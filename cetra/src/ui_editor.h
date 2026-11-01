@@ -34,10 +34,18 @@ void ui_editor_scroll_place(UIElement* el, size_t offset, float where);
 // The offset starting the row at the view's top: where ui_editor_scroll_place(el, top, 0) puts the
 // view back to.
 size_t ui_editor_top(const UIElement* el);
-// The editor leaves its text and shows `doc` from its start, as a new editor would: one caret at 0,
-// the view at the top. Its mode, find's query and its look stay. NULL shows nothing, as a text
-// freed first does; the text it shows already changes nothing.
+/*
+ * The editor leaves its text and shows `doc`, where it last was in it -- its carets, its scroll --
+ * as a vim window goes back to a buffer, or from its start for a text it has not shown: one caret
+ * at 0, the view at the top. It keeps its place in each text it leaves, which the text moves
+ * through every change as it moves an editor's carets, until the text or the editor is freed. Its
+ * mode, find's query and its look stay. NULL shows nothing, as a text freed first does; the text it
+ * shows already changes nothing. A place asked for before the editor is laid out on a text --
+ * ui_editor_scroll_place, ui_editor_reveal -- is taken at its next layout.
+ */
 void ui_editor_set_doc(UIElement* el, TextDoc* doc);
+// The text the editor shows; NULL for none, for anything not an editor, and once the text is freed.
+TextDoc* ui_editor_doc(const UIElement* el);
 
 /*
  * What an edit is made of, after vis: a MOTION says where a caret goes, a TEXT OBJECT what range

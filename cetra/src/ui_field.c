@@ -668,37 +668,47 @@ static bool _key(const UISystem* ui, UIElement* el, UIField* f, UIRect content,
                 _select_to_unless_selected(f, _word_right(f, f->state.cursor));
             stb_textedit_key(f, &f->state, STB_TEXTEDIT_K_DELETE);
             break;
+        // The shortcuts, by letter. A letter's key with no shortcut held is no key the field uses:
+        // it types from the character that follows, which must not go with a key used.
         case GLFW_KEY_A:
-            if (shortcut)
-                _select(f, 0, f->len);
+            if (!shortcut)
+                return false;
+            _select(f, 0, f->len);
             break;
         case GLFW_KEY_C:
-            if (shortcut)
-                _copy(ui, f);
+            if (!shortcut)
+                return false;
+            _copy(ui, f);
             break;
         case GLFW_KEY_X:
-            if (shortcut) {
-                _copy(ui, f);
-                if (!ro)
-                    stb_textedit_cut(f, &f->state);
-            }
+            if (!shortcut)
+                return false;
+            _copy(ui, f);
+            if (!ro)
+                stb_textedit_cut(f, &f->state);
             break;
         case GLFW_KEY_V:
-            if (shortcut && !ro)
+            if (!shortcut)
+                return false;
+            if (!ro)
                 _paste(ui, f);
             break;
         case GLFW_KEY_Z:
-            if (shortcut && !ro)
+            if (!shortcut)
+                return false;
+            if (!ro)
                 stb_textedit_key(f, &f->state, sh ? STB_TEXTEDIT_K_REDO : STB_TEXTEDIT_K_UNDO);
             break;
-        case GLFW_KEY_Y:
 #ifndef __APPLE__
-            if (shortcut && !ro)
+        case GLFW_KEY_Y:
+            if (!shortcut)
+                return false;
+            if (!ro)
                 stb_textedit_key(f, &f->state, STB_TEXTEDIT_K_REDO);
+            break;
 #endif
-            break;
         default:
-            break;
+            return false;
     }
     return true;
 }
@@ -729,8 +739,8 @@ static void _keys_end(UIElement* el) {
         f->on_change(el, f->change_user);
 }
 
-// One key or character, the field's on_key first: false for a key it does not use -- Esc, Tab, and
-// Page Up or Page Down on one line.
+// One key or character, the field's on_key first: false for a key it does not use -- Esc, Tab,
+// Page Up or Page Down on one line, and a key it types from the character after it.
 static bool _take_key(const UISystem* ui, UIElement* el, UIRect content, const InputKeyEvent* ev) {
     UIField* f = el ? el->field : NULL;
     if (!f || !ev)

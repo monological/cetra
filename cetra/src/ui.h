@@ -382,6 +382,8 @@ struct UIElement {
     // child holds which row. `row_builds` counts the rows built, a test of the building.
     struct UIRows* rows;
     unsigned row_builds;
+    struct UIScreen* screen; // a screen's root: the screen it is; NULL for every other element
+    UIElement* removed_next; // taken out during a pass: the next taken out, until the pass ends
 
     // BY FUNCTION
     char* text;                    // ui_set_text (owned)
@@ -491,6 +493,7 @@ bool ui_on_stack(const UISystem* ui, const UIScreen* screen);
 UIElement* ui_focused(const UIScreen* screen);
 // Put them on `el`, an element of `screen`, as though navigated there: a menu that opens on its
 // first item. NULL leaves nothing focused, where the first press lands on the first element.
+// Refused by name for an element of another screen, or one taken out.
 void ui_set_focus(UIScreen* screen, UIElement* el);
 // True while a modal screen is on the stack -- what the game gates its own
 // input on, and what input_set_suppressed is driven from.
@@ -507,17 +510,18 @@ UIElement* ui_slider(UIElement* parent, const char* text, float lo, float hi, fl
 UIElement* ui_selector(UIElement* parent, const char* text, const char* const* options, int count,
                        int* bound, UIActionFn action, void* user);
 // Takes `el` out of its parent and frees it with everything under it, letting go first of whatever
-// the system or a screen held inside it: the pressed element, a bar held, and a screen's focus,
-// left on nothing. Removed during a pass -- by a callback of its own, a key an editor took -- it is
-// taken out at once and freed as the pass ends. Refused by name: a screen's root, a pane's virtual
-// row, and an element of none of `ui`'s screens.
-void ui_remove(UISystem* ui, UIElement* el);
-// Takes `el` out of its parent and puts it under `parent` at `index` of the children there once it
-// is out, the end when `index` is past them. It keeps everything it holds -- an editor's carets and
-// scroll, a field's text, the focus. Refused by name: a screen's root, a move into `el` or under
-// it, a pane's virtual row, a move into a pane with rows or into one of its rows, which the pane
-// frees, and a move to another screen.
-void ui_move(UIElement* el, UIElement* parent, size_t index);
+// the UI held inside it: the pressed element, a bar held, and a screen's focus, left on nothing.
+// Removed during a pass -- by a callback of its own, a key an editor took -- it is taken out at
+// once and freed as the pass ends. Refused by name: a screen's root, a pane's virtual row, and an
+// element taken out already.
+void ui_remove(UIElement* el);
+// Takes `el` out of its parent and puts it under `parent`, just in front of `before`, one of
+// `parent`'s children, or at the end for NULL: a split puts a row in front of the pane it splits,
+// then the pane into the row. It keeps everything it holds -- an editor's carets and scroll, a
+// field's text, the focus. Refused by name: a screen's root, a `before` that is not `parent`'s
+// child, a move into `el` or under it, a pane's virtual row, a move into a pane with rows or into
+// one of its rows, which the pane frees, and a move to another screen.
+void ui_move(UIElement* el, UIElement* parent, const UIElement* before);
 // Where a slider's track lies in the rect the last layout gave it, in window points: what a drag
 // is measured along, for a draw of its own (ui_set_draw) to put the track there too.
 UIRect ui_slider_track(const UISystem* ui, const UIElement* el);
@@ -599,8 +603,9 @@ void ui_field_set_on_key(UIElement* el, UIKeyFn on_key, void* user);
 /*
  * The code editor (spec 14.4): a TextDoc shown and edited, its lines wrapped at its width, in the
  * theme's monospaced face. It borrows the text, and two editors may show one; a text freed first
- * leaves it showing nothing. It measures nothing, so it is sized FIXED or GROW, and grows by
- * default. Its carets, keys and modes are ui_editor_*, in ui_editor.h.
+ * leaves it showing nothing, as does NULL until ui_editor_set_doc gives it one. It measures
+ * nothing, so it is sized FIXED or GROW, and grows by default. Its carets, keys and modes are
+ * ui_editor_*, in ui_editor.h.
  */
 UIElement* ui_editor(UIElement* parent, struct TextDoc* doc);
 // Whether the UI takes the keyboard: a text field or an editor holds the top screen's focus, or a

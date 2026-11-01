@@ -11,8 +11,9 @@
 #include <stddef.h>
 
 typedef struct CetraEmbeddedFile {
-    const char* name;   // the file's own name, which a font pool keeps it under
-    const char* source; // the file it was built from, from the source root
+    // The file it was built from, from the source root: one name for it across the build, which a
+    // font pool keeps it under.
+    const char* source;
     const unsigned char* bytes;
     size_t size;
 } CetraEmbeddedFile;

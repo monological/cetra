@@ -15,10 +15,6 @@ struct Engine;
 
 // The engine a UI system was made with, for the clipboard and the screen's scale.
 struct Engine* ui_system_engine(const UISystem* ui);
-// What the system holds between passes, for a test: the element a press captured, the element
-// whose bar the pointer holds, and the focus as the last input pass left it.
-void ui_system_held(const UISystem* ui, const UIElement** pressed, const UIElement** bar,
-                    const UIElement** seen);
 
 // The bar: its width, its inset from the element's edge, its shortest thumb, and the strip along
 // the element's right edge a press lands on it from.

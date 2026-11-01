@@ -6,8 +6,6 @@
 
 #include "text.h"
 
-#include <GLFW/glfw3.h> // after text.h, which brings GLEW in first
-
 uint32_t ui_typing_next(const char* s, size_t len, size_t* i) {
     if (*i >= len)
         return 0;
@@ -160,11 +158,4 @@ bool ui_typing_caret_lit(UITypingCaret* c, double now, bool blink, double* wake)
     const bool lit = phase < UI_TYPING_CARET_LIT_SECONDS;
     *wake = (lit ? UI_TYPING_CARET_LIT_SECONDS : period) - phase;
     return lit;
-}
-
-bool ui_typing_makes_char(int key, int mods) {
-    const bool printable = (key >= GLFW_KEY_SPACE && key <= GLFW_KEY_WORLD_2) ||
-                           (key >= GLFW_KEY_KP_0 && key <= GLFW_KEY_KP_ADD) ||
-                           key == GLFW_KEY_KP_EQUAL;
-    return printable && !(mods & (GLFW_MOD_CONTROL | GLFW_MOD_SUPER));
 }

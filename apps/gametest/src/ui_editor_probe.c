@@ -18,7 +18,8 @@
 #include "cetra/internal/ext/stb_truetype.h" // the rasteriser the glyph cache's bitmaps are held to
 #include "cetra/internal/text_doc_edit.h"    // the editor's half of the text, which the arms drive
 #include "cetra/internal/ui_editor_hooks.h"  // the editor's wrapping and where it put things
-#include "cetra/internal/ui_internal.h" // ui_system_engine, for the clipboard; what a system holds
+#include "cetra/internal/ui_hooks.h"         // what a system holds
+#include "cetra/internal/ui_internal.h"      // ui_system_engine, for the clipboard
 #include "cetra/text.h"
 #include "cetra/text_doc.h"
 #include "cetra/ui_editor.h"
@@ -801,25 +802,28 @@ static void type(UISystem* ui, const char* text) {
 }
 
 // A press at (x0, y0) held to (x1, y1) over a pass, then let go there, a second apart.
-// One input pass with the pointer at (x, y), pressed, held or released there, a second after the
-// last.
-static void pointer_pass(UISystem* ui, float x, float y, bool pressed, bool down, bool released,
-                         int mods) {
+// What the pointer does in a pass: moves to the point, is pressed there, is held there, or is let
+// go there.
+typedef enum { POINTER_MOVE, POINTER_PRESS, POINTER_HOLD, POINTER_RELEASE } PointerAct;
+
+// One input pass with the pointer at (x, y), a second after the last.
+static void pointer_pass(UISystem* ui, float x, float y, PointerAct act, int mods) {
     ui_update(ui,
               &(UIInput){.pointer_x = x,
                          .pointer_y = y,
-                         .pointer_pressed = pressed,
-                         .pointer_down = down,
-                         .pointer_released = released,
+                         .pointer_pressed = act == POINTER_PRESS,
+                         .pointer_down = act == POINTER_PRESS || act == POINTER_HOLD,
+                         .pointer_released = act == POINTER_RELEASE,
                          .pointer_mods = mods,
                          .time = (g_key_time += 1.0)},
               1280.0f, 720.0f);
 }
 
+// A press at (x0, y0) held to (x1, y1) over a pass, then let go there, a second apart.
 static void press_drag(UISystem* ui, float x0, float y0, float x1, float y1, int mods) {
-    pointer_pass(ui, x0, y0, true, true, false, mods);
-    pointer_pass(ui, x1, y1, false, true, false, 0);
-    pointer_pass(ui, x1, y1, false, false, true, 0);
+    pointer_pass(ui, x0, y0, POINTER_PRESS, mods);
+    pointer_pass(ui, x1, y1, POINTER_HOLD, 0);
+    pointer_pass(ui, x1, y1, POINTER_RELEASE, 0);
     ui_build(ui, 1280.0f, 720.0f, 1.0f);
 }
 
@@ -1306,8 +1310,26 @@ static int probe_editor_decline(UISystem* ui) {
     return 0;
 }
 
-// A press is a key and then its character: a binding taking the key takes the character too, and a
-// character arriving alone is typed.
+// A command moving the focus to another element, as a split bound to `|` moves it to the pane it
+// made.
+static struct {
+    UIScreen* screen;
+    UIElement* to;
+} g_focus_move;
+
+static bool focus_move(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    ui_set_focus(g_focus_move.screen, g_focus_move.to);
+    return true;
+}
+
+static const UIEditorCommand FOCUS_MOVE = {"focus-move", "Moves the focus", focus_move, NULL};
+static const UIEditorBinding FOCUS_KEYS[] = {{GLFW_KEY_S, 0, &FOCUS_MOVE}};
+
+// A press is a key and then its character: a binding taking the key takes the character too,
+// wherever it put the focus, and a character arriving alone is typed. A text field types a letter
+// from its character, so its key is no key it uses.
 static int probe_editor_paired_char(UISystem* ui) {
     TextDoc* doc = create_text_doc("", 0);
     UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
@@ -1328,7 +1350,33 @@ static int probe_editor_paired_char(UISystem* ui) {
     key(ui, GLFW_KEY_SPACE, 0);
     type(ui, "x");
     say_flag("editor-paired-char", "stale", "typed", g_seam_runs[1] == 2 && doc_is_str(doc, " ax"));
+    // A key whose command moves the focus to another editor: its character types into neither.
+    UIScreen* s = ui_top(ui);
+    TextDoc* other = create_text_doc("", 0);
+    UIElement* there = ui_editor(ui_screen_root(s), other);
+    ui_set_size(there, UI_FIXED, 200.0f, UI_FIXED, 80.0f);
+    g_focus_move.screen = s;
+    g_focus_move.to = there;
+    const UIEditorMode mover = {.name = "mover",
+                                .parent = ui_editor_standard_mode(),
+                                .bindings = FOCUS_KEYS,
+                                .binding_count = 1,
+                                .layer = true};
+    ui_editor_set_mode(ed, &mover);
+    ui_set_focus(s, ed);
+    editor_pass(ui);
+    const InputKeyEvent moving[] = {{.key = GLFW_KEY_S}, {.codepoint = 's'}};
+    send_keys(ui, moving, 2);
+    say_flag("editor-paired-char", "moved", "dropped",
+             ui_focused(s) == there && doc_is_str(other, "") && doc_is_str(doc, " ax"));
+    // A field's letter, key and character: typed.
+    UIElement* field = ui_text_field(ui_screen_root(s), 0, NULL, NULL);
+    ui_set_focus(s, field);
+    editor_pass(ui);
+    send_keys(ui, letter, 2);
+    say_flag("editor-paired-char", "field", "typed", !strcmp(ui_field_text(field), "a"));
     ui_editor_set_mode(ed, NULL);
+    free_text_doc(other);
     free_text_doc(doc);
     return 0;
 }
@@ -1974,17 +2022,17 @@ static void count_press(UIElement* el, void* user) {
     g_presses++;
 }
 
-static UISystem* g_remover;
-
-// A button's action and an editor's key each taking their own element out, inside the pass.
+// A button's action and an editor's key each taking their own element out, inside the pass: the
+// button twice, the second refused, since it is out already.
 static void remove_self(UIElement* el, void* user) {
     (void)user;
-    ui_remove(g_remover, el);
+    ui_remove(el);
+    ui_remove(el);
 }
 
 static bool remove_editor(UIElement* el, void* user) {
     (void)user;
-    ui_remove(g_remover, el);
+    ui_remove(el);
     return true;
 }
 
@@ -2004,14 +2052,13 @@ static void build_row(UIElement* row, int index, void* user) {
 }
 
 static int probe_ui_remove(UISystem* ui) {
-    g_remover = ui;
     UIScreen* s = ui_screen(ui, "remove");
     ui_screen_set_modal(s, false);
     UIElement* root = ui_screen_root(s);
     root->align_main = UI_ALIGN_START;
     UIElement* inner = ui_panel(root);
     UIElement* inner_button = ui_button(inner, "inner", count_press, NULL);
-    const UIElement* after = ui_button(root, "after", count_press, NULL);
+    UIElement* after = ui_button(root, "after", count_press, NULL);
     UIElement* pressed = ui_button(root, "pressed", count_press, NULL);
     const UIElement* self = ui_button(root, "self", remove_self, NULL);
     UIElement* pane = ui_scroll(root);
@@ -2028,10 +2075,10 @@ static int probe_ui_remove(UISystem* ui) {
     // The focus inside what goes, as an input pass last saw it: both let go, and the next layout
     // puts the element after it where it stood.
     ui_set_focus(s, inner_button);
-    pointer_pass(ui, -1.0f, -1.0f, false, false, false, 0);
+    pointer_pass(ui, -1.0f, -1.0f, POINTER_MOVE, 0);
     const float inner_y = inner->rect.y;
     const size_t children = root->child_count;
-    ui_remove(ui, inner);
+    ui_remove(inner);
     ui_system_held(ui, &p, &b, &seen);
     say_flag("remove", "focus", "nothing", ui_focused(s) == NULL);
     say_flag("remove", "seen", "nothing", seen == NULL);
@@ -2043,49 +2090,49 @@ static int probe_ui_remove(UISystem* ui) {
     // A press held on what goes: let go, and its release activates nothing.
     float x = 0.0f, y = 0.0f;
     centre_of(pressed, &x, &y);
-    pointer_pass(ui, x, y, true, true, false, 0);
+    pointer_pass(ui, x, y, POINTER_PRESS, 0);
     ui_system_held(ui, &p, &b, &seen);
     const bool was_pressed = p == pressed;
-    ui_remove(ui, pressed);
+    ui_remove(pressed);
     ui_system_held(ui, &p, &b, &seen);
-    pointer_pass(ui, x, y, false, false, true, 0);
+    pointer_pass(ui, x, y, POINTER_RELEASE, 0);
     say_flag("remove", "pressed", "let_go", was_pressed && p == NULL && g_presses == 0);
 
-    // A button whose own action takes it out, inside the pass that released it.
+    // A button whose own action takes it out, inside the pass that released it, and asks again,
+    // refused.
     ui_layout(s, 1280.0f, 720.0f);
     centre_of(self, &x, &y);
     const size_t before_self = root->child_count;
-    pointer_pass(ui, x, y, true, true, false, 0);
-    pointer_pass(ui, x, y, false, false, true, 0);
+    pointer_pass(ui, x, y, POINTER_PRESS, 0);
+    pointer_pass(ui, x, y, POINTER_RELEASE, 0);
     ui_system_held(ui, &p, &b, &seen);
     say_flag("remove", "own_action", "freed", root->child_count == before_self - 1 && p == NULL);
 
     // A bar held on the pane that goes.
     ui_layout(s, 1280.0f, 720.0f);
     const float bx = pane->rect.x + pane->rect.w - 5.0f, by = pane->rect.y + 10.0f;
-    pointer_pass(ui, bx, by, true, true, false, 0);
+    pointer_pass(ui, bx, by, POINTER_PRESS, 0);
     ui_system_held(ui, &p, &b, &seen);
     const bool was_held = b == pane;
-    ui_remove(ui, pane);
+    ui_remove(pane);
     ui_system_held(ui, &p, &b, &seen);
-    pointer_pass(ui, bx, by + 20.0f, false, true, false, 0);
+    pointer_pass(ui, bx, by + 20.0f, POINTER_HOLD, 0);
     say_flag("remove", "bar", "let_go", was_held && b == NULL);
 
-    // Refused: a screen's root, a pane's row, and an element of another system's screen.
+    // Refused: a screen's root, and a pane's row. And the focus is refused an element of another
+    // screen, which is how nothing holds an element taken out.
     const size_t kept = root->child_count;
-    ui_remove(ui, root);
+    ui_remove(root);
     say_flag("remove", "root", "refused", ui_screen_root(s) == root && root->child_count == kept);
     ui_layout(s, 1280.0f, 720.0f);
     UIElement* row = ui_scroll_find_row(rows, 0);
-    ui_remove(ui, row);
+    ui_remove(row);
     say_flag("remove", "row", "refused", row && ui_scroll_find_row(rows, 0) == row);
-    UISystem* other = create_ui_system(ui_system_engine(ui));
-    UIScreen* os = ui_screen(other, "other");
+    UIScreen* os = ui_screen(ui, "other");
     UIElement* stranger = ui_panel(ui_screen_root(os));
-    ui_remove(ui, stranger);
-    say_flag("remove", "other", "refused",
-             ui_screen_root(os)->child_count == 1 && ui_screen_root(os)->children[0] == stranger);
-    free_ui_system(other);
+    ui_set_focus(s, after);
+    ui_set_focus(s, stranger);
+    say_flag("remove", "focus", "refused", ui_focused(s) == after);
 
     // An editor its own key takes out, inside the pass the key came in: freed as the pass ends,
     // its text forgetting it.
@@ -2107,7 +2154,7 @@ static int probe_ui_remove(UISystem* ui) {
     UIElement* ved = vim_fixture(ui, doc, vim, 0);
     vim_keys(ui, "iab");
     const bool open = doc->grouping;
-    ui_remove(ui, ved);
+    ui_remove(ved);
     say_flag("remove", "insert", "closed", open && !doc->grouping && doc->view_count == 0);
     free_ui_editor_vim(vim);
     free_text_doc(doc);
@@ -2126,19 +2173,6 @@ static char* move_text(size_t* len) {
     return text;
 }
 
-// A command moving the focus to another editor, as a split bound to `|` does.
-static UIElement* g_focus_to;
-
-static bool focus_to(UIElement* el, void* user) {
-    (void)el;
-    (void)user;
-    ui_set_focus(ui_top(g_remover), g_focus_to);
-    return true;
-}
-
-static const UIEditorCommand FOCUS_TO = {"focus-to", "Moves the focus", focus_to, NULL};
-static const UIEditorBinding FOCUS_KEYS[] = {{GLFW_KEY_S, 0, &FOCUS_TO}};
-
 static bool children_are(const UIElement* parent, UIElement* const* want, size_t n) {
     if (parent->child_count != n)
         return false;
@@ -2149,7 +2183,6 @@ static bool children_are(const UIElement* parent, UIElement* const* want, size_t
 }
 
 static int probe_ui_move(UISystem* ui) {
-    g_remover = ui;
     size_t len = 0;
     char* text = move_text(&len);
     TextDoc* doc = create_text_doc(text, len);
@@ -2169,8 +2202,8 @@ static int probe_ui_move(UISystem* ui) {
     // The editor under a new row, beside the field: its carets, its view and the focus kept.
     UIElement* row = ui_panel(root);
     row->dir = UI_ROW;
-    ui_move(ed, row, 0);
-    ui_move(field, row, 99);
+    ui_move(ed, row, NULL);
+    ui_move(field, row, NULL);
     editor_pass(ui);
     const TextSelection* now = NULL;
     const size_t n = ui_editor_selections(ed, &now, NULL);
@@ -2188,63 +2221,45 @@ static int probe_ui_move(UISystem* ui) {
              field->parent == row && row->children[1] == field &&
                  !strcmp(ui_field_text(field), "kept"));
 
-    // The index: among the children once the element is out, the end when past them.
+    // Where it goes: in front of the child named, the end for none, and in front of itself where
+    // it is.
     UIElement* col = ui_panel(root);
     UIElement* a = ui_panel(col);
     UIElement* b = ui_panel(col);
     UIElement* c = ui_panel(col);
-    ui_move(a, col, 2);
+    ui_move(a, col, NULL);
     const bool to_end = children_are(col, (UIElement* const[]){b, c, a}, 3);
-    ui_move(a, col, 0);
+    ui_move(a, col, b);
     const bool to_start = children_are(col, (UIElement* const[]){a, b, c}, 3);
-    ui_move(c, col, 1);
-    say_flag("move", "index", "order",
-             to_end && to_start && children_are(col, (UIElement* const[]){a, c, b}, 3));
+    ui_move(c, col, b);
+    const bool between = children_are(col, (UIElement* const[]){a, c, b}, 3);
+    ui_move(c, col, c);
+    say_flag("move", "before", "order",
+             to_end && to_start && between && children_are(col, (UIElement* const[]){a, c, b}, 3));
 
-    // Refused: a screen's root, into itself or under it, a pane's row or into a pane with rows,
-    // and to another screen.
-    ui_move(root, col, 0);
+    // Refused: a screen's root, in front of no child of the parent, into itself or under it, a
+    // pane's row or into a pane with rows or one of its rows, and to another screen.
+    ui_move(root, col, NULL);
     say_flag("move", "root", "refused", root->parent == NULL && col->child_count == 3);
-    ui_move(row, row, 0);
-    ui_move(row, ed, 0);
+    ui_move(a, col, ed);
+    say_flag("move", "before", "refused", children_are(col, (UIElement* const[]){a, c, b}, 3));
+    ui_move(row, row, NULL);
+    ui_move(row, ed, NULL);
     say_flag("move", "under", "refused", row->parent == root && ed->parent == row);
     UIElement* rows = ui_scroll(root);
     ui_set_size(rows, UI_FIXED, 200.0f, UI_FIXED, 80.0f);
     ui_scroll_set_rows(rows, 10, 20.0f, build_row, NULL);
     editor_pass(ui);
     UIElement* first = ui_scroll_find_row(rows, 0);
-    ui_move(a, rows, 0);
-    ui_move(a, first, 0);
-    ui_move(first, col, 0);
+    ui_move(a, rows, NULL);
+    ui_move(a, first, NULL);
+    ui_move(first, col, NULL);
     say_flag("move", "rows", "refused",
              a->parent == col && first && first->parent == rows && col->child_count == 3);
     UIScreen* elsewhere = ui_screen(ui, "elsewhere");
-    ui_move(a, ui_screen_root(elsewhere), 0);
+    ui_move(a, ui_screen_root(elsewhere), NULL);
     say_flag("move", "screen", "refused",
              a->parent == col && ui_screen_root(elsewhere)->child_count == 0);
-
-    // A key that makes a character, used by a mode whose command moves the focus to another
-    // editor: the press's character goes where its key went, and types into neither.
-    TextDoc* other = create_text_doc("other\n", 6);
-    UIElement* there = ui_editor(root, other);
-    ui_set_size(there, UI_FIXED, 200.0f, UI_FIXED, 80.0f);
-    g_focus_to = there;
-    const UIEditorMode mode = {.name = "mover",
-                               .parent = ui_editor_standard_mode(),
-                               .bindings = FOCUS_KEYS,
-                               .binding_count = 1,
-                               .layer = true};
-    ui_editor_set_mode(ed, &mode);
-    ui_set_focus(s, ed);
-    editor_pass(ui);
-    const size_t before = text_doc_length(doc);
-    const InputKeyEvent press[2] = {{.key = GLFW_KEY_S}, {.codepoint = 's'}};
-    send_keys(ui, press, 2);
-    say_flag("move", "key_char", "follows",
-             ui_focused(s) == there && doc_is_str(other, "other\n") &&
-                 text_doc_length(doc) == before);
-    ui_editor_set_mode(ed, NULL);
-    free_text_doc(other);
     free_text_doc(doc);
     return 0;
 }
@@ -2263,49 +2278,57 @@ static int probe_editor_set_doc(UISystem* ui) {
     editor_pass(ui);
     ui_editor_set_selections(twin, &(TextSelection){10, 10}, 1);
 
-    // Where the view was in the first text, to go back to.
+    // Where the editor is in the first text, to come back to.
     const TextSelection carets[2] = {{24, 24}, {40, 44}};
     ui_editor_set_selections(ed, carets, 2);
     ui_editor_scroll_place(ed, 100, 0.0f);
     editor_pass(ui);
-    size_t top = ui_editor_top(ed);
-    const uint64_t seen = a->version;
+    const size_t top = ui_editor_top(ed);
 
-    // Another text: one caret at its start, the view at its top.
+    // A text it has not shown: one caret at its start, the view at its top.
     ui_editor_set_doc(ed, b);
     editor_pass(ui);
     say_flag("set-doc", "start", "fresh", one_selection(ed, 0, 0) && ui_editor_top(ed) == 0);
-    // The first text has forgotten it -- an edit there moves none of its carets -- while the
-    // second editor on it keeps its own.
+    // The first text no longer moves its carets -- one at 3 in the second stays there through an
+    // edit at the first's start -- while the second editor on it keeps its own, moved.
+    ui_editor_set_selections(ed, &(TextSelection){3, 3}, 1);
     text_doc_replace(a, 0, 0, "xx", 2);
-    say_flag("set-doc", "old", "forgotten", one_selection(ed, 0, 0) && a->view_count == 1);
+    say_flag("set-doc", "old", "forgotten", one_selection(ed, 3, 3));
     say_flag("set-doc", "twin", "kept", one_selection(twin, 12, 12));
     type(ui, "q");
     say_flag("set-doc", "typing", "new",
-             doc_is_str(b, "qother\ntext\n") && text_doc_length(a) == len + 2);
+             doc_is_str(b, "othqer\ntext\n") && text_doc_length(a) == len + 2);
     // The text it shows already changes nothing.
-    ui_editor_set_selections(ed, &(TextSelection){3, 3}, 1);
     ui_editor_set_doc(ed, b);
-    say_flag("set-doc", "same", "kept", one_selection(ed, 3, 3));
-    // Nothing, then back to the first text where it was, as a host goes back: what it kept brought
-    // through the edit made there since.
+    say_flag("set-doc", "same", "kept", one_selection(ed, 4, 4));
+    // Nothing, then back to the first text: where it was there, brought through the edit made
+    // there while it showed another, as a vim window comes back to a buffer.
     ui_editor_set_doc(ed, NULL);
     say_flag("set-doc", "null", "nothing", ui_editor_selections(ed, NULL, NULL) == 0);
     ui_editor_set_doc(ed, a);
     editor_pass(ui);
-    TextSelection back[2] = {carets[0], carets[1]};
-    bool mapped = text_doc_map(a, seen, &top);
-    for (size_t i = 0; i < 2; i++)
-        mapped = mapped && text_doc_map(a, seen, &back[i].anchor) &&
-                 text_doc_map(a, seen, &back[i].head);
-    ui_editor_set_selections(ed, back, 2);
-    ui_editor_scroll_place(ed, top, 0.0f);
-    editor_pass(ui);
     const TextSelection* now = NULL;
     const size_t n = ui_editor_selections(ed, &now, NULL);
     say_flag("set-doc", "back", "where",
-             mapped && top == 96 && ui_editor_top(ed) == top && n == 2 && now[0].head == 26 &&
+             top == 94 && ui_editor_top(ed) == top + 2 && n == 2 && now[0].head == 26 &&
                  now[1].anchor == 42 && now[1].head == 46);
+    // A new editor placed before its first layout, as a split shows the view it split: placed at
+    // that layout.
+    UIElement* fresh = ui_editor(ui_screen_root(ui_top(ui)), a);
+    ui_set_size(fresh, UI_FIXED, 300.0f, UI_FIXED, 120.0f);
+    ui_editor_set_selections(fresh, &(TextSelection){100, 100}, 1);
+    ui_editor_scroll_place(fresh, top + 2, 0.0f);
+    editor_pass(ui);
+    say_flag("set-doc", "fresh", "placed",
+             ui_editor_top(fresh) == top + 2 && one_selection(fresh, 100, 100));
+    // A text freed while the editor is parked on it: its place let go, and the editor goes on.
+    TextDoc* c = create_text_doc("third\n", 6);
+    ui_editor_set_doc(ed, c);
+    ui_editor_set_doc(ed, b);
+    free_text_doc(c);
+    ui_editor_set_doc(ed, a);
+    editor_pass(ui);
+    say_flag("set-doc", "parked", "freed", ui_editor_top(ed) == top + 2);
     free_text_doc(a);
     free_text_doc(b);
     return 0;
@@ -2333,21 +2356,22 @@ static int probe_vim_set_doc(UISystem* ui) {
     say_flag("vim-set-doc", "insert", "let_go",
              open && !b->grouping && doc_is_str(a, &VIM_TEXT[1]) &&
                  ui_editor_vim_state(vim) == UI_VIM_NORMAL);
-    // A visual area: x after the switch takes one character.
+    // A visual area: x after the switch takes one character, at the caret the editor came back to
+    // in that text, where the insert left it.
     vim_keys(ui, "vll");
     ui_editor_set_doc(ed, b);
     vim_keys(ui, "x");
     say_flag("vim-set-doc", "visual", "let_go",
-             doc_is_str(b, "ne abtwo\n") && ui_editor_vim_state(vim) == UI_VIM_NORMAL);
+             doc_is_str(b, "one abwo\n") && ui_editor_vim_state(vim) == UI_VIM_NORMAL);
     // Freed with an operator half typed, and another editor made in its place, most likely at
     // its address: w there only moves. Esc first, so this case stands apart from those above.
     vim_keys(ui, "<Esc>d");
     UIElement* parent = ed->parent;
-    ui_remove(ui, ed);
+    ui_remove(ed);
     const void* was = ed;
     UIElement* again = ui_editor(parent, a);
-    fprintf(stderr, "vim-set-doc freed: the new editor %s the old one's address\n",
-            (const void*)again == was ? "took" : "did not take");
+    // Whether the case is the one it names: another editor where the freed one was.
+    printf("ui vim-set-doc address reused %d\n", (const void*)again == was ? 1 : 0);
     ui_set_size(again, UI_FIXED, 600.0f, UI_FIXED, 300.0f);
     ui_editor_set_mode(again, ui_editor_vim_mode(vim));
     ui_set_focus(ui_top(ui), again);

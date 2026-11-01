@@ -26083,10 +26083,12 @@ _UI_KINDS = ["ui_panel", "ui_label", "ui_button", "ui_toggle", "ui_slider", "ui_
              "ui_scroll", "ui_text_field", "ui_editor"]
 
 
-# Freed memory written over at once, by macOS's allocator and glibc's: a run reading what it freed
-# reads garbage and fails, where with memory left as it was it reads what was there and passes. What
-# the arms of an element freed late are run under (spec 14.6).
-_SCRIBBLED = dict(os.environ, MallocScribble="1", MALLOC_PERTURB_="85")
+def _scribbled():
+    """The environment with freed memory written over at once, by macOS's allocator and glibc's: a
+    run reading what it freed reads garbage and fails, where with memory left as it was it reads
+    what was there and passes. What the arms of an element freed late are run under (spec 14.6).
+    Made at the call, after main has set the run's own cook directory in the environment."""
+    return dict(os.environ, MallocScribble="1", MALLOC_PERTURB_="85")
 
 
 def _ui_probe(case, env=None):
@@ -28268,7 +28270,11 @@ def run_ui_gate(workdir):
                      takes Space takes the space with it; a space arriving alone,
                      as an input method's would, is typed; a key nothing binds
                      types its character; a used key with no character in its pass
-                     -- a script's -- takes none from the next.
+                     -- a script's -- takes none from the next; a key whose command
+                     moves the focus to another editor, as a split bound to `|`
+                     does, types its character into neither (spec 14.6); and a text
+                     field's letter, key and character, typed, the field using no
+                     key it types from its character.
       ui-editor-shapes a selection of three characters drawn by each shape: three
                      cells, four with the character at its far end (a vim mode's
                      visual mode), and its line whole with the line break (visual
@@ -28339,33 +28345,40 @@ def run_ui_gate(workdir):
                      last input pass saw it, left on nothing and the next layout
                      putting the element after it where it stood; a held press let
                      go, its release activating nothing; a button whose own action
-                     takes it out, and an editor its own key takes out, freed as the
+                     takes it out, its second ask refused as the element is out
+                     already, and an editor its own key takes out, freed as the
                      pass ends, the text forgetting the editor; a held bar let go; an
-                     editor taken out mid-insert closing its text's group; a root, a
-                     pane's row and another system's element refused. Run with freed
-                     memory scribbled over, so an element freed inside the pass
-                     that took it out crashes the run rather than passing.
+                     editor taken out mid-insert closing its text's group; a root and
+                     a pane's row refused, and the focus refused an element of
+                     another screen. Run with freed memory scribbled over, so an
+                     element freed inside the pass that took it out crashes the run
+                     rather than passing.
       ui-move        an element moved (spec 14.6): an editor under a new row
                      keeping its carets, its view and the focus, typing still
-                     reaching it; a field keeping its text; an index among the
-                     children once it is out, the end past them, within one parent
-                     too; a root, a move into itself or under it, a pane's row, a
-                     move into a pane with rows or into one of its rows, and a move
-                     to another screen refused; and a key that makes a character,
-                     used by a command that moves the focus to another editor, its
-                     character going with it rather than typed into that editor.
-      ui-editor-set-doc an editor shown another text (spec 14.6): one caret at its
-                     start and the view at its top; the text left forgetting it, an
-                     edit there moving none of its carets while a second editor on
-                     it keeps its own; typing reaching the new text; the same text
-                     again changing nothing; NULL showing nothing; and back to the
-                     first text where it was, the carets and the top a host kept
-                     brought through the edit made there since.
+                     reaching it; a field keeping its text; placed in front of the
+                     child named, at the end for none, and in front of itself where
+                     it is; a root, a child to go in front of that is not the
+                     parent's, a move into itself or under it, a pane's row, a move
+                     into a pane with rows or into one of its rows, and a move to
+                     another screen refused.
+      ui-editor-set-doc an editor shown another text (spec 14.6): a text it has not
+                     shown from its start; the text left no longer moving its
+                     carets -- one at 3 in the new text stays there through an edit
+                     at the old one's start -- while a second editor on it keeps its
+                     own; typing reaching the new text; the same text again changing
+                     nothing; NULL showing nothing; back to the first text where it
+                     was, its carets and its top brought through the edit made there
+                     while it showed another, by the text itself; a new editor
+                     placed before its first layout, placed at that layout; and a
+                     text freed while the editor was parked on it, its place let go.
+                     Run with freed memory scribbled over.
       ui-vim-set-doc what the vim mode held unfinished in an editor -- a half-typed
                      operator, an insert, whose group on the text left is closed, a
                      visual area -- let go when the editor is shown another text,
                      and an operator let go when the editor is freed and another
-                     made in its place.
+                     made in its place. That last case stands for what it names only
+                     where the allocator gave the new editor the freed one's address,
+                     which the probe says, and the arm says when it did not.
       ui-editor-ranges-late apps/canvas --editor's parse on its own thread, taken six
                      frames after it began: the text it read had an unclosed '(' at
                      byte 9, three bytes were typed before it since, and the error is
@@ -29298,7 +29311,7 @@ def run_ui_gate(workdir):
                            "dragged, find's next match, touching selections typed over each "
                            "landing after its own text, and a caret merged into a selection it "
                            "starts; freed memory scribbled over, so the bar's place reads no "
-                           "memory left unset", env=_SCRIBBLED)
+                           "memory left unset", env=_scribbled())
     print(f"  ui-editor-carets      {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-carets", ok)
 
@@ -29326,10 +29339,11 @@ def run_ui_gate(workdir):
     print(f"  ui-editor-decline     {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-decline", ok)
 
-    ok, detail = doc_flags("editor-paired-char", 4, "a binding taking Space takes the space its "
+    ok, detail = doc_flags("editor-paired-char", 6, "a binding taking Space takes the space its "
                            "press makes, a space arriving alone is typed, a key nothing binds "
-                           "types its character, and a used key with no character in its pass "
-                           "takes none from the next")
+                           "types its character, a used key with no character in its pass "
+                           "takes none from the next, a key moving the focus types its character "
+                           "nowhere, and a field's letter is typed")
     print(f"  ui-editor-paired-char {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-paired-char", ok)
 
@@ -29465,29 +29479,41 @@ def run_ui_gate(workdir):
     # ---- elements taken out and moved (spec 14.6)
     ok, detail = doc_flags("remove", 11, "the focus, the focus last seen, a held press and a held "
                            "bar let go of what goes; the next layout whole; a button's action and "
-                           "an editor's key taking their own element out, freed as the pass ends; "
-                           "an insert's group closed; a root, a row and another system's element "
-                           "refused; freed memory scribbled over", env=_SCRIBBLED)
+                           "an editor's key taking their own element out, freed as the pass ends, "
+                           "a second ask refused; an insert's group closed; a root and a row "
+                           "refused, and the focus refused another screen's element; freed memory "
+                           "scribbled over", env=_scribbled())
     print(f"  ui-remove             {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-remove", ok)
 
     ok, detail = doc_flags("move", 10, "an editor moved under a row keeping its carets, its view "
-                           "and the focus, a field its text, the index in order, the four refusals, "
-                           "and a key moving the focus taking its character with it")
+                           "and the focus, a field its text, each in front of the child named or "
+                           "at the end, and the refusals")
     print(f"  ui-move               {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-move", ok)
 
     # ---- an editor shown another text (spec 14.6)
-    ok, detail = doc_flags("set-doc", 7, "another text from its start, the one left forgetting the "
-                           "editor while a second editor keeps its carets, typing reaching the new "
-                           "text, the same text a no-op, NULL nothing, and the view and carets back "
-                           "where a host kept them")
+    ok, detail = doc_flags("set-doc", 9, "a text not shown from its start, the one left no longer "
+                           "moving its carets while a second editor keeps its own, typing reaching "
+                           "the new text, the same text a no-op, NULL nothing, back to the first "
+                           "where it was through the edit made since, a new editor placed before "
+                           "its first layout, and a text freed while parked on; freed memory "
+                           "scribbled over", env=_scribbled())
     print(f"  ui-editor-set-doc     {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-set-doc", ok)
 
-    ok, detail = doc_flags("vim-set-doc", 4, "an operator, an insert and a visual area let go when "
-                           "the editor is shown another text, and an operator when it is freed and "
-                           "another made in its place")
+    p = _ui_probe("vim-set-doc")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        reused = p.pop(("address", "reused"), [0])[0]
+        wrong = _probe_wrong(p, {k: 1 for k in p})
+        ok = not wrong and len(p) == 4
+        detail = (f"an operator, an insert and a visual area let go when the editor is shown "
+                  f"another text, and an operator when it is freed and another made in its place "
+                  + ("at its address" if reused else
+                     "-- not at its address this run, so that case did not stand for its name")
+                  + (f"; wrong: {wrong}" if wrong else ""))
     print(f"  ui-vim-set-doc        {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-vim-set-doc", ok)
 
@@ -30378,11 +30404,15 @@ def run_canvas_gate(workdir):
                      the focus and "X" typed into the first file there; F10 shows the second file
                      in it and "Y" is typed there; a click on the first pane and F6 land an edit
                      at the first file's start; a click back and F10 return the second pane to
-                     the first file with its caret at 15 -- the 1 it left at, brought through the
-                     14 bytes landed since. Then F9 closes it from its own key: one pane is left,
-                     with the focus, and "Z" typed lands in the first file (end to end). The close
-                     runs with freed memory scribbled over, so a pane freed inside the key that
-                     closed it crashes the run rather than passing.
+                     the first file with its caret at 15 -- the 1 it left at, which the editor
+                     kept and the text brought through the 14 bytes landed since. Then F9 closes
+                     it from its own key: one pane is left, with the focus, and "Z" typed lands in
+                     the first file. A pane split and the new one split and closed leaves the
+                     inner row's pane in the row's place, the focus on it; and under --vim a pane
+                     closed while the line it asked for is open hands the line to the pane left.
+                     The probe prints the panes' tree, so a row left in place is seen (end to
+                     end). The closes run with freed memory scribbled over, so a pane freed
+                     inside the key that closed it crashes the run rather than passing.
       canvas-under-ui the game UI's panel over the board: its centre the panel's colour, and
                      outside it the canvas as it is with no UI, 0 px. The canvas is an overlay
                      under UI_OVERLAY_ORDER.
@@ -30648,16 +30678,19 @@ def run_canvas_gate(workdir):
 
     # ---- the fonts built into the program (spec 14.6)
     sheet, probe = _canvas_run(workdir, "font_memory", "--font-sheet")
-    fonts = probe.get(("fonts", "bytes"), [])
-    if not sheet or len(fonts) != 7:
+    # "canvas fonts bytes B fonts F faces C of N": each count read by its label.
+    line = ["bytes"] + probe.get(("fonts", "bytes"), [])
+    counts = {line[k]: int(line[k + 1]) for k in range(0, len(line) - 1, 2)}
+    if not sheet or set(counts) != {"bytes", "fonts", "faces", "of"}:
         ok, detail = False, "the app failed or printed no fonts line"
     else:
-        same, made, faces, count = int(fonts[0]), int(fonts[2]), int(fonts[4]), int(fonts[6])
+        count = counts["of"]
         ink = int((_ppm_array(sheet)[..., :3].max(axis=2) > 150).sum())
-        ok = count == 3 and same == made == faces == count and ink > 2000
-        detail = (f"of {count} built-in fonts, {same} with their file's bytes, {made} making the "
-                  f"font the file makes and {faces} the face (want all 3); {ink} px of the sheet's "
-                  f"text (want over 2000)")
+        ok = (count > 0 and counts["bytes"] == counts["fonts"] == counts["faces"] == count
+              and ink > 2000)
+        detail = (f"of {count} built-in fonts, {counts['bytes']} with their file's bytes, "
+                  f"{counts['fonts']} making the font the file makes and {counts['faces']} the face "
+                  f"(want all); {ink} px of the sheet's text (want over 2000)")
     print(f"  canvas-font-memory  {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-font-memory", ok)
 
@@ -30773,20 +30806,40 @@ def run_canvas_gate(workdir):
         # Closing a pane from its own key frees it as the pass ends; freed memory scribbled over,
         # one freed sooner crashes the run.
         _, one = _canvas_run(workdir, "panes_close", *files, "--input-script", close_script,
-                             frames=28, env=_SCRIBBLED)
+                             frames=28, env=_scribbled())
+        # A pane split, the new one split again, and that one closed: the inner row hands its pane
+        # up, the focus on the pane beside the one closed.
+        nest_script = os.path.join(workdir, "panes_nest.script")
+        with open(nest_script, "w", encoding="utf-8") as f:
+            f.write("2 key=f8\n4 key=f8\n6 key=f9\n")
+        _, nest = _canvas_run(workdir, "panes_nest", *files, "--input-script", nest_script,
+                              frames=8, env=_scribbled())
+        # Under --vim, the line asked for by the second pane, which is then closed: the line
+        # answers the pane left.
+        vim_script = os.path.join(workdir, "panes_vim.script")
+        with open(vim_script, "w", encoding="utf-8") as f:
+            f.write(f"2 key=f8\n4 type=/\n6 at={right},{mid}\n7 at={right},{mid} down\n"
+                    f"8 at={right},{mid}\n10 key=f9\n")
+        _, vim = _canvas_run(workdir, "panes_vim", *files, "--vim", "--input-script", vim_script,
+                             frames=12, env=_scribbled())
         landed = b"(note landed)\nX(a one)\n(a two)\n"
         want = {
             "opened": (first.get(("pane", "0"), [])[:6] == ["file", "0", "top", "0", "focused", "1"]
-                       and ("pane", "1") not in first
+                       and first.get(("panes", "tree")) == ["(0)"]
                        and first.get(("file", "1")) == [b"(b one)\n".hex()]),
             "split": (two.get(("pane", "0"), [])[:6] == ["file", "0", "top", "0", "focused", "0"]
                       and two.get(("pane", "1")) == ["file", "0", "top", "0", "focused", "1",
                                                      "sel", "1", "15", "15"]
+                      and two.get(("panes", "tree")) == ["((0,1))"]
                       and two.get(("file", "0")) == [landed.hex()]
                       and two.get(("file", "1")) == [b"Y(b one)\n".hex()]),
             "closed": (one.get(("pane", "0"), [])[:6] == ["file", "0", "top", "0", "focused", "1"]
-                       and ("pane", "1") not in one
+                       and one.get(("panes", "tree")) == ["(0)"]
                        and one.get(("file", "0")) == [(landed + b"Z").hex()]),
+            "nested": (nest.get(("panes", "tree")) == ["((0,1))"]
+                       and nest.get(("pane", "1"), [])[4:6] == ["focused", "1"]),
+            "vim": (vim.get(("panes", "tree")) == ["(0)"]
+                    and vim.get(("panes", "asking")) == ["0"]),
         }
         ok = all(want.values())
         detail = (f"{want} -- second pane after the round trip "
