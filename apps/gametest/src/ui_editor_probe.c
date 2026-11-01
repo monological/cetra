@@ -1432,6 +1432,154 @@ static int probe_editor_paired_char(UISystem* ui) {
     return 0;
 }
 
+// ---- Any element takes keys (spec 14.10)
+
+static InputKeyEvent g_seen[32];
+static int g_seen_count;
+static int g_activations;
+
+// A pane's hook: everything it is handed is kept, and it takes the characters h and + and the key
+// K.
+static bool pane_keys(UIElement* el, const InputKeyEvent* k, void* user) {
+    (void)el;
+    (void)user;
+    if (g_seen_count < 32)
+        g_seen[g_seen_count++] = *k;
+    return k->codepoint == 'h' || k->codepoint == '+' || k->key == GLFW_KEY_K;
+}
+
+static bool take_slash(UIElement* el, const InputKeyEvent* k, void* user) {
+    (void)el;
+    (void)user;
+    return k->codepoint == '/';
+}
+
+static bool take_nothing(UIElement* el, const InputKeyEvent* k, void* user) {
+    (void)el;
+    (void)k;
+    (void)user;
+    return false;
+}
+
+static void count_activation(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    g_activations++;
+}
+
+// Whether the pane's hook was handed exactly `want`, in order.
+static bool seen_are(const InputKeyEvent* want, int n) {
+    bool same = g_seen_count == n;
+    for (int i = 0; same && i < n; i++)
+        same = g_seen[i].key == want[i].key && g_seen[i].mods == want[i].mods &&
+               g_seen[i].codepoint == want[i].codepoint;
+    if (!same)
+        fprintf(stderr, "  the hook was handed %d events, want %d\n", g_seen_count, n);
+    return same;
+}
+
+// A press and a release at the middle of `el`.
+static void click_on(UISystem* ui, const UIElement* el) {
+    const float x = el->rect.x + el->rect.w * 0.5f, y = el->rect.y + el->rect.h * 0.5f;
+    press_drag(ui, x, y, x, y, 0);
+}
+
+// The pointer passing over `el`, moving within it.
+static void pass_over(UISystem* ui, const UIElement* el) {
+    const float x = el->rect.x + el->rect.w * 0.5f, y = el->rect.y + el->rect.h * 0.5f;
+    pointer_pass(ui, x, y, POINTER_MOVE, 0);
+    pointer_pass(ui, x + 1.0f, y, POINTER_MOVE, 0);
+}
+
+// A panel with a key hook takes the keys as a field does, and keeps the focus as the pointer
+// passes; a field's hook is asked about each character first; a button with one still activates; a
+// panel with none is as it was; an editor refuses one.
+static int probe_element_keys(UISystem* ui) {
+    TextDoc* doc = create_text_doc("", 0);
+    UIElement* ed = editor_fixture(ui, doc, 300.0f, 100.0f);
+    UIScreen* s = ui_top(ui);
+    UIElement* root = ui_screen_root(s);
+    UIElement* pane = ui_panel(root);
+    ui_set_size(pane, UI_FIXED, 300.0f, UI_FIXED, 120.0f);
+    pane->focusable = true;
+    ui_set_on_key(pane, pane_keys, NULL);
+    UIElement* field = ui_text_field(root, 0, NULL, NULL);
+    ui_set_on_key(field, take_slash, NULL);
+    UIElement* button = ui_button(root, "Hooked", count_activation, NULL);
+    ui_set_on_key(button, take_nothing, NULL);
+    UIElement* plain = ui_panel(root);
+    ui_set_size(plain, UI_FIXED, 300.0f, UI_FIXED, 40.0f);
+    plain->focusable = true;
+    UIElement* unfocusable = ui_panel(root);
+    ui_set_size(unfocusable, UI_FIXED, 300.0f, UI_FIXED, 40.0f);
+    ui_set_on_key(unfocusable, pane_keys, NULL);
+    editor_pass(ui);
+
+    // An editor's keys are its modes': the hook is refused, and the editor types as it did.
+    ui_set_on_key(ed, pane_keys, NULL);
+    type(ui, "e");
+    say_flag("element-keys", "editor", "refused",
+             !ed->on_key && doc_is_str(doc, "e") && g_seen_count == 0);
+
+    // A press on the pane focuses it, and the keyboard is the UI's.
+    click_on(ui, pane);
+    say_flag("element-keys", "press", "focuses", ui_focused(s) == pane);
+    say_flag("element-keys", "press", "wants", ui_wants_keyboard(ui));
+
+    // Every key and character in order; the K key taken takes its k with it, typed nowhere.
+    const InputKeyEvent typed[] = {
+        {.key = GLFW_KEY_H}, {.codepoint = 'h'},  {.key = GLFW_KEY_EQUAL, .mods = GLFW_MOD_SHIFT},
+        {.codepoint = '+'},  {.key = GLFW_KEY_K}, {.codepoint = 'k'}};
+    send_keys(ui, typed, 6);
+    say_flag("element-keys", "keys", "order", seen_are(typed, 5));
+    say_flag("element-keys", "taken", "dropped",
+             ui_focused(s) == pane && doc_is_str(doc, "e") && !ui_field_text(field)[0]);
+
+    // The pointer passing over the field and the button leaves the focus on the pane; a press on
+    // the field moves it there.
+    pass_over(ui, field);
+    pass_over(ui, button);
+    say_flag("element-keys", "hover", "kept", ui_focused(s) == pane);
+    click_on(ui, field);
+    say_flag("element-keys", "press", "moves", ui_focused(s) == field);
+
+    // The field's hook is asked about each character before the field types it: the / it takes is
+    // kept out, the letters it declines are typed.
+    type(ui, "a/b");
+    say_flag("element-keys", "field", "slash", !strcmp(ui_field_text(field), "ab"));
+
+    // Tab, which the pane's hook declines, moves the focus on; Esc lets go of it.
+    click_on(ui, pane);
+    key(ui, GLFW_KEY_TAB, 0);
+    say_flag("element-keys", "tab", "moves", ui_focused(s) == field);
+    click_on(ui, pane);
+    key(ui, GLFW_KEY_ESCAPE, 0);
+    say_flag("element-keys", "escape", "lets", ui_focused(s) == NULL && !ui_wants_keyboard(ui));
+
+    // A button with a hook still activates on release.
+    click_on(ui, button);
+    say_flag("element-keys", "button", "activates", g_activations == 1);
+
+    // A focusable panel with no hook takes no keys, and a passing pointer takes its focus.
+    click_on(ui, plain);
+    say_flag("element-keys", "plain", "wants", ui_focused(s) == plain && !ui_wants_keyboard(ui));
+    pass_over(ui, field);
+    say_flag("element-keys", "plain", "hover", ui_focused(s) == field);
+
+    // A hooked panel that is not focusable: a press on it is a press on nothing, which lets go;
+    // focused by the app, it is handed the keys of the passes after.
+    click_on(ui, unfocusable);
+    say_flag("element-keys", "unfocusable", "press", ui_focused(s) == NULL);
+    ui_set_focus(s, unfocusable);
+    editor_pass(ui);
+    g_seen_count = 0;
+    type(ui, "h");
+    say_flag("element-keys", "unfocusable", "set",
+             ui_focused(s) == unfocusable && g_seen_count == 1 && g_seen[0].codepoint == 'h');
+    free_text_doc(doc);
+    return 0;
+}
+
 // The selection {2, 5} on the first line drawn as each shape: three cells, four with the character
 // at its far end, and the line whole with its line break; the block caret over the character at
 // the head.
@@ -2872,6 +3020,8 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_editor_host_edit(ui);
     if (!strcmp(which, "editor-layer"))
         return probe_editor_layer(ui);
+    if (!strcmp(which, "element-keys"))
+        return probe_element_keys(ui);
     if (!strcmp(which, "editor-decline"))
         return probe_editor_decline(ui);
     if (!strcmp(which, "editor-paired-char"))

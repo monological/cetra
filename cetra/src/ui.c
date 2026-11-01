@@ -568,10 +568,10 @@ static const UIWidgetOps* _ops(const UIElement* el) {
     return NULL;
 }
 
-// Whether `el` takes the keys while it holds the focus: a text field and an editor do, everything
-// else leaves them to the screen and the app.
+// Whether `el` takes the keys while it holds the focus: a text field, an editor and an element with
+// a key hook do, everything else leaves them to the screen and the app.
 static bool _takes_keys(const UIElement* el) {
-    return _ops(el) != NULL;
+    return _ops(el) != NULL || (el && el->on_key);
 }
 
 bool ui_wants_keyboard(const UISystem* ui) {
@@ -710,6 +710,17 @@ void ui_set_draw(UIElement* el, UIDrawFn draw, void* user) {
         return;
     el->draw = draw;
     el->draw_user = user;
+}
+
+void ui_set_on_key(UIElement* el, UIKeyFn on_key, void* user) {
+    if (!el)
+        return;
+    if (el->kind == UI_EDITOR) {
+        log_error("ui_set_on_key: a code editor's keys are its modes'; bind them in a mode layer");
+        return;
+    }
+    el->on_key = on_key;
+    el->on_key_user = user;
 }
 
 void ui_set_element_program(UIElement* el, ShaderProgram* program) {
@@ -2124,12 +2135,13 @@ static bool _makes_char(const InputKeyEvent* ev) {
 }
 
 /*
- * A pass's keys and characters, each in order to what holds the focus at its turn: a focused field
- * first, and what it does not use -- or every key, with anything else focused -- to the screen:
- * Tab moves the focus in tree order, Esc lets go of a field, and Page Up, Page Down, Home and End
- * scroll. The keys stop at a screen closed by one of them, being meant for it. A field the app
- * focused since the last pass takes none of them, since they came before it had the focus: the
- * key that opened a palette is not typed into it. True when Esc let go of a field.
+ * A pass's keys and characters, each in order to what holds the focus at its turn: the focused
+ * element's key hook first, then a focused field or editor, and what neither uses -- or every key,
+ * with anything else focused -- to the screen: Tab moves the focus in tree order, Esc lets go of
+ * what takes the keys, and Page Up, Page Down, Home and End scroll. The keys stop at a screen
+ * closed by one of them, being meant for it. An element the app focused since the last pass takes
+ * none of them, since they came before it had the focus: the key that opened a palette is not
+ * typed into it. True when Esc let go of the focus.
  *
  * A press is a key and then the character it makes, and a key something used takes that character
  * with it: a binding on Space types no space, and a split bound to `|` types no `|` into the pane
@@ -2150,14 +2162,16 @@ static bool _route_keys(UISystem* ui, UIScreen* top, const UIInput* in, const UI
         if (its_char)
             continue;
         UIElement* f = _takes_keys(top->focused) ? top->focused : NULL;
+        const UIWidgetOps* ops = _ops(f);
         if (f != taking) {
-            if (taking && _ops(taking)->keys_end)
+            if (_ops(taking) && _ops(taking)->keys_end)
                 _ops(taking)->keys_end(taking);
-            if (f && _ops(f)->keys_begin)
-                _ops(f)->keys_begin(f);
+            if (ops && ops->keys_begin)
+                ops->keys_begin(f);
             taking = f;
         }
-        const bool used = f && _ops(f)->key(ui, f, _content_rect(ui, f), ev);
+        const bool used = f && ((f->on_key && f->on_key(f, ev, f->on_key_user)) ||
+                                (ops && ops->key(ui, f, _content_rect(ui, f), ev)));
         owes_char = used && _makes_char(ev);
         if (used || ev->codepoint)
             continue;
@@ -2171,7 +2185,7 @@ static bool _route_keys(UISystem* ui, UIScreen* top, const UIInput* in, const UI
             _scroll_key(ui, top, in, ev->key);
         }
     }
-    if (taking && _ops(taking)->keys_end)
+    if (_ops(taking) && _ops(taking)->keys_end)
         _ops(taking)->keys_end(taking);
     return let_go;
 }
@@ -2252,8 +2266,8 @@ static void _update(UISystem* ui, const UIInput* in, float width, float height) 
     const bool moved = in->pointer_x != ui->last_pointer_x || in->pointer_y != ui->last_pointer_y;
     ui->last_pointer_x = in->pointer_x;
     ui->last_pointer_y = in->pointer_y;
-    // A text field holding the focus keeps it as the pointer passes over other things, since the
-    // keys are going to it; a press moves it.
+    // What takes the keys -- a text field, an editor, an element with a key hook -- keeps the focus
+    // as the pointer passes over other things, since the keys are going to it; a press moves it.
     if (moved && hovered && !_takes_keys(top->focused))
         top->focused = hovered;
 
@@ -2266,12 +2280,12 @@ static void _update(UISystem* ui, const UIInput* in, float width, float height) 
             top->focused = hovered;
         else if (!top->modal && !on_bar)
             top->focused = NULL; // a press on nothing lets go, where nothing holds the screen
-        if (_takes_keys(hovered))
+        if (_ops(hovered))
             _ops(hovered)->press(ui, hovered, _content_rect(ui, hovered), in->pointer_x,
                                  in->pointer_y, in->pointer_mods, in->time);
     }
     // A held field or editor selects to the pointer, from the captured element as a slider does.
-    if (_takes_keys(ui->pressed) && in->pointer_down && !in->pointer_pressed)
+    if (_ops(ui->pressed) && in->pointer_down && !in->pointer_pressed)
         _ops(ui->pressed)
             ->drag(ui, ui->pressed, _content_rect(ui, ui->pressed), in->pointer_x, in->pointer_y);
     // A held slider tracks the pointer: pressing anywhere on the row jumps the
@@ -2298,14 +2312,14 @@ static void _update(UISystem* ui, const UIInput* in, float width, float height) 
         // release would fire its callback a second time for one gesture. A field's
         // action is its submit, which a click is not.
         if (ui->pressed && ui->pressed == hovered && ui->pressed->kind != UI_SLIDER &&
-            !_takes_keys(ui->pressed))
+            !_ops(ui->pressed))
             _activate(ui->pressed);
         ui->pressed = NULL;
     }
 
-    // While a field holds the focus -- as the pointer left it -- navigation and accept are not the
-    // pass's to act on: an app that maps the arrows to navigation would move the focus out of the
-    // field with every caret move. Back lets go of it, as Esc does.
+    // While what takes the keys holds the focus -- as the pointer left it -- navigation and accept
+    // are not the pass's to act on: an app that maps the arrows to navigation would move the focus
+    // out of a field with every caret move. Back lets go of it, as Esc does.
     const bool typing = _takes_keys(top->focused);
     const bool let_go = _route_keys(ui, top, in, app_set);
     if (ui_top(ui) != top) {

@@ -28386,6 +28386,17 @@ def run_ui_gate(workdir):
                      does, types its character into neither (spec 14.6); and a text
                      field's letter, key and character, typed, the field using no
                      key it types from its character.
+      ui-element-keys any element takes keys with a hook (spec 14.10): a focused
+                     panel with one is handed every key and character in order, a
+                     key it takes dropping the character that key makes; the
+                     pointer passing over a field and a button leaves it focused,
+                     a press on the field moves the focus, Tab moves it on and Esc
+                     lets go; a press focuses it only when it is focusable, and
+                     ui_set_focus does either way; a field's hook keeps a / out of
+                     the text and the letters it declines are typed; a button with
+                     a hook still activates on release; a focusable panel with none
+                     takes no keys and gives the focus to a passing pointer; an
+                     editor refuses a hook and types as before.
       ui-editor-shapes a selection of three characters drawn by each shape: three
                      cells, four with the character at its far end (a vim mode's
                      visual mode), and its line whole with the line break (visual
@@ -29564,6 +29575,15 @@ def run_ui_gate(workdir):
                            "nowhere, and a field's letter is typed")
     print(f"  ui-editor-paired-char {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-paired-char", ok)
+
+    ok, detail = doc_flags("element-keys", 15,"a focused panel with a key hook is handed every key "
+                           "and character in order and keeps the focus under a passing pointer; "
+                           "Tab and Esc reach the screen; a press focuses it only when it is "
+                           "focusable; a field's hook keeps a / out of its text; a hooked button "
+                           "still activates; a panel with no hook is as it was; an editor refuses "
+                           "a hook")
+    print(f"  ui-element-keys       {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-element-keys", ok)
 
     ok, detail = doc_flags("editor-shapes", 4, "a selection of three characters drawn three cells "
                            "wide, four with the character at its far end, and its line whole with "

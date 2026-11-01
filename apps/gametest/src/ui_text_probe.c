@@ -1001,7 +1001,7 @@ static int probe_field_keys(UISystem* ui) {
     printf("ui field-keys enter submits %d\n", g_submits);
     // The key hook sees Up first and takes it; the caret stays.
     ui_field_set_text(field, "abc");
-    ui_field_set_on_key(field, take_up, NULL);
+    ui_set_on_key(field, take_up, NULL);
     one_key(ui, GLFW_KEY_UP, 0);
     printf("ui field-keys hook taken %d\n", g_keys_taken);
     printf("ui field-keys hook caret %d\n", cursor_of(field));

@@ -354,6 +354,9 @@ typedef struct UISystem UISystem;
 // a handler reads the new value rather than being told what it will become.
 typedef void (*UIActionFn)(UIElement* el, void* user);
 typedef void (*UIDrawFn)(UIElement* el, UIDrawList* dl, void* user);
+// A key or a character the focused element is handed before it acts on it; true takes it, and a
+// key taken takes the character it makes with it.
+typedef bool (*UIKeyFn)(UIElement* el, const InputKeyEvent* key, void* user);
 
 struct UIElement {
     // ENGINE-OWNED: the layout pass and the input pass write these; read them,
@@ -396,6 +399,8 @@ struct UIElement {
     UIStyle* style;                // ui_set_style (owned copy); NULL = the theme's
     UIDrawFn draw;                 // ui_set_draw
     void* draw_user;               //   "
+    UIKeyFn on_key;                // ui_set_on_key
+    void* on_key_user;             //   "
     struct ShaderProgram* program; // ui_set_element_program
 
     // SETTINGS: plain writes at any time.
@@ -584,8 +589,6 @@ enum {
     UI_FIELD_READ_ONLY = 2,       // selected and copied, never edited; may carry styled runs
     UI_FIELD_SUBMIT_ON_ENTER = 4, // multi-line: Enter submits and Shift+Enter starts a line
 };
-// A key the focused field sees before it acts on it; true takes it.
-typedef bool (*UIKeyFn)(UIElement* el, const InputKeyEvent* key, void* user);
 
 UIElement* ui_text_field(UIElement* parent, unsigned flags, UIActionFn on_submit, void* user);
 // The field's text, UTF-8; valid until it next changes. "" for anything not a field.
@@ -602,7 +605,6 @@ void ui_field_set_placeholder(UIElement* el, const char* text);
 bool ui_field_append(UIElement* el, const char* text, const UITextRun* runs, size_t run_count);
 // Once after a pass whose keys edited the text.
 void ui_field_set_on_change(UIElement* el, UIActionFn on_change, void* user);
-void ui_field_set_on_key(UIElement* el, UIKeyFn on_key, void* user);
 
 /*
  * The code editor (spec 14.4): a TextDoc shown and edited, its lines wrapped at its width, in the
@@ -612,8 +614,9 @@ void ui_field_set_on_key(UIElement* el, UIKeyFn on_key, void* user);
  * ui_editor_*, in ui_editor.h.
  */
 UIElement* ui_editor(UIElement* parent, struct TextDoc* doc);
-// Whether the UI takes the keyboard: a text field or an editor holds the top screen's focus, or a
-// modal screen is up. An app's own keys -- a view's bindings -- go where this is false.
+// Whether the UI takes the keyboard: a text field, an editor or an element with a key hook holds
+// the top screen's focus, or a modal screen is up. An app's own keys -- a view's bindings -- go
+// where this is false.
 bool ui_wants_keyboard(const UISystem* ui);
 
 // Replaces the text, and clears its runs: they name bytes of the text they were given for. Refused
@@ -626,6 +629,12 @@ void ui_set_text(UIElement* el, const char* text);
 bool ui_set_text_runs(UIElement* el, const UITextRun* runs, size_t count);
 void ui_set_style(UIElement* el, const UIStyle* style);
 void ui_set_draw(UIElement* el, UIDrawFn draw, void* user);
+// The keys and characters `el` is handed while it holds the focus, each before it acts on it; NULL
+// none. An element with one takes the keys as a text field does -- it keeps the focus as the
+// pointer passes, and what the hook does not take goes to the screen: Tab moves the focus, Esc
+// lets go -- whatever its kind; a press focuses it only if it is `focusable`. Refused by name on a
+// code editor, whose keys are its modes'.
+void ui_set_on_key(UIElement* el, UIKeyFn on_key, void* user);
 void ui_set_element_program(UIElement* el, struct ShaderProgram* program);
 // Convenience for the two size axes, since every element sets them together.
 void ui_set_size(UIElement* el, UISize x_mode, float x, UISize y_mode, float y);
