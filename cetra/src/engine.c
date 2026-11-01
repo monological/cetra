@@ -74,8 +74,10 @@ static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int 
 static void _engine_char_callback(GLFWwindow* window, unsigned int codepoint);
 static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, int fb_height);
+static void _engine_close_callback(GLFWwindow* window);
 static void _engine_derive_camera(Engine* engine);
 static void _engine_input_script_frame(Engine* engine);
+static void _engine_input_script_close(Engine* engine);
 static void _engine_input_script_free(Engine* engine);
 static bool _engine_input_script_cursor(const Engine* engine, double* fb_x, double* fb_y);
 static bool _engine_input_script_running(const Engine* engine);
@@ -1073,6 +1075,30 @@ void engine_end_work(Engine* engine) {
     } while (!atomic_compare_exchange_weak(out, &was, was - 1));
 }
 
+void engine_set_close_hook(Engine* engine, EngineCloseFunc fn, void* user) {
+    if (!engine) {
+        log_error("engine_set_close_hook: NULL engine");
+        return;
+    }
+    engine->close_hook = fn;
+    engine->close_user = user;
+}
+
+// The window asked to close, its should-close flag already set, as GLFW sets it before its
+// callback: a hook keeping it open clears the flag, and the next frame says why.
+static void _engine_close_asked(Engine* engine) {
+    if (engine->close_hook && !engine->close_hook(engine, engine->close_user)) {
+        glfwSetWindowShouldClose(engine->window, GLFW_FALSE);
+        engine_request_frame(engine);
+    }
+}
+
+static void _engine_close_callback(GLFWwindow* window) {
+    Engine* engine = glfwGetWindowUserPointer(window);
+    if (engine)
+        _engine_close_asked(engine);
+}
+
 // Frame-top self-heal: if the sizes the engine now derives disagree with what
 // the post chain was built at, rebuild. Keyed on the built sizes rather than
 // on an event flag so that every trigger -- the GUI slider, a window resize,
@@ -1281,6 +1307,7 @@ static int _setup_engine_gui(Engine* engine) {
     glfwSetFramebufferSizeCallback(engine->window, _engine_framebuffer_size_callback);
     glfwSetKeyCallback(engine->window, _engine_key_callback);
     glfwSetCharCallback(engine->window, _engine_char_callback);
+    glfwSetWindowCloseCallback(engine->window, _engine_close_callback);
     // Focus and the cursor entering or leaving have no engine-side logic, so they go straight to
     // the backend, which is owed both when installed without its own callbacks.
     glfwSetWindowFocusCallback(engine->window, ImGui_ImplGlfw_WindowFocusCallback);
@@ -1840,6 +1867,7 @@ typedef struct InputScriptRange {
     double wheel;
     InputKeyEvent typed[INPUT_SCRIPT_TYPED]; // in the line's order
     int typed_count;
+    bool close; // asks to close the window as its first frame ends
 } InputScriptRange;
 _Static_assert(offsetof(InputScriptRange, range) == 0,
                "frame_script.h reads the frame range off the front of this");
@@ -1849,8 +1877,9 @@ typedef struct InputScript {
     size_t count;
     int last; // the last frame any range covers; past it every frame is idle
     int frame;
-    double x, y; // where the cursor has been walked to
-    bool down;   // as of the previous frame, so a change is an edge
+    double x, y;    // where the cursor has been walked to
+    bool down;      // as of the previous frame, so a change is an edge
+    bool close_due; // the frame playing asks to close the window as it ends
 } InputScript;
 
 static const InputScriptRange k_input_idle = {0};
@@ -1983,6 +2012,10 @@ static bool _input_token(void* range, const char* tok, const char* path, int lin
         r->shift = true;
         return true;
     }
+    if (strcmp(tok, "close") == 0) {
+        r->close = true;
+        return true;
+    }
     const char* eq = strchr(tok, '=');
     if (eq) {
         size_t n = (size_t)(eq - tok);
@@ -2025,8 +2058,10 @@ static void _engine_input_script_frame(Engine* engine) {
     InputScript* s = engine->input_script;
     if (!s)
         return;
+    const int frame = s->frame++;
     const InputScriptRange* r =
-        frame_script_at(s->ranges, s->count, sizeof(*r), &k_input_idle, s->frame++);
+        frame_script_at(s->ranges, s->count, sizeof(*r), &k_input_idle, frame);
+    s->close_due = r->close && frame == r->range.from;
 
     double x = r->has_at ? r->at_x : s->x + r->by_x;
     double y = r->has_at ? r->at_y : s->y + r->by_y;
@@ -2054,6 +2089,17 @@ static void _engine_input_script_frame(Engine* engine) {
             _engine_char(engine, ev->codepoint);
         }
     }
+}
+
+// A `close` the frame playing holds, asked as the frame ends, as the close button would ask it:
+// the window's flag set first, as GLFW sets it.
+static void _engine_input_script_close(Engine* engine) {
+    InputScript* s = engine->input_script;
+    if (!s || !s->close_due)
+        return;
+    s->close_due = false;
+    glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
+    _engine_close_asked(engine);
 }
 
 // True while the script has a frame left to play: it is input, and idle mode draws for it.
@@ -3990,6 +4036,9 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         engine_present_frame(engine, frame_mode);
         _engine_frame_end_requests(engine);
         profiler_end_frame(engine->profiler);
+
+        // A script's close, before the frame limit below, which a refusal must not undo.
+        _engine_input_script_close(engine);
 
         // Engine-owned frame limit (CI/headless): requests close so the
         // final-frame screenshot below fires this same iteration.
