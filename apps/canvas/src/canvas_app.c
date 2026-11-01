@@ -1447,10 +1447,12 @@ static void draw_view(Engine* engine, void* user) {
         g_after_draw();
 }
 
-// Under --idle: the timed wakes --idle-wake asks for, one each frame in turn,
-// and, headless, a line a frame and one at exit for the `idle` gate group.
-enum { IDLE_WAKES_MAX = 8 };
+// Under --idle: the timed wakes --idle-wake asks for, an item each frame in turn
+// and every time of an item on its frame, and, headless, a line a frame and one
+// at exit for the `idle` gate group.
+enum { IDLE_WAKES_MAX = 128 };
 static double g_wakes[IDLE_WAKES_MAX];
+static int g_wake_item[IDLE_WAKES_MAX]; // the item each time is asked with
 static int g_wake_count, g_wake_next;
 static bool g_idle_say;
 static const char* g_idle_load; // --idle-load: a texture asked for as late work
@@ -2289,11 +2291,16 @@ static void on_update(Engine* engine, float dt) {
     (void)dt;
     if (board_late_settle(false) && g_idle_say)
         printf("canvas idle work landed %zu\n", engine->total_frames + 1);
-    if (g_idle_say)
+    if (g_idle_say) {
         printf("canvas idle frame %zu delta %.6f\n", engine->total_frames + 1, engine->delta_time);
+        printf("canvas idle at %zu %.6f\n", engine->total_frames + 1, glfwGetTime());
+    }
     start_late_work(engine);
-    if (g_wake_next < g_wake_count)
-        engine_request_frame_after(engine, g_wakes[g_wake_next++]);
+    if (g_wake_next < g_wake_count) {
+        const int item = g_wake_item[g_wake_next];
+        while (g_wake_next < g_wake_count && g_wake_item[g_wake_next] == item)
+            engine_request_frame_after(engine, g_wakes[g_wake_next++]);
+    }
     if (g_probe)
         say_typed(engine);
     live_ui_update(engine);
@@ -2900,10 +2907,18 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "--idle") == 0) {
             idle = true;
         } else if (strcmp(argv[i], "--idle-wake") == 0 && more) {
-            // Seconds, comma-separated: each asked for on its frame in turn.
-            for (const char* tok = strtok(argv[++i], ","); tok && g_wake_count < IDLE_WAKES_MAX;
-                 tok = strtok(NULL, ","))
-                g_wakes[g_wake_count++] = atof(tok);
+            // Seconds, comma-separated: each item asked for on its frame in turn, and the times
+            // of an item joined by + on the same frame.
+            int item = 0;
+            for (const char* s = argv[++i]; *s && g_wake_count < IDLE_WAKES_MAX;) {
+                char* end;
+                g_wakes[g_wake_count] = strtod(s, &end);
+                if (end == s)
+                    break;
+                g_wake_item[g_wake_count++] = item;
+                item += *end == ',';
+                s = *end ? end + 1 : end;
+            }
         } else if (strcmp(argv[i], "--input-script") == 0 && more) {
             input_script = argv[++i];
         } else if (strcmp(argv[i], "--idle-load") == 0 && more) {

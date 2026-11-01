@@ -30371,10 +30371,10 @@ def _shapes_pointer_run(workdir, tag, script, frames):
     return _pointer_run(workdir, _bin("shapes"), f"canvas_{tag}", script, frames)
 
 
-def _canvas_shot(out, frames, *args, env=None):
-    """apps/canvas headless at 400x300 points, its picture written to `out`: its stdout, or None
-    for a run that failed or hung, which prints the tail of its output so an arm reads nothing and
-    fails rather than the group stopping."""
+def _canvas_shot(out, frames, *args, env=None, log=False):
+    """apps/canvas headless at 400x300 points, its picture written to `out`: its stdout, with its
+    log after it when `log` is set, or None for a run that failed or hung, which prints the tail of
+    its output so an arm reads nothing and fails rather than the group stopping."""
     cmd = [_bin("canvas"), "-x", "-f", str(frames), "-W", "400", "-H", "300", "-S", out, *args]
     tag = os.path.splitext(os.path.basename(out))[0]
     try:
@@ -30385,7 +30385,7 @@ def _canvas_shot(out, frames, *args, env=None):
     if r.returncode != 0 or not os.path.exists(out):
         print(f"    apps/canvas {tag} failed: {(r.stdout + r.stderr)[-400:]}")
         return None
-    return r.stdout
+    return r.stdout + (r.stderr if log else "")
 
 
 def _canvas_run(workdir, tag, *args, frames=2, env=None):
@@ -31067,19 +31067,24 @@ def _canvas_coverage(path):
 
 def _idle_run(workdir, tag, *args, frames=50, idle=True):
     """apps/canvas under --idle unless told otherwise: its picture's path, and from its idle lines
-    each frame's delta_time, the run's frames drawn and seconds waited, the size of a texture it
-    loaded, and the frames its late work was begun and landed in, as {"deltas": [...], "frames": n,
-    "waited": s, "loaded": (w, h), "begun": n, "landed": n}; None and an empty dict for a run that
-    failed."""
+    each frame's delta_time and wall clock, the run's frames drawn and seconds waited, the size of a
+    texture it loaded, the frames its late work was begun and landed in, and how often a full list
+    of timed wakes was warned about, as {"deltas": [...], "at": [...], "frames": n, "waited": s,
+    "loaded": (w, h), "begun": n, "landed": n, "wakes_full": n}; None and an empty dict for a run
+    that failed."""
     out = os.path.join(workdir, f"idle_{tag}.ppm")
-    stdout = _canvas_shot(out, frames, *(["--idle"] if idle else []), *args)
+    stdout = _canvas_shot(out, frames, *(["--idle"] if idle else []), *args, log=True)
     if stdout is None:
         return None, {}
-    said = {"deltas": []}
+    said = {"deltas": [], "at": [], "wakes_full": 0}
     for line in stdout.splitlines():
         p = line.split()
-        if p[:3] == ["canvas", "idle", "frame"] and len(p) == 6:
+        if "timed wakes are held, the most" in line:
+            said["wakes_full"] += 1
+        elif p[:3] == ["canvas", "idle", "frame"] and len(p) == 6:
             said["deltas"].append(float(p[5]))
+        elif p[:3] == ["canvas", "idle", "at"] and len(p) == 5:
+            said["at"].append(float(p[4]))
         elif p[:3] == ["canvas", "idle", "frames"] and len(p) == 6:
             said["frames"], said["waited"] = int(p[3]), float(p[5])
         elif p[:3] == ["canvas", "idle", "loaded"] and len(p) == 5:
@@ -31102,6 +31107,12 @@ def run_idle_gate(workdir):
                      frames, from the first to the last at least the 0.5 s asked for, and each
                      delta_time under the wake it followed. The wait is kept out of the clock: a
                      frame after a wait advances what animates by a frame and not by the wait.
+      idle-wakes-kept every timed wake asked for is kept (spec 14.9): 0.6 s and 0.2 s asked on
+                     one frame draw a frame at or after each and only then end, where one deadline
+                     ended after the first; 0.3 s and 0.3005 s are one wake, drawn at or after the
+                     later; and 65 asked on one frame are warned about once, the last of them, past
+                     the 64 held, moving the latest later rather than being dropped -- the run's
+                     last frame is at or after its 1 s.
       idle-thread    the board filled on a thread started on the frame a 0.5 s wake draws, between
                      engine_begin_work and engine_end_work: the loop waits rather than drawing, 3
                      frames, and the last is the board drawn without idle mode, 0 px. A headless
@@ -31173,6 +31184,29 @@ def run_idle_gate(workdir):
                   f"(want under 0.2 and 0.3), {said['waited']:.3f} s waited")
     print(f"  idle-timed          {'PASS' if ok else 'FAIL'}  {detail}")
     note("idle-timed", ok)
+
+    # Each run's frame 1 asks; its wall clock is taken just before, so a frame at or past the ask's
+    # time plus a wait is at or past that wait.
+    _, two = _idle_run(workdir, "wakes_two", "--sheet", "shapes", "--idle-wake", "0.6+0.2")
+    _, near = _idle_run(workdir, "wakes_near", "--sheet", "shapes", "--idle-wake", "0.3+0.3005")
+    many = [round(0.02 + 0.01 * k, 2) for k in range(64)] + [1.0]
+    _, full = _idle_run(workdir, "wakes_full", "--sheet", "shapes", "--idle-wake",
+                        "+".join(str(t) for t in many), frames=200)
+    if any("frames" not in s or len(s["at"]) != s["frames"] for s in (two, near, full)):
+        ok, detail = False, "a run failed"
+    else:
+        after = [[t - s["at"][0] for t in s["at"][1:]] for s in (two, near, full)]
+        last = after[2][-1] if after[2] else 0.0
+        ok = (two["frames"] == 3 and after[0][0] >= 0.2 and after[0][1] >= 0.6
+              and near["frames"] == 2 and after[1][0] >= 0.3005
+              and full["wakes_full"] == 1 and last >= 1.0)
+        detail = (f"0.6+0.2: {two['frames']} frames (want 3) at "
+                  f"{', '.join(f'{t:.3f}' for t in after[0])} s; 0.3+0.3005: {near['frames']} "
+                  f"(want 2) at {', '.join(f'{t:.4f}' for t in after[1])} s (want >= 0.3005); "
+                  f"65 times: warned {full['wakes_full']} (want 1), {full['frames']} frames, the "
+                  f"last at {last:.3f} s (want >= 1)")
+    print(f"  idle-wakes-kept     {'PASS' if ok else 'FAIL'}  {detail}")
+    note("idle-wakes-kept", ok)
 
     late, said = _idle_run(workdir, "thread", "--sheet", "board", "--edit-thread", "--idle-wake",
                            "0.5")
