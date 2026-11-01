@@ -2111,27 +2111,37 @@ static bool editor_lookup(UIElement* el, UIEditorVimLookup kind, void* user) {
     return true;
 }
 
+// The brackets a line opens less those it closes.
+static int bracket_depth(const char* s, size_t len) {
+    int open = 0;
+    for (size_t i = 0; i < len; i++)
+        open += (s[i] == '(') - (s[i] == ')');
+    return open;
+}
+
 // --vim-layout: a host's indent for an S-expression, two spaces for every bracket still open where
-// the line starts -- brackets in comments and strings counted too, as a sketch of pcb's reader --
-// with a line that opens with a closing bracket one level less.
-static int editor_indent(UIElement* el, size_t line, void* user) {
+// a line starts -- brackets in comments and strings counted too, as a sketch of pcb's reader --
+// with a line that opens with a closing bracket one level less. The brackets above the lines are
+// counted once, and then down them.
+static bool editor_indent(UIElement* el, size_t first, size_t last, int* cols, void* user) {
     (void)user;
     TextDoc* doc = ui_editor_doc(el);
+    if (!doc)
+        return false;
     int open = 0;
-    for (size_t l = 0; doc && l < line; l++) {
-        size_t len = 0;
-        const char* s = text_doc_line(doc, l, &len);
-        for (size_t i = 0; i < len; i++)
-            open += (s[i] == '(') - (s[i] == ')');
-    }
     size_t len = 0;
-    const char* s = doc ? text_doc_line(doc, line, &len) : NULL;
-    size_t i = 0;
-    while (s && i < len && (s[i] == ' ' || s[i] == '\t'))
-        i++;
-    if (s && i < len && s[i] == ')')
-        open--;
-    return open > 0 ? 2 * open : 0;
+    for (size_t l = 0; l < first; l++)
+        open += bracket_depth(text_doc_line(doc, l, &len), len);
+    for (size_t line = first; line <= last; line++) {
+        const char* s = text_doc_line(doc, line, &len);
+        size_t i = 0;
+        while (i < len && (s[i] == ' ' || s[i] == '\t'))
+            i++;
+        const int depth = open - (i < len && s[i] == ')');
+        cols[line - first] = depth > 0 ? 2 * depth : 0;
+        open += bracket_depth(s, len);
+    }
+    return true;
 }
 
 // --vim-layout: the lines' words joined on one line at the first line's indent.
