@@ -883,10 +883,11 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
 // Asks for the next frame. Any thread: from another one, it wakes a waiting loop.
 void engine_request_frame(Engine* engine);
 // Asks for a frame `seconds` from now, at most a day. Every time asked is kept until it comes, so a
-// caller asks once; a time within a millisecond of one already held is that one, at the later of
-// the two, so a frame is never early and the same time asked every frame is held once. Past 64
-// times held, one more is merged with the next later and said once. A wake that recurs asks again
-// on the frame it draws. Main thread.
+// caller asks once. A time is merged with one already held, at the later of the two, only while
+// that makes no caller more than a millisecond late: a frame is never early, and the same time
+// asked every frame is held once. Past 64 times held, one more is merged with the next later, or
+// the latest is moved to it, and that is said once. A wake that recurs asks again on the frame it
+// draws. Main thread.
 void engine_request_frame_after(Engine* engine, double seconds);
 // A result is coming from another thread that will be drawn: a headless run in idle mode does not
 // end while one is out, and draws no frame until it is in, so the frame after the one that began

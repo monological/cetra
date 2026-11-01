@@ -1950,6 +1950,19 @@ static int probe_vim_carets(UISystem* ui) {
     ui_editor_set_selections(ed, touching, 2);
     vim_keys(ui, "vllld");
     say_flag("vim-carets", "visual", "touching", doc_is_str(doc, "eta\nalpha beta\nalpha beta\n"));
+    // Two carets whose ranges nest out of their order -- the first inside the bracket the second
+    // takes whole -- take every line of the outer once: > and, with the layout's indent, = too.
+    static const char NESTED[] = "  (a\n(b c)\nd)\n";
+    const TextSelection nested[] = {{6, 6}, {11, 11}};
+    text_doc_set_text(doc, NESTED, strlen(NESTED));
+    ui_editor_set_selections(ed, nested, 2);
+    vim_keys(ui, ">i(");
+    say_flag("vim-carets", "nested", "shift", doc_is_str(doc, "      (a\n    (b c)\n    d)\n"));
+    text_doc_set_text(doc, NESTED, strlen(NESTED));
+    ui_editor_set_selections(ed, nested, 2);
+    ui_editor_vim_set_indent(vim, layout_indent, NULL);
+    vim_keys(ui, "=i(");
+    say_flag("vim-carets", "nested", "indent", doc_is_str(doc, "(a\n  (b c)\n  d)\n"));
     ui_editor_set_mode(ed, NULL);
     free_text_doc(doc);
     free_ui_editor_vim(vim);
@@ -2339,6 +2352,22 @@ static int probe_vim_lookup(UISystem* ui) {
     vim_keys(ui, "gdK");
     say_flag("vim-lookup", "read_only", "asked", g_lookups == 12);
     doc->read_only = false;
+    // A host going to a definition in the same text from a block: visual mode ends where it went,
+    // not at the block's head.
+    caret_at(ed, 16);
+    vim_keys(ui, "<C-v>e<C-]>");
+    say_flag("vim-lookup", "block", "went",
+             g_lookups == 13 && ui_editor_vim_state(vim) == UI_VIM_NORMAL &&
+                 one_selection(ed, 0, 0));
+    // With no host, dgd after a j is characterwise, where vim's takes the j's lines: the one
+    // difference the mode keeps.
+    ui_editor_vim_set_lookup(vim, NULL, NULL);
+    text_doc_set_text(doc, LOOKUP_TEXT, strlen(LOOKUP_TEXT));
+    caret_at(ed, 0);
+    vim_keys(ui, "jjdgd");
+    say_flag("vim-lookup", "after_j", "characters",
+             doc_is_str(doc, "alpha \nbeta x\n") && one_selection(ed, 5, 5));
+    ui_editor_vim_set_lookup(vim, lookup_host, vim);
     // A host showing the editor another text from visual mode: the mode back in normal mode, the
     // other text's caret left where it was, and the next key read there.
     TextDoc* other = create_text_doc("xyz\n", 4);

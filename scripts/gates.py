@@ -26293,12 +26293,12 @@ _VIM_SEQUENCES = [
 ]
 
 # The layout oracle (spec 14.9): every fixture, and one indented badly on purpose -- brackets
-# opening and closing over lines, a tab, comment lines the rule leaves alone, a line of blanks --
-# with the rules of _VIM_LAYOUT on both sides. = over every kind of range, in visual modes and
-# with counts; the new lines o, O and Enter make; changes of whole lines; gq over ranges; and .,
-# u and Ctrl+R after them.
+# opening and closing over lines, tabs, comment lines the rule keeps (one with a tab, which a kept
+# indent rebuilds of spaces), a line of blanks -- with the rules of _VIM_LAYOUT on both sides. =
+# over every kind of range, in visual modes and with counts; the new lines o, O and Enter make;
+# changes of whole lines; gq over ranges; and ., u and Ctrl+R after them.
 _VIM_LAYOUT_FIXTURES = dict(_VIM_FIXTURES, crooked=(
-    b"(block bad\n(port a\n      :width 4)\n   (net b)\n; kept\n        ; also kept\n"
+    b"(block bad\n(port a\n      :width 4)\n   (net b)\n; kept\n\t  ; also kept\n"
     b"\t(inst (u 1)\nx))\n  \n  (tail one two three four five)\n"))
 _VIM_LAYOUT_SEQUENCES = [
     "==", "=j", "=k", "=G", "=gg", "3==", "=2j", "=ip", "=ap", "=i(", "=a(", "=}", "V=", "Vj=",
@@ -26443,7 +26443,8 @@ def _vim_reference(case, path, read_only=False, layout=False):
         if os.path.exists(p):
             os.remove(p)
     cmd = [_VIM, "-Nu", "NONE", "-i", "NONE", "-n", "-es", "-c", _VIM_SET,
-           *(["-c", f"source {_VIM_LAYOUT}"] if layout else []),
+           *(["-c", "execute 'source ' . fnameescape('" + _VIM_LAYOUT.replace("'", "''") + "')"]
+             if layout else []),
            *(["-c", "set nomodifiable"] if read_only else []),
            "-c", f"call cursor({line}, {col})",
            "-c", f"call feedkeys(\"{_vim_exe_keys(keys)}\", 'xt')",
@@ -28441,13 +28442,17 @@ def run_ui_gate(workdir):
                      nothing and kept, as vim keeps it; a host finding nothing
                      giving vim's own gd and leaving the caret for Ctrl+] and K; .
                      after a lookup making the change before it again; a read-only
-                     text still asking; and a host showing the editor another text
-                     from visual mode leaving the mode normal there.
+                     text still asking; a host going to a definition from a block,
+                     visual mode ending where it went; with no host, dgd after j
+                     characterwise, the one difference from vim kept; and a host
+                     showing the editor another text from visual mode leaving the
+                     mode normal there.
       ui-vim-carets  several carets, which vim has none of: Ctrl+V and I puts a
                      caret on each line, Z typed at every one, Esc and then u each
                      leaving one cursor at the block's top left; A after the block;
-                     three carets each taking 3x, dw and vlld; and two areas sharing
-                     a character deleted as one.
+                     three carets each taking 3x, dw and vlld; two areas sharing a
+                     character deleted as one; and two carets whose i( ranges nest
+                     out of their order, > and = taking each line of the outer once.
       ui-editor-script apps/canvas --editor on a file, driven by a script: a caret
                      added below, "XY" typed at both, undone, Esc to one caret, the
                      word at it taken by Cmd+D and found again round the text's end
@@ -29631,20 +29636,21 @@ def run_ui_gate(workdir):
     print(f"  ui-vim-host           {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-vim-host", ok)
 
-    ok, detail = doc_flags("vim-lookup", 9, "gd, gD, Ctrl+] and K asked of the host once each, of "
-                           "their kinds; g Esc d asking nothing; dgd and visual gd vim's motions; "
-                           "Ctrl+] and K in a one-line visual area asked with it in place and "
-                           "leaving visual mode, over two lines asking nothing; a host finding "
+    ok, detail = doc_flags("vim-lookup", 11, "gd, gD, Ctrl+] and K asked of the host once each, "
+                           "of their kinds; g Esc d asking nothing; dgd and visual gd vim's "
+                           "motions; Ctrl+] and K in a one-line visual area asked with it in place "
+                           "and leaving visual mode, over two lines asking nothing; a host finding "
                            "nothing giving vim's gd; . repeating the change before a lookup; a "
-                           "read-only text asking; another text shown from visual mode left "
-                           "normal")
+                           "read-only text asking; a host's jump from a block kept; dgd after j "
+                           "characterwise; another text shown from visual mode left normal")
     print(f"  ui-vim-lookup         {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-vim-lookup", ok)
 
-    ok, detail = doc_flags("vim-carets", 8, "a block's I a caret on each line, what is typed on "
+    ok, detail = doc_flags("vim-carets", 10, "a block's I a caret on each line, what is typed on "
                            "every one, one cursor at the top left after Esc and after undo, A after "
-                           "the block; each of three carets taking 3x, dw and a visual area; and two "
-                           "areas sharing a character deleted as one")
+                           "the block; each of three carets taking 3x, dw and a visual area; two "
+                           "areas sharing a character deleted as one; and two carets' ranges "
+                           "nested out of order shifted and re-indented a line once each")
     print(f"  ui-vim-carets         {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-vim-carets", ok)
 

@@ -1447,13 +1447,10 @@ static void draw_view(Engine* engine, void* user) {
         g_after_draw();
 }
 
-// Under --idle: the timed wakes --idle-wake asks for, an item each frame in turn
-// and every time of an item on its frame, and, headless, a line a frame and one
-// at exit for the `idle` gate group.
-enum { IDLE_WAKES_MAX = 128 };
-static double g_wakes[IDLE_WAKES_MAX];
-static int g_wake_item[IDLE_WAKES_MAX]; // the item each time is asked with
-static int g_wake_count, g_wake_next;
+// Under --idle: what is left of --idle-wake's argument, read an item a frame --
+// its times joined by + asked on that frame -- and, headless, a line a frame and
+// one at exit for the `idle` gate group.
+static const char* g_wake_spec = "";
 static bool g_idle_say;
 static const char* g_idle_load; // --idle-load: a texture asked for as late work
 static bool g_late_started;     // the late work has been started
@@ -2033,10 +2030,7 @@ static bool host_split(UIElement* el, void* user) {
     take_size(row, el);
     ui_move(row, el->parent, el);
     ui_move(el, row, NULL);
-    if (g_split_share > 0.0f)
-        ui_set_size(el, UI_SHARE, g_split_share, UI_GROW, 0.0f);
-    else
-        ui_set_size(el, UI_GROW, 0.0f, UI_GROW, 0.0f);
+    ui_set_size(el, g_split_share > 0.0f ? UI_SHARE : UI_GROW, g_split_share, UI_GROW, 0.0f);
     ui_set_focus(s->screen, pane_open(row, ui_editor_doc(el)));
     return true;
 }
@@ -2393,7 +2387,7 @@ static void on_idle_loaded(Texture* tex, void* user) {
 // wake left to ask for. After a wake the run is past the first tenth of a second, in which a hidden
 // window is sent something that wakes a waiting loop, so nothing but the work can wake it.
 static void start_late_work(Engine* engine) {
-    if (g_late_started || g_wake_next < g_wake_count)
+    if (g_late_started || *g_wake_spec)
         return;
     g_late_started = true;
     if (g_late_edit) {
@@ -2417,10 +2411,16 @@ static void on_update(Engine* engine, float dt) {
         printf("canvas idle at %zu %.6f\n", engine->total_frames + 1, glfwGetTime());
     }
     start_late_work(engine);
-    if (g_wake_next < g_wake_count) {
-        const int item = g_wake_item[g_wake_next];
-        while (g_wake_next < g_wake_count && g_wake_item[g_wake_next] == item)
-            engine_request_frame_after(engine, g_wakes[g_wake_next++]);
+    for (char sep = '+'; *g_wake_spec && sep == '+';) {
+        char* end;
+        const double seconds = strtod(g_wake_spec, &end);
+        if (end == g_wake_spec) {
+            g_wake_spec = "";
+            break;
+        }
+        engine_request_frame_after(engine, seconds);
+        sep = *end;
+        g_wake_spec = sep ? end + 1 : end;
     }
     if (g_probe)
         say_typed(engine);
@@ -3030,16 +3030,7 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "--idle-wake") == 0 && more) {
             // Seconds, comma-separated: each item asked for on its frame in turn, and the times
             // of an item joined by + on the same frame.
-            int item = 0;
-            for (const char* s = argv[++i]; *s && g_wake_count < IDLE_WAKES_MAX;) {
-                char* end;
-                g_wakes[g_wake_count] = strtod(s, &end);
-                if (end == s)
-                    break;
-                g_wake_item[g_wake_count++] = item;
-                item += *end == ',';
-                s = *end ? end + 1 : end;
-            }
+            g_wake_spec = argv[++i];
         } else if (strcmp(argv[i], "--input-script") == 0 && more) {
             input_script = argv[++i];
         } else if (strcmp(argv[i], "--idle-load") == 0 && more) {
