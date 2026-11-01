@@ -2768,17 +2768,21 @@ static void _leave_insert(Ctx* c) {
     int* wants = _drop_indent(c, &want_count);
     // A block's I or A that put nothing in -- typed nothing, or a read-only text refused it, which
     // vim tells by length too -- ends as any insert does, not at the block's corner; and an A takes
-    // its padding out again, since vim pads only lines it puts text on.
+    // its padding out again from every line but the top, since vim pads the others only once text
+    // goes on them, and the top line before its insert begins.
     const bool nothing_in =
         v->block_insert && v->block_corner && text_doc_length(c->doc) == v->padded_length;
     if (nothing_in && v->pad_count) {
         TextEdit* cut = calloc(v->pad_count, sizeof(TextEdit));
+        size_t m = 0;
         for (size_t i = 0; cut && i < v->pad_count; i++) {
+            if (v->pad_lines[i] == v->insert_top)
+                continue;
             const size_t e = _le(c, v->pad_lines[i]);
-            cut[i] = (TextEdit){e - v->pad_widths[i], e, "", 0};
+            cut[m++] = (TextEdit){e - v->pad_widths[i], e, "", 0};
         }
-        if (cut)
-            ui_editor_edit(c->el, cut, v->pad_count, NULL, 0, 0);
+        if (cut && m)
+            ui_editor_edit(c->el, cut, m, NULL, 0, 0);
         free(cut);
     }
     v->pad_count = 0;
