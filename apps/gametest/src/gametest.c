@@ -9852,7 +9852,9 @@ int main(int argc, const char* argv[]) {
     // particle demo next door (spec 11.103).
     //
     // Headless keeps MSAA and skips TAA unless asked, because jitter plus a
-    // history makes the frame sensitive to async load timing.
+    // history makes the frame depend on the frame a texture lands in. Headless,
+    // what the start-up asked for lands before frame 1 (spec 14.8); one asked
+    // for later still streams.
     if (!headless || force_taa) {
         config.engine.msaa_samples = 1;
         config.engine.taa = true;
