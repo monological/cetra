@@ -655,11 +655,17 @@ project are pcb's own, on these calls; nothing in cetra is missing for them.
 ## Not among the nine, but on the way
 
 - **Read-only texts, a close the app can refuse, and headless frames that wait for work** -- spec
-  14.7, planned, from pcb 6.1's reviews. pcb's messages pane and its conflict pane want a text no one
-  can type into. pcb wants to refuse a close while a file is in conflict, and on macOS the menu's
-  Cmd+Q is the same close request as the close button. Its window tests want scripted frames that
-  wait for work, rather than the app waiting for it. pcb takes these up in a spec of its own once
-  14.7 lands.
+  14.7, built, from pcb 6.1's reviews:
+  - `TextDoc.read_only` and `text_doc_set_on_refused`, for pcb's messages pane and its conflict
+    pane. The vim mode does what vim does with `'nomodifiable'`.
+  - `engine_set_close_hook`, for refusing a close while a file is in conflict. It is asked at the
+    close button, Alt+F4, and the macOS menu's Quit and Cmd+Q alike, and at an input script's
+    `close`.
+  - Headless, under idle mode, a frame waits for the work an app counts, so pcb's window tests can
+    drop their own waits. That work must be begun as it starts, never frames ahead, or the frame
+    that would start it waits for it: pcb's spec checks its two `engine_begin_work` sites.
+
+  pcb takes these up in a spec of its own.
 - **Host key sequences in the vim mode**, for pcb's `gd` and its leader key. pcb now reads vim's
   pending keys to spot them, which breaks if the vim mode ever does `gd` itself. Wanted with pcb's
   6.2, whose view keys will want them too; not yet a spec.
