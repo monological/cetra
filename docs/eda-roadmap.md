@@ -17,7 +17,7 @@ engine feature that pcb happens to be the first user of.
 `AGENTS.md` (Planning Workflow) requires: the item's status, the decisions its spec made, anything
 it did differently from what is written here and why, and any new item it found.
 
-_Last updated: 2026-10-31._
+_Last updated: 2026-11-01._
 
 ---
 
@@ -666,11 +666,22 @@ project are pcb's own, on these calls; nothing in cetra is missing for them.
     that would start it waits for it: pcb's spec checks its two `engine_begin_work` sites.
 
   pcb takes these up in a spec of its own.
-- **Host key sequences in the vim mode**, for pcb's `gd` and its leader key. pcb now reads vim's
-  pending keys to spot them, which breaks if the vim mode ever does `gd` itself. Wanted with pcb's
-  6.2, whose view keys will want them too; not yet a spec.
-- **Grow weights in the UI's layout**, so a pane split's ratio sizes it rather than the app
-  rewriting fixed sizes each frame. Nothing visible depends on it; not yet a spec.
+- **Vim keys the host answers, sizes by share, and every timed wake** -- spec 14.9, specced, not
+  built, the rest of pcb 6.1's reviews:
+  - hooks for vim's own keys that need the language, as vim's `tagfunc`, `keywordprg`,
+    `indentexpr` and `formatexpr` are: `gd`, `gD` and Ctrl+] ask the host where a name is
+    declared, `K` what it is, `=` and a new line its indent, `gq` its lines laid out. pcb now spots
+    its `gd` by reading the vim mode's half-typed keys, which breaks if the vim mode ever does `gd`
+    itself; with no host, `gd` becomes vim's own text search.
+  - `UI_SHARE`, a size as a share of the parent, so a pane split's ratio sizes it rather than the
+    app rewriting fixed sizes before and after each layout. It replaced "grow weights": a weight
+    on GROW comes on top of what a side measures, so a split would miss its ratio by its gap.
+  - `engine_request_frame_after` keeping every time asked, where it keeps only the soonest; pcb
+    asks its three each frame until they come.
+
+  None is needed by pcb's 6.2. pcb takes them up in its 6.1.2. A host's own key sequences, a
+  `:map`, wait until pcb wants a command vim has no meaning for; completion (Ctrl+X Ctrl+O) is a
+  spec of its own, later.
 - **A second window**, for a second monitor. pcb lists it as an open question and as a cetra change;
   nothing is decided.
 - **The physical depth of field** of item 7, likely wanted before pcb's 3D view is judged on its
