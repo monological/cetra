@@ -31066,6 +31066,10 @@ def run_idle_gate(workdir):
                      over 30 frames more than one on a line of text -- whose frames are the UI's
                      own eases -- and ends on its own once every row is wrapped, short of the 400
                      allowed.
+      idle-work-waits headless, a frame waits for the work out (spec 14.7): the board's thread,
+                     begun as the first frame draws and made slow on purpose, lands in the second
+                     at a pause of 0 ms and of 300 ms alike, while a script keeps every frame
+                     drawing. Before, a script's frames drew on through the work.
       engine-close-hook the window's close, which the app may refuse (spec 14.7), asked by an
                      input script's close as the close button asks it: refused the first time and
                      taken the second, the run ending on the frame of the second; with no hook
@@ -31215,6 +31219,32 @@ def run_idle_gate(workdir):
               f"takes at 192 KB a frame, the end before 400, and 1)")
     print(f"  idle-editor         {'PASS' if ok else 'FAIL'}  {detail}")
     note("idle-editor", ok)
+
+    # Headless, a frame waits for the work out (spec 14.7): the board's thread, begun as the first
+    # frame draws and made slow on purpose, lands in the second while a script keeps every frame
+    # drawing.
+    script = os.path.join(workdir, "idle_work.script")
+    with open(script, "w", encoding="utf-8") as f:
+        f.write("0-20 idle\n")
+
+    def work_run(delay):
+        out = os.path.join(workdir, f"idle_work_{delay}.ppm")
+        stdout = _canvas_shot(out, 50, "--idle", "--sheet", "board", "--edit-thread",
+                              "--work-delay", str(delay), "--input-script", script)
+        said = {}
+        for line in (stdout or "").splitlines():
+            p = line.split()
+            if p[:3] == ["canvas", "idle", "work"] and len(p) == 5:
+                said[p[3]] = int(p[4])
+        return said.get("begun"), said.get("landed")
+
+    runs = {delay: work_run(delay) for delay in (0, 300)}
+    ok = all(b is not None and landed == b + 1 for b, landed in runs.values())
+    detail = (", ".join(f"{d} ms: begun at frame {b}, landed at {landed}"
+                        for d, (b, landed) in runs.items())
+              + " (want each landed the frame after it was begun)")
+    print(f"  idle-work-waits     {'PASS' if ok else 'FAIL'}  {detail}")
+    note("idle-work-waits", ok)
 
     # The window's close, which the app may refuse (spec 14.7): a script's close asks the hook as
     # the close button would, as the frame it is on ends.

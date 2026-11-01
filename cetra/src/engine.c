@@ -967,10 +967,18 @@ typedef enum { IDLE_DRAW, IDLE_WAIT, IDLE_DONE } IdleNext;
 // script alone is asked here, since its frame plays after this is decided, at the end of the
 // frame's events. The work out is read BEFORE the request: engine_end_work asks before it lowers
 // its count, so this sees one or the other and never neither.
+//
+// Headless, work out is waited for before anything else that asks (spec 14.7), so what a frame
+// began has landed by the next on any machine: a script's frame N + 1 sees the work frame N began.
+// A window draws what asks at once, since input has to reach the screen within a frame. The
+// texture loader's decodes are not waited for: its count falls only as a frame delivers them.
 static IdleNext _engine_idle_next(const Engine* engine) {
     const EngineWake* w = engine->wake;
-    const bool pending = atomic_load(&w->work_out) > 0 ||
-                         async_loader_is_busy(engine->async_loader) || isfinite(w->wake_at);
+    const bool working = atomic_load(&w->work_out) > 0;
+    if (working && engine->headless)
+        return IDLE_WAIT;
+    const bool pending =
+        working || async_loader_is_busy(engine->async_loader) || isfinite(w->wake_at);
     if (atomic_load(&w->requested) || glfwGetTime() >= w->wake_at ||
         _engine_input_script_running(engine))
         return IDLE_DRAW;
@@ -989,7 +997,12 @@ static IdleNext _engine_idle_next(const Engine* engine) {
  * The wait is added to time_waited, which every clock leaves out, and total_frames does not
  * advance: the next frame is adjacent to this one, and every history that tests for a gap keeps
  * what it had.
+ *
+ * Headless work that never ends would hold the run here in silence, so it is said once, after
+ * ENGINE_WORK_WARN_SECONDS; the run goes on waiting.
  */
+#define ENGINE_WORK_WARN_SECONDS 10.0
+
 static void _engine_frame_events(Engine* engine) {
     if (!engine->idle) {
         glfwPollEvents();
@@ -999,13 +1012,24 @@ static void _engine_frame_events(Engine* engine) {
     // Raised before anything is read, as a request stores its flag before it reads this: either the
     // request sees the loop waiting and wakes it, or the loop sees the request.
     atomic_store(&w->waiting, true);
+    const double began = glfwGetTime();
+    bool warned = false;
     while (_engine_idle_next(engine) == IDLE_WAIT && !glfwWindowShouldClose(engine->window)) {
         const double start = glfwGetTime();
-        if (isfinite(w->wake_at))
-            glfwWaitEventsTimeout(w->wake_at > start ? w->wake_at - start : 0.0);
+        const bool working = engine->headless && atomic_load(&w->work_out) > 0;
+        const double until =
+            working && !warned ? fmin(w->wake_at, began + ENGINE_WORK_WARN_SECONDS) : w->wake_at;
+        if (isfinite(until))
+            glfwWaitEventsTimeout(until > start ? until - start : 0.0);
         else
             glfwWaitEvents();
         engine->time_waited += glfwGetTime() - start;
+        if (working && !warned && glfwGetTime() - began >= ENGINE_WORK_WARN_SECONDS) {
+            log_warn("headless: work begun with engine_begin_work, %d of it, has not ended in %.0f "
+                     "s; the run waits for it",
+                     atomic_load(&w->work_out), ENGINE_WORK_WARN_SECONDS);
+            warned = true;
+        }
         if (!engine->headless)
             break;
     }
@@ -1073,6 +1097,10 @@ void engine_end_work(Engine* engine) {
             return;
         }
     } while (!atomic_compare_exchange_weak(out, &was, was - 1));
+    // And a wake after it. Headless the loop waits while work is out whatever has asked, so a loop
+    // the request woke before the count fell has gone back to waiting, and only this wakes it.
+    if (atomic_load(&engine->wake->waiting))
+        glfwPostEmptyEvent();
 }
 
 void engine_set_close_hook(Engine* engine, EngineCloseFunc fn, void* user) {

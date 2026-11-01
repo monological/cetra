@@ -886,8 +886,10 @@ void engine_request_frame(Engine* engine);
 // draws. Main thread.
 void engine_request_frame_after(Engine* engine, double seconds);
 // A result is coming from another thread that will be drawn: a headless run in idle mode does not
-// end while one is out. Called before the frame that must not be the last ends -- by the code
-// that starts the work, not by the worker, which may not have run yet. Any thread.
+// end while one is out, and draws no frame until it is in, so the frame after the one that began
+// it has it on any machine (spec 14.7). Called as the work starts -- by the code that starts it,
+// not by the worker, which may not have run yet -- and never frames ahead of its start: headless,
+// the frame that would start it would wait for it. Any thread.
 void engine_begin_work(Engine* engine);
 // The result is in: ends what engine_begin_work began and asks for a frame. Any thread.
 void engine_end_work(Engine* engine);
