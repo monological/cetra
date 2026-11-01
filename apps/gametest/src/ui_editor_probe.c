@@ -1909,6 +1909,45 @@ static int probe_vim_read_only(UISystem* ui) {
     ui_editor_set_mode(ed, NULL);
     free_text_doc(doc);
     free_ui_editor_vim(vim);
+
+    // What `.` makes of a refused command, the text made writable again, and what vim only beeps
+    // at, each against vim 9.2's own run: a visual put's delete under it, a 3s's count, a J on the
+    // last line, an r past the line's end, a refused r and a ~ on an empty line.
+    static const struct {
+        const char* label;
+        const char* setup;
+        const char* refused;
+        int refusals;
+        const char* again;
+        const char* want;
+    } KEEP[] = {
+        {"put", "wyiw0", "viwp", 1, "0.", " def ghi\n\njkl mno\n"},
+        {"count", "x", "3sZ<Esc>", 1, "0.", "def ghi\n\njkl mno\n"},
+        {"join", "x", "GJ", 0, "gg.", "c def ghi\n\njkl mno\n"},
+        {"past", "x", "$5rq", 0, "gg.", "c def ghi\n\njkl mno\n"},
+        {"replace", "x", "rq", 1, "gg.", "c def ghi\n\njkl mno\n"},
+        {"tilde", "x", "j~", 0, "gg.", "c def ghi\n\njkl mno\n"},
+    };
+    for (size_t i = 0; i < sizeof(KEEP) / sizeof(KEEP[0]); i++) {
+        const char* text = "abc def ghi\n\njkl mno\n";
+        TextDoc* d = create_text_doc(text, strlen(text));
+        UIEditorVim* v = create_ui_editor_vim();
+        UIElement* e = vim_fixture(ui, d, v, 0);
+        text_doc_set_on_refused(d, note_refusal, NULL);
+        vim_keys(ui, KEEP[i].setup);
+        d->read_only = true;
+        g_refusals = 0;
+        vim_keys(ui, KEEP[i].refused);
+        const int refusals = g_refusals;
+        d->read_only = false;
+        vim_keys(ui, KEEP[i].again);
+        say_flag("vim-read-only", KEEP[i].label, "again",
+                 refusals == KEEP[i].refusals && doc_is_str(d, KEEP[i].want));
+        ui_editor_set_mode(e, NULL);
+        ui_pop(ui);
+        free_text_doc(d);
+        free_ui_editor_vim(v);
+    }
     return 0;
 }
 

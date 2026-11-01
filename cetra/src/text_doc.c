@@ -693,7 +693,9 @@ void text_doc_group(TextDoc* doc, bool open, const void* view) {
 }
 
 void text_doc_empty_step(TextDoc* doc, void* view) {
-    if (!doc || (doc->grouping && !doc->group_fresh))
+    // A read-only text keeps no step an editor makes, which would drop the host's redo; the
+    // command that asked was refused already.
+    if (!doc || doc->read_only || (doc->grouping && !doc->group_fresh))
         return;
     doc->group_fresh = false;
     _new_step(doc);
