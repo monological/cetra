@@ -1302,6 +1302,116 @@ static int probe_max_size(UISystem* ui) {
     return 0;
 }
 
+// A row `w` points across, 30 high, with 8 points of padding round it and 6 between its children.
+static UIElement* share_row(UIElement* parent, float w) {
+    UIElement* row = fixed_panel(parent, w, 30.0f);
+    row->dir = UI_ROW;
+    for (int i = 0; i < 4; i++)
+        row->padding[i] = 8.0f;
+    row->spacing = 6.0f;
+    return row;
+}
+
+static UIElement* sharing(UIElement* parent, float share) {
+    UIElement* c = ui_panel(parent);
+    ui_set_size(c, UI_SHARE, share, UI_FIXED, 10.0f);
+    return c;
+}
+
+static UIElement* grow_rest(UIElement* parent) {
+    UIElement* c = ui_panel(parent);
+    ui_set_size(c, UI_GROW, 0.0f, UI_FIXED, 10.0f);
+    return c;
+}
+
+static void say_rect(const char* label, const char* key, const UIElement* el) {
+    printf("ui share %s %s %.9g %.9g %.9g %.9g\n", label, key, (double)el->rect.x,
+           (double)el->rect.y, (double)el->rect.w, (double)el->rect.h);
+}
+
+// UI_SHARE (spec 14.9): each case's elements as exact rects, which the gate holds to the rule.
+static int probe_share(UISystem* ui) {
+    UIScreen* s = ui_screen(ui, "share");
+    ui_screen_set_modal(s, false);
+    UIElement* root = ui_screen_root(s);
+    // A share of 0.7 and a GROW side, at widths whose 0.7 is whole and is not.
+    static const float widths[] = {600.0f, 601.0f, 333.5f};
+    enum { SPLITS = sizeof(widths) / sizeof(widths[0]) };
+    const UIElement* split[SPLITS][3];
+    for (int i = 0; i < SPLITS; i++) {
+        UIElement* row = share_row(root, widths[i]);
+        split[i][0] = row;
+        split[i][1] = sharing(row, 0.7f);
+        split[i][2] = grow_rest(row);
+    }
+    // The GROW side a row of its own, measuring two children and its gap.
+    UIElement* nested = share_row(root, 600.0f);
+    const UIElement* nested_share = sharing(nested, 0.7f);
+    UIElement* inner = ui_panel(nested);
+    ui_set_size(inner, UI_GROW, 0.0f, UI_FIXED, 10.0f);
+    inner->dir = UI_ROW;
+    inner->spacing = 6.0f;
+    fixed_panel(inner, 20.0f, 10.0f);
+    fixed_panel(inner, 20.0f, 10.0f);
+    // A share across the main axis: half of a 31-point height.
+    UIElement* across_row = bare_row(root);
+    across_row->size[1] = 31.0f;
+    UIElement* across = ui_panel(across_row);
+    ui_set_size(across, UI_FIXED, 40.0f, UI_SHARE, 0.5f);
+    // A share held at its most.
+    UIElement* held_row = share_row(root, 600.0f);
+    UIElement* held = sharing(held_row, 0.7f);
+    held->max_size[0] = 100.0f;
+    const UIElement* held_rest = grow_rest(held_row);
+    // Two halves of an odd length, and two shares past 1.
+    UIElement* halves = share_row(root, 599.0f);
+    const UIElement* const half[2] = {sharing(halves, 0.5f), sharing(halves, 0.5f)};
+    UIElement* over = share_row(root, 600.0f);
+    const UIElement* const past[2] = {sharing(over, 0.7f), sharing(over, 0.7f)};
+    // A share under a parent that fits its children: half of what the parent comes to.
+    UIElement* fit = ui_panel(root);
+    ui_set_size(fit, UI_FIT, 0.0f, UI_FIXED, 30.0f);
+    fit->dir = UI_ROW;
+    for (int i = 0; i < 4; i++)
+        fit->padding[i] = -1.0f;
+    fit->spacing = -1.0f;
+    fixed_panel(fit, 100.0f, 10.0f);
+    const UIElement* fit_share = sharing(fit, 0.5f);
+    // A share of nothing.
+    UIElement* zero_row = share_row(root, 600.0f);
+    const UIElement* zero = sharing(zero_row, 0.0f);
+    const UIElement* zero_rest = grow_rest(zero_row);
+    ui_push(ui, s);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    for (int i = 0; i < SPLITS; i++) {
+        char label[16];
+        snprintf(label, sizeof label, "split%d", i);
+        say_rect(label, "row", split[i][0]);
+        say_rect(label, "share", split[i][1]);
+        say_rect(label, "grow", split[i][2]);
+    }
+    say_rect("nested", "row", nested);
+    say_rect("nested", "share", nested_share);
+    say_rect("nested", "grow", inner);
+    say_rect("across", "row", across_row);
+    say_rect("across", "share", across);
+    say_rect("held", "row", held_row);
+    say_rect("held", "share", held);
+    say_rect("held", "grow", held_rest);
+    say_rect("halves", "row", halves);
+    say_rect("halves", "a", half[0]);
+    say_rect("halves", "b", half[1]);
+    say_rect("over", "row", over);
+    say_rect("over", "a", past[0]);
+    say_rect("over", "b", past[1]);
+    say_rect("fit", "row", fit);
+    say_rect("fit", "share", fit_share);
+    say_rect("zero", "row", zero_row);
+    say_rect("zero", "share", zero);
+    say_rect("zero", "grow", zero_rest);
+    return 0;
+}
+
 // The glyph rows of `el`'s text as built: their quads' vertical centres, each row once, in order.
 // Every glyph of the probe's text is the same letter, so a row's quads share one centre.
 static size_t glyph_rows(UISystem* ui, float* rows, size_t cap) {
@@ -1530,6 +1640,8 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_utf8();
     if (!strcmp(which, "max-size"))
         return probe_max_size(ui);
+    if (!strcmp(which, "share"))
+        return probe_share(ui);
     if (!strcmp(which, "padding-none"))
         return probe_padding_none(ui);
     if (!strcmp(which, "control-lines"))

@@ -2014,20 +2014,34 @@ static bool host_reload(UIElement* el, void* user) {
     return true;
 }
 
-// F8: the pane split. A row takes its place, it moves into the row, and a second editor on the same
-// text goes beside it, with carets of its own and the focus.
+// --split-share F: the first side of a split takes a share of F of the row, the second the rest; 0
+// both share it evenly.
+static float g_split_share;
+
+// `to` sized as `from` is, for an element taking another's place in its parent.
+static void take_size(UIElement* to, const UIElement* from) {
+    ui_set_size(to, from->size_mode[0], from->size[0], from->size_mode[1], from->size[1]);
+}
+
+// F8: the pane split. A row takes its place and its size, it moves into the row, and a second
+// editor on the same text goes beside it, with carets of its own and the focus.
 static bool host_split(UIElement* el, void* user) {
     const EditorSheet* s = user;
     UIElement* row = pane_row(el->parent);
+    take_size(row, el);
     ui_move(row, el->parent, el);
     ui_move(el, row, NULL);
+    if (g_split_share > 0.0f)
+        ui_set_size(el, UI_SHARE, g_split_share, UI_GROW, 0.0f);
+    else
+        ui_set_size(el, UI_GROW, 0.0f, UI_GROW, 0.0f);
     ui_set_focus(s->screen, pane_open(row, ui_editor_doc(el)));
     return true;
 }
 
 // F9: the pane closed, from inside its own key, and the focus given to the pane beside it, which
 // takes its place -- as is the vim line when the pane had asked for it. A row left holding one pane
-// hands it to the row's own parent. The last pane stays.
+// hands it to the row's own parent, in the row's place and size. The last pane stays.
 static bool host_close(UIElement* el, void* user) {
     EditorSheet* s = user;
     if (panes_under(s->area) < 2)
@@ -2039,6 +2053,7 @@ static bool host_close(UIElement* el, void* user) {
             beside = parent->children[i + 1 < parent->child_count ? i + 1 : i - 1];
     ui_remove(el);
     if (parent != s->area && parent->child_count == 1) {
+        take_size(beside, parent);
         ui_move(beside, parent->parent, parent);
         ui_remove(parent);
     }
@@ -2938,6 +2953,8 @@ int main(int argc, char** argv) {
             editor_files[editor_count++] = argv[++i];
         } else if (strcmp(argv[i], "--editor-lag") == 0 && more) {
             g_editor_sheet.lag = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--split-share") == 0 && more) {
+            g_split_share = (float)atof(argv[++i]);
         } else if (strcmp(argv[i], "--vim") == 0) {
             vim = true;
         } else if (strcmp(argv[i], "--read-only") == 0) {

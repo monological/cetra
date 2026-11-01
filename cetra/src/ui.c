@@ -871,6 +871,12 @@ static float _at_most(const UIElement* el, int axis, float len) {
     return el->max_size[axis] > 0.0f ? glm_min(len, el->max_size[axis]) : len;
 }
 
+// A SHARE element's length out of `room`: rounded down to a whole point, so the edge it puts down
+// draws sharp -- only text is snapped to pixels -- and held to its most.
+static float _share_len(const UIElement* el, int axis, float room) {
+    return _at_most(el, axis, glm_max(floorf(el->size[axis] * room), 0.0f));
+}
+
 // Whether a child in the flow grows along `axis` and can take more room there: it is not at its
 // most.
 static bool _still_growing(const UIElement* c, int axis) {
@@ -965,8 +971,10 @@ static void _measure(const UISystem* ui, UIElement* el, int axis) {
         _measure(ui, el->children[i], axis);
 
     // A FIXED axis is its own size, so its content is not measured: a slider's label and a
-    // selector's options were walked at every layout for a size thrown away.
-    float v = el->size_mode[axis] == UI_FIXED ? 0.0f : _intrinsic(ui, el, axis);
+    // selector's options were walked at every layout for a size thrown away. Nor is a SHARE axis,
+    // whose length is its parent's to settle.
+    const UISize mode = el->size_mode[axis];
+    float v = mode == UI_FIXED || mode == UI_SHARE ? 0.0f : _intrinsic(ui, el, axis);
 
     if (el->rows && axis == 1) {
         // A pane of rows is as tall as all of them, built or not.
@@ -1004,8 +1012,10 @@ static void _measure(const UISystem* ui, UIElement* el, int axis) {
         v = pad[0] + pad[2];
     }
 
-    *_len(&el->rect, axis) =
-        (el->size_mode[axis] == UI_FIXED) ? el->size[axis] : _at_most(el, axis, v);
+    // A share measures nothing, so a parent fitting its children is the size of the others.
+    *_len(&el->rect, axis) = mode == UI_FIXED   ? el->size[axis]
+                             : mode == UI_SHARE ? 0.0f
+                                                : _at_most(el, axis, v);
 }
 
 /*
@@ -1045,8 +1055,8 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
     }
 
     if (_main_axis(el) != axis) {
-        // Across: a GROW child stretches to the inner extent, up to its most, and a smaller one is
-        // placed by the cross alignment.
+        // Across: a GROW child stretches to the inner extent and a SHARE child takes its share of
+        // it, each up to its most, and a smaller one is placed by the cross alignment.
         for (size_t i = 0; i < el->child_count; i++) {
             UIElement* c = el->children[i];
             if (c->fill)
@@ -1055,6 +1065,8 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
             float* cp = _pos(&c->rect, axis);
             if (c->size_mode[axis] == UI_GROW)
                 *cl = _at_most(c, axis, in_len);
+            else if (c->size_mode[axis] == UI_SHARE)
+                *cl = _share_len(c, axis, in_len);
             *cp = in_pos;
             if (*cl < in_len) {
                 if (el->align_cross == UI_ALIGN_CENTER)
@@ -1087,19 +1099,26 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
         return;
     }
 
+    size_t counted = 0;
+    for (size_t i = 0; i < el->child_count; i++)
+        counted += !el->children[i]->fill;
+    const float gaps = counted > 1 ? gap * (float)(counted - 1) : 0.0f;
+
+    // A share is settled first, as a FIXED length is, so the growing children share what it leaves
+    // and a GROW side beside it takes exactly the rest, whatever that side measures.
     float used = 0.0f;
-    size_t counted = 0, growing = 0;
+    size_t growing = 0;
     for (size_t i = 0; i < el->child_count; i++) {
         UIElement* c = el->children[i];
         if (c->fill)
             continue;
+        if (c->size_mode[axis] == UI_SHARE)
+            *_len(&c->rect, axis) = _share_len(c, axis, in_len - gaps);
         used += *_len(&c->rect, axis);
         if (_still_growing(c, axis))
             growing++;
-        counted++;
     }
-    if (counted > 1)
-        used += gap * (float)(counted - 1);
+    used += gaps;
 
     // The room left is shared among the growing children. One that would pass its most takes it
     // and no more, and what it leaves is shared again among the rest, round by round. What no
