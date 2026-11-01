@@ -741,6 +741,20 @@ static bool _may_change(const TextDoc* doc, const char* who) {
     return !doc->telling;
 }
 
+void text_doc_refuse(TextDoc* doc, const void* view) {
+    if (!doc || !doc->on_refused)
+        return;
+    const TextDocView* v = _view(doc, view);
+    doc->on_refused(doc, v ? v->element : NULL, doc->on_refused_user);
+}
+
+// Whether the editor `view` may change the text: not while it is read-only, which is told.
+static bool _may_edit(TextDoc* doc, const void* view) {
+    if (doc->read_only)
+        text_doc_refuse(doc, view);
+    return !doc->read_only;
+}
+
 // The one way changes are made: `changes`, from the highest start down, each in the text as the
 // first found it. Every view but `held` has its carets moved through each, `actor`'s as an
 // actor's. Out of memory part way, the changes made stand, and the undo history, which no longer
@@ -795,6 +809,8 @@ bool text_doc_apply(TextDoc* doc, const TextEdit* edits, size_t count, void* vie
             return false;
         }
     }
+    if (count && !_may_edit(doc, view))
+        return false;
     char* removed = NULL;
     TextDocChange* changes = _changes_of(doc, edits, count, &removed);
     if (!changes) {
@@ -897,11 +913,11 @@ static bool _step(TextDoc* doc, void* view, bool undo) {
 }
 
 bool text_doc_undo_in(TextDoc* doc, void* view) {
-    return _step(doc, view, true);
+    return doc && _may_edit(doc, view) && _step(doc, view, true);
 }
 
 bool text_doc_redo_in(TextDoc* doc, void* view) {
-    return _step(doc, view, false);
+    return doc && _may_edit(doc, view) && _step(doc, view, false);
 }
 
 bool text_doc_undo(TextDoc* doc) {
@@ -1036,6 +1052,13 @@ void text_doc_set_on_action(TextDoc* doc, TextDocActionFn fn, void* user) {
         return;
     doc->on_action = fn;
     doc->on_action_user = user;
+}
+
+void text_doc_set_on_refused(TextDoc* doc, TextDocRefusedFn fn, void* user) {
+    if (!doc)
+        return;
+    doc->on_refused = fn;
+    doc->on_refused_user = user;
 }
 
 // ---- Ranges

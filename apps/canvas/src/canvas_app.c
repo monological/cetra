@@ -1635,7 +1635,9 @@ static bool build_font_sheet(UISystem* ui, Engine* engine, Font* label) {
  * - F7, the file read again through the text's whole new text.
  * A parse's result is taken on the frame its thread's end wakes; --editor-lag N takes it N frames
  * after it began instead, waiting for it then, so a headless run repeats. --vim puts the vim mode
- * (spec 14.5) under the app's keys, with its state on a line under the editor.
+ * (spec 14.5) under the app's keys, with its state on a line under the editor. --read-only makes
+ * every file's text read-only (spec 14.7): nothing typed changes it, and each refusal is counted
+ * and, with --vim, said on that line.
  *
  * --editor may be given more than once, and the editors are PANES (spec 14.6), a test bed for
  * taking elements out, moving them and showing an editor another text -- not pcb's panes, whose
@@ -1692,7 +1694,9 @@ typedef struct EditorSheet {
     UIElement* area; // the panes' container, a row
     GlyphCache* face;
     UIScreen* screen;
-    int lag; // frames from a parse's start to its result being taken
+    int lag;        // frames from a parse's start to its result being taken
+    bool read_only; // every file's text read-only
+    int refused;    // what the texts refused, being read-only
     // With --vim: the vim mode under the app's own, and a line under the editor saying its state,
     // with the line / ? and : are typed in after it -- its kind shown before it -- and what the
     // last such line came to, said until the next key; and the editor that asked for the line.
@@ -2034,6 +2038,15 @@ static bool host_next_file(UIElement* el, void* user) {
     return true;
 }
 
+// A change a read-only text refused: counted, and said until the next key, as vim says E21.
+static void editor_refused(TextDoc* doc, const UIElement* editor, void* user) {
+    (void)doc;
+    (void)editor;
+    EditorSheet* s = user;
+    s->refused++;
+    snprintf(s->message, sizeof(s->message), "Cannot make changes, the text is read only");
+}
+
 // Any key in the editor: what the last line came to is said no longer; the key goes on.
 static bool host_any_key(UIElement* el, const InputKeyEvent* key, void* user) {
     (void)el;
@@ -2084,6 +2097,8 @@ static bool build_editor(UISystem* ui, const char* const* paths, int count, bool
             return false;
         }
         text_doc_set_highlighter(f->doc, sexpr_line, NULL, false);
+        f->doc->read_only = s->read_only;
+        text_doc_set_on_refused(f->doc, editor_refused, s);
         s->file_count++;
     }
     s->face = built_in_face(CANVAS_FONTS_EDITOR, 13.0f);
@@ -2776,15 +2791,16 @@ static void say_box(UIRect r, double s) {
 }
 
 static void usage(const char* argv0) {
-    fprintf(stderr,
-            "usage: %s [-x] [-f frames] [-S out.ppm] [-W points] [-H points]\n"
-            "          [--sheet NAME] [--view X,Y,WIDTH (mm)] [--offset UNITS] [--mirror]\n"
-            "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread]\n"
-            "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
-            "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--input-script PATH]\n"
-            "          [--ui-enter] [--ui-text TEXT] [--gui-click] [--history] [--palette]\n"
-            "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim]\n",
-            argv0);
+    fprintf(
+        stderr,
+        "usage: %s [-x] [-f frames] [-S out.ppm] [-W points] [-H points]\n"
+        "          [--sheet NAME] [--view X,Y,WIDTH (mm)] [--offset UNITS] [--mirror]\n"
+        "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread]\n"
+        "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
+        "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--input-script PATH]\n"
+        "          [--ui-enter] [--ui-text TEXT] [--gui-click] [--history] [--palette]\n"
+        "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim] [--read-only]\n",
+        argv0);
 }
 
 // An after-tonemap pass that changes nothing, so the frame is drawn into the
@@ -2877,6 +2893,8 @@ int main(int argc, char** argv) {
             g_editor_sheet.lag = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--vim") == 0) {
             vim = true;
+        } else if (strcmp(argv[i], "--read-only") == 0) {
+            g_editor_sheet.read_only = true;
         } else if (strcmp(argv[i], "--palette") == 0) {
             palette = true;
         } else if (strcmp(argv[i], "--ui-text") == 0 && more) {
@@ -3104,6 +3122,12 @@ int main(int argc, char** argv) {
             printf(" %zu %zu", r[i].start, r[i].end);
         printf("\n");
         printf("canvas editor settled %d\n", ui_editor_settled(pane) ? 1 : 0);
+        // What the texts refused, being read-only, and the clipboard, as hex.
+        printf("canvas editor refused %d\n", g_editor_sheet.refused);
+        printf("canvas editor clip ");
+        for (const char* p = engine_clipboard_get(engine); p && *p; p++)
+            printf("%02x", (unsigned char)*p);
+        printf("\n");
         // With --vim: its state, and what the last line typed came to, as hex.
         if (g_editor_sheet.vim) {
             printf("canvas editor vim %d ", (int)ui_editor_vim_state(g_editor_sheet.vim));

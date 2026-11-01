@@ -26208,6 +26208,8 @@ _VIM_SEQUENCES = [
     "<C-v>jlV", "vj<C-v>", "Vj<C-v>d", "<C-v>jlyjj<C-v>jp", "<C-v>jly3p", "<C-v>jlp",
     "<C-v>jlyjj<C-v>jP", "yiw<C-v>jp", "yiw<C-v>jlP", "yy<C-v>jp", "yy<C-v>jP", "<C-v>jlpu",
     "yiw<C-v>jpu", "yiw<C-v>j2p", "yy<C-v>jPu",
+    # A block's I and A that type nothing end as any insert does, not at the corner (spec 14.7).
+    "<C-v>jI<Esc>", "<C-v>jlA<Esc>", "<C-v>j$A<Esc>", "<C-v>jjlA<Esc>",
     # What the random sequences found, held here where no seed has to happen on it: a closer before
     # the next opener using it up, a put from nothing undone, Esc taking an autoindent, a change
     # made again that fails, and P made again.
@@ -26343,12 +26345,13 @@ def _vim_exe_keys(keys):
     return "".join(out)
 
 
-def _vim_reference(case, path):
+def _vim_reference(case, path, read_only=False):
     """(line, column, bytes) vim leaves `case` at -- its text, the cursor's line and column, and
     its keys -- or None when vim did not run. The text is the buffer as vim writes it, in the
     file's own line endings. The keys are fed as typed, so each command is its own step of undo
     and a key after one that failed is still read, as when a person types them; normal! would
-    make every command one step and let go of the keys after a failure."""
+    make every command one step and let go of the keys after a failure. `read_only` sets
+    'nomodifiable' on the buffer, which is what a read-only text is held to."""
     text, line, col, keys = case
     with open(path, "wb") as f:
         f.write(text)
@@ -26357,6 +26360,7 @@ def _vim_reference(case, path):
         if os.path.exists(p):
             os.remove(p)
     cmd = [_VIM, "-Nu", "NONE", "-i", "NONE", "-n", "-es", "-c", _VIM_SET,
+           *(["-c", "set nomodifiable"] if read_only else []),
            "-c", f"call cursor({line}, {col})",
            "-c", f"call feedkeys(\"{_vim_exe_keys(keys)}\", 'xt')",
            "-c", f"call writefile([line('.') . ' ' . col('.')], '{pos}')",
@@ -26372,16 +26376,18 @@ def _vim_reference(case, path):
     return int(l), int(c), data
 
 
-def _vim_cetra(cases, workdir, tag):
+def _vim_cetra(cases, workdir, tag, read_only=False):
     """[(line, column, bytes, emptied)] the vim mode leaves each case at, from one gametest run --
     `emptied` whether the text was emptied whole on the way; None for a case it printed nothing
-    for."""
+    for. `read_only` makes every case's text read-only."""
     path = os.path.join(workdir, f"vim_cases_{tag}.txt")
     with open(path, "w", encoding="ascii") as f:
         for text, line, col, keys in cases:
             f.write(f"{text.hex()} {line} {col} {keys.encode().hex()}\n")
-    out, _ = _gametest_probe_text("--ui-probe", "vim-run",
-                                  env=dict(os.environ, CETRA_VIM_CASES=path), timeout=1800)
+    env = dict(os.environ, CETRA_VIM_CASES=path)
+    if read_only:
+        env["CETRA_VIM_READ_ONLY"] = "1"
+    out, _ = _gametest_probe_text("--ui-probe", "vim-run", env=env, timeout=1800)
     got = {}
     for m in re.finditer(r"^vim (\d+) (\d+) (\d+) ([0-9a-f]*) ([01])$", out, re.M):
         got[int(m.group(1))] = (int(m.group(2)), int(m.group(3)), bytes.fromhex(m.group(4)),
@@ -26409,15 +26415,17 @@ def _vim_agrees(ref, got):
             and (ref[2] == got[2] + brk or got[2] == ref[2] + brk))
 
 
-def _vim_oracle(cases, workdir, tag):
+def _vim_oracle(cases, workdir, tag, read_only=False):
     """The cases on which the vim mode and vim itself differ, as (case, vim's, the mode's), and
-    how many vim ran. The mode's one run goes beside vim's many."""
+    how many vim ran. The mode's one run goes beside vim's many. `read_only` runs every case on a
+    read-only text beside vim's 'nomodifiable'."""
     from concurrent.futures import ThreadPoolExecutor
     folder = os.path.join(workdir, f"vim_{tag}")
     os.makedirs(folder, exist_ok=True)
     with ThreadPoolExecutor(max_workers=9) as pool:
-        mode = pool.submit(_vim_cetra, cases, workdir, tag)
-        ref = list(pool.map(lambda ic: _vim_reference(ic[1], os.path.join(folder, f"{ic[0]}.txt")),
+        mode = pool.submit(_vim_cetra, cases, workdir, tag, read_only)
+        ref = list(pool.map(lambda ic: _vim_reference(ic[1], os.path.join(folder, f"{ic[0]}.txt"),
+                                                      read_only),
                             enumerate(cases)))
         got = mode.result()
     ran = sum(r is not None for r in ref)
@@ -28216,6 +28224,12 @@ def run_ui_gate(workdir):
                      caret splits typing; two carets' typing is one step and joins
                      as one caret's does; undo and redo restore the text and the
                      carets as they were; with keep_undo off nothing is kept.
+      ui-doc-read-only a read-only text (spec 14.7): typing at two carets refused as
+                     one action, the version unchanged and nothing told to
+                     on_action; an editor's undo and redo refused; the host's edit
+                     and its whole new text landing, and its own undo and redo
+                     taking them; each refusal told once to on_refused; writable
+                     again, nothing differs.
       ui-doc-highlight a line is coloured once and again only once it changes; a
                      stateful line waits on the walk from the top, and a changed
                      line asks again of the lines after it only while the state
@@ -28379,6 +28393,26 @@ def run_ui_gate(workdir):
                      made in its place. That last case stands for what it names only
                      where the allocator gave the new editor the freed one's address,
                      which the probe says, and the arm says when it did not.
+      ui-editor-read-only apps/canvas --editor --read-only, driven by a script (spec
+                     14.7): typing, Backspace, cut and paste change nothing; the
+                     word Cmd+D takes copied, and cut, to the clipboard; the caret
+                     moves; each action one refusal (end to end).
+      ui-vim-read-only the vim mode on a read-only text, as vim with 'nomodifiable'
+                     (spec 14.7): 3dd and 5J one refusal each, told with the
+                     editor; a visual delete letting the area go with the cursor at
+                     its start; . making the refused command again, refused again,
+                     and with the text writable making it; a block's I into an insert
+                     whose typing is refused; a text made read-only during an insert
+                     keeping the insert open until Esc. Then apps/canvas --editor
+                     --vim --read-only by a script: x, dd, p, ., cw, i and o change
+                     nothing, w and j move, yiw yanks to the clipboard, and the
+                     refusals are counted (end to end).
+      ui-vim-read-only-oracle the oracle's corpus again on a read-only text, beside vim
+                     with 'nomodifiable': the text and the cursor must agree. Three
+                     sequences are left out by name: with their `o` refused, what
+                     they would insert is read as commands, and it holds `q` and
+                     `(`, a macro and a sentence motion the mode leaves out. Skips
+                     without vim on the path.
       ui-editor-ranges-late apps/canvas --editor's parse on its own thread, taken six
                      frames after it began: the text it read had an unclosed '(' at
                      byte 9, three bytes were typed before it since, and the error is
@@ -29253,6 +29287,12 @@ def run_ui_gate(workdir):
     print(f"  ui-doc-undo           {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-doc-undo", ok)
 
+    ok, detail = doc_flags("doc-read-only", 6, "typing at two carets refused as one action and "
+                           "told to no one but on_refused, an editor's undo and redo refused, the "
+                           "host's edits, undo and redo taken, and nothing different writable")
+    print(f"  ui-doc-read-only      {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-doc-read-only", ok)
+
     ok, detail = doc_flags("doc-highlight", 8, "a line is coloured once until it changes; a "
                            "stateful line waits on the walk, and a changed line asks again of the "
                            "lines after it only while the state it leaves has changed")
@@ -29516,6 +29556,73 @@ def run_ui_gate(workdir):
                   + (f"; wrong: {wrong}" if wrong else ""))
     print(f"  ui-vim-set-doc        {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-vim-set-doc", ok)
+
+    # ---- a read-only text (spec 14.7): the standard mode end to end
+    ro_path = os.path.join(workdir, "editor_read_only.txt")
+    with open(ro_path, "w", encoding="utf-8", newline="") as f:
+        f.write("one two\nthree four\n")
+    ro_text = b"one two\nthree four\n".hex()
+    ro_script = os.path.join(workdir, "editor_read_only.script")
+    with open(ro_script, "w", encoding="utf-8") as f:
+        f.write("3 type=XY\n5 key=backspace\n7 key=mod+d\n9 key=mod+c\n11 key=mod+x\n"
+                "13 key=mod+v\n15 key=right\n")
+    _, ro = _canvas_run(workdir, "editor_read_only", "--editor", ro_path, "--read-only",
+                        "--input-script", ro_script, frames=18)
+    ro_hex = (ro.get(("editor", "hex")) or [""])[0]
+    ro_sel = [int(v) for v in ro.get(("editor", "sel"), [])]
+    ro_clip = bytes.fromhex((ro.get(("editor", "clip")) or [""])[0])
+    ro_refused = int((ro.get(("editor", "refused")) or ["-1"])[0])
+    # The two letters, the cut and the paste: Backspace at the text's start deletes nothing.
+    ok = ro_hex == ro_text and ro_sel == [1, 3, 3] and ro_clip == b"one" and ro_refused == 4
+    detail = (f"the text {'unchanged' if ro_hex == ro_text else 'changed'}, selections {ro_sel}, "
+              f"clipboard {ro_clip!r}, {ro_refused} refused (want unchanged, [1, 3, 3], b'one', "
+              f"4)")
+    print(f"  ui-editor-read-only   {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-read-only", ok)
+
+    # ---- the vim mode on a read-only text: the probe, then end to end
+    ok, detail = doc_flags("vim-read-only", 8, "3dd and 5J one refusal each, told with the editor, "
+                           "a visual delete letting the area go with the cursor at its start, . "
+                           "refusing the refused command again and making it once writable, a "
+                           "block's I into an insert whose typing is refused, and an insert the "
+                           "text was made read-only in kept open until Esc")
+    with open(ro_script, "w", encoding="utf-8") as f:
+        f.write("3 type=x\n5 type=dd\n7 type=p\n9 type=.\n11 type=cw\n13 type=i\n15 type=w\n"
+                "17 type=yiw\n19 type=o\n21 type=j\n")
+    _, rv = _canvas_run(workdir, "vim_read_only", "--editor", ro_path, "--vim", "--read-only",
+                        "--input-script", ro_script, frames=24)
+    rv_hex = (rv.get(("editor", "hex")) or [""])[0]
+    rv_sel = [int(v) for v in rv.get(("editor", "sel"), [])]
+    rv_clip = bytes.fromhex((rv.get(("editor", "clip")) or [""])[0])
+    rv_refused = int((rv.get(("editor", "refused")) or ["-1"])[0])
+    rv_normal = (rv.get(("editor", "vim")) or ["-1"])[0] == "0"
+    # x, dd, p, the p `.` makes again, cw, i and o.
+    script_ok = (rv_hex == ro_text and rv_sel == [1, 12, 12] and rv_clip == b"two"
+                 and rv_refused == 7 and rv_normal)
+    ok = ok and script_ok
+    detail += (f"; by a script, the text {'unchanged' if rv_hex == ro_text else 'changed'}, "
+               f"selections {rv_sel}, clipboard {rv_clip!r}, {rv_refused} refused, normal mode "
+               f"{rv_normal} (want unchanged, [1, 12, 12], b'two', 7, True)")
+    print(f"  ui-vim-read-only      {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-vim-read-only", ok)
+
+    if not _VIM:
+        print("  ui-vim-read-only-oracle SKIP  (no vim on the path)")
+    else:
+        # With their `o` refused, what these would insert is read as commands, and it holds `q`
+        # and `(`: a macro and a sentence motion, which the mode leaves out.
+        absent = {"Goq) (z)<Esc>^da(", "Goq) (z)<Esc>^di(", "Goq (z)<Esc>^da("}
+        cases = _vim_corpus([s for s in _VIM_SEQUENCES if s not in absent])
+        diffs, ran = _vim_oracle(cases, workdir, "read_only", read_only=True)
+        missing = absent - set(_VIM_SEQUENCES)
+        ok = ran == len(cases) and not diffs and not missing
+        shown = _vim_shown(diffs, lambda case: f"{case[3]!r} at {case[1]}:{case[2]}")
+        detail = (f"{len(cases)} cases on a read-only text, vim ran {ran}, {len(diffs)} differ "
+                  f"from it" + (f": {shown}" if shown else "")
+                  + (f"; left out but no longer in the corpus: {sorted(missing)}" if missing
+                     else ""))
+        print(f"  ui-vim-read-only-oracle {'PASS' if ok else 'FAIL'}  {detail}")
+        note("ui-vim-read-only-oracle", ok)
 
     # ---- a parse's errors, read a few versions back, underlined where the typing since put them
     late_path = os.path.join(workdir, "editor_late.ckt")
