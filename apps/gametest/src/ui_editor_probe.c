@@ -1856,11 +1856,11 @@ static void note_refusal(TextDoc* doc, const UIElement* editor, void* user) {
 
 #define VIM_RO_TEXT "lpha beta\n  gamma delta\nlast line\n"
 
-// The vim mode on a read-only text (spec 14.7), as vim with 'nomodifiable': a command one refusal
-// however many changes it would make, told with its editor; a visual one letting the area go with
-// the cursor at its start; a refused command kept for `.`, which refuses it again; a block's I into
-// an insert that refuses what is typed; and a text made read-only during an insert leaving the
-// insert open.
+// The vim mode on a read-only text (spec 14.7), as vim with 'nomodifiable': a visual command
+// letting the area go with the cursor at its start, told with its editor; a command one refusal
+// however many changes it would make; a refused command kept for `.`, which refuses it again; a
+// block's I into an insert that refuses what is typed; and a text made read-only during an insert
+// leaving the insert open.
 static int probe_vim_read_only(UISystem* ui) {
     TextDoc* doc = create_text_doc(VIM_TEXT, strlen(VIM_TEXT));
     UIEditorVim* vim = create_ui_editor_vim();
@@ -1870,39 +1870,40 @@ static int probe_vim_read_only(UISystem* ui) {
     g_refused_by = NULL;
     vim_keys(ui, "x");
     doc->read_only = true;
-    vim_keys(ui, "3dd");
-    say_flag("vim-read-only", "command", "once",
-             g_refusals == 1 && g_refused_by == ed && doc_is_str(doc, VIM_RO_TEXT));
-    vim_keys(ui, "5J");
-    say_flag("vim-read-only", "join", "once", g_refusals == 2 && doc_is_str(doc, VIM_RO_TEXT));
     ui_editor_set_selections(ed, &(TextSelection){5, 5}, 1);
     vim_keys(ui, "vlld");
     say_flag("vim-read-only", "visual", "let_go",
-             g_refusals == 3 && ui_editor_vim_state(vim) == UI_VIM_NORMAL &&
+             g_refusals == 1 && g_refused_by == ed && ui_editor_vim_state(vim) == UI_VIM_NORMAL &&
                  one_selection(ed, 5, 5) && doc_is_str(doc, VIM_RO_TEXT));
+    vim_keys(ui, "3dd");
+    say_flag("vim-read-only", "command", "once", g_refusals == 2 && doc_is_str(doc, VIM_RO_TEXT));
+    vim_keys(ui, "5J");
+    say_flag("vim-read-only", "join", "once", g_refusals == 3 && doc_is_str(doc, VIM_RO_TEXT));
     vim_keys(ui, ".");
     say_flag("vim-read-only", "repeat", "refused",
              g_refusals == 4 && one_selection(ed, 5, 5) && doc_is_str(doc, VIM_RO_TEXT));
-    // Writable again, `.` makes the last refused command, the delete over an area of three.
+    // Writable again, `.` makes the last refused command, a normal mode one whose caller keeps
+    // nothing of its own: the lines joined.
     doc->read_only = false;
     ui_editor_set_selections(ed, &(TextSelection){0, 0}, 1);
     vim_keys(ui, ".");
     say_flag("vim-read-only", "repeat", "kept",
-             doc_is_str(doc, "a beta\n  gamma delta\nlast line\n"));
+             doc_is_str(doc, "lpha beta gamma delta last line\n"));
     doc->read_only = true;
-    vim_keys(ui, "<C-v>jI");
+    vim_keys(ui, "<C-v>I");
     const bool block_in = ui_editor_vim_state(vim) == UI_VIM_INSERT;
     vim_keys(ui, "Z");
     say_flag("vim-read-only", "block", "insert",
-             block_in && g_refusals == 5 && doc_is_str(doc, "a beta\n  gamma delta\nlast line\n"));
+             block_in && g_refusals == 5 && doc_is_str(doc, "lpha beta gamma delta last line\n"));
     vim_keys(ui, "<Esc>");
     doc->read_only = false;
+    ui_editor_set_selections(ed, &(TextSelection){0, 0}, 1);
     vim_keys(ui, "ib");
     doc->read_only = true;
     vim_keys(ui, "cd");
     say_flag("vim-read-only", "insert", "open",
              ui_editor_vim_state(vim) == UI_VIM_INSERT && g_refusals == 7 &&
-                 doc_is_str(doc, "ba beta\n  gamma delta\nlast line\n"));
+                 doc_is_str(doc, "blpha beta gamma delta last line\n"));
     vim_keys(ui, "<Esc>");
     say_flag("vim-read-only", "insert", "left", ui_editor_vim_state(vim) == UI_VIM_NORMAL);
     ui_editor_set_mode(ed, NULL);
