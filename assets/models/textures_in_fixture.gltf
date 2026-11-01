@@ -1,0 +1,827 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "gen_textures_in_fixture.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "tile_00",
+   "mesh": 0,
+   "translation": [
+    -1.5,
+    1.5,
+    0.0
+   ]
+  },
+  {
+   "name": "tile_01",
+   "mesh": 1,
+   "translation": [
+    -0.5,
+    1.5,
+    0.0
+   ]
+  },
+  {
+   "name": "tile_02",
+   "mesh": 2,
+   "translation": [
+    0.5,
+    1.5,
+    0.0
+   ]
+  },
+  {
+   "name": "tile_03",
+   "mesh": 3,
+   "translation": [
+    1.5,
+    1.5,
+    0.0
+   ]
+  },
+  {
+   "name": "tile_04",
+   "mesh": 4,
+   "translation": [
+    -1.5,
+    0.5,
+    0.0
+   ]
+  },
+  {
+   "name": "tile_05",
+   "mesh": 5,
+   "translation": [
+    -0.5,
+    0.5,
+    0.0
+   ]
+  },
+  {
+   "name": "tile_06",
+   "mesh": 6,
+   "translation": [
+    0.5,
+    0.5,
+    0.0
+   ]
+  },
+  {
+   "name": "tile_07",
+   "mesh": 7,
+   "translation": [
+    1.5,
+    0.5,
+    0.0
+   ]
+  },
+  {
+   "name": "tile_08",
+   "mesh": 8,
+   "translation": [
+    -1.5,
+    -0.5,
+    0.0
+   ]
+  },
+  {
+   "name": "tile_09",
+   "mesh": 9,
+   "translation": [
+    -0.5,
+    -0.5,
+    0.0
+   ]
+  },
+  {
+   "name": "tile_10",
+   "mesh": 10,
+   "translation": [
+    0.5,
+    -0.5,
+    0.0
+   ]
+  },
+  {
+   "name": "tile_11",
+   "mesh": 11,
+   "translation": [
+    1.5,
+    -0.5,
+    0.0
+   ]
+  },
+  {
+   "name": "tile_12",
+   "mesh": 12,
+   "translation": [
+    -1.5,
+    -1.5,
+    0.0
+   ]
+  },
+  {
+   "name": "tile_13",
+   "mesh": 13,
+   "translation": [
+    -0.5,
+    -1.5,
+    0.0
+   ]
+  },
+  {
+   "name": "tile_14",
+   "mesh": 14,
+   "translation": [
+    0.5,
+    -1.5,
+    0.0
+   ]
+  },
+  {
+   "name": "tile_15",
+   "mesh": 15,
+   "translation": [
+    1.5,
+    -1.5,
+    0.0
+   ]
+  }
+ ],
+ "meshes": [
+  {
+   "name": "tile_00",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 0
+    }
+   ]
+  },
+  {
+   "name": "tile_01",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 1
+    }
+   ]
+  },
+  {
+   "name": "tile_02",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 2
+    }
+   ]
+  },
+  {
+   "name": "tile_03",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 3
+    }
+   ]
+  },
+  {
+   "name": "tile_04",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 4
+    }
+   ]
+  },
+  {
+   "name": "tile_05",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 5
+    }
+   ]
+  },
+  {
+   "name": "tile_06",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 6
+    }
+   ]
+  },
+  {
+   "name": "tile_07",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 7
+    }
+   ]
+  },
+  {
+   "name": "tile_08",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 8
+    }
+   ]
+  },
+  {
+   "name": "tile_09",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 9
+    }
+   ]
+  },
+  {
+   "name": "tile_10",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 10
+    }
+   ]
+  },
+  {
+   "name": "tile_11",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 11
+    }
+   ]
+  },
+  {
+   "name": "tile_12",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 12
+    }
+   ]
+  },
+  {
+   "name": "tile_13",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 13
+    }
+   ]
+  },
+  {
+   "name": "tile_14",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 14
+    }
+   ]
+  },
+  {
+   "name": "tile_15",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
+     },
+     "indices": 3,
+     "material": 15
+    }
+   ]
+  }
+ ],
+ "materials": [
+  {
+   "name": "tile_00",
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 0
+    },
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   }
+  },
+  {
+   "name": "tile_01",
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 1
+    },
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   }
+  },
+  {
+   "name": "tile_02",
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 2
+    },
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   }
+  },
+  {
+   "name": "tile_03",
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 3
+    },
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   }
+  },
+  {
+   "name": "tile_04",
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 4
+    },
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   }
+  },
+  {
+   "name": "tile_05",
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 5
+    },
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   }
+  },
+  {
+   "name": "tile_06",
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 6
+    },
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   }
+  },
+  {
+   "name": "tile_07",
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 7
+    },
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   }
+  },
+  {
+   "name": "tile_08",
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 8
+    },
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   }
+  },
+  {
+   "name": "tile_09",
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 9
+    },
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   }
+  },
+  {
+   "name": "tile_10",
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 10
+    },
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   }
+  },
+  {
+   "name": "tile_11",
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 11
+    },
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   }
+  },
+  {
+   "name": "tile_12",
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 12
+    },
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   }
+  },
+  {
+   "name": "tile_13",
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 13
+    },
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   }
+  },
+  {
+   "name": "tile_14",
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 14
+    },
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   }
+  },
+  {
+   "name": "tile_15",
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 15
+    },
+    "baseColorFactor": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 1.0
+   }
+  }
+ ],
+ "textures": [
+  {
+   "source": 0
+  },
+  {
+   "source": 1
+  },
+  {
+   "source": 2
+  },
+  {
+   "source": 3
+  },
+  {
+   "source": 4
+  },
+  {
+   "source": 5
+  },
+  {
+   "source": 6
+  },
+  {
+   "source": 7
+  },
+  {
+   "source": 8
+  },
+  {
+   "source": 9
+  },
+  {
+   "source": 10
+  },
+  {
+   "source": 11
+  },
+  {
+   "source": 12
+  },
+  {
+   "source": 13
+  },
+  {
+   "source": 14
+  },
+  {
+   "source": 15
+  }
+ ],
+ "images": [
+  {
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAANElEQVR4nGP8ZGDAAAMJDx7A2QsUFLCKMzGQCGivgTFIQADOweVuZPHB6IfReKCFk0jWAAAvpxWlbCDTSQAAAABJRU5ErkJggg=="
+  },
+  {
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAANElEQVR4nGP8VGnAAAMJGx7A2QsCFLCKMzGQCGivgTFIUwDOweVuZPHB6IfReKCFk0jWAACAlhZpzOATkQAAAABJRU5ErkJggg=="
+  },
+  {
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAANElEQVR4nGP8dMiAAQYS6h/A2QsaFbCKMzGQCGivgTHIUQDOweVuZPHB6IfReKCFk0jWAADM8RcrOtuTJAAAAABJRU5ErkJggg=="
+  },
+  {
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAANElEQVR4nGO89cmAAQbyEx7A2RMXKGAVZ2IgEdBeA6NnkACcg8vdyOKD0Q+j8UALJ5GsAQA6fhdrrZ817gAAAABJRU5ErkJggg=="
+  },
+  {
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAANElEQVR4nGOc+MmAAQYWJDyAsxMWKGAVZ2IgEdBeA6NhkACcg8vdyOKD0Q+j8UALJ5GsAQDtUhapeCizKgAAAABJRU5ErkJggg=="
+  },
+  {
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAANElEQVR4nGP0/GTAAAPnEx7A2YYLFLCKMzGQCGivgVEiSADOweVuZPHB6IfReKCFk0jWAACerRXnnGbEqgAAAABJRU5ErkJggg=="
+  },
+  {
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAANElEQVR4nGM0+JTIAAMPEg7A2QoLHLCKMzGQCGivgVEgSBHOweVuZPHB6IfReKCFk0jWAAAQShYpf/4ndwAAAABJRU5ErkJggg=="
+  },
+  {
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAANElEQVR4nGM0+LSKAQYeJPTD2QoLCrGKMzGQCGivgVEgyBLOweVuZPHB6IfReKCFk0jWAABb4xbruUkjqgAAAABJRU5ErkJggg=="
+  },
+  {
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAANElEQVR4nGM0+PSJAQYeJCTA2QoLFmAVZ2IgEdBeA6NAUBCcg8vdyOKD0Q+j8UALJ5GsAQCpBBetemB06QAAAABJRU5ErkJggg=="
+  },
+  {
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAANElEQVR4nGM0WPWJAQYe9CfA2QqFC7CKMzGQCGivgVHAMgjOweVuZPHB6IfReKCFk0jWAABbIRbrJc0HFQAAAABJRU5ErkJggg=="
+  },
+  {
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAANElEQVR4nGM0SPzEAAMPDiTA2QoOC7CKMzGQCGivgVFAMQjOweVuZPHB6IfReKCFk0jWAAAOxhYpSaTuUAAAAABJRU5ErkJggg=="
+  },
+  {
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAANElEQVR4nGP0NPjEAAPnHyTA2YYKC7CKMzGQCGivgVFCIAjOweVuZPHB6IfReKCFk0jWAACcpRXnilJc8AAAAABJRU5ErkJggg=="
+  },
+  {
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAANElEQVR4nGOcaPCJAQYWPEiAsxMUFmAVZ2IgEdBeA6OhQBCcg8vdyOKD0Q+j8UALJ5GsAQDrShap8FsarQAAAABJRU5ErkJggg=="
+  },
+  {
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAANElEQVR4nGO8ZfCJAQbyHyTA2RMVFmAVZ2IgEdBeA6OnQBCcg8vdyOKD0Q+j8UALJ5GsAQA4dhdrzMTLcwAAAABJRU5ErkJggg=="
+  },
+  {
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAANElEQVR4nGP8ZHCIAQYSHtTD2QsUGrGKMzGQCGivgTFIwBHOweVuZPHB6IfReKCFk0jWAADLaxcr1pN68AAAAABJRU5ErkJggg=="
+  },
+  {
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAANElEQVR4nGP8ZFDJAAMJDzbA2QsUArCKMzGQCGivgTFIQBPOweVuZPHB6IfReKCFk0jWAAB/0hZp323dUwAAAABJRU5ErkJggg=="
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "min": [
+    -0.45,
+    -0.45,
+    0.0
+   ],
+   "max": [
+    0.45,
+    0.45,
+    0.0
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC2"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5123,
+   "count": 6,
+   "type": "SCALAR"
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 48,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 96,
+   "byteLength": 32,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 128,
+   "byteLength": 12,
+   "target": 34963
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "data:application/octet-stream;base64,ZmbmvmZm5r4AAAAAZmbmPmZm5r4AAAAAZmbmPmZm5j4AAAAAZmbmvmZm5j4AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AACAPwAAgD8AAAAAAAAAAAAAAAAAAAEAAgAAAAIAAwA=",
+   "byteLength": 140
+  }
+ ]
+}
