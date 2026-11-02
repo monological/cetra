@@ -980,6 +980,95 @@ static void _rows_measure(const UISystem* ui, UIElement* pane) {
 }
 
 /*
+ * Across its parent's flow: a GROW child stretches to the room and a SHARE child takes its share of
+ * it, each up to its most; any other keeps the length it has.
+ */
+static float _cross_len(const UIElement* c, int axis, float room) {
+    if (c->size_mode[axis] == UI_GROW)
+        return _at_most(c, axis, room);
+    if (c->size_mode[axis] == UI_SHARE)
+        return _share_len(c, axis, room);
+    return axis == 0 ? c->rect.w : c->rect.h;
+}
+
+/*
+ * Rows on the baseline (spec 14.13). An element's baseline is how far below its top its first
+ * line's baseline stands, from the lengths it has when asked: measured, or given by the arrange. A
+ * child stretched across a row fills it from the top and takes no part in its baseline.
+ */
+static float _baseline(const UISystem* ui, const UIElement* el);
+
+static bool _on_baseline(const UIElement* c) {
+    return !c->fill && c->size_mode[1] != UI_GROW && c->size_mode[1] != UI_SHARE;
+}
+
+// How far below a row's inner top its baseline stands: its deepest child's; -1 for none.
+static float _baseline_line(const UISystem* ui, const UIElement* row) {
+    float line = -1.0f;
+    for (size_t i = 0; i < row->child_count; i++)
+        if (_on_baseline(row->children[i]))
+            line = glm_max(line, _baseline(ui, row->children[i]));
+    return line;
+}
+
+/*
+ * Where `c` stands across `el`'s flow along `axis`, from the start of the room, `room` long: a
+ * smaller child where the cross alignment puts it; on the baseline, down to `line`, the row's; a
+ * child with no baseline, or no smaller than the room, at the start. The one placement the arrange,
+ * the measure and an element's baseline read.
+ */
+static float _cross_offset(const UISystem* ui, const UIElement* el, const UIElement* c, int axis,
+                           float room, float line) {
+    const float len = _cross_len(c, axis, room);
+    switch (el->align_cross) {
+        case UI_ALIGN_CENTER:
+            return len < room ? (room - len) * 0.5f : 0.0f;
+        case UI_ALIGN_END:
+            return len < room ? room - len : 0.0f;
+        case UI_ALIGN_BASELINE: {
+            // Across a column it is START: only a row's cross axis is its lines' height.
+            const float b = axis == 1 && _on_baseline(c) ? _baseline(ui, c) : -1.0f;
+            return b >= 0.0f ? line - b : 0.0f;
+        }
+        default:
+            return 0.0f;
+    }
+}
+
+/*
+ * A label's first line, as it draws it; a panel's or a screen root's first child's in the flow,
+ * where that child stands in it: across a row where the row's cross alignment puts it, down a
+ * column at its top unless the column centres or ends its children. -1 for none: no text, any
+ * other kind, or a scrolling pane, whose content moves with its scroll.
+ */
+static float _baseline(const UISystem* ui, const UIElement* el) {
+    float pad[4];
+    if (el->kind == UI_LABEL) {
+        const UIStyle s = _resolve(ui, el, UI_STATE_NORMAL);
+        if (!el->text || !el->text[0] || !s.font)
+            return -1.0f;
+        _padding_from(el, &s, pad);
+        const UIText t = _element_text(ui, el, &s);
+        return ui_text_baseline(&t, pad[0]);
+    }
+    if (el->kind != UI_PANEL && el->kind != UI_ROOT)
+        return -1.0f;
+    const UIElement* first = NULL;
+    for (size_t i = 0; i < el->child_count && !first; i++)
+        if (!el->children[i]->fill)
+            first = el->children[i];
+    const float b = first ? _baseline(ui, first) : -1.0f;
+    if (b < 0.0f)
+        return -1.0f;
+    _padding_of(ui, el, pad);
+    if (_main_axis(el) == 1)
+        return el->align_main == UI_ALIGN_CENTER || el->align_main == UI_ALIGN_END ? -1.0f
+                                                                                   : pad[0] + b;
+    const float line = el->align_cross == UI_ALIGN_BASELINE ? _baseline_line(ui, el) : 0.0f;
+    return pad[0] + _cross_offset(ui, el, first, 1, el->rect.h - pad[0] - pad[2], line) + b;
+}
+
+/*
  * Pass 1, bottom-up: every element gets the size its own content wants. A GROW
  * axis is measured too, at its FIT size -- that is the MINIMUM it will accept,
  * and it is what a FIT parent measures against, which is what stops the two
@@ -1006,6 +1095,9 @@ static void _measure(const UISystem* ui, UIElement* el, int axis) {
         _padding_of(ui, el, pad);
         const float gap = _spacing_of(ui, el);
         const bool along = _main_axis(el) == axis;
+        // Across a row on the baseline, a child reaches as far down as its line puts it.
+        const bool lined = !along && el->align_cross == UI_ALIGN_BASELINE;
+        const float line = lined ? _baseline_line(ui, el) : 0.0f;
         float sum = 0.0f, most = 0.0f;
         size_t counted = 0;
         for (size_t i = 0; i < el->child_count; i++) {
@@ -1013,8 +1105,9 @@ static void _measure(const UISystem* ui, UIElement* el, int axis) {
             if (c->fill)
                 continue; // a backdrop is outside the flow
             const float cl = *_len(&c->rect, axis);
+            const float reach = cl + (lined ? _cross_offset(ui, el, c, axis, 0.0f, line) : 0.0f);
             sum += cl;
-            most = cl > most ? cl : most;
+            most = reach > most ? reach : most;
             counted++;
         }
         if (along && counted > 1)
@@ -1074,25 +1167,16 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
     }
 
     if (_main_axis(el) != axis) {
-        // Across: a GROW child stretches to the inner extent and a SHARE child takes its share of
-        // it, each up to its most, and a smaller one is placed by the cross alignment.
+        // Across: each child its length and its place by the cross alignment. The line is read
+        // before any child is placed, from lengths placing does not change.
+        const float line = el->align_cross == UI_ALIGN_BASELINE ? _baseline_line(ui, el) : 0.0f;
         for (size_t i = 0; i < el->child_count; i++) {
             UIElement* c = el->children[i];
             if (c->fill)
                 continue;
-            float* cl = _len(&c->rect, axis);
-            float* cp = _pos(&c->rect, axis);
-            if (c->size_mode[axis] == UI_GROW)
-                *cl = _at_most(c, axis, in_len);
-            else if (c->size_mode[axis] == UI_SHARE)
-                *cl = _share_len(c, axis, in_len);
-            *cp = in_pos;
-            if (*cl < in_len) {
-                if (el->align_cross == UI_ALIGN_CENTER)
-                    *cp += (in_len - *cl) * 0.5f;
-                else if (el->align_cross == UI_ALIGN_END)
-                    *cp += in_len - *cl;
-            }
+            const float offset = _cross_offset(ui, el, c, axis, in_len, line);
+            *_len(&c->rect, axis) = _cross_len(c, axis, in_len);
+            *_pos(&c->rect, axis) = in_pos + offset;
             _arrange(ui, c, screen, axis);
         }
         return;

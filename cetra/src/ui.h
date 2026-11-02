@@ -50,13 +50,15 @@ static inline UIRect ui_rect_inset(UIRect r, float t, float right, float b, floa
     return (UIRect){r.x + l, r.y + t, r.w - l - right, r.h - t - b};
 }
 
-// Horizontal placement of a string inside the rect it is drawn into. Vertical
-// placement is always the rect's top plus the font's ascent, so two strings at
-// different sizes in one row share a baseline rather than a bounding box.
+// Where a string is placed across the rect it is drawn into, and where an element's children are
+// placed along its flow and across it. A string's baseline is always its rect's top plus its face's
+// ascent at its size, so two sizes drawn from one top do not share one.
 typedef enum {
     UI_ALIGN_START = 0,
     UI_ALIGN_CENTER = 1,
     UI_ALIGN_END = 2,
+    // A row's align_cross only (spec 14.13): each child with a baseline moved down until its first
+    // line stands on the deepest one's; START anywhere else.
     UI_ALIGN_BASELINE = 3,
 } UIAlign;
 
