@@ -28227,6 +28227,17 @@ def run_ui_gate(workdir):
                      fits its children, which it adds nothing to; and a share of 0.
       ui-padding-none a negative padding and spacing are none, a zero one the
                      style's and the theme's, and the padding goes per side.
+      ui-label-padding a label's text is drawn inside its padding: its first line's
+                     baseline its top padding and its face's ascent below its top,
+                     its pen its left padding in (spec 14.13). Drawn from its rect's
+                     corner, every label's text sat its top padding high, 4 points
+                     by default, with all its padding under it.
+      ui-baseline    a row on UI_ALIGN_BASELINE (spec 14.13): labels at 14 and 28
+                     points, one at 10 in a padded column and two in a row on the
+                     baseline of its own all stand on one baseline; a panel with no
+                     text stands at the row's top; and the row is as tall as its
+                     lowest child reaches. Within a framebuffer pixel, the grid a
+                     glyph's corner is snapped to.
       ui-control-lines a button and a slider whose text is two lines draw it through
                      the lines their height was measured from: the button's two
                      rows sit on its centre exactly as one row does, and the
@@ -29176,6 +29187,37 @@ def run_ui_gate(workdir):
                   f"either side, {sides[2]:.0f} x {sides[3]:.0f} (want 32 x 20)")
     print(f"  ui-padding-none       {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-padding-none", ok)
+
+    # A glyph's corner is snapped to the framebuffer's pixels, so a baseline or a pen read back
+    # from it lies within half a pixel of where it was drawn.
+    p = _ui_probe("label-padding")
+    if not p or ("baseline", "off") not in p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        snap = p[("pixel", "size")][0] * 0.5 + 0.01
+        base, pen = p[("baseline", "off")][0], p[("pen", "off")][0]
+        ok = abs(base) <= snap and abs(pen) <= snap
+        detail = (f"padding 10 above and 12 left: the baseline {base:+.2f} and the pen {pen:+.2f} "
+                  f"points off their place inside it (want within {snap:.2f})")
+    print(f"  ui-label-padding      {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-label-padding", ok)
+
+    p = _ui_probe("baseline")
+    count = p.get(("glyphs", "count"), [0])[0] if p else 0
+    if count != 5:
+        ok, detail = False, f"the probe drew {count} glyphs (want 5)"
+    else:
+        snap = p[("pixel", "size")][0] + 0.02
+        lines = [p[(f"glyph{i}", "line")][0] for i in range(5)]
+        spread = max(lines) - min(lines)
+        top = p[("textless", "top")][0]
+        height, reach = p[("row", "height")]
+        ok = spread <= snap and abs(top) <= 0.01 and abs(height - reach) <= 0.01
+        detail = (f"baselines at {', '.join(f'{v:.2f}' for v in lines)}, {spread:.2f} apart "
+                  f"(want within {snap:.2f}); the textless panel {top:+.2f} from the row's top "
+                  f"(want 0); the row {height:.2f} tall, its lowest child reaching {reach:.2f}")
+    print(f"  ui-baseline           {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-baseline", ok)
 
     p = _ui_probe("control-lines")
     counts = p.get(("rows", "count")) if p else None
