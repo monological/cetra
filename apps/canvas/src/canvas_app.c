@@ -2826,12 +2826,12 @@ static void build_palette_row(UIElement* holder, int index, void* user) {
     ui_set_style(row, &(UIStyle){.bg = {0.16f, 0.34f, 0.62f, lit ? 1.0f : 0.0f},
                                  .corner_radius = 5.0f,
                                  .padding = {5.0f, 10.0f, 5.0f, 10.0f}});
-    // A label's own room above and below its line would not fit the row's fixed height.
     UIElement* name = ui_label(row, pal_name(item));
     ui_set_size(name, UI_GROW, 0.0f, UI_FIT, 0.0f);
     UITextRun runs[FUZZY_QUERY_MAX];
     ui_set_text_runs(name, runs, palette_lit(pal_name(item), runs));
     UIElement* key = ui_label(row, g_pal_jump ? "" : COMMANDS[item].key);
+    // A label's own room above and below its line would not fit the row's fixed height.
     name->padding[0] = name->padding[2] = key->padding[0] = key->padding[2] = -1.0f;
 }
 

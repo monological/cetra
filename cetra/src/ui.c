@@ -366,6 +366,7 @@ static UIElement* _new_element(UIElement* parent, UIKind kind) {
         return NULL;
     }
     el->kind = kind;
+    el->baseline = -1.0f;
     el->dir = UI_COLUMN;
     el->size_mode[0] = UI_FIT;
     el->size_mode[1] = UI_FIT;
@@ -991,81 +992,81 @@ static float _cross_len(const UIElement* c, int axis, float room) {
     return axis == 0 ? c->rect.w : c->rect.h;
 }
 
-/*
- * Rows on the baseline (spec 14.13). An element's baseline is how far below its top its first
- * line's baseline stands, from the lengths it has when asked: measured, or given by the arrange. A
- * child stretched across a row fills it from the top and takes no part in its baseline.
- */
-static float _baseline(const UISystem* ui, const UIElement* el);
-
-static bool _on_baseline(const UIElement* c) {
-    return !c->fill && c->size_mode[1] != UI_GROW && c->size_mode[1] != UI_SHARE;
+// Where a child `len` long stands across a room `room` long, from its start: centred, at the end,
+// or at the start, as it does when it is no smaller than the room.
+static float _cross_offset(UIAlign align, float room, float len) {
+    if (len >= room)
+        return 0.0f;
+    return align == UI_ALIGN_CENTER ? (room - len) * 0.5f
+           : align == UI_ALIGN_END  ? room - len
+                                    : 0.0f;
 }
 
-// How far below a row's inner top its baseline stands: its deepest child's; -1 for none.
-static float _baseline_line(const UISystem* ui, const UIElement* row) {
+/*
+ * Rows on the baseline (spec 14.13). Every element keeps its baseline, set as the measure finishes
+ * its height, its children's first: one walk a layout, however deep rows on the baseline nest. A
+ * child stretched across a row fills it from the top and takes no part in its line.
+ */
+static bool _lines_up(const UIElement* el, int axis) {
+    return el->dir == UI_ROW && axis == 1 && el->align_cross == UI_ALIGN_BASELINE;
+}
+
+static bool _on_line(const UIElement* c) {
+    return !c->fill && c->size_mode[1] != UI_GROW && c->size_mode[1] != UI_SHARE &&
+           c->baseline >= 0.0f;
+}
+
+// How far below a row's inner top its children's line stands: the deepest of their baselines; -1
+// for none.
+static float _line_of(const UIElement* row) {
     float line = -1.0f;
     for (size_t i = 0; i < row->child_count; i++)
-        if (_on_baseline(row->children[i]))
-            line = glm_max(line, _baseline(ui, row->children[i]));
+        if (_on_line(row->children[i]))
+            line = glm_max(line, row->children[i]->baseline);
     return line;
 }
 
-/*
- * Where `c` stands across `el`'s flow along `axis`, from the start of the room, `room` long: a
- * smaller child where the cross alignment puts it; on the baseline, down to `line`, the row's; a
- * child with no baseline, or no smaller than the room, at the start. The one placement the arrange,
- * the measure and an element's baseline read.
- */
-static float _cross_offset(const UISystem* ui, const UIElement* el, const UIElement* c, int axis,
-                           float room, float line) {
-    const float len = _cross_len(c, axis, room);
-    switch (el->align_cross) {
-        case UI_ALIGN_CENTER:
-            return len < room ? (room - len) * 0.5f : 0.0f;
-        case UI_ALIGN_END:
-            return len < room ? room - len : 0.0f;
-        case UI_ALIGN_BASELINE: {
-            // Across a column it is START: only a row's cross axis is its lines' height.
-            const float b = axis == 1 && _on_baseline(c) ? _baseline(ui, c) : -1.0f;
-            return b >= 0.0f ? line - b : 0.0f;
-        }
-        default:
-            return 0.0f;
-    }
+// How far down a row's `line` moves `c`: until it stands on it, when it takes part.
+static float _drop(const UIElement* c, float line) {
+    return line >= 0.0f && _on_line(c) ? line - c->baseline : 0.0f;
 }
 
 /*
- * A label's first line, as it draws it; a panel's or a screen root's first child's in the flow,
- * where that child stands in it: across a row where the row's cross alignment puts it, down a
- * column at its top unless the column centres or ends its children. -1 for none: no text, any
- * other kind, or a scrolling pane, whose content moves with its scroll.
+ * An element's baseline from its children's and its own measured length, `line` its children's
+ * when it lines them up: a label's first line, where it draws it; a row on the baseline's, its
+ * line; any other panel's, its first child's in the flow where that child stands, across a row by
+ * the row's alignment and down a column at its top. -1 for none: no text; a column that centres or
+ * ends its children, whose first stands where room the arrange settles puts it; any other kind, a
+ * scrolling pane's content moving with its scroll.
  */
-static float _baseline(const UISystem* ui, const UIElement* el) {
+static float _baseline_of(const UISystem* ui, const UIElement* el, float line) {
     float pad[4];
     if (el->kind == UI_LABEL) {
         const UIStyle s = _resolve(ui, el, UI_STATE_NORMAL);
-        if (!el->text || !el->text[0] || !s.font)
+        if (!el->lines || !s.font)
             return -1.0f;
         _padding_from(el, &s, pad);
         const UIText t = _element_text(ui, el, &s);
         return ui_text_baseline(&t, pad[0]);
     }
-    if (el->kind != UI_PANEL && el->kind != UI_ROOT)
+    if (el->kind != UI_PANEL)
         return -1.0f;
+    _padding_of(ui, el, pad);
+    if (_lines_up(el, 1))
+        return line >= 0.0f ? pad[0] + line : -1.0f;
     const UIElement* first = NULL;
     for (size_t i = 0; i < el->child_count && !first; i++)
         if (!el->children[i]->fill)
             first = el->children[i];
-    const float b = first ? _baseline(ui, first) : -1.0f;
-    if (b < 0.0f)
+    if (!first || first->baseline < 0.0f)
         return -1.0f;
-    _padding_of(ui, el, pad);
     if (_main_axis(el) == 1)
-        return el->align_main == UI_ALIGN_CENTER || el->align_main == UI_ALIGN_END ? -1.0f
-                                                                                   : pad[0] + b;
-    const float line = el->align_cross == UI_ALIGN_BASELINE ? _baseline_line(ui, el) : 0.0f;
-    return pad[0] + _cross_offset(ui, el, first, 1, el->rect.h - pad[0] - pad[2], line) + b;
+        return el->align_main == UI_ALIGN_CENTER || el->align_main == UI_ALIGN_END
+                   ? -1.0f
+                   : pad[0] + first->baseline;
+    const float room = el->rect.h - pad[0] - pad[2];
+    return pad[0] + _cross_offset(el->align_cross, room, _cross_len(first, 1, room)) +
+           first->baseline;
 }
 
 /*
@@ -1083,6 +1084,7 @@ static void _measure(const UISystem* ui, UIElement* el, int axis) {
     // whose length is its parent's to settle.
     const UISize mode = el->size_mode[axis];
     float v = mode == UI_FIXED || mode == UI_SHARE ? 0.0f : _intrinsic(ui, el, axis);
+    const float line = _lines_up(el, axis) ? _line_of(el) : -1.0f;
 
     if (el->rows && axis == 1) {
         // A pane of rows is as tall as all of them, built or not.
@@ -1095,9 +1097,6 @@ static void _measure(const UISystem* ui, UIElement* el, int axis) {
         _padding_of(ui, el, pad);
         const float gap = _spacing_of(ui, el);
         const bool along = _main_axis(el) == axis;
-        // Across a row on the baseline, a child reaches as far down as its line puts it.
-        const bool lined = !along && el->align_cross == UI_ALIGN_BASELINE;
-        const float line = lined ? _baseline_line(ui, el) : 0.0f;
         float sum = 0.0f, most = 0.0f;
         size_t counted = 0;
         for (size_t i = 0; i < el->child_count; i++) {
@@ -1105,7 +1104,8 @@ static void _measure(const UISystem* ui, UIElement* el, int axis) {
             if (c->fill)
                 continue; // a backdrop is outside the flow
             const float cl = *_len(&c->rect, axis);
-            const float reach = cl + (lined ? _cross_offset(ui, el, c, axis, 0.0f, line) : 0.0f);
+            // On a row's line, a child reaches as far down as the line moves it.
+            const float reach = cl + _drop(c, line);
             sum += cl;
             most = reach > most ? reach : most;
             counted++;
@@ -1128,6 +1128,8 @@ static void _measure(const UISystem* ui, UIElement* el, int axis) {
     *_len(&el->rect, axis) = mode == UI_FIXED   ? el->size[axis]
                              : mode == UI_SHARE ? 0.0f
                                                 : _at_most(el, axis, v);
+    if (axis == 1)
+        el->baseline = _baseline_of(ui, el, line);
 }
 
 /*
@@ -1167,16 +1169,17 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
     }
 
     if (_main_axis(el) != axis) {
-        // Across: each child its length and its place by the cross alignment. The line is read
-        // before any child is placed, from lengths placing does not change.
-        const float line = el->align_cross == UI_ALIGN_BASELINE ? _baseline_line(ui, el) : 0.0f;
+        // Across: each child its length, and its place by the cross alignment or on the line.
+        const float line = _lines_up(el, axis) ? _line_of(el) : -1.0f;
         for (size_t i = 0; i < el->child_count; i++) {
             UIElement* c = el->children[i];
             if (c->fill)
                 continue;
-            const float offset = _cross_offset(ui, el, c, axis, in_len, line);
-            *_len(&c->rect, axis) = _cross_len(c, axis, in_len);
-            *_pos(&c->rect, axis) = in_pos + offset;
+            const float len = _cross_len(c, axis, in_len);
+            *_len(&c->rect, axis) = len;
+            *_pos(&c->rect, axis) =
+                in_pos +
+                (line >= 0.0f ? _drop(c, line) : _cross_offset(el->align_cross, in_len, len));
             _arrange(ui, c, screen, axis);
         }
         return;
@@ -1639,11 +1642,16 @@ UIRect ui_slider_track(const UISystem* ui, const UIElement* el) {
                     el->rect.w - s.padding[1] - s.padding[3], UI_TRACK_H};
 }
 
-// An element's rect less its padding: where a field's text is.
-static UIRect _content_rect(const UISystem* ui, const UIElement* el) {
+// An element's rect less its padding, by a style resolved for it: where its content is drawn.
+static UIRect _content_in(const UIElement* el, const UIStyle* s) {
     float pad[4];
-    _padding_of(ui, el, pad);
+    _padding_from(el, s, pad);
     return ui_rect_inset(el->rect, pad[0], pad[1], pad[2], pad[3]);
+}
+
+static UIRect _content_rect(const UISystem* ui, const UIElement* el) {
+    const UIStyle s = _resolve(ui, el, UI_STATE_NORMAL);
+    return _content_in(el, &s);
 }
 
 // The height a pane shows its content through: its rect less its padding.
@@ -1725,7 +1733,7 @@ static void _emit(UISystem* ui, UIElement* el) {
                 // Inside its padding: the box its height was measured and its lines broken for.
                 if (el->lines) {
                     const UIText t = _element_text(ui, el, &s);
-                    ui_draw_text_lines(dl, _content_rect(ui, el), &t, el->lines, s.line_spacing,
+                    ui_draw_text_lines(dl, _content_in(el, &s), &t, el->lines, s.line_spacing,
                                        el->align_cross);
                 }
                 break;
@@ -1742,7 +1750,7 @@ static void _emit(UISystem* ui, UIElement* el) {
                 }
                 const UIScreen* top = ui_top(ui);
                 const bool blink = ui->engine && !ui->engine->headless;
-                const double wake = ops->draw(ui, el, &s, _content_rect(ui, el),
+                const double wake = ops->draw(ui, el, &s, _content_in(el, &s),
                                               top && top->focused == el, ui->now, blink);
                 ui->caret_wake = wake < ui->caret_wake ? wake : ui->caret_wake;
                 UIRect track, thumb;
