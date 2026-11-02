@@ -1515,43 +1515,43 @@ static int probe_padding_none(UISystem* ui) {
     return 0;
 }
 
-// One framebuffer pixel in points at the probes' 1280 by 720, the grid every glyph quad's corner is
-// snapped to: how far a baseline read back from a quad may lie from where it was drawn.
-static float probe_pixel(const Game* game) {
-    return game->engine->fb_width > 0 ? 1280.0f / (float)game->engine->fb_width : 1.0f;
+// One framebuffer pixel in points, the screen built `width` points across: the grid every glyph
+// quad's corner is snapped to, how far a pen read back from a quad may lie from where it was.
+static float probe_pixel(const Game* game, float width) {
+    return game->engine->fb_width > 0 ? width / (float)game->engine->fb_width : 1.0f;
 }
 
-// The baseline and pen a built glyph quad of `c` at `size` was drawn from: its corner less the
+// The pen and baseline a built glyph quad of `c` at `size` was drawn from: its corner less the
 // glyph's own offset from them.
-static float quad_baseline(const Font* font, UIRect quad, uint32_t c, float size) {
-    return quad.y - font_get_glyph((Font*)font, c)->y0 * (size / font->base_size);
-}
-
-static float quad_pen(const Font* font, UIRect quad, uint32_t c, float size) {
-    return quad.x - font_get_glyph((Font*)font, c)->x0 * (size / font->base_size);
+static void quad_origin(const Font* font, UIRect quad, uint32_t c, float size, float* pen,
+                        float* baseline) {
+    const GlyphInfo* g = font_get_glyph((Font*)font, c);
+    *pen = quad.x - g->x0 * (size / font->base_size);
+    *baseline = quad.y - g->y0 * (size / font->base_size);
 }
 
 // A label drawn inside its padding: its first line's baseline its top padding and its face's ascent
 // below its top, and its pen its left padding in from its left.
 static int probe_label_padding(const Game* game, UISystem* ui, const Font* font) {
+    const float width = 1280.0f;
     UIScreen* s = ui_screen(ui, "label-padding");
     UIElement* label = ui_label(ui_screen_root(s), "xxxx");
     label->padding[0] = 10.0f;
     label->padding[3] = 12.0f;
     ui_push(ui, s);
-    ui_build(ui, 1280.0f, 720.0f, 1.0f);
+    ui_build(ui, width, 720.0f, 1.0f);
     UIRect quads[8];
     vec4 colors[8];
     const size_t n = glyph_quads(ui, quads, colors, 8);
     printf("ui label-padding glyphs count %zu\n", n);
-    printf("ui label-padding pixel size %.6f\n", (double)probe_pixel(game));
+    printf("ui label-padding pixel size %.6f\n", (double)probe_pixel(game, width));
     if (n > 0) {
+        float pen, baseline;
+        quad_origin(font, quads[0], 'x', PROBE_SIZE, &pen, &baseline);
         const float ascent = font->ascent * (PROBE_SIZE / font->base_size);
         printf("ui label-padding baseline off %.6f\n",
-               (double)(quad_baseline(font, quads[0], 'x', PROBE_SIZE) -
-                        (label->rect.y + 10.0f + ascent)));
-        printf("ui label-padding pen off %.6f\n",
-               (double)(quad_pen(font, quads[0], 'x', PROBE_SIZE) - (label->rect.x + 12.0f)));
+               (double)(baseline - (label->rect.y + 10.0f + ascent)));
+        printf("ui label-padding pen off %.6f\n", (double)(pen - (label->rect.x + 12.0f)));
     }
     ui_pop(ui);
     return 0;
@@ -1564,43 +1564,56 @@ static UIElement* sized_x(UIElement* parent, float size) {
     return label;
 }
 
-// A row on the baseline: labels of three sizes, one in a padded column, two in a row on the
-// baseline of its own and one with 40 points of padding under it, all on one line; a panel with no
-// text at the row's top; and the row as tall as the lowest of its children reaches, which is the
-// padded label, moved down onto the line.
-static int probe_baseline(const Game* game, UISystem* ui, const Font* font) {
-    UIScreen* s = ui_screen(ui, "baseline");
-    UIElement* row = ui_panel(ui_screen_root(s));
+// A row on the baseline.
+static UIElement* lined_row(UIElement* parent) {
+    UIElement* row = ui_panel(parent);
     row->dir = UI_ROW;
     row->align_cross = UI_ALIGN_BASELINE;
+    return row;
+}
+
+// A row on the baseline: labels of three sizes, one in a padded column, two in a row on the
+// baseline of its own, one after an icon with no text in another, and one with 40 points of padding
+// under it, all on one line; a panel with no text at the row's top; the row's own baseline its
+// line; and the row as tall as the lowest of its children reaches, which is the padded label, moved
+// down onto the line.
+static int probe_baseline(const Game* game, UISystem* ui, const Font* font) {
+    const float width = 1280.0f;
+    UIScreen* s = ui_screen(ui, "baseline");
+    UIElement* row = lined_row(ui_screen_root(s));
     for (int i = 0; i < 4; i++)
         row->padding[i] = 4.0f;
-    static const float SIZES[] = {14.0f, 28.0f, 10.0f, 12.0f, 20.0f, 10.0f};
+    static const float SIZES[] = {14.0f, 28.0f, 10.0f, 12.0f, 20.0f, 16.0f, 10.0f};
     sized_x(row, SIZES[0]);
     sized_x(row, SIZES[1]);
     UIElement* column = ui_panel(row);
     for (int i = 0; i < 4; i++)
         column->padding[i] = 3.0f;
     sized_x(column, SIZES[2]);
-    UIElement* inner = ui_panel(row);
-    inner->dir = UI_ROW;
-    inner->align_cross = UI_ALIGN_BASELINE;
+    UIElement* inner = lined_row(row);
     sized_x(inner, SIZES[3]);
     sized_x(inner, SIZES[4]);
-    UIElement* deep = sized_x(row, SIZES[5]);
+    UIElement* iconed = lined_row(row);
+    fixed_panel(iconed, 12.0f, 12.0f);
+    sized_x(iconed, SIZES[5]);
+    UIElement* deep = sized_x(row, SIZES[6]);
     deep->padding[0] = 4.0f;
     deep->padding[2] = 40.0f;
     const UIElement* textless = fixed_panel(row, 10.0f, 10.0f);
     ui_push(ui, s);
-    ui_build(ui, 1280.0f, 720.0f, 1.0f);
+    ui_build(ui, width, 720.0f, 1.0f);
     UIRect quads[8];
     vec4 colors[8];
     const size_t n = glyph_quads(ui, quads, colors, 8);
     printf("ui baseline glyphs count %zu\n", n);
-    printf("ui baseline pixel size %.6f\n", (double)probe_pixel(game));
-    for (size_t i = 0; i < n && i < sizeof(SIZES) / sizeof(SIZES[0]); i++)
-        printf("ui baseline glyph%zu line %.6f\n", i,
-               (double)quad_baseline(font, quads[i], 'x', SIZES[i]));
+    printf("ui baseline pixel size %.6f\n", (double)probe_pixel(game, width));
+    float line = 0.0f;
+    for (size_t i = 0; i < n && i < sizeof(SIZES) / sizeof(SIZES[0]); i++) {
+        float pen;
+        quad_origin(font, quads[i], 'x', SIZES[i], &pen, &line);
+        printf("ui baseline glyph%zu line %.6f\n", i, (double)line);
+    }
+    printf("ui baseline row own %.6f %.6f\n", (double)(row->rect.y + row->baseline), (double)line);
     printf("ui baseline textless top %.6f\n", (double)(textless->rect.y - (row->rect.y + 4.0f)));
     float reach = 0.0f;
     for (size_t i = 0; i < row->child_count; i++) {

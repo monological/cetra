@@ -28234,11 +28234,13 @@ def run_ui_gate(workdir):
                      by default, with all its padding under it.
       ui-baseline    a row on UI_ALIGN_BASELINE (spec 14.13): labels at 14 and 28
                      points, one at 10 in a padded column, two in a row on the
-                     baseline of its own and one with 40 points of padding under it
-                     all stand on one baseline; a panel with no text stands at the
-                     row's top; and the row is as tall as its lowest child reaches,
-                     the padded label moved down onto the line. Within a
-                     framebuffer pixel, the grid a glyph's corner is snapped to.
+                     baseline of its own, one after a textless icon in another and
+                     one with 40 points of padding under it all stand on one
+                     baseline, and the row's own baseline is that line; a panel
+                     with no text stands at the row's top; and the row is as tall
+                     as its lowest child reaches, the padded label moved down onto
+                     the line. Within a framebuffer pixel, the grid a glyph's
+                     corner is snapped to.
       ui-control-lines a button and a slider whose text is two lines draw it through
                      the lines their height was measured from: the button's two
                      rows sit on its centre exactly as one row does, and the
@@ -29205,18 +29207,21 @@ def run_ui_gate(workdir):
 
     p = _ui_probe("baseline")
     count = p.get(("glyphs", "count"), [0])[0] if p else 0
-    if count != 6:
-        ok, detail = False, f"the probe drew {count} glyphs (want 6)"
+    if count != 7:
+        ok, detail = False, f"the probe drew {count} glyphs (want 7)"
     else:
         snap = p[("pixel", "size")][0] + 0.02
-        lines = [p[(f"glyph{i}", "line")][0] for i in range(6)]
+        lines = [p[(f"glyph{i}", "line")][0] for i in range(7)]
         spread = max(lines) - min(lines)
+        own, drawn = p[("row", "own")]
         top = p[("textless", "top")][0]
         height, reach = p[("row", "height")]
-        ok = spread <= snap and abs(top) <= 0.01 and abs(height - reach) <= 0.01
+        ok = (spread <= snap and abs(own - drawn) <= snap and abs(top) <= 0.01
+              and abs(height - reach) <= 0.01)
         detail = (f"baselines at {', '.join(f'{v:.2f}' for v in lines)}, {spread:.2f} apart "
-                  f"(want within {snap:.2f}); the textless panel {top:+.2f} from the row's top "
-                  f"(want 0); the row {height:.2f} tall, its lowest child reaching {reach:.2f}")
+                  f"(want within {snap:.2f}); the row's own at {own:.2f}; the textless panel "
+                  f"{top:+.2f} from the row's top (want 0); the row {height:.2f} tall, its lowest "
+                  f"child reaching {reach:.2f}")
     print(f"  ui-baseline           {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-baseline", ok)
 

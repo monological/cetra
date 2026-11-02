@@ -50,9 +50,8 @@ static inline UIRect ui_rect_inset(UIRect r, float t, float right, float b, floa
     return (UIRect){r.x + l, r.y + t, r.w - l - right, r.h - t - b};
 }
 
-// Where a string is placed across the rect it is drawn into, and where an element's children are
-// placed along its flow and across it. A string's baseline is always its rect's top plus its face's
-// ascent at its size, so two sizes drawn from one top do not share one.
+// A string's horizontal alignment in the rect it is drawn into, a label's included; an element's
+// children's placement along its flow and across it.
 typedef enum {
     UI_ALIGN_START = 0,
     UI_ALIGN_CENTER = 1,
@@ -380,7 +379,10 @@ struct UIElement {
     // ENGINE-OWNED: the layout pass and the input pass write these; read them,
     // never write them.
     UIKind kind;
-    UIRect rect;   // settled by ui_layout, in points
+    UIRect rect; // settled by ui_layout, in points
+    // How far below its top its first line's baseline stands, as its last layout measured it: what
+    // a row on UI_ALIGN_BASELINE lines it up by. -1 for none.
+    float baseline;
     UIState state; // settled by the input pass
     float t_hover; // 0..1, eased toward whether the pointer is inside
     float t_focus; // 0..1, eased toward whether this element has focus
