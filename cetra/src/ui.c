@@ -132,6 +132,15 @@ static UIStyle _default_style(UIKind kind, UIState state) {
             s.bg[3] = 0.88f;
             s.corner_radius = 10.0f;
             s.padding[0] = s.padding[1] = s.padding[2] = s.padding[3] = 16.0f;
+            // The editor's border while it takes the keys, so a focused pane looks the same
+            // whichever kind it is.
+            if (state == UI_STATE_FOCUS || state == UI_STATE_ACTIVE) {
+                s.border[0] = 0.45f;
+                s.border[1] = 0.70f;
+                s.border[2] = 1.00f;
+                s.border[3] = 0.6f;
+                s.border_width = 1.0f;
+            }
             break;
         case UI_TEXT_FIELD:
             // A well rather than a raised control: darker than a button, a faint edge, and the
@@ -280,7 +289,7 @@ static const UIStyle* _theme_entry(const UITheme* t, UIKind kind, UIState state)
         case UI_ROOT:
             return &none; // nothing to theme; see the UIKind comment
         case UI_PANEL:
-            return &t->panel;
+            return &t->panel[state];
         case UI_LABEL:
             return &t->label;
         case UI_BUTTON:
@@ -298,7 +307,7 @@ static const UIStyle* _theme_entry(const UITheme* t, UIKind kind, UIState state)
         case UI_EDITOR:
             return &t->editor[state];
         default:
-            return &t->panel;
+            return &t->panel[state];
     }
 }
 
@@ -1528,8 +1537,17 @@ static void _draw_control_text(UISystem* ui, const UIElement* el, const UIStyle*
 // The input pass writes `state`; the easing follows it. Deriving the state back
 // out of the eased weights instead would be circular -- the weights chase the
 // state -- and a focus ring would take a frame to notice it had moved.
+//
+// A panel is drawn focused only while it takes the keys, as a field and an editor are: a focusable
+// panel with no key hook is a list's row, which the focus follows the pointer over, and drawn
+// focused it would outline whatever the mouse is on.
 static UIState _state_of(const UIElement* el) {
-    return el->disabled ? UI_STATE_DISABLED : el->state;
+    if (el->disabled)
+        return UI_STATE_DISABLED;
+    if (el->kind == UI_PANEL && (el->state == UI_STATE_FOCUS || el->state == UI_STATE_ACTIVE) &&
+        !_takes_keys(el))
+        return UI_STATE_NORMAL;
+    return el->state;
 }
 
 // Where a slider's track is. ONE definition, read by the draw and by the hit
@@ -1617,8 +1635,15 @@ static void _emit(UISystem* ui, UIElement* el) {
 
     if (el->draw) {
         // The app paints, and keeps everything else: this element was laid out,
-        // can hold focus, and takes input exactly like a built-in one.
+        // can hold focus, and takes input exactly like a built-in one. A panel
+        // taking the keys keeps its focus border too, over the painting.
         el->draw(el, dl, el->draw_user);
+        if (el->kind == UI_PANEL && (state == UI_STATE_FOCUS || state == UI_STATE_ACTIVE)) {
+            UIStyle border = s;
+            glm_vec4_zero(border.bg);
+            border.bg_tex = NULL;
+            ui_draw_rect(dl, el->rect, &border);
+        }
     } else {
         switch (el->kind) {
             case UI_ROOT:

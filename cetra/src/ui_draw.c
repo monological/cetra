@@ -978,6 +978,17 @@ bool ui_draw_list_quad(const UIDrawList* dl, size_t i, UIRect* rect, vec4 color,
     return true;
 }
 
+bool ui_draw_list_quad_border(const UIDrawList* dl, size_t i, vec4 border, float* width) {
+    if (!dl || i >= dl->vcount / 4)
+        return false;
+    const UIVertex* v = &dl->verts[i * 4];
+    if (border)
+        memcpy(border, v[0].border, sizeof(float) * 4);
+    if (width)
+        *width = v[0].params[1];
+    return true;
+}
+
 bool ui_draw_list_render(UIDrawList* dl) {
     if (!dl || dl->icount == 0 || !dl->program)
         return false;

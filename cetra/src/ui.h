@@ -214,6 +214,8 @@ uint64_t ui_draw_list_signature(const UIDrawList* dl);
 // what a draw produced; false past the end, with the outputs untouched.
 size_t ui_draw_list_quad_count(const UIDrawList* dl);
 bool ui_draw_list_quad(const UIDrawList* dl, size_t i, UIRect* rect, vec4 color, int* kind);
+// Quad `i`'s border: its colour and its width in points, 0 for none.
+bool ui_draw_list_quad_border(const UIDrawList* dl, size_t i, vec4 border, float* width);
 
 // An element's own fragment program for the next primitives emitted; NULL
 // returns to the default. The uniform contract a replacement is written
@@ -249,7 +251,8 @@ size_t ui_text_wrap_point(const Font* font, float size, float tracking, const ch
  *
  * What that costs is nothing, because three escape hatches sit under it and
  * each keeps strictly more than the last: ui_set_draw keeps layout, focus and
- * input while the app paints; ui_set_element_program keeps all of that and
+ * input while the app paints, and a panel taking the keys keeps its focus
+ * border, drawn over the painting; ui_set_element_program keeps all of that and
  * swaps only the fragment stage; and the draw-list primitives above take
  * neither, for anything the vocabulary refuses outright.
  * ===========================================================================
@@ -322,7 +325,10 @@ typedef struct UITheme {
     float spacing; // gap between siblings, when a container names none
     // No entry for UI_ROOT: a screen root draws nothing, so a style for it
     // would be a field that cannot have an effect.
-    UIStyle panel;
+    // A panel: FOCUS its border while it takes the keys (a key hook), drawn over what a draw hook
+    // paints, as round a text field or an editor. A panel that takes no keys is never drawn FOCUS
+    // or ACTIVE: a list's row the focus follows the pointer over is no place keys go.
+    UIStyle panel[UI_STATE_COUNT];
     UIStyle label;
     UIStyle button[UI_STATE_COUNT];
     UIStyle toggle[UI_STATE_COUNT];
