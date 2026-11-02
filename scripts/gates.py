@@ -28398,6 +28398,14 @@ def run_ui_gate(workdir):
                      and gives the focus to a passing pointer; a button, toggle,
                      slider, selector and editor refuse a hook, the editor typing
                      as before.
+      ui-panel-focus a panel taking the keys is drawn focused (spec 14.11): with a
+                     key hook and a draw hook, the theme's FOCUS border drawn over
+                     the hook's painting while it is focused and while it is
+                     pressed, none unfocused; with no draw hook, its own quad
+                     carries the border; the app's colour in theme.panel[FOCUS]
+                     is the one drawn; a focusable panel with no key hook -- a
+                     list's row, which the focus follows the pointer over -- and
+                     a label with both hooks draw no border.
       ui-editor-shapes a selection of three characters drawn by each shape: three
                      cells, four with the character at its far end (a vim mode's
                      visual mode), and its line whole with the line break (visual
@@ -29585,6 +29593,13 @@ def run_ui_gate(workdir):
                            "hook is as it was; the four controls and an editor refuse a hook")
     print(f"  ui-element-keys       {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-element-keys", ok)
+
+    ok, detail = doc_flags("panel-focus", 7, "a panel taking the keys is drawn focused: its border "
+                           "over a draw hook's painting, focused and pressed, on its own quad with "
+                           "no hook, in the theme's colour when the app sets one; a focusable panel "
+                           "with no key hook and a label draw none")
+    print(f"  ui-panel-focus        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-panel-focus", ok)
 
     ok, detail = doc_flags("editor-shapes", 4, "a selection of three characters drawn three cells "
                            "wide, four with the character at its far end, and its line whole with "

@@ -1596,6 +1596,124 @@ static int probe_element_keys(UISystem* ui) {
     return 0;
 }
 
+// A draw hook's painting: one quad of a colour nothing else draws, over the element.
+static void paint_marker(UIElement* el, UIDrawList* dl, void* user) {
+    (void)user;
+    ui_draw_quad(dl, el->rect, (vec4){0.25f, 0.5f, 0.75f, 1.0f});
+}
+
+// The quads drawn exactly over an element's rect: how many, and the widest border among them, with
+// its colour and the fill of the quad that carries it.
+typedef struct Over {
+    int quads;
+    float width;
+    vec4 border, fill;
+} Over;
+
+static Over over(UISystem* ui, const UIElement* el) {
+    const UIDrawList* dl = ui_draw_list(ui);
+    Over o = {0};
+    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
+        UIRect r;
+        vec4 fill, border;
+        float width = 0.0f;
+        ui_draw_list_quad(dl, i, &r, fill, NULL);
+        ui_draw_list_quad_border(dl, i, border, &width);
+        if (fabsf(r.x - el->rect.x) > 0.01f || fabsf(r.y - el->rect.y) > 0.01f ||
+            fabsf(r.w - el->rect.w) > 0.01f || fabsf(r.h - el->rect.h) > 0.01f)
+            continue;
+        o.quads++;
+        if (width > o.width) {
+            o.width = width;
+            glm_vec4_copy(border, o.border);
+            glm_vec4_copy(fill, o.fill);
+        }
+    }
+    return o;
+}
+
+static bool same_colour(const vec4 a, const vec4 b) {
+    return fabsf(a[0] - b[0]) < 1e-4f && fabsf(a[1] - b[1]) < 1e-4f && fabsf(a[2] - b[2]) < 1e-4f &&
+           fabsf(a[3] - b[3]) < 1e-4f;
+}
+
+// A panel is drawn focused while it takes the keys (spec 14.11): its border over a draw hook's
+// painting, focused or pressed, its own quad's border with no hook, the theme's colour when the app
+// sets one; and no border on a focusable panel with no key hook, a list's row, nor on a label.
+static int probe_panel_focus(UISystem* ui) {
+    static const vec4 FOCUS_BORDER = {0.45f, 0.70f, 1.00f, 0.6f};
+    UIScreen* s = ui_screen(ui, "panels");
+    ui_screen_set_modal(s, false);
+    UIElement* root = ui_screen_root(s);
+    UIElement* drawn = ui_panel(root);
+    ui_set_size(drawn, UI_FIXED, 200.0f, UI_FIXED, 80.0f);
+    drawn->focusable = true;
+    ui_set_on_key(drawn, pane_keys, NULL);
+    ui_set_draw(drawn, paint_marker, NULL);
+    UIElement* keys = ui_panel(root);
+    ui_set_size(keys, UI_FIXED, 200.0f, UI_FIXED, 40.0f);
+    keys->focusable = true;
+    ui_set_on_key(keys, pane_keys, NULL);
+    UIElement* row = ui_panel(root);
+    ui_set_size(row, UI_FIXED, 200.0f, UI_FIXED, 40.0f);
+    row->focusable = true;
+    UIElement* label = ui_label(root, "label");
+    label->focusable = true;
+    ui_set_on_key(label, pane_keys, NULL);
+    ui_set_draw(label, paint_marker, NULL);
+    ui_push(ui, s);
+    editor_pass(ui);
+
+    Over o = over(ui, drawn);
+    say_flag("panel-focus", "drawn", "unfocused", o.quads == 1 && o.width == 0.0f);
+
+    ui_set_focus(s, drawn);
+    editor_pass(ui);
+    o = over(ui, drawn);
+    say_flag("panel-focus", "drawn", "focused",
+             o.quads == 2 && o.width == 1.0f && o.fill[3] == 0.0f &&
+                 same_colour(o.border, FOCUS_BORDER));
+
+    // Pressed and held, the panel is ACTIVE, and keeps the border.
+    const float cx = drawn->rect.x + drawn->rect.w * 0.5f,
+                cy = drawn->rect.y + drawn->rect.h * 0.5f;
+    pointer_pass(ui, cx, cy, POINTER_PRESS, 0);
+    ui_build(ui, 1280.0f, 720.0f, 1.0f);
+    o = over(ui, drawn);
+    say_flag("panel-focus", "drawn", "pressed", drawn->state == UI_STATE_ACTIVE && o.width == 1.0f);
+    pointer_pass(ui, cx, cy, POINTER_RELEASE, 0);
+
+    ui_set_focus(s, keys);
+    editor_pass(ui);
+    o = over(ui, keys);
+    say_flag("panel-focus", "keys", "focused",
+             o.quads == 1 && o.width == 1.0f && o.fill[3] > 0.0f &&
+                 same_colour(o.border, FOCUS_BORDER));
+
+    ui_set_focus(s, row);
+    editor_pass(ui);
+    o = over(ui, row);
+    say_flag("panel-focus", "row", "none", ui_focused(s) == row && o.width == 0.0f);
+
+    ui_set_focus(s, label);
+    editor_pass(ui);
+    o = over(ui, label);
+    say_flag("panel-focus", "label", "none", o.quads == 1 && o.width == 0.0f);
+
+    // The app's colour for the focused look, from the theme.
+    UITheme theme = *ui_theme(ui);
+    const UITheme was = theme;
+    glm_vec4_copy((vec4){1.0f, 0.0f, 0.0f, 1.0f}, theme.panel[UI_STATE_FOCUS].border);
+    ui_set_theme(ui, &theme);
+    ui_set_focus(s, drawn);
+    editor_pass(ui);
+    o = over(ui, drawn);
+    say_flag("panel-focus", "theme", "colour",
+             o.width == 1.0f && same_colour(o.border, (vec4){1.0f, 0.0f, 0.0f, 1.0f}));
+    ui_set_theme(ui, &was);
+    return 0;
+}
+
 // The selection {2, 5} on the first line drawn as each shape: three cells, four with the character
 // at its far end, and the line whole with its line break; the block caret over the character at
 // the head.
@@ -3033,6 +3151,8 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_editor_layer(ui);
     if (!strcmp(which, "element-keys"))
         return probe_element_keys(ui);
+    if (!strcmp(which, "panel-focus"))
+        return probe_panel_focus(ui);
     if (!strcmp(which, "editor-decline"))
         return probe_editor_decline(ui);
     if (!strcmp(which, "editor-paired-char"))
