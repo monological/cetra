@@ -1436,15 +1436,18 @@ static int probe_editor_paired_char(UISystem* ui) {
 
 static InputKeyEvent g_seen[32];
 static int g_seen_count;
-static int g_activations;
+static UIScreen* g_keys_screen; // where the pane's hook moves the focus when it takes K
+static UIElement* g_keys_field;
 
 // A pane's hook: everything it is handed is kept, and it takes the characters h and + and the key
-// K.
+// K, which moves the focus to the field, as a key opening a prompt would.
 static bool pane_keys(UIElement* el, const InputKeyEvent* k, void* user) {
     (void)el;
     (void)user;
     if (g_seen_count < 32)
         g_seen[g_seen_count++] = *k;
+    if (k->key == GLFW_KEY_K)
+        ui_set_focus(g_keys_screen, g_keys_field);
     return k->codepoint == 'h' || k->codepoint == '+' || k->key == GLFW_KEY_K;
 }
 
@@ -1452,19 +1455,6 @@ static bool take_slash(UIElement* el, const InputKeyEvent* k, void* user) {
     (void)el;
     (void)user;
     return k->codepoint == '/';
-}
-
-static bool take_nothing(UIElement* el, const InputKeyEvent* k, void* user) {
-    (void)el;
-    (void)k;
-    (void)user;
-    return false;
-}
-
-static void count_activation(UIElement* el, void* user) {
-    (void)el;
-    (void)user;
-    g_activations++;
 }
 
 // Whether the pane's hook was handed exactly `want`, in order.
@@ -1478,22 +1468,29 @@ static bool seen_are(const InputKeyEvent* want, int n) {
     return same;
 }
 
+static void centre_of(const UIElement* el, float* x, float* y) {
+    *x = el->rect.x + el->rect.w * 0.5f;
+    *y = el->rect.y + el->rect.h * 0.5f;
+}
+
 // A press and a release at the middle of `el`.
 static void click_on(UISystem* ui, const UIElement* el) {
-    const float x = el->rect.x + el->rect.w * 0.5f, y = el->rect.y + el->rect.h * 0.5f;
+    float x, y;
+    centre_of(el, &x, &y);
     press_drag(ui, x, y, x, y, 0);
 }
 
 // The pointer passing over `el`, moving within it.
 static void pass_over(UISystem* ui, const UIElement* el) {
-    const float x = el->rect.x + el->rect.w * 0.5f, y = el->rect.y + el->rect.h * 0.5f;
+    float x, y;
+    centre_of(el, &x, &y);
     pointer_pass(ui, x, y, POINTER_MOVE, 0);
     pointer_pass(ui, x + 1.0f, y, POINTER_MOVE, 0);
 }
 
 // A panel with a key hook takes the keys as a field does, and keeps the focus as the pointer
-// passes; a field's hook is asked about each character first; a button with one still activates; a
-// panel with none is as it was; an editor refuses one.
+// passes; a field's hook is asked about each character first; a panel with none is as it was; the
+// four controls and an editor refuse one.
 static int probe_element_keys(UISystem* ui) {
     TextDoc* doc = create_text_doc("", 0);
     UIElement* ed = editor_fixture(ui, doc, 300.0f, 100.0f);
@@ -1505,8 +1502,21 @@ static int probe_element_keys(UISystem* ui) {
     ui_set_on_key(pane, pane_keys, NULL);
     UIElement* field = ui_text_field(root, 0, NULL, NULL);
     ui_set_on_key(field, take_slash, NULL);
-    UIElement* button = ui_button(root, "Hooked", count_activation, NULL);
-    ui_set_on_key(button, take_nothing, NULL);
+    g_keys_screen = s;
+    g_keys_field = field;
+    UIElement* controls = ui_panel(root);
+    controls->dir = UI_ROW;
+    static bool on;
+    static float level;
+    static int pick;
+    static const char* const PICKS[] = {"one", "two"};
+    UIElement* const refusing[] = {
+        ui_button(controls, "Button", NULL, NULL),
+        ui_toggle(controls, "Toggle", &on, NULL, NULL),
+        ui_slider(controls, "Slider", 0.0f, 1.0f, &level, NULL, NULL),
+        ui_selector(controls, "Selector", PICKS, 2, &pick, NULL, NULL),
+    };
+    const UIElement* button = refusing[0];
     UIElement* plain = ui_panel(root);
     ui_set_size(plain, UI_FIXED, 300.0f, UI_FIXED, 40.0f);
     plain->focusable = true;
@@ -1521,22 +1531,32 @@ static int probe_element_keys(UISystem* ui) {
     say_flag("element-keys", "editor", "refused",
              !ed->on_key && doc_is_str(doc, "e") && g_seen_count == 0);
 
+    // A control's own keys and navigation would stop while a hook held them: refused on each.
+    bool none = true;
+    for (size_t i = 0; i < sizeof(refusing) / sizeof(refusing[0]); i++) {
+        ui_set_on_key(refusing[i], pane_keys, NULL);
+        none = none && !refusing[i]->on_key;
+    }
+    say_flag("element-keys", "controls", "refused", none);
+
     // A press on the pane focuses it, and the keyboard is the UI's.
     click_on(ui, pane);
     say_flag("element-keys", "press", "focuses", ui_focused(s) == pane);
     say_flag("element-keys", "press", "wants", ui_wants_keyboard(ui));
 
-    // Every key and character in order; the K key taken takes its k with it, typed nowhere.
+    // Every key and character in order. The K key taken moves the focus to the field and takes its
+    // k with it, so the field types nothing.
     const InputKeyEvent typed[] = {
         {.key = GLFW_KEY_H}, {.codepoint = 'h'},  {.key = GLFW_KEY_EQUAL, .mods = GLFW_MOD_SHIFT},
         {.codepoint = '+'},  {.key = GLFW_KEY_K}, {.codepoint = 'k'}};
     send_keys(ui, typed, 6);
     say_flag("element-keys", "keys", "order", seen_are(typed, 5));
     say_flag("element-keys", "taken", "dropped",
-             ui_focused(s) == pane && doc_is_str(doc, "e") && !ui_field_text(field)[0]);
+             ui_focused(s) == field && !ui_field_text(field)[0] && doc_is_str(doc, "e"));
 
     // The pointer passing over the field and the button leaves the focus on the pane; a press on
     // the field moves it there.
+    click_on(ui, pane);
     pass_over(ui, field);
     pass_over(ui, button);
     say_flag("element-keys", "hover", "kept", ui_focused(s) == pane);
@@ -1555,10 +1575,6 @@ static int probe_element_keys(UISystem* ui) {
     click_on(ui, pane);
     key(ui, GLFW_KEY_ESCAPE, 0);
     say_flag("element-keys", "escape", "lets", ui_focused(s) == NULL && !ui_wants_keyboard(ui));
-
-    // A button with a hook still activates on release.
-    click_on(ui, button);
-    say_flag("element-keys", "button", "activates", g_activations == 1);
 
     // A focusable panel with no hook takes no keys, and a passing pointer takes its focus.
     click_on(ui, plain);
@@ -2630,11 +2646,6 @@ static bool remove_editor(UIElement* el, void* user) {
 static const UIEditorCommand REMOVE_EDITOR = {"remove", "Takes the editor out", remove_editor,
                                               NULL};
 static const UIEditorBinding REMOVE_KEYS[] = {{GLFW_KEY_F9, 0, &REMOVE_EDITOR}};
-
-static void centre_of(const UIElement* el, float* x, float* y) {
-    *x = el->rect.x + el->rect.w * 0.5f;
-    *y = el->rect.y + el->rect.h * 0.5f;
-}
 
 static void build_row(UIElement* row, int index, void* user) {
     (void)index;

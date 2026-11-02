@@ -629,11 +629,10 @@ void ui_set_text(UIElement* el, const char* text);
 bool ui_set_text_runs(UIElement* el, const UITextRun* runs, size_t count);
 void ui_set_style(UIElement* el, const UIStyle* style);
 void ui_set_draw(UIElement* el, UIDrawFn draw, void* user);
-// The keys and characters `el` is handed while it holds the focus, each before it acts on it; NULL
-// none. An element with one takes the keys as a text field does -- it keeps the focus as the
-// pointer passes, and what the hook does not take goes to the screen: Tab moves the focus, Esc
-// lets go -- whatever its kind; a press focuses it only if it is `focusable`. Refused by name on a
-// code editor, whose keys are its modes'.
+// The keys and characters `el` is handed while it holds the focus, before it acts on them; NULL
+// none. It then takes the keys as a text field does. Refused by name on a button, toggle, slider or
+// selector, whose own keys and navigation it would stop, and on a code editor, whose keys are its
+// modes'.
 void ui_set_on_key(UIElement* el, UIKeyFn on_key, void* user);
 void ui_set_element_program(UIElement* el, struct ShaderProgram* program);
 // Convenience for the two size axes, since every element sets them together.
