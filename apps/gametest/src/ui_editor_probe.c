@@ -1730,6 +1730,27 @@ static int probe_panel_focus(UISystem* ui, const Font* font) {
     return 0;
 }
 
+// A fading screen fades a quad's border with its fill (spec 14.12): at a draw list's alpha of one
+// half, both alphas halved.
+static int probe_border_fade(UISystem* ui) {
+    UIDrawList* dl = ui_draw_list(ui);
+    ui_draw_list_begin(dl, 1280, 720);
+    ui_draw_list_set_alpha(dl, 0.5f);
+    ui_draw_rect(dl, (UIRect){10.0f, 10.0f, 100.0f, 50.0f},
+                 &(UIStyle){.bg = {0.2f, 0.3f, 0.4f, 0.8f},
+                            .border = {0.45f, 0.70f, 1.00f, 0.6f},
+                            .border_width = 2.0f});
+    vec4 fill = {0}, border = {0};
+    float width = 0.0f;
+    const bool one = ui_draw_list_quad_count(dl) == 1;
+    ui_draw_list_quad(dl, 0, NULL, fill, NULL);
+    ui_draw_list_quad_border(dl, 0, border, &width);
+    say_flag("border-fade", "fill", "halved", one && fabsf(fill[3] - 0.4f) < 1e-6f);
+    say_flag("border-fade", "border", "halved",
+             one && fabsf(border[3] - 0.3f) < 1e-6f && width == 2.0f);
+    return 0;
+}
+
 // The selection {2, 5} on the first line drawn as each shape: three cells, four with the character
 // at its far end, and the line whole with its line break; the block caret over the character at
 // the head.
@@ -3169,6 +3190,8 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_element_keys(ui);
     if (!strcmp(which, "panel-focus"))
         return probe_panel_focus(ui, font);
+    if (!strcmp(which, "border-fade"))
+        return probe_border_fade(ui);
     if (!strcmp(which, "editor-decline"))
         return probe_editor_decline(ui);
     if (!strcmp(which, "editor-paired-char"))

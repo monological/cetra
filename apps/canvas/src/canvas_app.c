@@ -2981,47 +2981,51 @@ static void say_box(UIRect r, double s) {
 }
 
 /*
- * --ui-borders (spec 14.12): four boxes with one border on one opaque backdrop, which
+ * --ui-borders (spec 14.12): boxes of one size and radius on one opaque backdrop, which
  * canvas-ui-borders holds to Porter-Duff over. A border over a clear fill must draw as one over a
  * fill of the backdrop's own colour, and one over a fill at half alpha as one over that fill laid
  * on the backdrop. The clear fill is magenta at alpha 0, a colour that must count for nothing: an
- * all-zero colour would mean "inherit".
+ * all-zero colour would mean "inherit". And an opaque border's outer edge must draw as the edge of
+ * a box filled with the border's colour, which it does only if the edge's coverage counts once.
  */
-static void build_borders(UISystem* ui, int width, int height, double scale) {
-    static const vec4 BACKDROP = {0.16f, 0.20f, 0.26f, 1.0f};
-    static const vec4 FILL = {0.80f, 0.30f, 0.20f, 1.0f};
-    const struct {
+static void build_borders(UISystem* ui, int width, int height, double scale, bool probe) {
+#define BORDERS_BACKDROP 0.16f, 0.20f, 0.26f
+#define BORDERS_FILL     0.80f, 0.30f, 0.20f
+#define BORDERS_BLUE     0.45f, 0.70f, 1.00f
+    static const struct {
         const char* name;
-        vec4 bg;
-    } boxes[] = {
-        {"opaque", {BACKDROP[0], BACKDROP[1], BACKDROP[2], 1.0f}},
-        {"clear", {1.0f, 0.0f, 1.0f, 0.0f}},
-        {"half", {FILL[0], FILL[1], FILL[2], 0.5f}},
+        UIStyle style;
+    } BOXES[] = {
+        {"opaque", {.bg = {BORDERS_BACKDROP, 1.0f}, .border = {BORDERS_BLUE, 0.6f}}},
+        {"clear", {.bg = {1.0f, 0.0f, 1.0f, 0.0f}, .border = {BORDERS_BLUE, 0.6f}}},
+        {"half", {.bg = {BORDERS_FILL, 0.5f}, .border = {BORDERS_BLUE, 0.6f}}},
         {"mixed",
-         {0.5f * (FILL[0] + BACKDROP[0]), 0.5f * (FILL[1] + BACKDROP[1]),
-          0.5f * (FILL[2] + BACKDROP[2]), 1.0f}},
+         {.bg = {0.5f * (0.80f + 0.16f), 0.5f * (0.30f + 0.20f), 0.5f * (0.20f + 0.26f), 1.0f},
+          .border = {BORDERS_BLUE, 0.6f}}},
+        {"edge", {.bg = {BORDERS_FILL, 1.0f}, .border = {BORDERS_BLUE, 1.0f}}},
+        {"solid", {.bg = {BORDERS_BLUE, 1.0f}}},
     };
+    const size_t count = sizeof(BOXES) / sizeof(BOXES[0]);
     UIScreen* screen = ui_screen(ui, "borders");
     UIElement* backdrop = ui_panel(ui_screen_root(screen));
     backdrop->dir = UI_ROW;
-    ui_set_style(backdrop, &(UIStyle){.bg = {BACKDROP[0], BACKDROP[1], BACKDROP[2], 1.0f}});
-    UIElement* made[4];
-    for (int i = 0; i < 4; i++) {
+    ui_set_style(backdrop, &(UIStyle){.bg = {BORDERS_BACKDROP, 1.0f}});
+    UIElement* made[sizeof(BOXES) / sizeof(BOXES[0])];
+    for (size_t i = 0; i < count; i++) {
+        UIStyle style = BOXES[i].style;
+        style.border_width = 2.0f;
+        style.corner_radius = 8.0f;
         made[i] = ui_panel(backdrop);
-        ui_set_size(made[i], UI_FIXED, 70.0f, UI_FIXED, 40.0f);
-        ui_set_style(made[i], &(UIStyle){.bg = {boxes[i].bg[0], boxes[i].bg[1], boxes[i].bg[2],
-                                                boxes[i].bg[3]},
-                                         .border = {0.45f, 0.70f, 1.00f, 0.6f},
-                                         .border_width = 2.0f,
-                                         .corner_radius = 8.0f});
+        ui_set_size(made[i], UI_FIXED, 50.0f, UI_FIXED, 40.0f);
+        ui_set_style(made[i], &style);
     }
+#undef BORDERS_BACKDROP
+#undef BORDERS_FILL
+#undef BORDERS_BLUE
     ui_push(ui, screen);
     ui_layout(screen, (float)width, (float)height);
-    printf("canvas border backdrop");
-    say_box(backdrop->rect, scale);
-    printf("\n");
-    for (int i = 0; i < 4; i++) {
-        printf("canvas border %s", boxes[i].name);
+    for (size_t i = 0; probe && i < count; i++) {
+        printf("canvas border %s", BOXES[i].name);
         say_box(made[i]->rect, scale);
         printf("\n");
     }
@@ -3338,7 +3342,7 @@ int main(int argc, char** argv) {
         }
     }
     if (borders)
-        build_borders(ui, width, height, ctx.fb_scale);
+        build_borders(ui, width, height, ctx.fb_scale, probe);
     fflush(stdout);
 
     engine_add_overlay(engine, draw_view, NULL, 0);

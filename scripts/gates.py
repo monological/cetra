@@ -28407,6 +28407,9 @@ def run_ui_gate(workdir):
                      is the one drawn; a focusable panel with no key hook -- a
                      list's row, which the focus follows the pointer over -- and
                      a label with both hooks draw no border.
+      ui-border-fade a fading screen fades a quad's border with its fill (spec
+                     14.12): a bordered rect drawn at a draw list's alpha of one
+                     half carries half its fill's alpha and half its border's.
       ui-editor-shapes a selection of three characters drawn by each shape: three
                      cells, four with the character at its far end (a vim mode's
                      visual mode), and its line whole with the line break (visual
@@ -29601,6 +29604,11 @@ def run_ui_gate(workdir):
                            "sets one; a focusable panel with no key hook and a label draw none")
     print(f"  ui-panel-focus        {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-panel-focus", ok)
+
+    ok, detail = doc_flags("border-fade", 2, "a fading screen fades a quad's border with its fill: "
+                           "at a draw list's alpha of one half, both alphas halved")
+    print(f"  ui-border-fade        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-border-fade", ok)
 
     ok, detail = doc_flags("editor-shapes", 4, "a selection of three characters drawn three cells "
                            "wide, four with the character at its far end, and its line whole with "
@@ -30803,8 +30811,10 @@ def run_canvas_gate(workdir):
                      four boxes with one border on one opaque backdrop, each compared pixel
                      for pixel. Over a clear fill -- magenta at alpha 0, a colour that must
                      count for nothing -- it draws as over a fill of the backdrop's colour,
-                     and over a half-alpha fill as over that fill laid on the backdrop,
-                     within 2 codes; and the border stands 20 codes or more off the backdrop,
+                     and over a half-alpha fill as over that fill laid on the backdrop; an
+                     opaque border's outermost two pixels draw as a box filled with its
+                     colour, which they do only if the edge's coverage counts once; each
+                     within 2 codes. The border stands 20 codes or more off the backdrop,
                      so a box drawing nothing cannot pass.
       canvas-budget  both views of the board split at 1920x1080 points, a framebuffer of
                      3840x2160 on this machine, each frame's canvas draws timed between two
@@ -31258,8 +31268,8 @@ def run_canvas_gate(workdir):
     print(f"  canvas-under-ui     {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-under-ui", ok)
 
-    shot, probe = _canvas_run(workdir, "borders", "--sheet", "board", "--ui-borders")
-    names = ("backdrop", "opaque", "clear", "half", "mixed")
+    shot, probe = _canvas_run(workdir, "borders", "--ui-borders")
+    names = ("opaque", "clear", "half", "mixed", "edge", "solid")
     boxes = {n: [int(v) for v in probe.get(("border", n), [])[:4]] for n in names}
     if not shot or not all(len(b) == 4 for b in boxes.values()):
         ok, detail = False, "a run failed or printed no boxes"
@@ -31270,21 +31280,28 @@ def run_canvas_gate(workdir):
             x0, y0, x1, y1 = boxes[n]
             return img[y0:y1, x0:x1, :3]
 
-        bx0, by0, _, by1 = boxes["backdrop"]
-        backdrop = img[(by0 + by1) // 2, bx0 + 6, :3]
-        shapes = {box(n).shape for n in names[1:]}
+        shapes = {box(n).shape for n in names}
         if len(shapes) != 1:
             ok, detail = False, f"the boxes differ in size: {shapes}"
         else:
+            h, w, _ = shapes.pop()
+            # The opaque box's fill is the backdrop's colour, so its centre is the backdrop.
+            backdrop = box("opaque")[h // 2, w // 2]
             # Porter-Duff over: a border over a clear fill draws as one over the backdrop's own
             # colour, and one over a half-alpha fill as one over that fill laid on the backdrop.
             clear = int(np.abs(box("clear") - box("opaque")).max())
             half = int(np.abs(box("half") - box("mixed")).max())
             ring = int(np.abs(box("opaque") - backdrop).max())
-            ok = clear <= 2 and half <= 2 and ring >= 20
+            # The outermost two pixels lie wholly in an opaque border's band: drawn there, it
+            # matches a box filled with its colour only if the edge's coverage counts once.
+            frame = np.zeros((h, w), bool)
+            frame[:2, :] = frame[-2:, :] = frame[:, :2] = frame[:, -2:] = True
+            edge = int(np.abs(box("edge") - box("solid"))[frame].max())
+            ok = clear <= 2 and half <= 2 and edge <= 2 and ring >= 20
             detail = (f"over a clear fill against over the backdrop's colour {clear} codes apart, "
-                      f"over a half-alpha fill against over that fill on the backdrop {half} (want "
-                      f"2 at most); the border {ring} codes off the backdrop (want 20 or more)")
+                      f"over a half-alpha fill against over that fill on the backdrop {half}, an "
+                      f"opaque border's outer edge against a filled box's {edge} (want 2 at most); "
+                      f"the border {ring} codes off the backdrop (want 20 or more)")
     print(f"  canvas-ui-borders   {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-ui-borders", ok)
 

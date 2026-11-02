@@ -204,10 +204,12 @@ static bool _push_quad(UIDrawList* dl, GLuint texture, float x0, float y0, float
         v->u = us[i];
         v->v = vs[i];
         memcpy(v->color, c, sizeof(float) * 4);
-        v->color[3] *= dl->alpha;
         memcpy(v->rect, rc, sizeof(float) * 4);
         memcpy(v->params, params, sizeof(float) * 4);
         memcpy(v->border, bc, sizeof(float) * 4);
+        // A fading screen fades the border with the fill, or it pops in whole.
+        v->color[3] *= dl->alpha;
+        v->border[3] *= dl->alpha;
     }
 
     const unsigned int order[6] = {0, 1, 2, 0, 2, 3};
