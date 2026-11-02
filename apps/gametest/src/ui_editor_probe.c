@@ -1278,6 +1278,11 @@ static const UIEditorBinding SEAM_BASE_KEYS[] = {{GLFW_KEY_SPACE, 0, &SEAM_BASE}
 
 #define SEAM_TEXT "hello world\nsecond line\nthird"
 
+static bool same_colour(const float* a, const float* b) {
+    return fabsf(a[0] - b[0]) < 1e-4f && fabsf(a[1] - b[1]) < 1e-4f && fabsf(a[2] - b[2]) < 1e-4f &&
+           fabsf(a[3] - b[3]) < 1e-4f;
+}
+
 // The flat quads drawn on the row at y in colour c: how many cells wide they come to together.
 static float band_cells(const UISystem* ui, float y, const float* c, float cell) {
     const UIDrawList* dl = ui_draw_list(ui);
@@ -1287,9 +1292,7 @@ static float band_cells(const UISystem* ui, float y, const float* c, float cell)
         vec4 colour;
         int kind = 0;
         ui_draw_list_quad(dl, i, &r, colour, &kind);
-        if (kind == 0 && fabsf(r.y - y) < 0.01f && fabsf(colour[0] - c[0]) < 1e-4f &&
-            fabsf(colour[1] - c[1]) < 1e-4f && fabsf(colour[2] - c[2]) < 1e-4f &&
-            fabsf(colour[3] - c[3]) < 1e-4f)
+        if (kind == 0 && fabsf(r.y - y) < 0.01f && same_colour(colour, c))
             w += r.w;
     }
     return w / cell;
@@ -1596,10 +1599,15 @@ static int probe_element_keys(UISystem* ui) {
     return 0;
 }
 
-// A draw hook's painting: one quad of a colour nothing else draws, over the element.
+// A draw hook's painting: one quad over the element.
 static void paint_marker(UIElement* el, UIDrawList* dl, void* user) {
     (void)user;
     ui_draw_quad(dl, el->rect, (vec4){0.25f, 0.5f, 0.75f, 1.0f});
+}
+
+static bool same_rect(UIRect a, UIRect b) {
+    return fabsf(a.x - b.x) < 0.01f && fabsf(a.y - b.y) < 0.01f && fabsf(a.w - b.w) < 0.01f &&
+           fabsf(a.h - b.h) < 0.01f;
 }
 
 // The quads drawn exactly over an element's rect: how many, and the widest border among them, with
@@ -1619,8 +1627,7 @@ static Over over(UISystem* ui, const UIElement* el) {
         float width = 0.0f;
         ui_draw_list_quad(dl, i, &r, fill, NULL);
         ui_draw_list_quad_border(dl, i, border, &width);
-        if (fabsf(r.x - el->rect.x) > 0.01f || fabsf(r.y - el->rect.y) > 0.01f ||
-            fabsf(r.w - el->rect.w) > 0.01f || fabsf(r.h - el->rect.h) > 0.01f)
+        if (!same_rect(r, el->rect))
             continue;
         o.quads++;
         if (width > o.width) {
@@ -1632,15 +1639,11 @@ static Over over(UISystem* ui, const UIElement* el) {
     return o;
 }
 
-static bool same_colour(const vec4 a, const vec4 b) {
-    return fabsf(a[0] - b[0]) < 1e-4f && fabsf(a[1] - b[1]) < 1e-4f && fabsf(a[2] - b[2]) < 1e-4f &&
-           fabsf(a[3] - b[3]) < 1e-4f;
-}
-
 // A panel is drawn focused while it takes the keys (spec 14.11): its border over a draw hook's
-// painting, focused or pressed, its own quad's border with no hook, the theme's colour when the app
-// sets one; and no border on a focusable panel with no key hook, a list's row, nor on a label.
-static int probe_panel_focus(UISystem* ui) {
+// painting, focused or pressed, its own quad's border with no hook, over its image when its style
+// has one, the theme's colour when the app sets one; and no border on a focusable panel with no key
+// hook, a list's row, nor on a label.
+static int probe_panel_focus(UISystem* ui, const Font* font) {
     static const vec4 FOCUS_BORDER = {0.45f, 0.70f, 1.00f, 0.6f};
     UIScreen* s = ui_screen(ui, "panels");
     ui_screen_set_modal(s, false);
@@ -1657,6 +1660,13 @@ static int probe_panel_focus(UISystem* ui) {
     UIElement* row = ui_panel(root);
     ui_set_size(row, UI_FIXED, 200.0f, UI_FIXED, 40.0f);
     row->focusable = true;
+    // A style with an image draws the image, which carries no border, so its border goes over it.
+    Texture atlas = {.id = font->atlas_texture_id};
+    UIElement* pictured = ui_panel(root);
+    ui_set_size(pictured, UI_FIXED, 200.0f, UI_FIXED, 40.0f);
+    pictured->focusable = true;
+    ui_set_on_key(pictured, pane_keys, NULL);
+    ui_set_style(pictured, &(UIStyle){.bg_tex = &atlas});
     UIElement* label = ui_label(root, "label");
     label->focusable = true;
     ui_set_on_key(label, pane_keys, NULL);
@@ -1689,6 +1699,12 @@ static int probe_panel_focus(UISystem* ui) {
     say_flag("panel-focus", "keys", "focused",
              o.quads == 1 && o.width == 1.0f && o.fill[3] > 0.0f &&
                  same_colour(o.border, FOCUS_BORDER));
+
+    ui_set_focus(s, pictured);
+    editor_pass(ui);
+    o = over(ui, pictured);
+    say_flag("panel-focus", "image", "focused",
+             o.quads == 2 && o.width == 1.0f && same_colour(o.border, FOCUS_BORDER));
 
     ui_set_focus(s, row);
     editor_pass(ui);
@@ -3152,7 +3168,7 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
     if (!strcmp(which, "element-keys"))
         return probe_element_keys(ui);
     if (!strcmp(which, "panel-focus"))
-        return probe_panel_focus(ui);
+        return probe_panel_focus(ui, font);
     if (!strcmp(which, "editor-decline"))
         return probe_editor_decline(ui);
     if (!strcmp(which, "editor-paired-char"))

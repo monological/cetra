@@ -247,17 +247,26 @@ void ui_draw_rect(UIDrawList* dl, UIRect r, const UIStyle* style) {
         // image unspellable -- the value meaning "no tint" is the value meaning
         // "inherit" -- so an image was multiplied by whatever fill the theme
         // happened to carry, or by transparent black, and vanished.
-        if (sliced) {
+        if (sliced)
             ui_draw_9slice(dl, r, style->bg_tex, style->bg_slice, (float*)style->bg_tint);
-            return;
-        }
-        ui_draw_textured_quad(dl, r, style->bg_tex, (float*)style->bg_tint);
+        else
+            ui_draw_textured_quad(dl, r, style->bg_tex, (float*)style->bg_tint);
+        // An image carries no border of its own.
+        ui_draw_border(dl, r, style);
         return;
     }
 
     _push_quad(dl, dl->white, r.x, r.y, r.x + r.w, r.y + r.h, 0, 0, 1, 1, style->bg,
                style->corner_radius, has_border ? style->border_width : 0.0f, UI_MODE_FILL,
                style->border);
+}
+
+void ui_draw_border(UIDrawList* dl, UIRect r, const UIStyle* style) {
+    static const float clear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    if (!dl || !style || style->border[3] <= 0.0f || style->border_width <= 0.0f)
+        return;
+    _push_quad(dl, dl->white, r.x, r.y, r.x + r.w, r.y + r.h, 0, 0, 1, 1, clear,
+               style->corner_radius, style->border_width, UI_MODE_FILL, style->border);
 }
 
 void ui_draw_rounded(UIDrawList* dl, UIRect r, float radius, vec4 fill, vec4 border,

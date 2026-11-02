@@ -136,8 +136,11 @@ bool ui_draw_list_render(UIDrawList* dl);
 
 // Solid fill, with the style's corner radius and border applied. The rounding
 // is evaluated in the fragment stage rather than tessellated, so a radius costs
-// no vertices and is exact at any size.
+// no vertices and is exact at any size. A style with an image draws the image,
+// then its border over it.
 void ui_draw_rect(UIDrawList* dl, UIRect r, const UIStyle* style);
+// The style's border alone, over what is drawn already; nothing when it has none.
+void ui_draw_border(UIDrawList* dl, UIRect r, const UIStyle* style);
 // The same without a style: a flat colour, square corners, no border.
 void ui_draw_quad(UIDrawList* dl, UIRect r, vec4 color);
 // A rounded fill with an optional border, without building a UIStyle to say so.
@@ -327,7 +330,9 @@ typedef struct UITheme {
     // would be a field that cannot have an effect.
     // A panel: FOCUS its border while it takes the keys (a key hook), drawn over what a draw hook
     // paints, as round a text field or an editor. A panel that takes no keys is never drawn FOCUS
-    // or ACTIVE: a list's row the focus follows the pointer over is no place keys go.
+    // or ACTIVE: a list's row the focus follows the pointer over is no place keys go. That is its
+    // style only; an element program's uFocus still follows the focus. A panel with a draw hook
+    // keeps its style's border in any state, over the painting.
     UIStyle panel[UI_STATE_COUNT];
     UIStyle label;
     UIStyle button[UI_STATE_COUNT];

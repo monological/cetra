@@ -28402,7 +28402,8 @@ def run_ui_gate(workdir):
                      key hook and a draw hook, the theme's FOCUS border drawn over
                      the hook's painting while it is focused and while it is
                      pressed, none unfocused; with no draw hook, its own quad
-                     carries the border; the app's colour in theme.panel[FOCUS]
+                     carries the border, and with an image in its style the border
+                     is drawn over the image; the app's colour in theme.panel[FOCUS]
                      is the one drawn; a focusable panel with no key hook -- a
                      list's row, which the focus follows the pointer over -- and
                      a label with both hooks draw no border.
@@ -29594,10 +29595,10 @@ def run_ui_gate(workdir):
     print(f"  ui-element-keys       {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-element-keys", ok)
 
-    ok, detail = doc_flags("panel-focus", 7, "a panel taking the keys is drawn focused: its border "
+    ok, detail = doc_flags("panel-focus", 8, "a panel taking the keys is drawn focused: its border "
                            "over a draw hook's painting, focused and pressed, on its own quad with "
-                           "no hook, in the theme's colour when the app sets one; a focusable panel "
-                           "with no key hook and a label draw none")
+                           "no hook, over its style's image, in the theme's colour when the app "
+                           "sets one; a focusable panel with no key hook and a label draw none")
     print(f"  ui-panel-focus        {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-panel-focus", ok)
 
