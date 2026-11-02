@@ -53,7 +53,12 @@ static inline UIRect ui_rect_inset(UIRect r, float t, float right, float b, floa
 // Horizontal placement of a string inside the rect it is drawn into. Vertical
 // placement is always the rect's top plus the font's ascent, so two strings at
 // different sizes in one row share a baseline rather than a bounding box.
-typedef enum { UI_ALIGN_START = 0, UI_ALIGN_CENTER = 1, UI_ALIGN_END = 2 } UIAlign;
+typedef enum {
+    UI_ALIGN_START = 0,
+    UI_ALIGN_CENTER = 1,
+    UI_ALIGN_END = 2,
+    UI_ALIGN_BASELINE = 3,
+} UIAlign;
 
 /*
  * How one element looks. Every field's ZERO is "inherit or absent", which is

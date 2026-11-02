@@ -1515,6 +1515,99 @@ static int probe_padding_none(UISystem* ui) {
     return 0;
 }
 
+// One framebuffer pixel in points at the probes' 1280 by 720, the grid every glyph quad's corner is
+// snapped to: how far a baseline read back from a quad may lie from where it was drawn.
+static float probe_pixel(const Game* game) {
+    return game->engine->fb_width > 0 ? 1280.0f / (float)game->engine->fb_width : 1.0f;
+}
+
+// The baseline and pen a built glyph quad of `c` at `size` was drawn from: its corner less the
+// glyph's own offset from them.
+static float quad_baseline(const Font* font, UIRect quad, uint32_t c, float size) {
+    return quad.y - font_get_glyph((Font*)font, c)->y0 * (size / font->base_size);
+}
+
+static float quad_pen(const Font* font, UIRect quad, uint32_t c, float size) {
+    return quad.x - font_get_glyph((Font*)font, c)->x0 * (size / font->base_size);
+}
+
+// A label drawn inside its padding: its first line's baseline its top padding and its face's ascent
+// below its top, and its pen its left padding in from its left.
+static int probe_label_padding(const Game* game, UISystem* ui, const Font* font) {
+    UIScreen* s = ui_screen(ui, "label-padding");
+    UIElement* label = ui_label(ui_screen_root(s), "xxxx");
+    label->padding[0] = 10.0f;
+    label->padding[3] = 12.0f;
+    ui_push(ui, s);
+    ui_build(ui, 1280.0f, 720.0f, 1.0f);
+    UIRect quads[8];
+    vec4 colors[8];
+    const size_t n = glyph_quads(ui, quads, colors, 8);
+    printf("ui label-padding glyphs count %zu\n", n);
+    printf("ui label-padding pixel size %.6f\n", (double)probe_pixel(game));
+    if (n > 0) {
+        const float ascent = font->ascent * (PROBE_SIZE / font->base_size);
+        printf("ui label-padding baseline off %.6f\n",
+               (double)(quad_baseline(font, quads[0], 'x', PROBE_SIZE) -
+                        (label->rect.y + 10.0f + ascent)));
+        printf("ui label-padding pen off %.6f\n",
+               (double)(quad_pen(font, quads[0], 'x', PROBE_SIZE) - (label->rect.x + 12.0f)));
+    }
+    ui_pop(ui);
+    return 0;
+}
+
+// A label of one "x" at `size`.
+static UIElement* sized_x(UIElement* parent, float size) {
+    UIElement* label = ui_label(parent, "x");
+    ui_set_style(label, &(UIStyle){.font_size = size});
+    return label;
+}
+
+// A row on the baseline: labels of three sizes, one in a padded column and two in a row on the
+// baseline of its own, all on one line; a panel with no text at the row's top; and the row as tall
+// as the lowest of its children reaches.
+static int probe_baseline(const Game* game, UISystem* ui, const Font* font) {
+    UIScreen* s = ui_screen(ui, "baseline");
+    UIElement* row = ui_panel(ui_screen_root(s));
+    row->dir = UI_ROW;
+    row->align_cross = UI_ALIGN_BASELINE;
+    for (int i = 0; i < 4; i++)
+        row->padding[i] = 4.0f;
+    static const float SIZES[] = {14.0f, 28.0f, 10.0f, 12.0f, 20.0f};
+    sized_x(row, SIZES[0]);
+    sized_x(row, SIZES[1]);
+    UIElement* column = ui_panel(row);
+    for (int i = 0; i < 4; i++)
+        column->padding[i] = 3.0f;
+    sized_x(column, SIZES[2]);
+    UIElement* inner = ui_panel(row);
+    inner->dir = UI_ROW;
+    inner->align_cross = UI_ALIGN_BASELINE;
+    sized_x(inner, SIZES[3]);
+    sized_x(inner, SIZES[4]);
+    const UIElement* textless = fixed_panel(row, 10.0f, 10.0f);
+    ui_push(ui, s);
+    ui_build(ui, 1280.0f, 720.0f, 1.0f);
+    UIRect quads[8];
+    vec4 colors[8];
+    const size_t n = glyph_quads(ui, quads, colors, 8);
+    printf("ui baseline glyphs count %zu\n", n);
+    printf("ui baseline pixel size %.6f\n", (double)probe_pixel(game));
+    for (size_t i = 0; i < n && i < sizeof(SIZES) / sizeof(SIZES[0]); i++)
+        printf("ui baseline glyph%zu line %.6f\n", i,
+               (double)quad_baseline(font, quads[i], 'x', SIZES[i]));
+    printf("ui baseline textless top %.6f\n", (double)(textless->rect.y - (row->rect.y + 4.0f)));
+    float reach = 0.0f;
+    for (size_t i = 0; i < row->child_count; i++) {
+        const UIRect* r = &row->children[i]->rect;
+        reach = glm_max(reach, r->y + r->h - row->rect.y);
+    }
+    printf("ui baseline row height %.6f %.6f\n", (double)row->rect.h, (double)(reach + 4.0f));
+    ui_pop(ui);
+    return 0;
+}
+
 // ---- UTF-8
 
 static int probe_utf8(void) {
@@ -1644,6 +1737,10 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_share(ui);
     if (!strcmp(which, "padding-none"))
         return probe_padding_none(ui);
+    if (!strcmp(which, "label-padding"))
+        return probe_label_padding(game, ui, font);
+    if (!strcmp(which, "baseline"))
+        return probe_baseline(game, ui, font);
     if (!strcmp(which, "control-lines"))
         return probe_control_lines(ui);
     if (!strcmp(which, "text-mesh"))
