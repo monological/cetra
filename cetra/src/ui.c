@@ -100,6 +100,21 @@ struct UISystem {
 
 // ------------------------------------------------------------------- theme
 
+// Whether a state is drawn focused: focused, or pressed, which a press focuses.
+static bool _shows_focus(UIState state) {
+    return state == UI_STATE_FOCUS || state == UI_STATE_ACTIVE;
+}
+
+// The focus colour's border at an alpha and a width: every kind showing where the keys go shows
+// it in the one blue.
+static void _focus_border(UIStyle* s, float alpha, float width) {
+    s->border[0] = 0.45f;
+    s->border[1] = 0.70f;
+    s->border[2] = 1.00f;
+    s->border[3] = alpha;
+    s->border_width = width;
+}
+
 /*
  * The engine default, and the bottom of the resolution chain: an element's own
  * style, then the theme's entry for its kind and state, then this. Every step
@@ -134,13 +149,8 @@ static UIStyle _default_style(UIKind kind, UIState state) {
             s.padding[0] = s.padding[1] = s.padding[2] = s.padding[3] = 16.0f;
             // The editor's border while it takes the keys, so a focused pane looks the same
             // whichever kind it is.
-            if (state == UI_STATE_FOCUS || state == UI_STATE_ACTIVE) {
-                s.border[0] = 0.45f;
-                s.border[1] = 0.70f;
-                s.border[2] = 1.00f;
-                s.border[3] = 0.6f;
-                s.border_width = 1.0f;
-            }
+            if (_shows_focus(state))
+                _focus_border(&s, 0.6f, 1.0f);
             break;
         case UI_TEXT_FIELD:
             // A well rather than a raised control: darker than a button, a faint edge, and the
@@ -157,15 +167,10 @@ static UIStyle _default_style(UIKind kind, UIState state) {
             s.corner_radius = 6.0f;
             s.padding[0] = s.padding[2] = 8.0f;
             s.padding[1] = s.padding[3] = 10.0f;
-            if (state == UI_STATE_FOCUS || state == UI_STATE_ACTIVE) {
-                s.border[0] = 0.45f;
-                s.border[1] = 0.70f;
-                s.border[2] = 1.00f;
-                s.border[3] = 1.0f;
-                s.border_width = 1.5f;
-            } else if (state == UI_STATE_DISABLED) {
+            if (_shows_focus(state))
+                _focus_border(&s, 1.0f, 1.5f);
+            else if (state == UI_STATE_DISABLED)
                 s.fg[0] = s.fg[1] = s.fg[2] = 0.45f;
-            }
             break;
         case UI_EDITOR:
             // The field's well, squarer and with less padding: a code editor fills its pane.
@@ -182,25 +187,16 @@ static UIStyle _default_style(UIKind kind, UIState state) {
             s.border_width = 1.0f;
             s.corner_radius = 4.0f;
             s.padding[0] = s.padding[1] = s.padding[2] = s.padding[3] = 6.0f;
-            if (state == UI_STATE_FOCUS || state == UI_STATE_ACTIVE) {
-                s.border[0] = 0.45f;
-                s.border[1] = 0.70f;
-                s.border[2] = 1.00f;
-                s.border[3] = 0.6f;
-            }
+            if (_shows_focus(state))
+                _focus_border(&s, 0.6f, 1.0f);
             break;
         case UI_SCROLL:
             // A window onto its content: no fill and no padding of its own, a faint thumb, and a
             // subtle border while the focus is inside it.
             s.fg[0] = s.fg[1] = s.fg[2] = 1.0f;
             s.fg[3] = 0.35f;
-            if (state == UI_STATE_FOCUS || state == UI_STATE_ACTIVE) {
-                s.border[0] = 0.45f;
-                s.border[1] = 0.70f;
-                s.border[2] = 1.00f;
-                s.border[3] = 0.45f;
-                s.border_width = 1.0f;
-            }
+            if (_shows_focus(state))
+                _focus_border(&s, 0.45f, 1.0f);
             break;
         default: // the four controls share a shape and differ by state
             s.fg[0] = s.fg[1] = s.fg[2] = 0.90f;
@@ -220,15 +216,11 @@ static UIStyle _default_style(UIKind kind, UIState state) {
                 s.bg[1] = 0.29f;
                 s.bg[2] = 0.38f;
                 s.fg[0] = s.fg[1] = s.fg[2] = 1.0f;
-            } else if (state == UI_STATE_FOCUS || state == UI_STATE_ACTIVE) {
+            } else if (_shows_focus(state)) {
                 s.bg[0] = 0.16f;
                 s.bg[1] = 0.34f;
                 s.bg[2] = 0.62f;
-                s.border[0] = 0.45f;
-                s.border[1] = 0.70f;
-                s.border[2] = 1.00f;
-                s.border[3] = 1.0f;
-                s.border_width = 1.5f;
+                _focus_border(&s, 1.0f, 1.5f);
                 s.fg[0] = s.fg[1] = s.fg[2] = 1.0f;
             } else if (state == UI_STATE_DISABLED) {
                 s.fg[0] = s.fg[1] = s.fg[2] = 0.45f;
@@ -1540,12 +1532,12 @@ static void _draw_control_text(UISystem* ui, const UIElement* el, const UIStyle*
 //
 // A panel is drawn focused only while it takes the keys, as a field and an editor are: a focusable
 // panel with no key hook is a list's row, which the focus follows the pointer over, and drawn
-// focused it would outline whatever the mouse is on.
+// focused it would outline whatever the mouse is on. Only its style: its eased focus follows its
+// state as it is, so an element program's uFocus still rises under the pointer.
 static UIState _state_of(const UIElement* el) {
     if (el->disabled)
         return UI_STATE_DISABLED;
-    if (el->kind == UI_PANEL && (el->state == UI_STATE_FOCUS || el->state == UI_STATE_ACTIVE) &&
-        !_takes_keys(el))
+    if (el->kind == UI_PANEL && _shows_focus(el->state) && !_takes_keys(el))
         return UI_STATE_NORMAL;
     return el->state;
 }
@@ -1636,14 +1628,11 @@ static void _emit(UISystem* ui, UIElement* el) {
     if (el->draw) {
         // The app paints, and keeps everything else: this element was laid out,
         // can hold focus, and takes input exactly like a built-in one. A panel
-        // taking the keys keeps its focus border too, over the painting.
+        // keeps its border too, over the painting: the focus look of one taking
+        // the keys.
         el->draw(el, dl, el->draw_user);
-        if (el->kind == UI_PANEL && (state == UI_STATE_FOCUS || state == UI_STATE_ACTIVE)) {
-            UIStyle border = s;
-            glm_vec4_zero(border.bg);
-            border.bg_tex = NULL;
-            ui_draw_rect(dl, el->rect, &border);
-        }
+        if (el->kind == UI_PANEL)
+            ui_draw_border(dl, el->rect, &s);
     } else {
         switch (el->kind) {
             case UI_ROOT:
@@ -1800,8 +1789,7 @@ static bool _ease(UIElement* el, float dt) {
     const float step = (UI_EASE_SECONDS > 0.0f) ? dt / UI_EASE_SECONDS : 1.0f;
     const float hover_target =
         (el->state == UI_STATE_HOVER || el->state == UI_STATE_ACTIVE) ? 1.0f : 0.0f;
-    const float focus_target =
-        (el->state == UI_STATE_FOCUS || el->state == UI_STATE_ACTIVE) ? 1.0f : 0.0f;
+    const float focus_target = _shows_focus(el->state) ? 1.0f : 0.0f;
     const float value_target =
         (el->kind == UI_TOGGLE && el->bound_bool && *el->bound_bool) ? 1.0f : 0.0f;
     const float k = step < 1.0f ? step : 1.0f;
