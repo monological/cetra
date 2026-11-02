@@ -704,6 +704,12 @@ project are pcb's own, on these calls; nothing in cetra is missing for them.
   its submodule. Its hooks there match one key each, so seeing characters changes nothing for them.
   A schematic pane that should keep the focus through Esc takes Esc, as the vim mode does, and pcb
   maps nothing to the UI's `back`, which would let go of it whatever the hook did.
+- **A pane's focus border** -- spec 14.11, built, found by trying pcb's 6.2: its schematic pane had
+  no border when focused, where the code pane had the editor's. A panel taking the keys is drawn
+  focused now: `theme.panel` is per state, its FOCUS look the editor's border, drawn over a draw
+  hook's painting too, so every pane kind pcb draws gets it. A focusable panel with no key hook --
+  a list's row -- is not. pcb gives its schematic panel the editor's corner radius when it moves
+  its submodule, so the two borders match.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the
