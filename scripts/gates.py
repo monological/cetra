@@ -30799,6 +30799,13 @@ def run_canvas_gate(workdir):
       canvas-under-ui the game UI's panel over the board: its centre the panel's colour, and
                      outside it the canvas as it is with no UI, 0 px. The canvas is an overlay
                      under UI_OVERLAY_ORDER.
+      canvas-ui-borders a UI border laid over its fill by Porter-Duff over (spec 14.12):
+                     four boxes with one border on one opaque backdrop, each compared pixel
+                     for pixel. Over a clear fill -- magenta at alpha 0, a colour that must
+                     count for nothing -- it draws as over a fill of the backdrop's colour,
+                     and over a half-alpha fill as over that fill laid on the backdrop,
+                     within 2 codes; and the border stands 20 codes or more off the backdrop,
+                     so a box drawing nothing cannot pass.
       canvas-budget  both views of the board split at 1920x1080 points, a framebuffer of
                      3840x2160 on this machine, each frame's canvas draws timed between two
                      glFinish calls: the median under 6 ms. A timing arm: the bound is this
@@ -31250,6 +31257,36 @@ def run_canvas_gate(workdir):
                   f"{want:06x}), {outside} px differ outside it (want 0)")
     print(f"  canvas-under-ui     {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-under-ui", ok)
+
+    shot, probe = _canvas_run(workdir, "borders", "--sheet", "board", "--ui-borders")
+    names = ("backdrop", "opaque", "clear", "half", "mixed")
+    boxes = {n: [int(v) for v in probe.get(("border", n), [])[:4]] for n in names}
+    if not shot or not all(len(b) == 4 for b in boxes.values()):
+        ok, detail = False, "a run failed or printed no boxes"
+    else:
+        img = _ppm_array(shot).astype(int)
+
+        def box(n):
+            x0, y0, x1, y1 = boxes[n]
+            return img[y0:y1, x0:x1, :3]
+
+        bx0, by0, _, by1 = boxes["backdrop"]
+        backdrop = img[(by0 + by1) // 2, bx0 + 6, :3]
+        shapes = {box(n).shape for n in names[1:]}
+        if len(shapes) != 1:
+            ok, detail = False, f"the boxes differ in size: {shapes}"
+        else:
+            # Porter-Duff over: a border over a clear fill draws as one over the backdrop's own
+            # colour, and one over a half-alpha fill as one over that fill laid on the backdrop.
+            clear = int(np.abs(box("clear") - box("opaque")).max())
+            half = int(np.abs(box("half") - box("mixed")).max())
+            ring = int(np.abs(box("opaque") - backdrop).max())
+            ok = clear <= 2 and half <= 2 and ring >= 20
+            detail = (f"over a clear fill against over the backdrop's colour {clear} codes apart, "
+                      f"over a half-alpha fill against over that fill on the backdrop {half} (want "
+                      f"2 at most); the border {ring} codes off the backdrop (want 20 or more)")
+    print(f"  canvas-ui-borders   {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-ui-borders", ok)
 
     _, probe = _canvas_run(workdir, "budget", "--sheet", "board", "--split", "--budget", "-W",
                            "1920", "-H", "1080", "-f", "30")

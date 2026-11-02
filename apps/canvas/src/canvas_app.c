@@ -2980,6 +2980,53 @@ static void say_box(UIRect r, double s) {
            lround((r.y + r.h) * s));
 }
 
+/*
+ * --ui-borders (spec 14.12): four boxes with one border on one opaque backdrop, which
+ * canvas-ui-borders holds to Porter-Duff over. A border over a clear fill must draw as one over a
+ * fill of the backdrop's own colour, and one over a fill at half alpha as one over that fill laid
+ * on the backdrop. The clear fill is magenta at alpha 0, a colour that must count for nothing: an
+ * all-zero colour would mean "inherit".
+ */
+static void build_borders(UISystem* ui, int width, int height, double scale) {
+    static const vec4 BACKDROP = {0.16f, 0.20f, 0.26f, 1.0f};
+    static const vec4 FILL = {0.80f, 0.30f, 0.20f, 1.0f};
+    const struct {
+        const char* name;
+        vec4 bg;
+    } boxes[] = {
+        {"opaque", {BACKDROP[0], BACKDROP[1], BACKDROP[2], 1.0f}},
+        {"clear", {1.0f, 0.0f, 1.0f, 0.0f}},
+        {"half", {FILL[0], FILL[1], FILL[2], 0.5f}},
+        {"mixed",
+         {0.5f * (FILL[0] + BACKDROP[0]), 0.5f * (FILL[1] + BACKDROP[1]),
+          0.5f * (FILL[2] + BACKDROP[2]), 1.0f}},
+    };
+    UIScreen* screen = ui_screen(ui, "borders");
+    UIElement* backdrop = ui_panel(ui_screen_root(screen));
+    backdrop->dir = UI_ROW;
+    ui_set_style(backdrop, &(UIStyle){.bg = {BACKDROP[0], BACKDROP[1], BACKDROP[2], 1.0f}});
+    UIElement* made[4];
+    for (int i = 0; i < 4; i++) {
+        made[i] = ui_panel(backdrop);
+        ui_set_size(made[i], UI_FIXED, 70.0f, UI_FIXED, 40.0f);
+        ui_set_style(made[i], &(UIStyle){.bg = {boxes[i].bg[0], boxes[i].bg[1], boxes[i].bg[2],
+                                                boxes[i].bg[3]},
+                                         .border = {0.45f, 0.70f, 1.00f, 0.6f},
+                                         .border_width = 2.0f,
+                                         .corner_radius = 8.0f});
+    }
+    ui_push(ui, screen);
+    ui_layout(screen, (float)width, (float)height);
+    printf("canvas border backdrop");
+    say_box(backdrop->rect, scale);
+    printf("\n");
+    for (int i = 0; i < 4; i++) {
+        printf("canvas border %s", boxes[i].name);
+        say_box(made[i]->rect, scale);
+        printf("\n");
+    }
+}
+
 static void usage(const char* argv0) {
     fprintf(stderr,
             "usage: %s [-x] [-f frames] [-S out.ppm] [-W points] [-H points]\n"
@@ -2991,7 +3038,7 @@ static void usage(const char* argv0) {
             "          [--ui-enter] [--ui-text TEXT] [--ui-keys] [--gui-click] [--history] "
             "[--palette]\n"
             "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim] [--read-only]\n"
-            "          [--refuse-close]\n",
+            "          [--refuse-close] [--ui-borders]\n",
             argv0);
 }
 
@@ -3008,7 +3055,8 @@ static const char* IDENTITY_PASS = "#version 330 core\n"
 
 int main(int argc, char** argv) {
     bool headless = false, mirror = false, probe = false, picture = false, edit_thread = false;
-    bool split = false, with_ui = false, budget = false, idle = false, ui_enter = false;
+    bool split = false, with_ui = false, budget = false, idle = false, ui_enter = false,
+         borders = false;
     bool history = false, palette = false, font_sheet = false, vim = false;
     const char* editor_files[EDITOR_FILES_MAX];
     int editor_count = 0;
@@ -3107,6 +3155,8 @@ int main(int argc, char** argv) {
             g_ui_keys = true;
         } else if (strcmp(argv[i], "--gui-click") == 0) {
             g_gui_click = true;
+        } else if (strcmp(argv[i], "--ui-borders") == 0) {
+            borders = true;
         } else {
             usage(argv[0]);
             return 2;
@@ -3212,7 +3262,7 @@ int main(int argc, char** argv) {
     g_engine = engine;
     g_home_view = g_views[0];
     UISystem* ui = NULL;
-    if (with_ui || history || palette || font_sheet || editor_count) {
+    if (with_ui || history || palette || font_sheet || editor_count || borders) {
         ui = create_ui_system(engine);
         ui_set_font(ui, font, 18.0f);
         ui_attach(ui, engine);
@@ -3287,6 +3337,8 @@ int main(int argc, char** argv) {
             printf(" want 3399e6\n");
         }
     }
+    if (borders)
+        build_borders(ui, width, height, ctx.fb_scale);
     fflush(stdout);
 
     engine_add_overlay(engine, draw_view, NULL, 0);
