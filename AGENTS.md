@@ -970,7 +970,12 @@ entry there before changing anything marked with a dagger.
   `mode` attribute: a flat fill, a textured quad, or an SDF glyph. Rounded corners and borders are
   an exact signed-distance evaluation rather than geometry, so a radius costs no vertices; the
   glyph branch takes `fwidth` with no constant smoothing term, which is what keeps text the same
-  weight at any size
+  weight at any size. **A border is laid over its fill by Porter-Duff over** (spec 14.12), in
+  straight colour, the box's outer edge counted once: mixed into the fill's colour as though the
+  fill were opaque, a border over a clear fill was pulled toward black and laid on at its alpha
+  twice, and drew at about a third of its strength, which no bordered element in the tree showed
+  until pcb's schematic, a self-drawn panel whose focus border has nothing under it. A fading
+  screen fades a border with its fill. `canvas-ui-borders` holds it
 - **2D canvas (spec 14.0):** `canvas_vert/frag` (an instance of a unit quad a record: segments,
   arcs, circles, boxes, a fill's outer edge ramp, glyphs, and outline rings), `canvas_fill_vert/frag`
   (a polygon's triangles and their inner ramp), `canvas_composite_frag` (a view's rectangle into the
