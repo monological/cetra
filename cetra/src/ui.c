@@ -1638,9 +1638,10 @@ static void _emit(UISystem* ui, UIElement* el) {
             case UI_ROOT:
                 break; // lays its children out and draws nothing itself
             case UI_LABEL:
+                // Inside its padding: the box its height was measured and its lines broken for.
                 if (el->lines) {
                     const UIText t = _element_text(ui, el, &s);
-                    ui_draw_text_lines(dl, el->rect, &t, el->lines, s.line_spacing,
+                    ui_draw_text_lines(dl, _content_rect(ui, el), &t, el->lines, s.line_spacing,
                                        el->align_cross);
                 }
                 break;
