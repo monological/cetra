@@ -74,16 +74,20 @@ void main() {
         fill *= texture(uTex, vUV);
 
     // The border is the band between the outer edge and the same box inset by
-    // its width -- so it rounds with the corner for free, and a zero width
-    // leaves `band` identically zero rather than needing a branch.
+    // its width -- so it rounds with the corner for free. `ring` is its inner
+    // edge; the outer edge is `inside`, applied once, to the whole box.
     float border_w = max(vParams.y, 0.0);
-    float band = 0.0;
-    if (border_w > 0.0)
-        band = smoothstep(-aa, aa, d + border_w) * inside;
+    float ring = border_w > 0.0 ? smoothstep(-aa, aa, d + border_w) : 0.0;
 
-    vec3 rgb = mix(fill.rgb, vBorder.rgb, band * vBorder.a);
-    float alpha = mix(fill.a, max(fill.a, vBorder.a), band) * inside;
+    // The border laid over the fill by Porter-Duff over, in straight colour for
+    // the blend: each weighted by its own alpha, so a clear fill's colour counts
+    // for nothing. With no border this is the fill exactly; over an opaque fill
+    // it is the border mixed into the fill by its alpha. A pixel written has
+    // `a` of at least the discard's bound, so `ba / a` is defined.
+    float ba = ring * vBorder.a;
+    float a = ba + fill.a * (1.0 - ba);
+    float alpha = a * inside;
     if (alpha < 0.003)
         discard;
-    FragColor = vec4(rgb, alpha);
+    FragColor = vec4(mix(fill.rgb, vBorder.rgb, ba / a), alpha);
 }
