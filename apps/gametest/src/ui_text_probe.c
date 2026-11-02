@@ -1564,9 +1564,10 @@ static UIElement* sized_x(UIElement* parent, float size) {
     return label;
 }
 
-// A row on the baseline: labels of three sizes, one in a padded column and two in a row on the
-// baseline of its own, all on one line; a panel with no text at the row's top; and the row as tall
-// as the lowest of its children reaches.
+// A row on the baseline: labels of three sizes, one in a padded column, two in a row on the
+// baseline of its own and one with 40 points of padding under it, all on one line; a panel with no
+// text at the row's top; and the row as tall as the lowest of its children reaches, which is the
+// padded label, moved down onto the line.
 static int probe_baseline(const Game* game, UISystem* ui, const Font* font) {
     UIScreen* s = ui_screen(ui, "baseline");
     UIElement* row = ui_panel(ui_screen_root(s));
@@ -1574,7 +1575,7 @@ static int probe_baseline(const Game* game, UISystem* ui, const Font* font) {
     row->align_cross = UI_ALIGN_BASELINE;
     for (int i = 0; i < 4; i++)
         row->padding[i] = 4.0f;
-    static const float SIZES[] = {14.0f, 28.0f, 10.0f, 12.0f, 20.0f};
+    static const float SIZES[] = {14.0f, 28.0f, 10.0f, 12.0f, 20.0f, 10.0f};
     sized_x(row, SIZES[0]);
     sized_x(row, SIZES[1]);
     UIElement* column = ui_panel(row);
@@ -1586,6 +1587,9 @@ static int probe_baseline(const Game* game, UISystem* ui, const Font* font) {
     inner->align_cross = UI_ALIGN_BASELINE;
     sized_x(inner, SIZES[3]);
     sized_x(inner, SIZES[4]);
+    UIElement* deep = sized_x(row, SIZES[5]);
+    deep->padding[0] = 4.0f;
+    deep->padding[2] = 40.0f;
     const UIElement* textless = fixed_panel(row, 10.0f, 10.0f);
     ui_push(ui, s);
     ui_build(ui, 1280.0f, 720.0f, 1.0f);

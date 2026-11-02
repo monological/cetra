@@ -28233,11 +28233,12 @@ def run_ui_gate(workdir):
                      corner, every label's text sat its top padding high, 4 points
                      by default, with all its padding under it.
       ui-baseline    a row on UI_ALIGN_BASELINE (spec 14.13): labels at 14 and 28
-                     points, one at 10 in a padded column and two in a row on the
-                     baseline of its own all stand on one baseline; a panel with no
-                     text stands at the row's top; and the row is as tall as its
-                     lowest child reaches. Within a framebuffer pixel, the grid a
-                     glyph's corner is snapped to.
+                     points, one at 10 in a padded column, two in a row on the
+                     baseline of its own and one with 40 points of padding under it
+                     all stand on one baseline; a panel with no text stands at the
+                     row's top; and the row is as tall as its lowest child reaches,
+                     the padded label moved down onto the line. Within a
+                     framebuffer pixel, the grid a glyph's corner is snapped to.
       ui-control-lines a button and a slider whose text is two lines draw it through
                      the lines their height was measured from: the button's two
                      rows sit on its centre exactly as one row does, and the
@@ -29204,11 +29205,11 @@ def run_ui_gate(workdir):
 
     p = _ui_probe("baseline")
     count = p.get(("glyphs", "count"), [0])[0] if p else 0
-    if count != 5:
-        ok, detail = False, f"the probe drew {count} glyphs (want 5)"
+    if count != 6:
+        ok, detail = False, f"the probe drew {count} glyphs (want 6)"
     else:
         snap = p[("pixel", "size")][0] + 0.02
-        lines = [p[(f"glyph{i}", "line")][0] for i in range(5)]
+        lines = [p[(f"glyph{i}", "line")][0] for i in range(6)]
         spread = max(lines) - min(lines)
         top = p[("textless", "top")][0]
         height, reach = p[("row", "height")]
