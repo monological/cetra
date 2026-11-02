@@ -714,6 +714,13 @@ project are pcb's own, on these calls; nothing in cetra is missing for them.
   over the schematic's clear fill drew it at about a third of its strength. Spec 14.12, built,
   lays a border over its fill by Porter-Duff over, so a pane drawn by pcb shows its focus as the
   code editor does.
+- **A label's text inside its padding, and rows on the baseline** -- spec 14.13, built, found
+  making pcb's key hints (its 6.3.1): a key in a small box at 11 points beside what it does at 14
+  would not line up. A label drew its text from its rect's corner while it measured its padding,
+  so every label's text sat 4 points high in its box and anything centred beside it sat low; it
+  draws inside its padding now. And `UI_ALIGN_BASELINE`, a row's cross alignment by its text, puts
+  each child's first line on the deepest one's. pcb chooses between centring its key boxes and
+  standing them on the baseline when it moves its submodule.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the
