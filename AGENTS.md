@@ -170,7 +170,7 @@ Each has a `README.md` in its directory.
 | `apps/tree` | Procedural tree generator on an island | yes |
 | `apps/silent` | A first-person walk through a foggy night town; the engine's largest user | yes |
 | `apps/canvas` | The 2D canvas, idle mode and the UI's text input, panes and editor | yes |
-| `apps/shapes` | Procedural geometry | no |
+| `apps/shapes` | Two rectangles, square and rounded | yes, no screenshot |
 | `apps/sprites` | A particle globe under the 2D preset | yes |
 | `apps/network` | A wireframe sphere with its own shaders | yes |
 | `apps/splash` | SDF text | no |

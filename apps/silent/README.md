@@ -1,5 +1,509 @@
 # silent
 
-A grimy kitchen in a clapboard house on a foggy night street, and a Gothic mansion up a hill at the street's end, walked in first person: WASD and the mouse, Shift to hurry, C or pad B to crouch and Ctrl to crouch while held, F for the flashlight once it is found, E for a door or what is in reach, Tab for the backpack, M for the town map, Escape for the pause menu (specs 13.6, 13.13, 13.25, 13.40, 13.43 and 13.50). **Since 13.47 it walks like a person** (`player.c` over the engine's `gait.h`): the body drawn between its 60 Hz steps, a speed ramp with a fast turn of heading, every flight collided as a ramp along its nosings (`kit_frame_ramp` -- on its treads the capsule wedged against a riser for good, and the eye rode each tread in lumps), a climb at the pace a person keeps on it, the eye eased up kerbs and steps, a head bob of 2 cm walking with a centimetre of sway, and footsteps of what the feet are on (`footsteps.c`) -- the material of the kit's body under them, which the kit notes for every body it makes (`KitSurfaces`), a rug's own test, and on the open ground what is drawn there -- wet out under the rain: `--no-interp`, `--no-gait`, `--bob`, `--climb`, `--no-footsteps`, `--footstep-say`, `--trace-gait`. **Since 13.48 it crouches**: the capsule goes from 1.7 m to 1.15 through the engine's `character_controller_set_half_height`, its foot kept, and the eye eases after it from 1.62 m to 1.05 in 0.2 s and back in 0.3, at half a walk's pace, half the bob and footsteps 6 dB softer; sprinting asks to stand, and standing waits until there is room overhead. Nothing in the town a standing body cannot get under is open to a crouched one -- the gallery sconces are the one place a crouch passes that standing does not, and they lead nowhere. The cat sees a crouched player low, so what stands between hides them (`player_eye_height`). The toggle is read once a frame, never in a fixed step, where a press counts twice on a frame of two steps. `--crouch` starts crouched. Built from flat-shaded boxes and prisms batched per material -- PS2-era to begin with, and no longer a rule since spec 13.35, whose woods are generated conifers and whose chain link is a cutout -- with world-metre planar UVs so texel density is even everywhere, under CC0 photo scans cut to 256 px (`tools/fetch_textures.py`, which says where each came from). **Grime is baked into VERTEX COLOURS** (spec 13.8), which `pbr_frag` already multiplies into the albedo: a material in `mats.c`'s grime table has its boxes' faces cut into a grid and darkened toward their edges, under a patch field and jitter so it gathers in stretches rather than as a frame round every face. Walls are left out on purpose, since a wall's slab seams are edges nobody built. On glass the albedo also tints what shows THROUGH, so the same dirt reads as a film. **The few round, polished things are smooth solids** (`kit_frame_lathe`, `kit_frame_pipe`, with a normal per vertex): pots, the tap, the jars, a plate and a mug. Their grime gathers where each is fixed on. Everything else stays faceted. **Photos, notes and letters are cards cut from one picture** (`kit_frame_card`, which takes explicit UVs). `tools/make_cards.py` builds that picture and GENERATES `src/cards.h` with each card's UVs and size, so never edit the header -- rerun the tool. Container glass is 4 mm thick because a jar is hollow, and at a jar's diameter the refraction pass sampled past the jam behind the wall. **The hall clock** (spec 13.10, `clock.c`) stands opposite the kitchen door under a pendant lantern. Its pendulum and hands are each a node of their own, built by a small kit round its pivot and turned from `game->time`. The painted dial comes from `make_cards.py`, and so do the arbors' positions, which the header carries as anchors. **That picture's roughness map is a quarter its size, on purpose**: every roughness map is a layer of the engine's material array, which brings all its layers up to the largest, and at full size it took the array from 18 MB to 288. **Every recorded sound is a CC0 Freesound recording shaped by `tools/fetch_sounds.py`** (spec 13.11, needs ffmpeg), which lists each one's source: the clock's tick and tock, cut and put through a wooden case, and LOOPS for the fridge, the tubes and the wind -- the steadiest stretch, crossfaded into itself and levelled alike, so the volumes in the C files are the only statement of loudness. `--audition DIR` renders every candidate to choose by ear. **The rooms are the engine's audio ZONES** (spec 13.33, `sounds.c`): each house, the home's living room, kitchen and basement, and the mansion's upper storey, as boxes -- the tower's octagon as five, from `tower_boxes` -- joined by links for an outside wall, an open doorway, a floor and a storey, three of them doors whose swing opens their link. Every placed sound is heard through the walls between it and the listener, so no module multiplies a wall into a volume; the rooms and links are two tables in `sounds.c`, each door one row. A floor (0.4) lets more through than an open doorway (0.35), so the living room and the kitchen hear each other through the cellar, about 2 dB over across the hall, and that was left so by ear. The wind is a 2D bed placed nowhere, two layers crossfaded by how far the doors stand open, at the level of the best-heard room with an outside wall -- which is also what the rain beds take under a roof, so a front door opening moves the wind's mix and not the basement's level. The failing tube's buzz drops out with its flicker. `--audio-dump PATH` writes what a headless listener hears, for listening without a window; `--mute` silences it all. The tubes are emissive strips the engine turns into LTC panels, so a flicker is a material strength and the light follows it. The flashlight is registered before any other spot, because the fog scatters only the scene's first spot. The street lamps are point lights shaped by an IES profile, which is what makes the fog draw a cone under each head rather than a ball around it. The GI volumes and the reflection probes are installed at frame 2, not at load, since the first sweep is the only full-weight one. Each house's volume sweeps, and its probes capture, only once that house's cached lights hold their tiles, which the nearest lights get first -- so the mansion's are taken on the way up the drive, and the frame fades in once the volume and the reflection probes round the eye are ready. **It loads under the engine's loading screen** (spec 13.34; `--no-loading-screen` for a black window, `--loading-screen` to have it headless too): shown at the top of `on_init`, drawn at every `load_seam` and between its materials, and showing PLAY once the lighting round the eye is in, until the `start` action (Enter, Space, E, a click, pad A or Start, read while the rest of the input is held, and only while PLAY is up) lets it go -- at once headless and under `--no-play-prompt`. The captures drop to the play budget as soon as the lighting is in, so PLAY answers a press within a short frame; the fade and the player's input wait for the screen to switch off, the input held from the frame-input hook, and a click takes no cursor while it is held. `--startup-ms` prints how long each loading step and held frame took, and how long the screen stood still in it (`still=`, spec 13.39). Since 13.39 the textures decode on the engine's loader threads, and `mats_register` waits for them before it returns, since a kit frees an unused material as it finishes. The sounds decode on miniaudio's job thread: silent begins the audio's loading phase as it makes the system, and `game_run` ends it before the first frame. The physics broadphase is optimised before the cat, whose place check casts thousands of rays. The world kit's shadow cells, the woods and the cat draw the screen between their pieces. No piece of the load stands it still past about 140 ms -- the land's mesh collider and the prompt's font atlas, each one call. **Since 13.49 it comes up on a TITLE and keeps SAVES** (`title.c`, `save_game.c`): a windowed run comes up on the title over the street -- Continue, New Game, Load Game, Settings, Exit to Desktop -- under a camera rig of the title's own, with the game held on a clock of its own while the weather goes on. A game saves itself into its slot, `silent-1` to `silent-8` in the engine's per-user directory, when something is taken, a place found, another room entered and on quitting, with a candlestick in the corner saying so. A run started from a state on the command line skips the title and saves only under `--slot`. **Since 13.50 Escape or pad Start PAUSES** (`pause_menu.c`, `settings_menu.c`): Resume, Settings, Quit to Title and Exit to Desktop, the whole world frozen under it on the sim clock, the rain in the air included. Settings -- one volume, the window mode and vsync, look speed and invert, the field of view -- apply as they change and are kept in `silent-settings.json` beside the slots through the engine's `settings.h`, with `--mute` and `--fov` laid over them. **Quit to Title** saves, goes black, puts the world back from `silent-start.json`, written at load, makes the cat's mind afresh, and loads again round the title's view. So taking the bag or the map takes its node off the graph and keeps it, and a load or a return lays it back. `--title`, `--title-screen`, `--pause-screen`, `--load`, `--new-game`, `--slot` and `--no-autosave` drive it headless. **The captures are paced, never one long frame** (spec 13.32): while the view is held they take up to `LOADING_CAPTURE_MS` (100) of each frame, so the window keeps answering, and once it comes up the engine's 8; `--capture-budget-ms` pins one, headless too, where the default is no limit. **One sample with jittered TAA, headless as well as windowed**: with MSAA the fog composite takes one depth per edge pixel and outlines every silhouette in the street. The jitter follows the frame index, so a headless run still repeats itself: 0 px between two runs with TAA and between two with `--no-taa`. Render scale defaults to 0.5. No film grain (spec 13.28); `--crt` shows the game, its door prompt and menus included, on a consumer television, which is off by default. **`--day` is an overcast day on a photometric sky** (spec 13.7): the sky is in nits like the tubes, fully overcast so nothing casts, and metered with the meter floored so a room never opens past the night's pinned exposure -- the kitchen by day is the night's exposure plus its window. **Since 13.19 the day has a local exposure** (highlights 0.2, shadows 0.6, blend 0; `--no-local-exposure`, `--le-highlights`, `--le-shadows`, `--le-blend`, `--le-probe`), so the kitchen window onto the street reads without the kitchen going dark: the window is 5.8 stops over the room, and the day key of 0.45 leaves about a stop above grey, which is why it takes so strong a setting. Off at night, whose exposure is pinned. G frees the mouse while the GUI is open, or its sliders could not be reached. The player owns the window's cursor (`player.c`): in play a click takes it in a window or borderless, since the window shares the desktop, and exclusive fullscreen takes it whenever play has the input; the title and every screen over the game show it only while the mouse drives them, hiding it from the moment a menu key or a pad does; and the loading screen hides it, taking any press, a click included. **It rains by default, at 6 mm/h** (spec 13.9), already soaked; `--rain <mm/h>` and `--no-rain`. The streaks, the wet ground and the splashes are art-directed past physical, each a constant in `silent.c`, because in fog this dense a drop refracts air about as bright as itself; its reflections see the fog (`reflect_fog`) and SSR reaches 40 m so a puddle mirrors the street. The rain is HEARD too, two noise beds whose patter falls away under a roof, read from the rain's own occlusion map at the player's head. **Since 13.12 a gusting breeze blows it off the street onto the house** (`--no-wind` for still air), which is what wets the facade and the kitchen window under the pent roof across the front: in still air both stayed dry. The glass beads, opaque panes included. Both houses carry a GUTTER along that roof and a downpipe (`house_front_gutter`, shared), and its leaks are drip lines -- two joints, an overflow past the kitchen window and the downpipe's shoe -- while the neighbours drip from their bare eaves and porch roofs; the street adds the lines while it is built and draws nothing from its RNG for them, so every seed builds the same street. The drips are lit by the kitchen's tubes as well as the lamps. Porosity is stated per material in `mats.c` rather than read off the roughness, which had painted siding, trim and car paint soaking like soil. The road, the pavement and the yard carry their scans' displacement, and the puddles stand in their lows (`--no-relief` for the noise alone). Those maps are `_disp.png`, never `_height.png`: the engine gives any material with a `_height` sibling of its albedo parallax, and the jars' contents share the grass's albedo. **Since 13.13 there is a two-storey Gothic house**, weathered charcoal board-and-batten on a rubble base, and **since 13.25 it is the MANSION at the street's end** (`MANSION_ORIGIN` in `layout.h`), moved whole. Its kit carries an ORIGIN, applied where vertices, colliders, drip lines and wicks are emitted and after the planar UVs, so every texture lands as it did and `house.c`, `tower.c`, `interior.c`, `hearth.c` and `study.c` still build in house-local coordinates; `mansion_at` is the one translation for what is placed outside the kit -- the study lamp, the GI corner, the probe boxes, the cat's places, the sound boxes, the fog hole. That kit sits beside the street's (`kit_init_beside`) and shares its materials, so each building has meshes of its own and culls on its own, and `kit_free_unused` frees a shared material neither used. Its front row is a Gothic DINING ROOM where the kitchen was (`mansion.c`): a refectory table laid for a meal long abandoned, high-backed chairs, an iron candelabra, a sideboard, portraits from `make_gothic.py`, and a window seat under a leaded window; a suit of armour stands where the clock stood. Behind them is a double-height great hall with a castle chimneypiece whose firebox is EMPTY -- the fire is spec 13.14's -- and a stair up its east wall to a railed gallery. An octagonal tower on the front-west corner holds the study upstairs: about a thousand seeded books, stained glass, and four gargoyles outside that drip from their jaws. **The drive** (`hill.c`, `trees.c`, `grounds.c`) leaves the street's east end and winds up a faceted hill, carved to the road's own profile and collided as a mesh, through bare twisted `tree_gen` trees swaying in the wind -- held at rest in the candles' and lamps' cached shadows (spec 13.26), which following their sway cost 176 ms a frame -- to iron gates on stone piers with one leaf hanging open, a rusted fence round the grounds, a small graveyard beside the drive, and two of the street's lamps, one dead and one failing. The fog is the street's rectangle with a hole round each house (and since 13.41 the cabin), reaching down into the chasm. **The town's edges** (spec 13.35: `land.c`, `terrace.c`, `fences.c`, `woods.c`, `crossroads.c`) close the street in. One ground grid covers the world, from `land_height`, and with the chasm's face it is a kit of its own whose shadow cells are six times the size (`Kit.shadow_cell_scale`): in the street's 3 m cells it made thousands of shadow draws of a few triangles each. The far side stands on a stepped terrace behind a board-formed retaining wall, with a flight up through it to each door and a guard rail along its top. Every yard is fenced -- board, picket, chain link (drawn by `tools/make_chainlink.py`) or cinder block -- with a return from each house's sides and a gate in one; ours is reached through its open side gate, its back gate is padlocked, and a fallen length of its back fence has a dead tree lying through it (the fences report every fallen length, and the woods fill each one). Conifer woods from the engine's generator stand behind both sides (`--no-woods`), with the world's edge deep inside them. Every tree is hung once and never taken down, the far ones kept cheap by their levels of detail -- each model's meshes carrying their own `lod_scale` (spec 13.38), so the engine's bias stays the GUI's -- and every tree, the woods' and the drive's, is drawn only within the fog's reach (`TREES_REACH_*`, 45 m by night and 30 by day, none with `--no-fog`) by a `draw_distance` on their roots, while the shadows still take every tree: about 6.6 ms of a frame from a yard and 1.6 from the street, `--no-woods` the A/B. Hanging only those within reach as the player walked was the first way, and it changed the scene graph every few steps, which then redrew every cached light's kept faces -- frames of 650 ms (13.35; the engine since 13.38 redraws only the faces a change touches). A tree's wood and needles share one wind response, and the needles' extra life is their flutter. Each trunk's body is the model's own radius at a body's height, leaning with the tree (`trees_trunk_collider`). At the street's west end is a crossroads: both arms are barricaded, one row of `BARRICADES` each so a mechanic can open one, and the road straight on breaks off at the lip of a chasm the fog fills, under a failing lamp. **Since 13.41 the south arm's barricade has a gap, and a gravel track runs through it down to a lake** (`road.c`, `lake.c`, `cabin.c`; `--player-at X,Z[,YAW]` starts the player anywhere, `-52,30` at the gap). The chasm does not end: its lip turns west at `RIDGE_Z` and runs off into the fog as the north face of a rock ridge, and the valley behind it is the same ground grid grown south, the lake's bowl and bed added last in `land_height` (`lake_ground`), the bed in the collider too -- left out of it once for a wading ring that came later, and the player fell through the world. The drive's spline and carve are `road.c`'s now, shared by both roads: the drive rises on a smoothstep, the track at a constant grade with eased ends, steep enough for puddles to stand on it. The lake is a water of its own, calm and dark, held to a rectangle by the engine's `Water.bounds` (see Water in the shader inventory), so the chasm at the same depth stays dry, and switched on only within the fog's reach of it plus 15 m, the reach its kits and the cabin's are drawn to, since its surface, the light it takes from what is under it and its ripples cost a frame wherever the eye is; startup prints the lowest ground on the bounds, which must stay over the level. Round it: a dock, two rowboats, reed clumps (`tools/make_reeds.py`), drowned trees, and a valley wood planted from its own random stream, so the old woods' draws are untouched. On its east bank is a **log cabin** -- round logs interleaved at the corners over a stone footing under rusted tin, a fieldstone chimney, a porch toward the water with a rocking chair, wood stacked under the eave -- and inside, a fire burning on the engine's filmed hearth flipbook, a meal laid for one with the lamp lit, a cot, a cold stove, preserves, and a map of the lake from `make_cards.py`. **Its door is left open**, so the fire shows from the dock; it is battened boards (`door_leaf_battened`) through `door_hang`, which took the leaf's foot from the hinge's height only from this spec on -- the mansion's front door had hung 8 m under its doorway since 13.25. The hearth's light is lifted 8 times over what its flames cast, as the candles' is (by 20): the night is exposed for a house lit by a few candles, and at its physical brightness the fire left its own room dark. The cabin has its own GI volume, reflection probe (its box capped at the eave, or the roof's top over the room took the probe), fog hole and sound zone; the fog's local volumes rose from 8 to 16 for that third hole, and the haze floor went down to the lake. The lake laps at the shore nearest the listener, and the hearth crackles and the room has its own quiet, each a CC0 Freesound loop. `fetch_sounds.py --only JOB ...` fetches and makes only the jobs named. **Since 13.56 the lake's waves are the FFT's** (`--lake-waves gerstner` for the old), a breeze over it and no swell; **a brass lamp stands at the dock's end** (`dock_lamp.c`), a round lantern (`fixture_lantern_round`) hanging from a shepherd's crook on a chain and swinging in the breeze, a cached 60 cd light following its bulb; and **the moored boat is a motorboat** (`boat.c`): the user's download of a wooden rowboat with an old outboard modelled, baked and fitted by `tools/make_boat_blender.py`, which GENERATES `src/boat_shape.h` (the hull's draft, its dry shapes and its rim) -- rerun it, never edit the header. Its twin lies turned over on the bank. E from the dock gets in, onto the stern seat, the view carried by the boat; E starts the motor by its pull cord (`pull_cord.c`: three presses while a marker running along a bar is in its small lit zone, drawn on the HUD's gauge); W S A D drive it; E stops it; Q (or a right click) gets out alongside the dock, and the boat is brought onto its mooring and tied. The first time on a trip that it reaches the spot circled on the cabin's lake map (`layout.h`'s `LAKE_MARK_*`), the motor dies and has to be started again. It bumps off the bodies that stop a wader and the dock, analytically, against its rim; its hull keeps the water out with the engine's dry shapes; a save keeps it. Its sounds are seven CC0 recordings, the motor's loop re-pitched by its speed through the engine's `audio_sound_set_pitch`. `--in-boat`, `--boat-at`, `--boat-running`, `--pull-cord`, `--trace-boat`. **The player's house** (`home.c`, after P.T.) is a two-storey clapboard one on the original lot, with a porch, shutters and a brick chimney: a straight hall from the front door to a back window, cream plaster over dark glossy boards, paintings from `make_cards.py`, a console, a plant and the clock; the kitchen and the living room off its front half, a bathroom and the bedroom off its back, and the stair shut. Its ground storey is 3.1 m clear, half a metre over the plan's, which the mansion keeps: `layout.h`'s `HOME_*` heights are the plan's plus `HOME_RAISE`, and every home use takes them. The hall is lit by a pendant on a chain and a lantern on a wall bracket, square lanterns of aged brass and the jars' clear glass round filament bulbs (`fixtures.c`, spec 13.52): the glass casts nothing for a cached light, so the bulbs' light leaves through the panes and only the brass shadows it. The pendant is a kit of its own beside the street's (`kit_keep_beside`), casting nothing and hidden from captures, so it can swing about its rose: `Lights.swing_want`, eased, its light's kept shadow following while the swing is wide. **Since 13.40 the back bedroom is open** (`bedroom.c`): a double bed across it under its east window, a nightstand each side with a lamp on one -- its shade lit from inside by the lampshade hook, as the living room's floor lamp's is, and its light cached with a near plane past the shade's rim, since the shade drawn into its own light's shadow boxed the bulb in -- and a chest of drawers facing the bed with the kitchen's old chamberstick burning on it. The bed and the bag take the kit's SOFT BOX (`kit_frame_soft_box`, edges rounded, faces puffed, normals per vertex), the kit's lathes and pipes being round or square things only. On the bed lies the player's BACKPACK (`backpack.c`) with the flashlight in it -- since 13.55 an army lamp clipped high on the jacket's chest, a little to the left (`flashlight.glb`, from a CC BY download through `tools/make_flashlight_blender.py`), its beam aimed at what the look meets, and while the birdcage is held lit and held on it, the night's exposure four stops down: E takes it, and until then F thinks "I don't have a flashlight." and the way into the basement at the cellar flight's foot is barred by a body nobody sees, the player thinking it too dark to go on. Words the player sees are the HUD's (`hud.c`, which `prompt.c` became): the door prompt and over it a THOUGHT that fades in and out, on one non-modal screen. Tab opens the BACKPACK'S SCREEN (`backpack_menu.c`), after Deus Ex: Human Revolution's inventory -- one amber pane, the bag's grid on the left with each thing across its own footprint as a picture of itself, the chosen one turning on the right. The GAME packs the grid (first fit in the order things were had, then largest first, then a row more), so the player never arranges anything and it is never full. The pictures are silent's own turntable (`item_view.c`), the item's meshes drawn through their VAOs into a target of its own from inside the overlay, every piece of GL state put back, since the engine draws one view of one world. `--backpack` starts with it, `--open-backpack flashlight` with its screen open for a headless picture. **Since 13.43 a street map of the town hangs half open on the fridge's freezer door** (`fridge_map.c`), under a glossy printed cover, so it reads as a thing to take. E takes it into the bag once there is one; until then the player thinks there is nowhere to put it. M or pad RB opens it (`map_screen.c`), over the world, or over the bag from the bag's screen. The map is a VIEW with a pan and a zoom, with a red arrow where the player stands. Blue ink is written on stroke by stroke the first time each mark shows, through an app UI fragment stage (`shaders/map_ink_frag.glsl`, over the UI's own vertex stage by `create_ui_draw_program`) that reads when the pen reached each pixel from the marks picture's red, its colour the quad's tint, through the engine's `ui_draw_textured_quad_uv`. The map's two pictures decode on the engine's loader threads (`engine_load_texture`). The marks are the player's house, circled with "my house?" on the first opening, and the FINDS (`town_map.c`, one `PLACES` table): the barricaded north arm and the road's end at the gorge get an X, the cabin is sketched in. Each is found by walking into its box and thought about, with "M   Map" hinted when the map is had; a find without the map is written on once it is. **The map is printed from the game's own plan, so nothing about the town is copied into Python by hand**: `--map-export` writes every shape the map shows, from the code that builds it, into `tools/town_plan.txt`. From that, `tools/make_map.py` draws the print, the marks, the folded map's cover, and GENERATES `src/map_art.h`. Re-export and rerun both when the street, the lake, the hill or the land change, and never edit the header. A map is a `MapId` with one generated `MapArt` row, and each mark draws from a random stream of its own, so a second map or another place is a run of the tool that leaves every existing mark's hand as it was. `--map`, `--open-map`, `--found LIST|all`, `--open-backpack map`. The hall plant is turned and fitted so no leaf comes through the wall into the bedroom. **Since 13.31 the door at the hall's end opens on the cellar stair** (`basement.c`): painted walls either side and ahead, down a steep flight into a basement dug under the whole house -- bare damp concrete under the floor's own joists, on a beam and posts, holding a rusted furnace and its ducts, a water heater, a laundry tub with its tap dripping into it, a floor drain in a pool of damp, sagging shelves of preserves, boxes, a workbench, a chair set facing the corner and a padlocked door into the crawlspace. A bare bulb hangs over the flight, lit, set swinging by the draft the first time the door opens, and now and then dimming on a failing supply (`lights_brownout`). Its swinging kit is `Kit.casts_nothing`, so the glass is never a mover in the kept shadows; its light is cached with no body and sets the engine's `Light.shadow_follow` while the swing is wide, so its shadows follow it rather than stepping each time it passes the kept shadows' tolerance. The haze starts at the basement's floor rather than the yard's. The basement is a zone of its own, the cellar and the flight behind its door, so the house's sounds, the wind and the rain come down through the floor, and the door opening lets the drip up into the hall. Cobwebs were tried and taken out: nothing painted read as silk. **Since 13.30 the living room's television shows snow** (`tv.c`; `--no-static` for a set showing nothing), the first app to use spec 13.29's hooks: `shaders/tv_static.glsl` on a card over the glass in the late draw, past TAA, so a new field every 1/59.94 s is not averaged into grey -- interlaced, band-limited along the line, Gaussian about a black level through the tube's gamma, under a rolling hum bar -- and a surface hook on the glass (`tv_glass.glsl`) giving the glass's light the picture's shape, from the one chunk both are built with (`tv_picture.glsl`), so the glass emits exactly the picture's expected light and SSR, the probes and TAA's history see the screen lit while the card adds only the noise. The room is lit by an area PANEL on the glass, as bright as the picture averages, with a specular share of 0, since the glass's own light is what reflects: a point light in front of the screen hung a ball of lit fog in the air. Its hiss is Freesound 765159, from the set, heard through the living room's walls and doorway like any placed sound. The kit gained a Gothic vocabulary for it (`kit.c`): ear-clipped polygons and extrusions, pointed and Tudor arch outlines, arched openings with their spandrels, walls at any yaw, and stairs. `layout.h` is the plan; `house.c`'s `WALLS` table states every wall's openings once, and `interior.c` dresses them from it. The carvings, the rug and runners, the stained glass, the book spines, the arms and the fireback are cards cut from one atlas, built by `tools/make_gothic.py`, which GENERATES `src/gothic.h` -- rerun it, never edit the header. The doors are kinematic bodies (`door.c`), Gothic plank leaves in the mansion and four-panel ones in the home (a `DoorLeafFn` each), swung by E or X only, never by pushing, with a HUD line (`hud.c`) drawn through the engine's UI layer. **Stained glass is OPAQUE and emissive by its own picture**: a transmissive pane showed only the fog behind it. **The mansion's GI grid is 11x7x11 on 1.21 m cells**, the one spacing found that keeps every probe centre 0.15 m off every wall and slab, and the startup print says when a layout change breaks that. The home's is laid over its bounds, down to the basement's floor, on 1.25 m cells with classification on (`create_gi_volume_spaced`), which switches off a probe inside a wall instead: 450 probes, against 792 on 1 m cells, which swept about 30% slower for a shift in the bounce light of under a code on average (spec 13.42). The cabin's keeps 1 m. **The reflection probes' boxes, five in the mansion and seven in the home, run to the plane each room's doors and panes hang in** (spec 13.23): a shared wall's centre line, an outside wall's pane, and for the hall the front door's middle, which `layout.h` states once as `FRONT_DOOR_Z`. Stopped at the inner faces, a door hung in the middle of its wall was outside every box and reflected the day sky, and the parlour door went a washed-out grey. Each fade is half a pane, so a window's street face never takes the room's probe; at the default fade the kitchen's reflection reached through its wall onto the great hall's panelling. The study is two boxes, room and tower bay, since one round both took in the facade beside the tower. The engine's Probe Coverage render mode, in G's Render Mode list, paints magenta whatever falls through to the sky: indoors any magenta is a miss. **Since 13.16 the candles and the hall light cast CACHED shadows**, so a sconce no longer lights the bookcase on the far side of its wall and no candle lights the facade from inside: each candle's soft shadow is the average of eight views over its flame and follows the flame with no face redrawn, the clock's pendulum and hands are drawn over a copy of the hall's still casters each frame, and the wax scatters light a few millimetres under its surface (`mats.c`'s `ScatterSpec`, chosen by eye). `--no-candle-shadows` turns the candles' off and leaves the hall light's, `--tile-views 1` shades from one view for comparison, and `--tiles-probe` prints the tiles at exit. **Since 13.27 the kitchen's three tubes cast cached shadows too**, the hood's included, so the ceiling tube no longer lights the hall through the kitchen wall -- the old single map down a panel's normal read the hall, more than 60 degrees off it, as lit. Each is cached from its strip's centre with a near plane past the steel channel the strip sits in, which otherwise shadows the ceiling round the tube from within. `--no-gi` leaves out the GI volume and the probes captured from it, which is what tells a change in the direct light from one in what the captures saw. **Since 13.42 its light is COOKED**: a launch after the first loads the volumes' sweeps and the probes' columns from the cook and comes up lit in about 2 s rather than 10 (debug build), unless something they see has changed (`CETRA_NO_COOK=1` captures live). A capture burst holds the scene at rest (`rest_lights`): the failing tube lit, the basement bulb hanging straight on a full supply, the TV's field at its long-run mean and the flashlight off, while the clock's pendulum and hands are `capture_hidden`. The game starts in the kitchen's back corner, looking across it to the hall door. **Since 13.52 the house can be HAUNTED** (`haunt.c`, after P.T.): since 13.53 the house's story begins it (below, at the key since 13.54), and K or the pad's right-stick click begins and ends it anywhere. The power goes: every light in the house, the TV and its hiss, the street lamps, and the light that comes from no lamp -- the GI bounce, the reflection probes' and the sky's, which the lit surface scales together by the environment's strength (`ibl->intensity`), and the fog's glow, which no wall stops -- with the house's clear panes black. A second and a half on, the hall's two lights, the floor lamp and the snow come back red, failing now and then, the bounce with them, under a post pass after the tone map (`shaders/haunt_grade.glsl`) that drains the picture to red. The clock stops (`clock_stop`, running late after rather than jumping), the fridge clunks off, a recording plays from its start over all of it (`veil.flac`, cut if it ends sooner), a low drone rises, and the hall's pendant starts to swing. The bathroom bulb, the bedside lamp, the kitchen's tubes (`lights_set_mains`) and the cellar bulb (`Basement.mains`) stay out. **The door beats wait for the player, and the tries for nobody** (spec 13.54): from 4 s, as soon as it stands shut, the cellar door is tried from its other side -- from the hall, when the key began it, as the player turns back to the cellar stair -- its knob turned two to four times a try under the rattle, its leaf jolted in its frame toward the stair on the recordings' own hits (`door_jolt`). Those hits come from `src/door_takes.h`, which `tools/fetch_sounds.py` GENERATES: rerun it, never edit the header. The tries go on until the player opens the door on nobody, which stops them for good. A second after the player first stands in the hall -- come up through that door -- the bathroom door creaks ajar, or shut if it stood open (`door_drift`); and the first time they stand in the front of the hall looking back down it, an open cellar door slams (`door_slam`). Every capture rests the house as it was, so nothing the haunting puts out is kept. `--haunt`, `--haunt-at S` (that many seconds in, the slam and the creak past) and `--trace-haunt`, which prints the story's turns too. **Since 13.53 the haunting has its place in a STORY** (`story.c`): the front door is locked from the inside, and the way out is a key on the basement's workbench, down the cellar stair the backpack's flashlight gets the player down. **Since 13.55 the key hangs in a BIRDCAGE on the bench** (`birdcage.c`; `tools/make_birdcage_blender.py` builds and bakes it), rusted iron cast solid with a face for its door, and the player's own ARMS take it out: E picks it up (`inspect.c`, over `arms.c`; `tools/make_arms_blender.py` makes `arms.glb` and GENERATES `src/arms_clips.h`, so rerun it, never edit the header). The view glides to a framing set from the cage and goes onto the arms' `View` bone, a camera rig of the hold's own, while the player's body stays where it stood. The hands lift and turn it as the player thinks "What is this thing...?" and then "The face... I think it opens."; the mouse or the stick spins it on the palm, Q (or a right click, or pad B) sets it back shut, E opens the face and E again takes the key, into the bag as it goes out of sight, and the hands set the cage down open and empty. A load or a return to the title puts it straight back on the bench, open exactly when the key is had. The arms, the cage and the bag's lamp come in through one import (`library.c`). The backpack keeps the key on the graph exactly while it does not hold it (`backpack_lay`). **Since 13.54 taking it begins the haunting** (`story_key`), and the cellar door slams shut over the player's head (`door_slam`), heard from where it lands (`door_update`), as every door's slam is, from one set of door sounds (`DoorSounds`). The cellar door is an ordinary door all through: the haunting tries it (above) as the player turns back to the stair, and it is the player who opens it again at the top of the flight, on nobody. With the key and no map the player thinks of the map in the kitchen and the door stays shut; with both it opens, the haunting ends as it does, the power, the lights and the colour back, and it is an ordinary door from then on. A door that will not open is tried by hand with the haunting's own knob and rattle takes, the leaf jolting on their hits (`door_try.c`, shared with the haunting's tries). The stage is saved, a `story` section by name, and the game autosaves at each turn: a game saved haunted loads haunted again, a locked front door loads shut, and a player anywhere but in the house counts it open, so a `--player-at` in the town, or a save from before 13.53 made out there, is not locked out. K begins and ends the haunting without moving the story. `--key`, `--story locked|haunted|open`, `--open-backpack key`, `--inspect pickup|closed|open` (the birdcage in the hands from the start, wherever the player stands), `--trace-hold`. **Since 13.17 a black cat with yellow eyes lives in the Gothic house**, the mansion since 13.25, (`--no-cat`; `--cat-fur`/`--cat-eyes RRGGBB`, live in the G panel too). Its body is built headless in Blender by `tools/make_cat_blender.py`, which writes `assets/models/cat.glb` and GENERATES `src/cat_clips.h` -- each clip's length, loop, stated travel, events in seconds and the eye anchors -- so rerun it, never edit the header; `out/cat_blender/cat.blend` is kept for a look, and `--preview clip@seconds` renders stills from five views. It is brought in through a library scene (see Memory Ownership) and is `capture_hidden`, so it goes into the house at once and no capture keeps it. `cat_body.c` is the body and its look -- the import, the coat read from `assets/scenes/cat.cscn`, the colours, the eyeshine -- and `cat.c` moves it: a posture ladder (curl, lie, sit, stand) a transition clip apart, turns on the spot by quarter-turn clips, walks, trots, runs and the stair advanced by root motion, jumps played at the rate that makes their air time the arc's own, every jump turning in the air to land facing the way on, and acts in place (stretch, startle, groom, hiss) with the face's vocals on the override layer masked to the bones they move. `cat_places.c` is the house as 42 places and 86 links, walks, the flight, jumps and the gallery's HAND RAIL -- walked one way, east, on the wood, with nothing turning on it, and left out of every route but one meant for it. `cat_brain.c` is an aloof watcher on the engine's brain: sleep, stretch, loaf, explore, watch the candelabra's flame, watch the rain, avoid, startle, follow, and the rail to sit on the stair's newel over the great hall, with energy, boredom, alarm, affinity and how long since each place, and a head turned by the engine's look-at to whatever it watches -- the player when near, fast or the reason for what it does. `cat_voice.c` plays its CC0 recordings from the clips' own events at its head or feet: meows, a trill, a hiss, paws silent on cloth, landings, and a purr for someone close it likes. Its eyes throw the flashlight back (`--no-eyeshine`). Flags: `--cat-at`, `--cat-clip NAME[@S]`, `--cat-goto PLACE[:trot|:run]` (scripted, so no mind), `--cat-activity`, `--cat-seed`, `--cat-blind`, `--cat-cam`, `--cat-say`, `--trace-cat`; G shows its scores and needs, and draws the graph, its route and its sight line over the frame (`cat_debug.c`, the graph and the route even with no mind). Two runs from one seed trace identically. No gate arms and no goldens, by decision
+A first-person walk through a foggy, rainy night town. The player starts in the back corner of the
+kitchen of their own clapboard house, which is locked from the inside; the key is in a birdcage in
+the basement, and taking it begins a haunting. Outside are a street of neighbours' houses, a Gothic
+mansion up a hill at the street's east end with a black cat living in it, a crossroads and a chasm
+at its west end, and through a gap in a barricade a track down to a lake with a log cabin and a
+motorboat.
 
-Headless: yes
+It is the engine's largest user. It has no gate arms and no goldens, by decision: it is checked by
+running it and looking.
+
+## Running it
+
+```bash
+./out/bin/silent                         # the title, then a game
+./out/bin/silent --new-game              # straight into a new game
+./out/bin/silent --day --no-rain         # an overcast day, dry
+./out/bin/silent --player-at -78,118,90  # start anywhere: here, the dock looking at the cabin
+./out/bin/silent -x -f 120 -W 960 -H 540 -S /tmp/kitchen.ppm \
+    --cam-eye 2.2,1.95,13.55 --cam-target 2.2,1.25,10.1
+```
+
+| Action | Keys | Pad |
+|--------|------|-----|
+| Walk, look | WASD, the mouse or the arrows | left stick, right stick |
+| Hurry | Shift | left bumper |
+| Crouch (toggle), crouch while held | C, Ctrl | B |
+| Flashlight, once found | F | Y |
+| A door, or what is in reach | E | X |
+| Put down what is held | Q or a right click | B |
+| Backpack | Tab | Back |
+| Town map, once had | M | right bumper |
+| Begin or end the haunting | K | right-stick click |
+| Pause menu | Escape | Start |
+| Debug GUI | G or backtick | |
+
+Every flag, with pinned camera views for each part of the town, is in `docs/cli-reference.md`,
+"apps/silent". A run started from a state on the command line -- a headless run, `--player-at`, a
+pinned camera, `--backpack`, `--story`, and so on -- skips the title and saves nowhere unless
+`--slot` says where. `--pad-script` and `--trace-player` play it headless, as in gametest.
+
+## What it exercises in the engine
+
+- The game layer: the fixed-step loop, the character controller and its crouch, the gait, input,
+  saves and settings, and the audio system with zones, voices, re-pitching and the loading phase.
+- Animation and AI: the cat's animator, root motion, override layer, look-at, nav graph and brain,
+  and the player's arms on a camera rig of their own.
+- The lighting: cached point- and area-light shadows (candles, lamps, the kitchen's tubes), GI
+  volumes and reflection probes streamed by distance and cooked to disk, derived emissive panels,
+  IES profiles, the capture budget and capture rest, and the loading screen.
+- The post chain: one-sample jittered TAA headless, TAAU at 0.5, volumetric fog with local holes,
+  an overcast photometric sky, local exposure, a LUT grade, the CRT, and app post passes.
+- Rain, wind, wet surfaces and drips; bounded water with dry shapes; the fire flipbook.
+- App shaders: a surface hook and a late-draw surface on the television, a lampshade hook, app UI
+  fragment stages for the map's ink and the save candlestick (`shaders/candles_frag.glsl`), and a
+  post pass for the haunting's grade.
+- The UI: the title, menus, the HUD, the backpack's grid and the map, with items drawn by an
+  in-overlay turntable.
+
+## How the world is built
+
+### The kit
+
+The buildings and the ground are built by `kit.c` from flat-shaded boxes and prisms batched per
+material (the trees are `tree_gen`'s, and the cat, arms, cage, lamp and boat are models), with
+world-metre planar UVs so texel density is even everywhere, under CC0 photo scans cut to 256 px
+(`tools/fetch_textures.py`, which says where each came from). On top of that:
+- **Smooth solids** (`kit_frame_lathe`, `kit_frame_pipe`, a normal per vertex) for the few round,
+  polished things: pots, the tap, jars, plates, mugs. Everything else stays faceted.
+- **A soft box** (`kit_frame_soft_box`, edges rounded and faces puffed) for the bed and the bag,
+  since lathes and pipes only make round or square things.
+- **Cards** (`kit_frame_card`, explicit UVs) for photos, notes, letters, carvings, rugs, stained
+  glass and book spines, each cut from one atlas a tool builds.
+- **A Gothic vocabulary**: ear-clipped polygons and extrusions, pointed and Tudor arches, arched
+  openings with their spandrels, walls at any yaw, and stairs.
+- **Ramps for flights** (`kit_frame_ramp`): every flight collides as a ramp along its nosings. On
+  its treads the capsule wedged against a riser, and the eye rode each tread in lumps.
+- **Surfaces** (`KitSurfaces`): the kit notes the material of every body it makes, which is what
+  footsteps are heard on.
+
+**Kits beside each other.** The mansion's kit sits beside the street's (`kit_init_beside`) and
+shares its materials, so each building has its own meshes and culls on its own; `kit_free_unused`
+frees a shared material no kit used. A small kit made beside another and finished on its own --
+the hall's pendant, the dock lamp, the boat -- has its own meshes, so it can move as a whole, and
+`kit_keep_beside` counts what it used as used by the first, so `kit_free_unused` keeps its
+materials. `Kit.casts_nothing` keeps a swinging kit, such as the pendant or the basement bulb, out of
+the kept shadows, where it would be a mover every frame. The ground and the chasm's face are
+a kit of their own with shadow cells six times the size (`Kit.shadow_cell_scale`): in 3 m cells the
+ground made thousands of shadow draws of a few triangles each.
+
+**A kit has an origin.** It is applied where vertices, colliders, drip lines and wicks are emitted,
+and after the planar UVs, so the mansion's files (`house.c`, `tower.c`, `interior.c`, `hearth.c`,
+`study.c`, `mansion.c`) build in house-local coordinates and every texture lands the same wherever
+the house stands. `mansion_at` is the one translation for what is placed outside the kit: the study
+lamp, the GI corner, the probe boxes, the cat's places, the sound boxes, the fog hole.
+
+### The plan
+
+`layout.h` is the plan: the street, both houses, the mansion's place (`MANSION_X`, `MANSION_Y`,
+`MANSION_Z`), the hill, the woods' edges, the ridge, the lake and the cabin. The home's ground
+storey is half a metre taller than the plan the mansion keeps: its `HOME_*` heights are the plan's
+plus `HOME_RAISE`, and every home use takes them. `FRONT_DOOR_Z` is stated once there for the door
+and the hall's probe box. `house.c`'s `WALLS` table states every wall's openings once, and
+`interior.c` dresses them from it. `tools/make_cards.py` restates `LAKE_*` and `LAKE_MARK_*` for
+the cabin's lake map, so change both together.
+
+### Generated files
+
+Never edit these headers; rerun the tool that writes them.
+
+| Header | Tool | Holds |
+|--------|------|-------|
+| `src/cards.h` | `tools/make_cards.py` | each card's UVs and size in the cards picture, and the hall clock's arbor anchors |
+| `src/gothic.h` | `tools/make_gothic.py` | the Gothic atlas's cards: carvings, rugs, stained glass, spines, arms, fireback |
+| `src/map_art.h` | `tools/make_map.py` | the town map's `MapArt` rows |
+| `src/cat_clips.h` | `tools/make_cat_blender.py` | the cat's clips: length, loop, stated travel, events, eye anchors |
+| `src/arms_clips.h` | `tools/make_arms_blender.py` | the player's arms' clips and events |
+| `src/boat_shape.h` | `tools/make_boat_blender.py` | the hull's draft, its dry shapes and its rim |
+| `src/door_takes.h` | `tools/fetch_sounds.py` | the hits in the door-rattle recordings |
+
+The Blender tools run headless (`Blender -b --factory-startup -P <tool> -- ...`) and also write their
+models into `assets/models/` (`cat.glb`, `arms.glb`, `birdcage.glb`, `flashlight.glb`, the boat);
+`make_cat_blender.py --preview clip@seconds` renders stills. `make_reeds.py` and
+`make_chainlink.py` write cutout textures, and `make_grade.py` the colour grade,
+`assets/lut/silent_grade.cube` (`--no-grade` drops it).
+
+**The map is printed from the game's own plan**, so nothing about the town is copied into Python by
+hand: `--map-export` writes every shape the map shows, from the code that builds it, into
+`tools/town_plan.txt`, and `make_map.py` draws the print, the marks and the folded map's cover from
+that. Re-export and rerun both when the street, the lake, the hill or the land change. Each mark
+draws from a random stream of its own, so adding a map or a place leaves every existing mark's hand
+as it was.
+
+### Materials
+
+- **Grime is baked into vertex colours**, which `pbr_frag` multiplies into the albedo. A material
+  in `mats.c`'s grime table has its boxes' faces cut into a grid and darkened toward their edges,
+  under a patch field and jitter so it gathers in stretches. Walls are left out, since a wall's slab
+  seams are edges nobody built. On glass the albedo also tints what shows through, so the same dirt
+  reads as a film. A smooth solid's grime gathers where it is fixed on.
+- **Container glass is 4 mm thick**: a jar is hollow, and thicker the refraction pass sampled past
+  the jam to the wall behind.
+- **The hall clock's picture has a quarter-size roughness map**, on purpose: every roughness map is
+  a layer of the engine's material array, which brings all its layers up to the largest.
+- **Stained glass is opaque and emissive by its own picture**: a transmissive pane showed only the
+  fog behind it.
+- **Porosity is stated per material** in `mats.c`, not read off the roughness, which soaked
+  painted siding and car paint like soil.
+- **Displacement maps are named `_disp.png`, never `_height.png`**: the engine gives parallax to any
+  material whose albedo has a `_height` sibling, and the jars' contents share the grass's albedo.
+- **Wax scatters light under its surface** (`mats.c`'s `ScatterSpec`, chosen by eye).
+
+### The town
+
+- **The street and the player's house** (`street.c`, `home.c`, `kitchen.c`, `bedroom.c`,
+  `basement.c`): a two-storey clapboard house with a porch, a straight hall from the front door to
+  a back window with the kitchen and living room off its front half and a bathroom and bedroom off
+  its back, the stair shut, and a basement dug under the whole house down a steep cellar flight.
+  `--seed` reseeds the clutter and the street's windows.
+- **The mansion** (`mansion.c`, `house.c`, `tower.c`, `interior.c`, `hearth.c`, `study.c`):
+  two storeys of weathered charcoal board-and-batten on a rubble base, holding a Gothic dining
+  room, a double-height great hall with an empty firebox and a stair to a railed gallery, and an
+  octagonal tower with the study upstairs, about a thousand seeded books, stained glass, and four
+  gargoyles outside that drip from their jaws.
+- **The drive** (`hill.c`, `trees.c`, `grounds.c`, `road.c`): up a faceted hill, carved to the
+  road's own profile and collided as a mesh, through bare `tree_gen` trees, to iron gates, a fence
+  and a graveyard.
+- **The town's edges** (`land.c`, `terrace.c`, `fences.c`, `woods.c`, `crossroads.c`): one ground
+  grid from `land_height` over the whole world; a stepped terrace behind a retaining wall on the
+  far side; every yard fenced, the fences reporting each fallen length and the woods filling it
+  (the player's yard is reached through its open side gate, its back gate padlocked and a dead
+  tree lying through a fallen length of its back fence); conifer woods behind both sides, with the
+  world's edge deep inside them; and at the west end a crossroads, each arm barricaded by one row
+  of `BARRICADES` so a mechanic can open it, and the road straight on ending at a chasm.
+- **The lake valley** (`road.c`, `lake.c`, `cabin.c`, `dock_lamp.c`, `boat.c`): the chasm's lip
+  turns west at `RIDGE_Z` as a ridge's face, and the same ground grid grows south into a valley,
+  the lake's bowl and bed added last in `land_height` (`lake_ground`). The bed is in the collider
+  too: left out, the player falls through the world. `road.c`'s spline and carve serve both roads:
+  the drive rises on a smoothstep, the track at a constant grade with eased ends, steep enough for
+  puddles to stand on it. A dock with a round brass lantern (`fixture_lantern_round`) swinging from
+  a crook in the breeze, its cached light following its bulb; two boats, reeds, drowned trees, a
+  valley wood on its own random stream so the older woods' draws are untouched, and a log cabin with
+  its door left open, so its fire shows from the dock.
+
+Rules from building these:
+- **Trees are hung once and never taken down**, kept cheap far off by their levels of detail (each
+  model's meshes carry their own `lod_scale`, so the engine's bias stays the GUI's) and drawn only
+  within the fog's reach by a `draw_distance` on their roots (`TREES_REACH_NIGHT`,
+  `TREES_REACH_DAY`; none under `--no-fog`). The shadows still take every tree. Hanging and
+  unhanging trees as the player walked changed the scene graph every few steps, which costs every
+  cached light the faces that change touches.
+- **A tree's wood and needles share one wind response**; the needles' extra life is their flutter.
+  The trees are held at rest in the cached shadows (`cached_shadow_wind =
+  CACHED_SHADOW_WIND_REST`): following the drive's dead trees' sway there cost 176 ms a frame.
+- **Each trunk's collider** is the model's own radius at a body's height, leaning with the tree
+  (`trees_trunk_collider`).
+- **The lake is a water of its own**, bounded to a rectangle so the chasm at the same depth stays
+  dry, and switched on only within the fog's reach of it plus 15 m, since its surface costs a frame
+  wherever the eye is. Startup prints the lowest ground on its bounds, which must stay above the
+  level. Its waves are the FFT's, a breeze and no swell (`--lake-waves gerstner` for the other
+  model).
+- **The fog is the street's rectangle with a hole round each house and the cabin**, reaching down
+  into the chasm; its haze floor is at the lake. The basement's haze starts at its own floor.
+- **The street adds drip lines while it is built and draws nothing from its random stream for
+  them**, so every seed builds the same street.
+
+## The player
+
+`player.c`, over the engine's `gait.h`:
+- **The body is drawn between its 60 Hz steps**, with a speed ramp and a fast turn of heading, and
+  climbs a flight at the pace a person keeps on it. The gait eases the eye up kerbs and steps, bobs
+  it 2 cm walking with a centimetre of sway, and lets each foot fall on what it lands on
+  (`footsteps.c`): the kit body's material, a rug's own test, and on the open ground what is drawn
+  there, wet under the rain. `--no-interp`, `--no-gait`, `--bob`, `--climb`, `--no-footsteps` and
+  `--trace-gait` take it apart.
+- **Crouching** shrinks the capsule from 1.7 m to 1.15 through
+  `character_controller_set_half_height`, keeping its foot, and eases the eye from 1.62 m to 1.05;
+  half a walk's pace, half the bob, footsteps 6 dB softer. Sprinting asks to stand, and standing
+  waits until there is room. Nothing a standing body cannot get under is open to a crouched one
+  except the gallery sconces, which lead nowhere. The cat sees a crouched player low
+  (`player_eye_height`), so what stands between hides them.
+- **The crouch toggle is read once a frame, never in a fixed step**, where a press counts twice on a
+  frame of two steps.
+- **The player owns the cursor.** In play a click takes it in a window or borderless, since the
+  window shares the desktop, and exclusive fullscreen takes it whenever play has the input. The
+  title and every screen over the game show it only while the mouse drives them, hiding it as soon
+  as a key or a pad does. The loading screen hides it. G frees it while the debug GUI is open, or
+  the sliders could not be reached.
+
+## The house and the story
+
+**The story** (`story.c`): the front door is locked from the inside, and the key hangs in a
+birdcage on the basement's workbench, down the cellar stair the flashlight gets the player down.
+Taking the key begins the haunting (`story_key`), and the cellar door slams shut over the player's
+head. With the key and no map, the player thinks of the map in the kitchen and the front door stays
+shut; with both, it opens, the haunting ends, and it is an ordinary door from then on. The stage is
+saved as a `story` section by name and the game autosaves at each turn. A player saved anywhere but
+in the house counts the door open, so a game started out in the town is never locked out. K begins
+and ends the haunting without moving the story.
+
+**The backpack** (`backpack.c`) lies on the back bedroom's bed with the flashlight in it. Until it
+is taken, F thinks "I don't have a flashlight." and a body nobody sees bars the basement at the
+cellar flight's foot. The flashlight (`flashlight.glb`) is clipped high on the jacket's chest, its
+beam aimed at what the look meets. The backpack keeps an item's node on the scene graph exactly
+while it does not hold it (`backpack_lay`).
+
+**The birdcage** (`birdcage.c`, `inspect.c` over `arms.c`): E picks it up in the player's own arms.
+The view glides to a framing set from the cage and onto the arms' `View` bone, a camera rig of the
+hold's own, while the body stays where it stood. The mouse or the stick spins it, E opens the face
+and takes the key, Q sets it back shut. While it is held the flashlight is lit and held on it and
+the night's exposure drops four stops. A load or a return to the title puts it straight back on the
+bench, open exactly when the key is had. The arms, the cage and the flashlight come in through one
+import (`library.c`).
+
+**The haunting** (`haunt.c`): the power goes -- every light in the house, the TV and its hiss, the
+street lamps, and the light no lamp gives: the GI bounce, the reflection probes' and the sky's,
+which the lit surface scales together by `ibl->intensity`, and the fog's glow. A second and a half
+later the hall's lights, the floor lamp and the TV come back red, under an after-tonemap post pass
+(`shaders/haunt_grade.glsl`) that drains the picture to red; the bathroom bulb, the bedside lamp,
+the kitchen's tubes (`lights_set_mains`) and the cellar bulb (`Basement.mains`) stay out. The clock
+stops (`clock_stop`, then
+runs late rather than jumping), the fridge clunks off, a recording and a drone play, and the
+pendant swings. Then the doors, each waiting for the player rather than a clock:
+- from 4 s, once it stands shut, the cellar door is tried from its other side -- the knob turned
+  under a rattle, the leaf jolted on the recordings' own hits (`door_jolt`) -- until the player
+  opens it on nobody;
+- a second after the player first stands in the hall, the bathroom door creaks ajar, or shut
+  (`door_drift`);
+- the first time the player stands at the front of the hall looking back down it, an open cellar
+  door slams (`door_slam`).
+
+Every capture rests the house as it was, so nothing the haunting puts out is kept in the lighting.
+`--haunt`, `--haunt-at`, `--story`, `--key`, `--inspect` and `--trace-haunt` drive it.
+
+**Doors** (`door.c`) are kinematic bodies, Gothic plank leaves in the mansion, four-panel ones at
+home and battened boards at the cabin (a `DoorLeafFn` each, hung by `door_hang`), swung by E or pad
+X only, never by pushing. A door that will not open is tried by hand with the haunting's knob and
+rattle takes (`door_try.c`). Every slam is heard from where it lands (`door_update`), from one set
+of door sounds (`DoorSounds`).
+
+**The hall clock** (`clock.c`) stands under the hall's lantern. Its pendulum and hands are each a
+node of their own, built by a small kit round its pivot and turned from `game->time`; the painted
+dial and the arbors' positions come from `make_cards.py`.
+
+**The television** (`tv.c`) shows snow, through the engine's app shaders: `shaders/tv_static.glsl`
+on a card over the glass in the late draw, past TAA, so a new field every 1/59.94 s is not averaged
+into grey; and a surface hook on the glass (`tv_glass.glsl`) giving the glass's light the
+picture's shape, both from one chunk (`tv_picture.glsl`). So SSR, the probes and TAA's history see
+the screen lit while the card adds only the noise. The room is lit by an area panel on the glass,
+as bright as the picture averages, with a specular share of 0, since the glass's own light is what
+reflects: a point light in front of the screen hung a ball of lit fog in the air. `--no-static`
+switches it off.
+
+**The basement** (`basement.c`): a bare bulb hangs over the flight, set swinging by the draft the
+first time the door opens, and dims now and then on a failing supply (`lights_brownout`). Its light
+is cached with no body and sets the engine's `Light.shadow_follow` while the swing is wide, so its
+shadows follow it rather than stepping each time it passes the kept shadows' tolerance. The cellar
+and the flight behind its door are a sound zone of their own, so the house, the wind and the rain
+come down through the floor, and the door opening lets the tap's drip up into the hall. Cobwebs
+were tried and taken out: nothing painted read as silk.
+
+**The hall** is lit by a pendant on a chain and a lantern on a bracket (`fixtures.c`), brass with
+clear glass round filament bulbs. The glass casts nothing for a cached light, so the light leaves
+through the panes and only the brass shadows it. The pendant is a kit kept beside the street's,
+hidden from captures, swinging about its rose by an eased `Lights.swing_want`. The bedside lamp's
+shade is lit from inside by the lampshade hook, and its light is cached with a near plane past the
+shade's rim, since a shade drawn into its own light's shadow boxes the bulb in.
+
+## Sound
+
+- **Every recording is a CC0 Freesound recording shaped by `tools/fetch_sounds.py`** (needs
+  ffmpeg), which lists each one's source. Loops are cut from the steadiest stretch, crossfaded into
+  themselves and levelled alike, so the volumes in the C files are the only statement of loudness.
+  `fetch_sounds.py --audition DIR` renders every candidate to choose by ear, and `--only JOB ...`
+  fetches and makes only the jobs named.
+- **The rooms are the engine's audio zones** (`sounds.c`): each house, the home's living room,
+  kitchen and basement, the mansion's upper storey, the cabin, as boxes (the tower's octagon as five,
+  from `tower_boxes`), joined by links for an outside wall, an open doorway, a floor and a storey.
+  The rooms and links are two tables; each door is one row, whose swing opens its link. Every placed
+  sound is heard through the walls between it and the listener, so no module multiplies a wall into
+  a volume. A floor lets slightly more through than an open doorway, which was left so by ear.
+- **The wind is a 2D bed placed nowhere**, two layers crossfaded by how far the doors stand open, at
+  the level of the best-heard room with an outside wall. The rain's two noise beds take the same
+  level under a roof, read from the rain's occlusion map at the player's head (`rain_bed.c`), so a
+  front door opening changes the wind's mix and not the basement's level.
+- **Placed sounds** include the hall clock's tick and tock (put through a wooden case), the fridge,
+  the tubes' buzz (which drops out with the failing tube's flicker), the television's hiss, the
+  basement tap's drip, the lake lapping at the shore nearest the listener, and the cabin's hearth.
+- **The motorboat's** engine loop is re-pitched by its speed through `audio_sound_set_pitch`.
+- `--mute` silences everything. `--audio-dump PATH` with `-x` writes what the listener hears as a
+  WAV, which is how to listen without a window.
+
+## Lighting
+
+- **The kitchen's tubes are emissive strips the engine turns into area panels**, so a flicker is a
+  material strength and the light follows it. `--no-flicker` keeps the failing one steady; a
+  headless frame that lands in its stutter shows the tube dark and reads as an underlit room.
+- **The flashlight is registered before any other spot**, because the fog scatters only the
+  scene's first spot.
+- **The street lamps are point lights shaped by an IES profile**, which is what draws a cone of fog
+  under each head rather than a ball round it.
+- **The candles, the lamps and the tubes cast cached shadows**, so no light reaches through a wall.
+  A candle's soft shadow is the average of eight views over its flame and follows the flame with no
+  face redrawn; the clock's pendulum and hands are drawn over a copy of the hall's still casters
+  each frame. Each tube is cached from its strip's centre with a near plane past the steel channel
+  it sits in, which otherwise shadows the ceiling round it. The tiles go to the nearest lights, so
+  at home the mansion's candles do not cast.
+- **The candles' light is lifted 20 times and the cabin hearth's 8** over what their flames cast:
+  the night is exposed for a house lit by a few candles, and at physical brightness a fire leaves
+  its own room dark.
+- **GI volumes**: the mansion's grid is 11x7x11 on 1.21 m cells, the one spacing found that keeps
+  every probe centre 0.15 m off every wall and slab, and the startup print says when a layout
+  change breaks that. The home's is laid over its bounds, down to the basement floor, on 1.25 m
+  cells with classification on (`create_gi_volume_spaced`), which switches off a probe inside a
+  wall instead; 1 m cells swept much slower for a change in bounce light under a code. The cabin's
+  is 1 m.
+- **Reflection probes**: thirteen boxes, seven in the home, five in the mansion and one in the
+  cabin. Each box runs to the plane its room's doors and panes hang in -- a shared wall's centre
+  line, an outside pane's room-side face, and for the hall the front door's middle -- since a door
+  outside every box reflects the sky. Each fade is half a pane, so a window's street face never
+  takes the room's probe; at the engine's default fade a room's reflection reached through its wall
+  onto the panelling next door. The study is two boxes, room and tower bay, since one round both
+  took in the facade. The great hall's box goes to the ridge, its roof being open. The cabin's is capped at
+  the eave, or the tin over the room took the probe. The Probe Coverage render mode, in the debug
+  GUI, paints whatever falls through to the sky magenta: indoors any magenta is a miss.
+- **The GI volumes and probes are installed on the third frame** (`total_frames == 2`), not at
+  load: the tubes' panels cast only from the second frame, and a volume's first sweep is its only
+  full-weight one, so it has to see the lit room. Each house's volume sweeps, and its probes
+  capture, only once its cached lights hold their tiles, which the nearest get first, so the
+  mansion's are taken on the way up the drive. The frame fades in once the lighting round the eye is
+  ready (`scene_lighting_ready_in`).
+- **Its light is cooked** (`Scene.cook_lighting`): a launch after the first loads the sweeps and
+  probe columns from the cook unless something they see changed. `CETRA_NO_COOK=1` captures live.
+- **A capture holds the scene at rest** (`rest_lights`): the failing tube lit, the basement bulb
+  straight on a full supply, the TV's field at its mean, the flashlight off, and the clock's
+  pendulum and hands `capture_hidden`.
+- **The captures are paced**: under the loading screen, and in the black while a game comes up,
+  they take up to `LOADING_CAPTURE_MS` of each frame, so the window keeps answering; otherwise the
+  play budget, so PLAY answers a press within a short frame. `--capture-budget-ms` pins one,
+  headless too, where the default is no limit.
+- `--no-gi` leaves out the volumes and the probes captured from them, which is what separates a
+  change in the direct light from one in what the captures saw. `--no-candle-shadows`,
+  `--tile-views` and `--tiles-probe` are the shadows' switches.
+
+## Loading
+
+It loads under the engine's loading screen, shown at the top of `on_init` and drawn at every
+`load_seam` and between its materials. Once the lighting round the eye is in, the screen shows
+PLAY until the `start` action (Enter, Space, E, a click, pad A or Start) lets it go; that action is
+read while the rest of the input is held, and only while PLAY is up. Headless, and under
+`--no-play-prompt`, it goes at once. The fade and the player's input wait for the screen to switch
+off, the input held from the frame-input hook, and a click takes no cursor while it is held.
+`--no-loading-screen` loads under a black window, and `--loading-screen` keeps the screen headless.
+- Textures decode on the engine's loader threads, and `mats_register` waits for them before it
+  returns, since a kit frees an unused material as it finishes.
+- Sounds decode on miniaudio's job thread: silent begins the audio's loading phase as it makes the
+  system, and `game_run` ends it before the first frame.
+- The physics broadphase is optimised before the cat is placed, whose place check casts thousands
+  of rays.
+- The kit's shadow cells, the woods and the cat draw the screen between their pieces. The longest
+  single stand-stills left are the land's mesh collider and the prompt's font atlas, each one call
+  of about 140 ms.
+- `--startup-ms` prints how long each step took and how long the screen stood still in it.
+
+## The frame
+
+- **One sample with jittered TAA, headless as well as windowed.** With MSAA the fog composite takes
+  one depth per edge pixel and outlines every silhouette in the street. The jitter follows the
+  frame index, so a headless run still repeats itself exactly. Render scale defaults to 0.5.
+- **No film grain.** `--crt` shows the game, its prompts and menus included, on a consumer
+  television; it is off by default.
+- **`--day` is an overcast day on a photometric sky**: the sky is in nits like the tubes, fully
+  overcast so nothing casts, and metered with the meter floored so a room never opens past the
+  night's pinned exposure. The kitchen by day is the night's exposure plus its window.
+- **By day there is a local exposure** (highlights 0.2, shadows 0.6, blend 0), so the kitchen
+  window onto the street reads without the room going dark. The window is about 6 stops over the
+  room and the day key of 0.45 leaves about a stop above grey, which is why it takes so strong a
+  setting. It is off at night, whose exposure is pinned.
+
+## Rain and weather
+
+It rains by default at 6 mm/h, already soaked (`--rain <mm/h>`, `--no-rain`). What silent changes
+from the engine's physical rain is a look, each a constant in `silent.c`: brighter, denser, slower
+streaks, lighter wet darkening, bigger splashes and brighter drips, because in fog this dense a drop
+refracts air about as bright as itself. Its reflections see the fog (`reflect_fog`), and SSR
+reaches 40 m so a puddle mirrors the street.
+
+A gusting breeze blows the rain off the street onto the houses (`--no-wind` for still air), which
+is what wets the facades and the kitchen window under the pent roof; in still air both stay dry.
+Glass beads, opaque panes included. Both houses carry a gutter and downpipe
+(`house_front_gutter`), and its leaks are drip lines -- two joints, an overflow past the kitchen
+window and the downpipe's shoe -- while the neighbours drip from bare eaves and porch roofs. The
+drips are lit by the kitchen's tubes as well as the lamps. The road, pavement and yard carry their
+scans' displacement, and the puddles stand in their lows (`--no-relief` for noise alone).
+
+## The cat
+
+A black cat with yellow eyes lives in the mansion (`--no-cat`). Its body is built headless in
+Blender by `tools/make_cat_blender.py`; `out/cat_blender/cat.blend` is kept to look at. It comes
+in through a library scene (`docs/architecture.md`, Memory Ownership) and is `capture_hidden`, so
+it goes into the house at once and no capture keeps it.
+- `cat_body.c` is the body and its look: the import, the coat read from `assets/scenes/cat.cscn`,
+  the colours (`--cat-fur`, `--cat-eyes`), and the eyeshine that throws the flashlight back.
+- `cat.c` moves it: a posture ladder (curl, lie, sit, stand) a transition clip apart, quarter-turn
+  clips on the spot, walks, trots, runs and the stair advanced by root motion, jumps played at the
+  rate that makes their air time the arc's own and turning in the air to land facing on, and acts in
+  place with the face's vocals on the override layer masked to the bones they move.
+- `cat_places.c` is the mansion as a graph of places and links (walks, the flight, jumps, and the
+  gallery's hand rail, walked one way, east, with nothing turning on it, and left out of every route
+  but the one meant for it).
+- `cat_brain.c` is an aloof watcher on the engine's brain: sleep, stretch, loaf, explore, watch the
+  candelabra's flame, watch the rain, avoid, startle, follow, and the rail to the stair's newel,
+  with needs and memory of places, and a head turned by the engine's look-at to whatever it
+  watches. It senses the player's body, never the camera.
+- `cat_voice.c` plays its recordings from the clips' events at its head or feet, and purrs for
+  someone close it likes.
+- `cat_debug.c` draws its graph, route and sight line in the debug GUI.
+
+Two runs on one seed (`--cat-seed`) trace identically. `--cat-at`, `--cat-clip`, `--cat-goto`,
+`--cat-activity`, `--cat-blind`, `--cat-cam`, `--cat-say` and `--trace-cat` script and read it.
+
+## The boat
+
+The moored boat (`boat.c`) is a wooden rowboat with an outboard, modelled, baked and fitted by
+`tools/make_boat_blender.py`; its twin lies turned over on the bank. E from the dock gets in, onto
+the stern seat, the view carried by the boat; E starts the motor by its pull cord (`pull_cord.c`:
+three presses while a marker running along a bar is in its lit zone, on the HUD's gauge); WASD
+drives; E stops it; Q or a right click gets out alongside the dock, and the boat is moored and tied.
+The first time on a trip it reaches the spot circled on the cabin's lake map (`LAKE_MARK_*`), the
+motor dies. It bumps off the bodies that stop a wader and the dock analytically, against its rim;
+its hull keeps the water out with the water's dry shapes; a save keeps it. `--in-boat`, `--boat-at`,
+`--boat-running`, `--pull-cord` and `--trace-boat` drive it.
+
+## The UI screens
+
+- **The title** (`title.c`): a windowed run comes up on it over the street -- Continue, New Game,
+  Load Game, Settings, Exit to Desktop -- under a camera rig of its own, the game held on a clock of
+  its own while the weather goes on.
+- **Saves** (`save_game.c`): no manual saves. A game saves itself into its slot, `silent-1` to
+  `silent-8` in the engine's per-user directory, when something is taken, a place found, another
+  room entered and on quitting, with a candlestick in the corner saying so.
+- **The pause menu** (`pause_menu.c`): Resume, Settings, Quit to Title, Exit to Desktop, the whole
+  world frozen under it on the sim clock, the rain in the air included. **Quit to Title** saves,
+  goes black, puts the world back from `silent-start.json` (written at load), makes the cat's mind
+  afresh and loads again round the title's view. So taking the bag or the map takes its node off the
+  graph and keeps it, and a load or a return lays it back.
+- **Settings** (`settings_menu.c`): one volume, window mode and vsync, look speed and invert, and
+  the field of view, applied as they change and kept in `silent-settings.json` beside the slots
+  through the engine's `settings.h`. `--mute` and `--fov` win over the file.
+- **The HUD** (`hud.c`): the door prompt, and over it a thought that fades in and out, on one
+  non-modal screen.
+- **The backpack's screen** (`backpack_menu.c`): one amber pane, the bag's grid on the left with
+  each thing across its own footprint as a picture of itself, the chosen one turning on the right.
+  The game packs the grid -- first fit in the order things were had, then largest first, then a row
+  more -- so the player never arranges anything and it is never full. The pictures come from
+  `item_view.c`, which draws an item's meshes through their VAOs into a target of its own from
+  inside the overlay and puts back every piece of GL state, since the engine draws one view of one
+  world.
+- **The map** (`fridge_map.c`, `map_screen.c`, `town_map.c`): a street map hangs half open on the
+  fridge's freezer door; E takes it into the bag once there is one. M opens it as a view with a pan,
+  a zoom and a red arrow for the player. The player's house is circled "my house?" the first time.
+  Each find in `town_map.c`'s `PLACES` table -- the barricaded north arm, the road's end at the
+  gorge, the cabin -- is found by walking into its box and thought about, with "M   Map" hinted
+  once the map is had; a find made before is written on once it is. Blue ink writes each mark on
+  stroke by stroke the first time the map shows it: an app UI fragment stage (`shaders/map_ink_frag.glsl`, built by
+  `create_ui_draw_program`) reads when the pen reached each pixel from the marks picture's red,
+  through `ui_draw_textured_quad_uv`. The map's two pictures decode on the loader threads
+  (`engine_load_texture`). A map is a `MapId` with one generated `MapArt` row.
