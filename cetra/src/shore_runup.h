@@ -16,7 +16,8 @@
  * it is reviewable by eye in a way a bare literal is not.
  *
  * `procedural/water_waves.c` is the precedent and the warning: it is the CPU twin of the
- * Gerstner half and CLAUDE.md records that "nothing compares the two, which is the known gap".
+ * Gerstner half and `docs/shader-subsystems.md`, Water, records that "nothing compares the
+ * two, which is the known gap".
  *
  * `--shore-probe` prints what this computes and the `shore-twin` gate arm reads it, but be
  * exact about what that arm establishes: it checks this copy is bounded by its own ceiling,

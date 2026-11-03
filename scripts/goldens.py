@@ -47,7 +47,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Same override gates.py takes, and the same env var, so one export covers both.
 #
 # But note the goldens are COMMITTED PNGs and a build type is part of what baked
-# them: -O2 changes CPU float results (AGENTS.md records the erosion digest
+# them: -O2 changes CPU float results (`docs/verification.md` records bakes
 # differing between -O0 and -O2). Checking release-built frames against
 # debug-baked goldens is a comparison across two builds, which this repo's own
 # rule says does not hold. Change the build type here only together with
