@@ -2537,9 +2537,8 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
     const int tab = _tab(ed);
     const int atlas_height = ed->face->atlas.height;
     vec4 fg = {s->fg[0], s->fg[1], s->fg[2], s->fg[3]};
-    vec4 dim = {s->fg[0], s->fg[1], s->fg[2], s->fg[3] * 0.38f};
-    if (t->line_numbers[3] > 0.0f)
-        glm_vec4_copy((float*)t->line_numbers, dim);
+    const vec4 dim = {s->fg[0], s->fg[1], s->fg[2], s->fg[3] * 0.38f};
+    const float* numbers = t->line_numbers[3] > 0.0f ? t->line_numbers : dim;
     vec4 sel_colour = {t->selection[0], t->selection[1], t->selection[2], t->selection[3]};
     if (sel_colour[3] <= 0.0f)
         glm_vec4_copy((vec4){0.25f, 0.45f, 0.85f, 0.45f}, sel_colour);
@@ -2593,7 +2592,7 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
                 float nx =
                     roundf(content.x * ed->px) + (float)(_digits(doc->line_count) - n) * cell_px;
                 for (int k = 0; k < n; k++, nx += cell_px)
-                    _glyph(dl, ed, (uint32_t)num[k], nx, base_px, dim);
+                    _glyph(dl, ed, (uint32_t)num[k], nx, base_px, numbers);
             }
             // Backgrounds: the host's ranges, find's matches, then the selections over them.
             for (size_t k = 0; k < range_count; k++) {
