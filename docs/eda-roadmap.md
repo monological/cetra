@@ -5,19 +5,19 @@ designing circuit boards, can be built on it rather than a game. The program is 
 its own repository with cetra as a submodule (`apps/pcb`, spec 11.105): one window holding a code
 editor, a schematic, a board layout, a 3D view of the board, datasheet pages and an agent's chat.
 pcb's `ARCH.md` (section 9, "cetra changes this needs") lists nine changes it wants from the
-engine. This document takes each of them, says what cetra already has toward it, what is still to
-decide, and which step of pcb's build first needs it.
+engine. This document takes each of them, says what cetra has toward it, what is still to decide,
+and which step of pcb's build first needs it.
 
 **Who owns what.** pcb's `ARCH.md` owns what pcb wants; this document owns how cetra provides it.
 Every change goes through cetra's own spec process, numbered 14.x, and pcb picks it up by bumping its
 submodule. Nothing in cetra may name a pcb type or depend on pcb's code: each item is a general
 engine feature that pcb happens to be the first user of.
 
-**Keeping it current.** This is a living plan. Every 14.x spec updates it on its own branch, as
-`AGENTS.md` (Planning Workflow) requires: the item's status, the decisions its spec made, anything
-it did differently from what is written here and why, and any new item it found.
+**Keeping it current.** Every 14.x spec updates this plan on its own branch, as `AGENTS.md`
+(Workflow) requires: the item's status, the decisions its spec made, anything it did differently
+from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-01._
+_Last updated: 2026-11-03._
 
 ---
 
@@ -29,7 +29,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
   views costs one frame. The 2D and 3D views share the window, the text, the UI, the headless
   capture and the test suite; a second rendering engine for 2D was considered and refused.
 - **The layout of the window** (pcb spec 6.1, `ARCH.md` section 8). The main area is a tree of
-  PANES, each showing one view: `|` splits the focused pane left and right, `\` top and bottom,
+  panes, each showing one view: `|` splits the focused pane left and right, `\` top and bottom,
   Space Enter opens another, `:q` closes the focused one, and two panes may show one view -- one
   file twice with a cursor in each. A code pane goes to another file through Cmd+P. Space m shows
   the messages along the bottom, under every pane, by splitting the top of the tree, and hides them
@@ -42,8 +42,8 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
   live routing turns continuous drawing back on.
 - **Headless.** `pcb render` draws any view to an image through cetra's screenshot path, and that is
   how pcb's agent sees the board. So every item here has to work with no visible window.
-- **True units.** A board is about 100 mm across and an 0402 part is 1 mm, all in real millimetres.
-  Spec 13.57 made cetra render at that scale (item 7).
+- **True units.** A board is about 100 mm across and an 0402 part is 1 mm, all in real millimetres
+  (item 7).
 - **The 3D view must look first-rate**, real time and not ray traced, using everything cetra has:
   translucent FR4, glossy solder mask over extruded copper, plated holes as instances, a studio
   environment with shadows, reflections and TAA, and a still view that keeps accumulating TAA's
@@ -55,25 +55,26 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 
 | # | Item | Status | First needed by pcb's step | Spec |
 |---|------|--------|----------------------------|------|
-| 1 | The 2D canvas | **Built**, spec 14.0; images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0 |
-| 2 | Idle mode: drawing only when something changed | **Built**, spec 14.1, for frames that draw no 3D scene | 6 | 14.1 |
-| 3 | Skipping the 3D scene pass when no 3D view is shown | Not started; takes a still 3D view drawn on demand, moved from item 2 | 8, the 3D view | |
+| 1 | The 2D canvas | **Built**; images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0 |
+| 2 | Idle mode: drawing only when something changed | **Built**, for frames that draw no 3D scene | 6 | 14.1 |
+| 3 | Skipping the 3D scene pass when no 3D view is shown | Not started; includes a still 3D view drawn on demand | 8, the 3D view | |
 | 4 | Drawing the 3D scene into part of the window | Not started | 8 | |
-| 5 | Text input and scrolling panes in the UI | **Built**, spec 14.2, and its follow-ups, spec 14.3; composing text in an input method, glyphs past the atlas and the rest below are left for later | 6 (the command palette and the `/` jump); 9 (the chat) | 14.2, 14.3 |
-| 6 | The text editor widget | **Built**, spec 14.4; sideways scrolling, a regular-expression find and the rest below are left for later | 6 (the code view) | 14.4 |
-| 6a | The editor's vim mode | **Built**, spec 14.5, held to vim 9.2 itself; named registers, macros, marks and the rest below are left for later | 6 (the code view, which is vim only) | 14.5 |
-| 7 | Rendering at any scale, in true units | **Built**, specs 13.57 and 13.58; the macro depth of field left | Already used by pcb's pictures | |
+| 5 | Text input and scrolling panes in the UI | **Built**; composing text in an input method, glyphs past the atlas and the rest below are left for later | 6 (the command palette and the `/` jump); 9 (the chat) | 14.2, 14.3 |
+| 6 | The text editor widget | **Built**; sideways scrolling, a regular-expression find and the rest below are left for later | 6 (the code view) | 14.4 |
+| 6a | The editor's vim mode | **Built**, held to vim 9.2 itself; named registers, macros, marks and the rest below are left for later | 6 (the code view, which is vim only) | 14.5, 14.9 |
+| 7 | Rendering at any scale, in true units | **Built**; the physical depth of field left | Already used by pcb's pictures | 13.57, 13.58 |
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
-| 9 | What the panes and the fonts need of the UI | **Built**, spec 14.6 | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
+| 9 | What the panes and the fonts need of the UI | **Built** | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
 
-**Proposed order**: 1, 2, 5, 6, then 3 and 4 together when pcb starts its 3D view. 1, 2 and 5 are
-built, 5 with its follow-ups (14.3), and 6 in spec 14.4, which stands on several of them: the
-UTF-8 home, typed input, the clipboard and the input script. 6a, the vim mode, came next (14.5),
-since pcb's code view is to be vim only and its window, spec 6.1, starts there; and 9, the panes
-and the fonts (14.6), which that window is made of. 3 and 4 are next,
-once pcb starts its 3D view. The canvas went first because
-the schematic and the layout both stand on it, and it is the largest. Item 8's bugs and the macro
-depth of field can be taken whenever they fit.
+Specs 14.7 and 14.9 to 14.13 are the smaller changes pcb's window asked for, listed under "Not
+among the nine". Spec 14.8 was not asked for by pcb: a headless run waits for the textures its
+start-up asked for before frame 1 (`docs/architecture.md`, Render Pipeline), which `pcb render`
+gets for free.
+
+**Order**: 1, 2, 5, 6, 6a and 9 are built, in that order; the canvas went first because the
+schematic and the layout both stand on it, and the editor stands on 5's UTF-8, typed input,
+clipboard and input script. Next are 3 and 4 together, once pcb starts its 3D view. Item 8's bugs
+and the physical depth of field can be taken whenever they fit.
 
 pcb's build steps, for reference: 6 is the window (code editor, schematic, keys, palette, help,
 shared selection, diff overlays and blink); 7 the layout view; 8 the 3D view; 9 the agent; 10
@@ -83,109 +84,36 @@ datasheets.
 
 ## 1. The 2D canvas
 
-**What pcb needs** (`ARCH.md` sections 6 and 9):
-
-- **Primitives**: segments with a width (routes, wires), arcs, circles, rounded rectangles (pads),
-  filled polygons (copper pours, the board outline) and text.
-- **Exact edges**: each primitive is a quad whose shader computes its exact outline, so edges are
-  clean at any zoom with no multisampling.
-- **After tone mapping**: it draws at display resolution, so nothing grades, blooms or rescales it.
-- **Tiles per layer**: each tile is one GPU buffer, a change re-uploads only the tiles it touched,
-  and tiles out of view are skipped.
-- **Detail by zoom**: zoomed far out, small text and fine pads drop out, and thin lines stay at
-  least one pixel wide.
-- **Precision**: geometry stays in nanometres on the CPU, and each tile sends positions relative to
-  its own origin, so zooming deep into any corner stays exact.
-- **Instant highlighting**: each primitive carries its net's ID, and the shader reads a small table
-  of net states (selected, dimmed, hidden, a diff colour). Highlighting a net or flipping a diff
-  changes one table entry and rebuilds no geometry.
-- **Layers** draw in order, each with its own colour and transparency, the active one on top.
-- **Beyond copper**, the same canvas draws schematic symbols, group frames, and datasheet pages as
-  tiled images.
-- **Diffs**: two versions overlaid -- added in green, removed as a red ghost, a moved part as a
-  ghost at its old place with an arrow. Blink flips the view between the two versions; the split
-  shows them side by side, both panned and zoomed together.
+**What pcb needs** (`ARCH.md` sections 6 and 9): routes, wires, arcs, circles, pads, pours, the
+board outline and text, with exact edges at any zoom, drawn after tone mapping at display
+resolution; tiles per layer re-uploaded only where changed; precision in nanometres anywhere on the
+board; highlighting a net or flipping a diff without rebuilding geometry; layers in order with the
+active one on top; schematic symbols, group frames and datasheet pages on the same canvas; and
+diffs, two versions overlaid, blinked or side by side.
 
 **Not cetra's: picking.** "What is under the cursor" is answered on the CPU by pcb, from a spatial
-index over its exact geometry, ranked by its own rules (mode, shown layers, the more specific
-object). It never reads back from the GPU.
+index over its exact geometry, ranked by its own rules. It never reads back from the GPU.
 
-**What cetra had before 14.0:**
+**Built in spec 14.0** (`docs/canvas.md`): `canvas.h` and `triangulate.h`, drawn from an engine
+overlay (`engine_add_overlay`, an ordered list the UI shares at `UI_OVERLAY_ORDER`). Coordinates in
+int64 units cut into tiles of 2^22, a tile a range of its layer's buffer, fills triangulated on the
+CPU by earcut (a stencil had nowhere to live: the window is multisampled and the picture FBO has
+colour only), a layer's coverage resolved by max before it paints, text as glyph records in ems,
+several views of one canvas, and two tags a shape, a net and an object, whose state (colour, pick
+outline, dim, hidden, raised) is a table write. `canvas_generation` tells idle mode when to draw.
 
-- **The overlay hook**: the one place an app draws after tone mapping, at display resolution,
-  captured by a headless screenshot. It was a single slot, which the game UI took.
-- **The UI's draw list** (`ui_draw.c`): quads, 9-slice, rounded rectangles whose corners and
-  borders are an exact signed-distance evaluation, and SDF glyph runs, batched by texture, program
-  and clip. It works in window points, top-left origin, +Y down, and is rebuilt every frame.
-- **SDF text** (`text.c`), whose `Font` and `font_get_glyph` the UI already shares.
-- **The canvas controller** (`app.h`): pan and zoom on a square-on orthographic camera over a plane.
-  It moves a scene's camera, in float world units, so it does not fit the canvas.
-- **No polygon triangulation** anywhere in `cetra/src`.
-
-**Decided in spec 14.0** (`specs/14.0-the-2d-canvas.md` has the reasons):
-
-- **Sharing the overlay: an ordered list** of up to eight post-tonemap draws (`engine_add_overlay`),
-  the UI at `UI_OVERLAY_ORDER`, over a canvas added lower. Built in phase 1, which also made
-  `free_ui_system` take the UI off the list (it used to leave the engine holding a freed pointer)
-  and renamed the canvas controller `PlaneDrag`, so the canvas could have the name.
-- **Filling a polygon: triangulated on the CPU** by a port of earcut, in cetra (`triangulate.h`,
-  public), with antialiased contour edges. A stencil had nowhere to live: the window is
-  multisampled and the picture FBO has colour only. Built in phase 4: a fill's inner ramp is
-  measured against the outline edges at its triangle's corners, since an ear thinner than half a
-  pixel leaves its band to the triangle beside it.
-- **A layer resolves its coverage by the largest any shape gives a pixel**, then paints each pixel
-  once, inside the view's one render pass. Max rather than union, because a shape cut at a tile and
-  a polygon's corners cover a pixel twice and max is idempotent there. Built in phase 4, earlier
-  than planned, because fills needed it.
-- **Tiles and precision:** tiles of 2^22 units; each shape stored as int32 offsets from its tile,
-  added to the tile's int32 offset from the view in the shader, so precision does not depend on how
-  far from the origin the view is. Long shapes are split at tile edges.
-- **Text in world units:** laid out by the canvas, sized by the em, cut at the font's true edge,
-  dropped below a pixel size. Built in phase 5:
-  - A string is a record a glyph, laid out on the edit's thread, its pen in ems, so its size and
-    turn ride the record.
-  - A canvas draws with at most four fonts, one texture unit each.
-  - The font's true edge is half a code under stb's stated on-edge value, since stb truncates the
-    field's texels. Cut at the stated value, every glyph was 0.65% thin against stb's own
-    rasterizer.
-  - Glyphs are indexed by codepoint, so the table holds ASCII, as the atlas does. A denser index
-    comes with glyphs beyond ASCII (items 5 and 6).
-  - The UI's glyphs and the text meshes cut at the same edge, judged on before and after pictures
-    of silent's and gametest's menus: they had been drawn about two atlas pixels bolder than the
-    face.
-- **Several views at once:** a view is a value (a rectangle, a pan, a zoom, and its own shown layers
-  and active layer), drawn by `canvas_draw` into one target the canvas owns. Built in phases 2
-  and 7: a board split as two views, the second from below with its own layers, each equal to
-  itself drawn alone; both at 4K in 2.4 ms on an M1 Max.
-- **Retained, not rebuilt**, with three deviations from what is written above:
-  - **A tile is a range of its layer's buffer**, not a buffer of its own, uploaded alone when it
-    changes. A buffer per tile meant a draw per tile per layer, thousands zoomed out, at about 2 µs
-    a draw on Apple's GL.
-  - **Each shape carries two tags**, a net and an object, where ARCH has a net ID only: diff colours
-    and selection belong to objects. Built in phase 6: a tag's state is a colour, a pick outline
-    (a ring drawn last, under its layer's other shapes, so it stays outside a picked trace at its
-    joints), a dim, hidden and raised. Where shapes of a layer overlap, a raised one's colour
-    shows; otherwise which shows is not defined.
-  - **Images, and datasheet pages with them, moved out of 14.0** to pcb's datasheet step, which
-    needs texture residency of its own.
-
-**What 14.0 found that this list did not say:**
-- **The ring of a picked shape has a pixel or two of error at a joint's inner corners.** The ring
-  wants the least distance over all of an object's shapes, which max blending cannot give; three
-  more passes a layer would. Invisible at 1x.
+**What pcb has to know:**
 - **Where shapes of one layer overlap in different colours, which colour shows is not defined**,
-  beyond a raised shape winning and a shape covering a pixel well winning over another's edge.
-  Fills draw before shapes, and a tile's place in its buffer moves as it grows, so neither the
-  order of adding nor any other order holds. pcb gives shapes that overlap one colour, or raises
-  the one that should show.
-- **The active layer is drawn after the others**, as ARCH says, **except layers kept above it**
-  (`CanvasLayer.above_active`, added by the reviews): holes, a ratsnest and a selection overlay
-  stay over whichever copper is active.
-- **For idle mode (item 2):** `canvas_generation` changes with every edit applied, layer or style
-  added, and style or tag written, a shared tag table's included. A layer's opacity and order and
-  a view are plain settings and change nothing there; an app knows when it writes them.
+  beyond a raised shape winning. pcb gives shapes that overlap one colour, or raises the one that
+  should show.
+- **The active layer is drawn after the others, except layers kept above it**
+  (`CanvasLayer.above_active`): holes, a ratsnest and a selection overlay stay over whichever copper
+  is active.
+- **A picked shape's ring has a pixel or two of error at a joint's inner corners.** The ring wants
+  the least distance over all of an object's shapes, which max blending cannot give; three more
+  passes a layer would. Invisible at 1x.
 - **Buffer textures are not yet checked on Linux and Windows.** They are core in GL 3.1, below the
-  4.1 the engine requires, so the risk is a driver's bug; the build VMs were gone for this spec.
+  4.1 the engine requires, so the risk is a driver's bug.
 
 **Left for later**, each with a need named:
 - **Images and datasheet pages**, with the texture residency they need, for pcb's step 10. A record
@@ -193,7 +121,8 @@ object). It never reads back from the GPU.
 - **A per-tag offset**, so a dragged object moves without an edit, for pcb's step 7.
 - **Triangles supplied by the caller**, such as pcb's own constrained triangulation, in place of
   the canvas's earcut.
-- **Glyphs beyond ASCII**, with a dense glyph index, alongside items 5 and 6, which need them too.
+- **Glyphs beyond ASCII on the canvas**, with a dense glyph index: its glyph table holds 128
+  codepoints, though the font's atlas holds more since item 5.
 - **Dashed lines**, for schematic buses and courtyards.
 - **A transparent view background**, for the canvas over the 3D view (items 3 and 4).
 - **One target shared by several canvases**, should pcb draw two canvases in one window.
@@ -205,40 +134,19 @@ object). It never reads back from the GPU.
 **What pcb needs**: nothing drawn unless something changed, and continuous drawing back on while
 something moves (live routing). Input still reaches the screen within one frame.
 
-**What cetra had before 14.1**: `engine_run` drew every frame, throttled by vsync. The only path
-that waited was a minimized window, which blocks on `glfwWaitEventsTimeout(0.1)`.
+**Built in spec 14.1** (`docs/architecture.md`, Render Pipeline, Idle mode): `Engine.idle`, off by
+default, for frames that draw no 3D scene; a scene with anything to draw keeps the loop drawing. A
+frame is asked for by any window event, `engine_request_frame` from any thread,
+`engine_request_frame_after` for a time, `engine_end_work` when a thread's result is in, and the
+engine's own work. Headless, a run ends at the first frame after which nothing asks for another and
+no work is out, and that frame is its screenshot, which is what `pcb render` wants.
 
-**Built in spec 14.1** (`specs/14.1-idle-mode.md` has the reasons):
-
-- **Idle mode covers the frames that draw no 3D scene**: the schematic, the layout, the code editor
-  and the chat. A frame whose scene has anything to draw keeps the loop drawing every frame, as
-  before: an item, an IBL, a sky, water, falling rain, a fire, a particle system.
-- **It is a switch an app turns on, off by default** (`Engine.idle`, `EngineConfig.idle`), so every
-  game, every other app and every golden is unchanged. pcb and `apps/canvas` turn it on.
-- **A still 3D view drawn on demand moved to item 3** (below), with what keeps a 3D frame alive and
-  the accumulation pcb's ARCH asks for. Only with pcb's 3D view is there a board to judge it on.
-- **Who says something changed:**
-  - input: in a window any wake draws a frame, so every event does;
-  - `engine_request_frame`, from any thread, which wakes a waiting loop with `glfwPostEmptyEvent`;
-  - `engine_request_frame_after`, a timed wake, for pcb's blink;
-  - `engine_begin_work` and `engine_end_work`, around a thread's result, such as a parse;
-  - the engine's own: the UI while it eases or a screen enters, the debug GUI while ImGui takes
-    queued input, the texture loader when a decode is done, the loading screen, an input script
-    (the pointer script, renamed in spec 14.2 when it learned to type).
-
-  A change made inside a frame is drawn by that frame, so pcb asks only for changes made elsewhere.
-- **The clock across a wait.** The wait is kept out of `delta_time` and the windowed `render_time`,
-  so what animates resumes where it stopped.
-- **The frame counter** advances only on drawn frames, so the frame after a wait is adjacent to the
-  last and no history is dropped.
-- **Headless**, a run in idle mode ends at the first frame after which nothing asks for another and
-  no work is out, and that frame is its screenshot: what `pcb render` wants. `--frames N` is then
-  the most it draws. A run without idle mode is unchanged.
-- **pcb's part:**
-  - set `idle`;
-  - call `engine_end_work` (or `engine_request_frame`) when a worker publishes a snapshot;
-  - while live routing runs, call `engine_request_frame` each frame;
-  - read a gamepad, if ever, the same way, since pads send no events.
+**pcb's part:**
+- set `idle`;
+- call `engine_end_work` (or `engine_request_frame`) when a worker publishes a snapshot, with
+  `engine_begin_work` called as the work starts, never frames ahead;
+- while live routing runs, call `engine_request_frame` each frame;
+- read a gamepad, if ever, the same way, since pads send no events.
 
 **Left for later:** a gamepad that wakes the loop by itself. GLFW polls pads, and sends no event
 for them.
@@ -261,9 +169,10 @@ and keeping the overlay.
 - **Coming back.** The temporal histories are many frames old when the scene returns, so the first
   frame back is treated as a cut, as a render-scale change resets them (spec 11.8).
 
-**A still 3D view drawn on demand** (moved from item 2 while planning spec 14.1). CAD programs
-redraw a 3D view only when it moves or its model changes (KiCad, FreeCAD, Fusion); redrawing every
-frame is a game's habit. None of this is for a game, which moves every frame.
+**A still 3D view drawn on demand.** CAD programs redraw a 3D view only when it moves or its model
+changes (KiCad, FreeCAD, Fusion); redrawing every frame is a game's habit. None of this is for a
+game, which moves every frame. Idle mode (item 2) leaves every frame with a 3D scene drawing; this
+is where that changes.
 
 - **TAA never comes to rest by itself.** Each history blends the new frame in at a fixed 3%, the
   jitter cycles through 8 positions (16 when upscaling), and several noise seeds never repeat, so
@@ -309,56 +218,31 @@ CRT's picture (spec 13.28) must be exactly window-sized because the UI's scissor
 
 ## 5. Text input and scrolling panes
 
-**What pcb needs**: the chat, a scrolling history with an input line. Also, as found writing this
-plan rather than stated in `ARCH.md`: the command palette (Cmd+K, a few letters typed to filter a
-list of commands, each shown with its key) and the `/` jump to any part or net by name, fuzzy, which
-are both a text field over a list, and are wanted in step 6, before the chat.
+**What pcb needs**: the chat, a scrolling history with an input line; and, wanted earlier in step
+6, the command palette (Cmd+K, a few letters typed to filter a list of commands, each shown with its
+key) and the `/` jump to any part or net by name, fuzzy, both a text field over a list.
 
-**What cetra had before 14.2**: a closed list of six UI elements (panel, label, button, toggle,
-slider, selector) with no text field and no container that clips and scrolls; typed characters
-reaching only ImGui; a font atlas of printable ASCII; and wrapping as a helper that apps called and
-broke lines with by hand.
+**Built in specs 14.2 and 14.3** (`docs/ui.md`; typed input, the pointer and the clipboard in
+`docs/architecture.md`, Input): typed keys and characters in one ordered list on `InputState`,
+handed to the UI with the pointer by `ui_input_read`; the clipboard; the input script typing; UTF-8
+throughout with one home in `text.c`; an atlas of ASCII, Latin-1, Greek and a board's symbols, with a
+kerning table; wrapped labels and styled runs; the scrolling pane with virtual rows; the text field;
+`max_size`; `ui_wants_keyboard`, which is when pcb's keys stand down; and `fuzzy_match`.
+`apps/canvas --palette` and `--history` exercise them.
 
-**Built in spec 14.2** (`specs/14.2-text-input-and-scrolling-panes.md` has the reasons):
+**Settled for pcb:**
+- **Matching** is the matcher in cetra; the lists and their order stay pcb's.
+- **Row layout** is rows of ordinary elements the app builds, with runs for the matched letters.
+- **A chat message's format** is pcb's step 9, built from rows and runs: change lines, accept and
+  reject, speakers and Markdown need nothing more from cetra.
+- **Input methods**: finished characters arrive, from dead keys, Option combinations, the emoji
+  picker and a Chinese or Japanese input method once a character is chosen.
 
-- **Typed input reaches the UI.** The engine records keys, repeats and characters in one ordered
-  list on `InputState` (`key_events`), which `ui_input_add_keyboard` handed the UI with the wheel
-  and the clock; since 14.3 `ui_input_read` does, with the pointer too. The clipboard is the engine's (`engine_clipboard_get`/`_set`), GLFW's in a window and
-  the engine's own string headless, so a test never touches the user's. The pointer script became
-  the input script and types (`type=`, `key=` with `mod` for Cmd or Ctrl).
-- **UTF-8 throughout**, with one decoder (`text_utf8_next`), and an atlas of ASCII, Latin-1, Greek
-  and the symbols a board's prose wants (Ω, µ, ±, ≤, arrows, dashes). A character the atlas lacks
-  is kept, copied and stepped over whole, and draws as an outlined box.
-- **Wrapped labels and styled runs.** The layout runs one axis at a time, so a label with `wrap`
-  breaks at the width it was given, and keeps its lines until its text, width or style change. A
-  label or a read-only field takes runs (`UITextRun`, `ui_set_text_runs`): a byte range with its
-  own colour and face, in the element's size and line.
-- **The scrolling pane** (`ui_scroll`): clipped, hit only where it shows, the wheel over it, Page
-  Up, Page Down, Home and End, a bar to drag or page on, a focus scrolled into view, `follow_end`.
-  The focused pane takes its FOCUS look while the focus is anywhere in it, which is ARCH's "subtle
-  border". **Virtual rows** (`ui_scroll_set_rows`) build only the rows in view, keep each height
-  measured for when its row is not built, and keep the first row in view still as heights above
-  it change: 100,000 rows lay out a screenful.
-- **The text field** (`ui_text_field`): single-line, multi-line growing to `max_rows`, or read-only
-  with runs; a caret, a selection, the clipboard, undo a word at a time, the platform's keys, a
-  click, double click and triple click, and a caret that blinks on a timed wake under idle mode.
-- **Focus and keys**: `ui_wants_keyboard` is true while a field holds the focus or a modal screen
-  is up, which is when pcb's keys stand down; Esc closes a modal screen (the palette) and lets go
-  in one that is not (the chat); Tab moves in tree order; the pointer passing over no longer takes
-  a field's focus; a field's `on_key` sees each key first (any element's since 14.10,
-  `ui_set_on_key`), so a list's Up and Down work while the caret stays in the field.
-- **The matcher** (`fuzzy_match`, `fuzzy.h`): one query against one name, a score and the matched
-  byte offsets, the best placement by dynamic program after fzf's. It searches nothing: pcb loops
-  over its own lists and keeps its own tie-break.
-- **What ARCH left open, as settled**:
-  - **Matching** is the matcher in cetra; the lists and their order stay pcb's.
-  - **Row layout** is rows of ordinary elements the app builds, with runs for the matched letters.
-  - **A chat message's format** is pcb's step 9, built from rows and runs: change lines, accept and
-    reject, speakers and Markdown need nothing more from cetra.
-  - **Input methods**: finished characters arrive, from dead keys, Option combinations, the emoji
-    picker and a Chinese or Japanese input method once a character is chosen.
-- **`apps/canvas`** exercises it: `--palette` (Cmd+K over the app's commands, `/` over 5,000 names)
-  and `--history` (a column of read-only messages with an input line and a streamed reply).
+**Not built, with the reason:**
+- **Laying out only when something changed**: the heaviest screen's two layouts take well under the
+  1 ms bar, so apps keep writing fields directly.
+- **Clearing the keys pressed while a loading screen is up**: silent's loading screen takes the
+  press that starts the game through the same poll, so clearing there would swallow it.
 
 **Left for later:**
 
@@ -368,140 +252,37 @@ broke lines with by hand.
 - **Right-to-left text**, and caret moves by grapheme rather than codepoint.
 - **Horizontal scrolling panes**; **selecting across messages**, each being its own field.
 - **Runs in an editable field**, and runs that change the size.
-- **More fonts**: only Roboto-Bold and a pixel face ship, and pcb chooses its own, built into its
-  binary since spec 14.6 (item 9).
-
-**Spec 14.3, 14.2's follow-ups: built.** 14.2's closing reviews found these, and the call was to
-do them properly before the editor builds on the same UI. Each was designed from the problem it
-solves and cetra's own rules: plain C, a retained tree, plain fields, a closed list of elements.
-UIKit, Cocoa and Dear ImGui were a check afterwards, for a case missed, and never a template. An
-earlier draft of this entry named each item after a UIKit call, which read as a plan to copy it.
-
-- **Built:**
-  1. **A field's own placeholder**, `ui_field_set_placeholder`, so a field's `text` stays NULL and
-     the layout and `ui_set_text` lose their special cases; `ui_set_text` on a field is refused.
-  2. **A maximum size on any element**, `max_size[2]`, for FIT and GROW. The palette's list is as
-     tall as its rows up to twelve, then scrolls, with no mode switched per keystroke; a GROW child
-     held at its most leaves its room to its growing siblings.
-  3. **`ui_scroll_into_view` kept and tested**, for an app revealing an element rather than a row.
-  4. **`max_rows` 0 means no most**, as `max_size`'s 0 does, and a field pages by the rows it shows.
-  5. **`ui_field_append` and `ui_scroll_find_row`**: a streamed reply appends to its built row,
-     breaking only the last line again, with the caret, the selection, the scroll and undo kept.
-  6. **The pointer from the engine**: `InputState` latches the press, the release and their
-     modifiers as it does the keys, and `ui_input_read` hands all of it to the UI, replacing
-     `ui_input_add_keyboard` and every app's own pointer state. `engine_fb_to_points` is the
-     one conversion from the engine's pixels to window points, so pcb pans by it rather than
-     by a copy.
-  7. **`fuzzy_match` fills a `FuzzyPositions`**, which says how many it wrote.
-  8. **One home for UTF-8**, in `text.c`: `next`, its exact mirror `prev`, `encode` and
-     `is_continuation`, refusing what is no character both ways, and a codepoint is a `uint32_t`
-     throughout.
-  9. **One way a label lays out its text**: every element with text keeps its lines, and a label
-     draws through them.
-
-  Two of 14.2's own additions were settled with them: the modifier bits are `INPUT_MOD_SHORTCUT`
-  and `INPUT_MOD_WORD` in `input.h`, and a negative padding means none, as a negative spacing does.
-- **Measured** (`gametest --ui-bench`, release; each was built only past the bar it was given):
-  10. **Laying out only when something changed: not built.** The heaviest screen's two layouts
-      took 0.117 ms a frame, against a bar of 1. Apps keep writing fields directly.
-  11. **The text's measures kept: built**, its text's share of the layouts being over the quarter
-      the bar set. Built for labels alone it bought nothing, 8 of the settings screen's 40
-      elements being labels; the closing reviews gave every element with text its lines and so
-      its measures, and stopped measuring a FIXED axis, and that screen's two layouts went from
-      0.117 ms to 0.014.
-  12. **A kerning table: built**, at load, kerning being three quarters of a text walk. With the
-      glyphs under U+0100 found without the hash, and every layout stepping one pen
-      (`font_pen_step`) that reads a pair from the glyphs it holds, a walk went from 1.09 ms to
-      0.14.
-  13. **Re-breaking only the edited line: not built.** With the kerning table, a keystroke in a
-      20 KB field takes 0.32 ms, under the 1 ms bar. The editor's own core decides it again at its
-      sizes: at 1,000 KB a keystroke is still 14 ms.
-  14. **The atlas: built in bands across threads**, the packing still serial, so the atlas is the
-      same to the byte: 157 ms to 33 for Roboto at 64.
-- **Not done:** clearing the keys pressed while a loading screen is up. They arrive together in the
-  first frame, but silent's loading screen takes the press that starts the game through that same
-  poll, so clearing there would swallow it.
+- **More fonts**: Roboto-Bold, a pixel face and JetBrains Mono ship, and pcb builds its own into its
+  binary (item 9).
 
 ---
 
 ## 6. The text editor widget — built
 
 **What pcb needs** (`ARCH.md` section 8): pcb's code view, an editor of its own in C, borrowing
-freely from rxi's lite (MIT) and vis (ISC) and keeping their licence notices on copied code.
-Standard keys first; key handling built on modes from the start, so that a vim mode is an addition
-later and not a rewrite. The widget goes in cetra. What stays in pcb:
+freely from rxi's lite (MIT) and vis (ISC). The widget goes in cetra. What stays in pcb: the
+colouring, from pcb's own parser; the link that lands edits made in other views in the open buffer;
+and undo, since typing shares the project's one undo timeline, which is pcb's.
 
-- **The colouring**, from pcb's own parser.
-- **The link** that lands edits made in other views in the open buffer.
-- **Undo**: typing shares the project's one undo timeline, which is pcb's.
+**Built in spec 14.4** (`docs/ui.md`, The code editor and its text): `text_doc.c/h`, the text, an
+array of lines kept apart from the editors showing it; `ui_editor.c/h`, the editor, the UI's ninth
+element; `glyph_cache.c/h`, JetBrains Mono as bitmaps at the exact pixel size; and `ui_typing.c/h`,
+the platform's editing conventions the field shares. Positions are bytes from the file's start.
+Several carets, keys as vis's motions, text objects and operators under modes that fall to their
+parents, wrapping, and only the rows in view laid out. No code was copied from lite or vis, only
+their designs, so no notice of theirs is owed.
 
-**What cetra has today**: SDF text and the UI draw list's glyph runs, and since spec 14.2 a text
-field. **Spec 14.2 decided on two text cores, not one.** The field edits a flat UTF-8 buffer
-through stb_textedit and walks its rows from the start of the text, which suits a few thousand
-characters. The editor needs large files, colour spans from the host and the host's undo, which
-want a piece table or an array of lines. What 14.2 wrote once for both:
+- **Two text cores, not one**: the field edits a flat buffer through stb_textedit, which suits a
+  few thousand characters; the editor needs large files, the host's colours and the host's undo.
+- **Not a piece table**: its wins are cheap undo and free snapshots, and undo is pcb's while pcb's
+  reader copies the bytes anyway.
 
-- the platform's key conventions (word and line moves, the shortcut modifier), private to
-  `ui_field.c` until the editor hoists them;
-- the UTF-8 walk (`text_utf8_next`);
-- the one measure of a glyph's advance and kerning across styled runs (`ui_text.h`'s walk), which
-  gives the editor its colouring's measure too;
-- typed input, the clipboard and the input script that drives them headless.
-
-**Decided in spec 14.4** (talked through 2026-10-30):
-
-- **The buffer: an array of lines** (lite's), each pointing into the file as loaded until it is
-  edited, so a file opens with one copy and one scan, and typing touches one line. Not a piece
-  table: its wins are cheap undo and free snapshots, and undo is pcb's while pcb's reader copies
-  the bytes anyway. **The text and the editor are two objects**, as in lite and vis, so pcb's split
-  can show one file twice and pcb lands view edits in the text whether or not it is shown.
-- **Positions are bytes from the file's start**, as pcb's splices count them, a CR before an LF
-  belonging to the line ending and a byte-order mark counting.
-- **Seams to the host**:
-  - every user action is reported, with its changes, the selections before and after, and a
-    version;
-  - the host's edits land by byte range, or as a whole new text trimmed to the change, with carets,
-    selections and scroll moving through them;
-  - colours come two ways: a highlighter asked a line at a time (pcb's strings and comments never
-    cross a line), and the host's ranges given at the version they were read from and moved through
-    the typing since.
-- **Undo**: the text keeps its own, for an app with no timeline, and a host switches it off and
-  binds the keys to its own.
-- **Several carets from the start.**
-- **Keys: vis's motions, text objects and operators**, which a mode turns keys into; a key a mode
-  does not bind falls to its parent, and every command is listed by name and description for a
-  host's command table.
-- **Speed**: only the rows in view laid out; bars of 1 ms for a keystroke and a jump in a 10 MB
-  file.
-- **The font: JetBrains Mono**, drawn from bitmaps made at the exact pixel size rather than the UI's
-  distance fields, which go soft at code sizes.
-- **Wrapping from the start**; sideways scrolling is left for later.
-- **Headless** as the field is: the input script drives it, a probe reads it.
-
-**Built in spec 14.4.**
-
-- **`text_doc.c/h`** is the text, with the editor's half in `text_doc_edit.h`.
-- **`glyph_cache.c/h`** is the face, with JetBrains Mono under `assets/fonts/`.
-- **`ui_editor.c/h`** is the editor, the UI's ninth element.
-- **`ui_typing.c/h`** holds the platform's editing conventions, which the field shares.
-- **pcb's seams, as built:**
-  - `text_doc_set_on_action` reports each action;
-  - `text_doc_replace` and `text_doc_set_text` land the host's edits;
-  - `text_doc_map` brings pcb's own positions forward;
-  - `text_doc_set_highlighter` colours a line at a time, stateless for pcb;
-  - `text_doc_set_ranges` takes errors and the shared selection, given at the version they were
-    read from;
-  - `keep_undo` off, and Cmd+Z bound in a mode of pcb's whose parent is
-    `ui_editor_standard_mode()`;
-  - `ui_editor_commands` lists the editor's commands for pcb's command table.
-
-  `apps/canvas --editor` stands in for pcb through all of these.
-- **Speed at 10 MB, after the reviews:** a keystroke 0.11 ms, at 100 carets 0.50 ms, Enter 0.20 ms,
-  a jump 0.12 ms, opening 2 ms. A budget of 192 KB a frame wraps the rest of the rows in the
-  background, asking idle mode for the frames it needs.
-- **No code was copied from lite or vis**, only their designs: lite's array of lines and per-line
-  colours, vis's motions, text objects and operators, and modes that fall to their parents. So no
-  notice of theirs is owed.
+**pcb's seams:** `text_doc_set_on_action` reports each action; `text_doc_replace` and
+`text_doc_set_text` land the host's edits; `text_doc_map` brings pcb's positions forward;
+`text_doc_set_highlighter` colours a line at a time; `text_doc_set_ranges` takes errors and the
+shared selection at the version they were read from; `keep_undo` off with pcb's undo bound in a
+mode of its own; `ui_editor_commands` lists the editor's commands for pcb's command table.
+`apps/canvas --editor` stands in for pcb through all of these.
 
 **Left for later:**
 
@@ -514,7 +295,7 @@ want a piece table or an array of lines. What 14.2 wrote once for both:
 - folding and gutter markers;
 - a keystroke at 100 carets in a 64 MB text, 2.25 ms. The line starts are worked out again from the
   first caret's line, and a tree of line lengths would make that a logarithm;
-- Enter at 100 carets: 6.45 ms at 10 MB and 42 ms at 64 MB, over the 1 ms bar. Each line break
+- Enter at 100 carets: about 6.5 ms at 10 MB and 42 ms at 64 MB, over the 1 ms bar. Each line break
   moves every line after it in the text's array and in each editor's rows, once per caret; built
   once an action instead, it would cost one pass. A question for whoever plans the next editor
   work, since the fix reaches across the text and every view.
@@ -523,39 +304,25 @@ want a piece table or an array of lines. What 14.2 wrote once for both:
 
 ## 6a. The editor's vim mode — built
 
-**What pcb needs**: its code view is vim only, decided with the user on 2026-10-30 -- `i` and Esc,
-the visual modes, `/` searching the text. pcb's own keys go over it: Space for help in normal mode,
-`/` searching whatever view has the focus, `:` its command line. So the mode is built in cetra,
-beside the standard one, for any app to use, and pcb stacks a layer of its keys on it.
+**What pcb needs**: its code view is vim only -- `i` and Esc, the visual modes, `/` searching the
+text. pcb's own keys go over it: Space for help in normal mode, `/` searching whatever view has the
+focus, `:` its command line. So the mode is built in cetra, beside the standard one, for any app to
+use, and pcb stacks a layer of its keys on it.
 
-**What spec 14.5 built:**
-
-- **The editor's seams**, general rather than vim's: a mode may be a layer, keys only over its
-  parent; a command that declines hands its key to the parent; a key a mode used takes its
-  character with it; three selection shapes (a span, inclusive of the far character, whole lines);
-  a hook after the pointer moves the selections; and undo steps made of parts with a serial a
-  host's timeline groups by, held open across actions by a group.
-- **The vim mode** (`ui_editor_vim.c/h`), one per host shared by its editors, as vim's state is
-  the person's: normal, insert, visual, visual line and visual block; counts, the motions, the
-  operators over every motion and text object, the edits, `.`, a block's `I` and `A` at every
-  line; `/ ? n N * #` and `:` (a line number, `$`, `noh`, anything else the host's), a host's line
-  lit as it is typed through `ui_editor_vim_light`; undo by vim's units, through the host's
-  timeline when it keeps one; the register the system clipboard.
-- **Held to vim 9.2 itself**: 6,624 cases of a corpus and 1,600 seeded random sequences run
-  through both, text and cursor compared byte for byte; 8,000 more sequences checked once. A
-  keystroke at 10 MB costs 0.12 to 0.25 ms.
-- **Otherwise than the plan said**: the character of a key a mode used is dropped in the editor,
-  not in `_route_keys`, since the text field takes every key event; Esc in normal mode is always
-  taken, since declined it let go of the editor; and with no prompt from the host, the mode reads
-  a `/`, `?` or `:` line from the keys itself.
+**Built in spec 14.5, with the language's keys in 14.9** (`docs/ui.md`, The vim mode):
+`ui_editor_vim.c/h`, one per host shared by its editors, held to vim 9.2 itself by an oracle; the
+editor's general seams it needed (layer modes, commands that decline, a used key taking its
+character, three selection shapes, a pointer hook, undo steps of parts); and the hooks for keys that
+need the language (`ui_editor_vim_set_lookup`, `_set_indent`, `_set_format`, see "Not among the
+nine").
 
 **Left for later:**
 
 - named registers, macros, marks and the jump list (Ctrl+O, Ctrl+I);
-- `:s` and ranges, replace mode `R`, `gv`, `=` and `gq`, Ctrl+A and Ctrl+X, insert completion and
-  tag objects;
+- `:s` and ranges, replace mode `R`, `gv`, Ctrl+A and Ctrl+X, insert completion and tag objects;
 - regular expressions in a search, as in item 6's find;
-- the differences from vim the spec lists: `A` after an area ending inside a character of several
+- a host's own key sequences, a `:map`, once pcb wants a command vim has no meaning for;
+- the differences from vim spec 14.5 lists: `A` after an area ending inside a character of several
   bytes, `.` after `v$` and after a visual `A` or `I`, `p` of lines over a block of empty lines
   then `u`, `r` with Enter in visual mode, and a quote object growing a visual area.
 
@@ -563,26 +330,19 @@ beside the standard one, for any app to use, and pcb stacks a layer of its keys 
 
 ## 7. Rendering at any scale, in true units — built
 
-**Built in specs 13.57 and 13.58.**
+**Built in specs 13.57 and 13.58** (`docs/architecture.md`, The Typical Size;
+`docs/shader-subsystems.md`, Cascade soft shadows): `Engine.typical_size` (`--typical-size 0.001`
+for a board) scaling every tuning length, a camera's planes fitted each frame (`Camera.fit_clip`),
+and cascade soft-shadow thresholds counted in texels. pcb's pictures render at true size through
+them, and its 3D view will make its engine at a typical size of 0.001.
 
-- **13.57**: the engine's typical size (`Engine.typical_size`, `--typical-size 0.001` for a board),
-  every tuning length scaled by it, and a camera's near and far planes fitted each frame to what it
-  sees (`Camera.fit_clip`, `--fit-clip`). `scale-twin` holds a scene at 0 px against itself shrunk
-  1024 times.
-- **13.58**: a short occluder keeps its soft shadow, the cascade thresholds counted in texels of the
-  map rather than as a fraction of its depth range.
-
-pcb's pictures already render at true size through them, and its 3D view will make its engine at a
-typical size of 0.001.
-
-**Left for later**, from those two specs:
+**Left for later:**
 
 - **A physical depth of field.** The CoC today is a look with no focal length or aperture. A
   thin-lens CoC from the camera's focal length and aperture would put a macro shot's thin focus where
-  a real lens does, at any scale. 13.57 names it as the next spec pcb is likely to want for
-  close-ups.
+  a real lens does, at any scale. Likely the next spec pcb wants, for close-ups.
 - **The cascade penumbra estimate** is normalised by a depth range the padding dominates, so its
-  softness depends on how a cascade was fitted, not on the light (13.58).
+  softness depends on how a cascade was fitted, not on the light.
 - **Lights' default size** (50 m) and the shadow system's metre defaults stay; a small scene states
   its own.
 - **A camera inside a large box** falls to the clip floor.
@@ -625,102 +385,44 @@ beside each `.glb`, by material name.
 pane beside the one it splits; Space m puts the messages under every pane and takes them away; a
 code pane moves between files, back where it was in each; and the fonts are built into the binary.
 
-**What spec 14.6 built:**
-
-- **`ui_remove(el)` and `ui_move(el, parent, before)`**: an element taken out of the UI and freed,
-  and one moved under another parent in front of a sibling (NULL the end), keeping everything it
-  holds. A split is a row put in front of the pane, the pane moved into it and a new pane beside it;
-  the messages are a column put in front of the root's content with the content moved into it; a
-  close is a removal. Whatever the UI held inside what goes is let go first, and an element removed
-  during a pass -- `:q` closing a pane from its own key -- is freed only as the pass ends. A key
-  that something used takes its press's character with it, so a split bound to `|` types no `|`
-  into the pane it made.
-- **`ui_editor_set_doc`**: an editor shown another text, and back where it was in each text it has
-  shown, as a vim window is: its carets, its view and its rows kept on the text while it shows
-  another and brought through every edit made there, so pcb keeps nothing per pane and file. A text
-  new to it starts at its top. `ui_editor_top` and a public `ui_editor_scroll_place` give a view to
-  a new pane, held for its first layout; `ui_editor_doc` says what a pane shows. An editor's
-  serial, new at each text, is how the vim mode knows another editor from the last it saw.
-- **Fonts from bytes**: `load_font_memory` and `create_glyph_cache_memory`, the same font to the byte
-  as the file. `cetra_embed_files` builds files into a program as a table indexed by what each is
-  for, so a font's file is named only in the build's list.
-- **A test bed**: `apps/canvas --editor A --editor B`, whose F8, F9 and F10 split, close and switch
-  files, and whose fonts are built in. It is not pcb's panes, whose keys are pcb's.
+**Built in spec 14.6** (`docs/ui.md`, Removing and moving elements and The code editor and its
+text; fonts from bytes in Drawing and text): `ui_remove` and `ui_move`, from which a split, the
+messages and a close are made; `ui_editor_set_doc`, an editor that keeps its place in every text it
+has shown, so pcb keeps nothing per pane and file; `ui_editor_scroll_place`, `ui_editor_top` and
+`ui_editor_doc`; `load_font_memory`, `create_glyph_cache_memory` and `cetra_embed_files` for fonts
+built into the program. `apps/canvas --editor A --editor B` is a test bed, not pcb's panes.
 
 **Left for later**: dividers dragged to resize, a pane filling the window, and the layout kept per
-project are pcb's own, on these calls; nothing in cetra is missing for them.
+project are pcb's own, on these calls. A UI call that wraps an element in a new parent, carrying
+its size, as the canvas app's `take_size` does by hand, waits until pcb's splits repeat it.
 
 ---
 
 ## Not among the nine, but on the way
 
 - **Read-only texts, a close the app can refuse, and headless frames that wait for work** -- spec
-  14.7, built, from pcb 6.1's reviews:
-  - `TextDoc.read_only` and `text_doc_set_on_refused`, for pcb's messages pane and its conflict
-    pane. The vim mode does what vim does with `'nomodifiable'`.
-  - `engine_set_close_hook`, for refusing a close while a file is in conflict. It is asked at the
-    close button, Alt+F4, and the macOS menu's Quit and Cmd+Q alike, and at an input script's
-    `close`.
-  - Headless, under idle mode, a frame waits for the work an app counts, so pcb's window tests can
-    drop their own waits. That work must be begun as it starts, never frames ahead, or the frame
-    that would start it waits for it: pcb's spec checks its two `engine_begin_work` sites.
-
-  pcb takes these up in a spec of its own.
-- **Vim keys the host answers, sizes by share, and every timed wake** -- spec 14.9, built, the
-  rest of pcb 6.1's reviews:
-  - hooks for vim's own keys that need the language, as vim's `tagfunc`, `keywordprg`,
-    `indentexpr` and `formatexpr` are: `ui_editor_vim_set_lookup` for `gd`, `gD`, Ctrl+] and `K`,
-    `ui_editor_vim_set_indent` for `=` and every new line's indent, `ui_editor_vim_set_format`
-    for `gq`. pcb's peek at the vim mode's half-typed keys for its `gd` can go. Built differently
-    from the plan in two places:
-    - Ctrl+] and `K` in visual mode ask only for an area on one line, as vim's do.
-    - Every change of whole lines asks for an indent, not only `cc` and `S`, since vim's
-      `op_change` re-indents any linewise change.
-  - With no host, `gd` and `gD` are vim's own `find_decl`, held to vim by the oracle. Under an
-    operator they are always characterwise, where vim's take the kind of the motion before them.
-  - `UI_SHARE`, a size as a share of the parent, rounded down to a whole point as pcb's split
-    floors it, so a pane split's ratio sizes it rather than the app rewriting fixed sizes before
-    and after each layout. It replaced "grow weights": a weight on GROW comes on top of what a side
-    measures, so a split would miss its ratio by its gap. pcb's `size_under` and its two calls can
-    go: a split is one side at `UI_SHARE` and the other GROW.
-  - `engine_request_frame_after` keeps every time asked, 64 at once, so pcb asks its three once.
-
-  None is needed by pcb's 6.2. pcb takes them up in its 6.1.2. A host's own key sequences, a
-  `:map`, wait until pcb wants a command vim has no meaning for; completion (Ctrl+X Ctrl+O) is a
-  spec of its own, later.
-- **A panel takes keys** -- spec 14.10, built, for pcb's schematic pane (its 6.2) and every pane
-  kind after it, which only a text field and the code editor could be before:
-  - `ui_set_on_key` on a panel, a scrolling pane, a label or a text field. An element with a hook
-    takes the keys as a text field does: it keeps the focus under a passing pointer, and what the
-    hook declines goes to the screen, Tab and Esc among them.
-  - The hook is handed every key and every character, so pcb's `+` is a character on any keyboard
-    layout. A field's hook is the same call, asked about a character before the field types it.
-  - A hook does not make a pane `focusable`; pcb sets that on its pane so a click focuses it.
-  - Refused on a code editor, whose keys are its modes', and on a button, toggle, slider or
-    selector. Navigation and accept reach the UI apart from the keys, so a hook could not hand them
-    back, and a control holding the keys would be neither pressed nor left.
-
-  `ui_field_set_on_key` is gone: pcb's `go.c` and `status.c` take `ui_set_on_key` when it moves
-  its submodule. Its hooks there match one key each, so seeing characters changes nothing for them.
-  A schematic pane that should keep the focus through Esc takes Esc, as the vim mode does, and pcb
-  maps nothing to the UI's `back`, which would let go of it whatever the hook did.
-- **A pane's focus border** -- spec 14.11, built, found by trying pcb's 6.2: its schematic pane had
-  no border when focused, where the code pane had the editor's. A panel taking the keys is drawn
-  focused now: `theme.panel` is per state, its FOCUS look the editor's border, drawn over a draw
-  hook's painting too, so every pane kind pcb draws gets it. A focusable panel with no key hook --
-  a list's row -- is not. pcb gives its schematic panel the editor's corner radius when it moves
-  its submodule, so the two borders match. Seen in pcb, the schematic's border was far fainter
-  than the code pane's: the UI shader composited a border as though its fill were opaque, and
-  over the schematic's clear fill drew it at about a third of its strength. Spec 14.12, built,
-  lays a border over its fill by Porter-Duff over, so a pane drawn by pcb shows its focus as the
-  code editor does.
-- **A label's text inside its padding, and rows on the baseline** -- spec 14.13, built, found
-  making pcb's key hints (its 6.3.1): a key in a small box at 11 points beside what it does at 14
-  would not line up. A label drew its text from its rect's corner while it measured its padding,
-  so every label's text sat 4 points high in its box and anything centred beside it sat low; it
-  draws inside its padding now. And `UI_ALIGN_BASELINE`, a row's cross alignment by its text, puts
-  each child's first line on the deepest one's. Shown both, the user chose centring for pcb's key
-  boxes, which the first fix is what makes work.
+  14.7, built, from pcb 6.1's reviews: `TextDoc.read_only` with `text_doc_set_on_refused` (the vim
+  mode does what vim does with `'nomodifiable'`), `engine_set_close_hook`, and a headless frame
+  under idle mode waiting for the work an app counts. `docs/ui.md` and `docs/architecture.md`.
+- **Vim keys the host answers, sizes by share, and every timed wake** -- spec 14.9, built:
+  `ui_editor_vim_set_lookup` (`gd`, `gD`, Ctrl+] and `K`), `_set_indent` (`=` and every new line's
+  indent) and `_set_format` (`gq`), with vim's own `find_decl` for `gd` and `gD` when the host
+  finds nothing; `UI_SHARE`, a size as a share of the parent, which a GROW weight could not give
+  since it misses the ratio by the gap; and `engine_request_frame_after` keeping every time asked.
+  One difference from vim is kept: `gd` under an operator is always characterwise. Completion
+  (Ctrl+X Ctrl+O) is a spec of its own, later.
+- **A panel takes keys** -- spec 14.10, built: `ui_set_on_key` on a panel, a scrolling pane, a label
+  or a text field, handed every key and character, for pcb's schematic pane and every pane kind
+  after it (`docs/ui.md`, Key hooks). Refused on a code editor and on the controls. A pane that
+  should keep the focus through Esc takes Esc, and pcb maps nothing to the UI's `back`, which would
+  let go of it whatever the hook did.
+- **A pane's focus border** -- specs 14.11 and 14.12, built: a panel taking the keys is drawn
+  focused, with the editor's border, and a border is laid over its fill by Porter-Duff over, so a
+  pane pcb draws shows its focus as the code editor does. pcb gives its schematic panel the
+  editor's corner radius so the two borders match.
+- **A label's text inside its padding, and rows on the baseline** -- spec 14.13, built, for pcb's
+  key hints: a label draws its text inside its padding, and `UI_ALIGN_BASELINE` lines a row's
+  children up by their text. pcb's key boxes use centring, which the first fix makes work.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the
