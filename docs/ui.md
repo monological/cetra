@@ -369,7 +369,8 @@ leaves the carets, and a cut copies before it deletes.
 ### The editor (`ui_editor.c`)
 
 The code editor (spec 14.4) is a UI element (`ui_editor`, in `ui.h`) on a `TextDoc` it borrows,
-drawn in the theme's `editor_face`.
+drawn in the theme's `editor_face`. Its line numbers are `theme.line_numbers` (spec 14.14), one
+colour for every state; while that colour's alpha is 0 they are the editor's text at 38%.
 
 - **Its lines wrap at its width**: after the last space that fits, at the edge for a word longer
   than a row, later rows hung at the line's indent. Only the rows in view are wrapped and drawn;
