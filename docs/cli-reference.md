@@ -367,8 +367,7 @@ The map rides `sceneColorTex` by `#define` in the opaque pass, where unit 6 is i
   - **Off by default because most emissive materials are not lamps**: 30 of the 32 in this corpus
     are a glow over a black base used to make something a flat bright colour. A material declines
     with `emissiveLight: "off"` in a `.cscn`.
-  - Two shape tests: planarity, which is flatness only, and `fill`, which rejects an L, a ring, a
-    quad with a hole or two strips far apart, all perfectly flat.
+  - Two shape tests, planarity and `fill` (`docs/lighting.md`, Derived area panels).
   - A derived panel has `cast_shadows` false like any light, so it lights through walls until a
     `light_overrides` entry says otherwise. That entry's `shadow_cache`, with a `range`, caches its
     shadow.
@@ -855,10 +854,8 @@ scatter keeps props off its course (spec 11.68). `--no-trail` is the ground with
   debug build (`build.sh`'s default, with no `-O`) takes 2.3 s and 14.8 s, so time a bake from
   `out/release/bin`, not `out/bin`.
 
-**A debug profile re-orders costs, not just inflates them.** Forest's whole startup is 6.57 s debug
-against 1.40 s release, and Jolt's per-region BVH build is 24x slower in debug where the scatter is
-5.7x, so a debug profile makes cheap things look expensive in exactly the proportion that motivates
-work on them. In a release build the scatter and the colliders are 6% of startup. The largest
+**A debug profile re-orders costs, not just inflates them** (`docs/verification.md`, Which binaries
+a number describes). In a release build the scatter and the colliders are 6% of forest's startup. The largest
 region-load cost in either build is Jolt's BVH builder, 85% of collider time, inside a vendored
 library.
 
@@ -921,51 +918,15 @@ and 255 is odd, so it has no coarse level and the save refuses it; the streaming
 - The render app's **`--shadow-center <x,y,z|auto>`** sets `ShadowSystem.scene_center`, which
   nothing else outside the process reaches.
 
-What moving a world costs is mostly not precision. Anything that reads a world position as an
-identity, such as forest's wind phase hash, changes completely a few units out, and stays changed
-however far the world goes, since a hash is discontinuous. Such reads take the authored position
-from `include/world_origin.glsl`'s `authoredPos()`. Precision itself degrades gradually: about
-0.1% of the frame at an offset of 12, 4% at 12,000 and 45% at 262,140.
+What moving a world costs is mostly not precision: a read of a world position as an identity, such
+as forest's wind phase hash, must take the authored position (`docs/architecture.md`, Step 4 and
+the transform walk). Precision itself degrades gradually: about 0.1% of the frame at an offset of 12, 4% at
+12,000 and 45% at 262,140.
 
-**What the terrain flags reach.** `docs/terrain.md` describes the terrain; these are the contracts
-of `procedural/terrain.h` that the flags above expose:
-- **A field has two residencies.** `TerrainField.stream` non-NULL means its planes address a
-  resident window, not the whole level, so indexing it res by res is invalid: `heightmap_save`,
-  `terrain_field_measure` and erosion refuse a streamed field by name, and its height range comes
-  from the file's manifest. The sampler is the same either way.
-- **A height has levels.** `terrain_height_at_level(p, x, z, k)` is the surface with everything
-  finer than level k's cell removed: a filtered mip on the field path, dropped octaves on the fbm
-  path. Level 0 is `terrain_height_at` bit for bit. A consumer names a cell
-  (`terrain_level_for_cell`), not a level, which keeps a quadtree patch and its parent one level
-  apart without either knowing of the other. The pyramid filters under a separable `[1 2 1]` tent.
-  Taking every other node instead removes nothing whenever a patch cell is a whole multiple of a
-  field cell, since the coarse level then holds exactly the floats level 0 returns there.
-- **`island_start` / `island_depth` shape the analytic height alone** (spec 11.63), so
-  `terrain_field_seed` bakes the island in and erosion erodes it as an island, while a heightmap
-  loaded from a file is left as the file says. The radius is Euclidean against a square domain, so
-  the corners are open sea.
-- **A field samples bicubic, not bilinear**: `terrain_normal_at` central-differences over 1.30
-  units on a cell of about 2, and a piecewise-constant derivative would facet the normals and reach
-  the scatter's slope gate as rows of missing trees.
-- **Outside `[-extent, +extent]` a field clamps its coordinate, not its taps.** Clamping taps
-  alone interpolates with an out-of-range `t` and extrapolates the cubic past the edge, and callers
-  do ask out there: the third-person eye trails the player off the domain. The two differ only in
-  the first cell past the edge, which is where `terrain-clamp` samples.
-- **`terrain_height_at` is not thread-safe.** The analytic path memoizes a permutation table in
-  file statics, and the function's contract is the weaker of its two paths.
-- **`terrain_mask_at` returns flow, deposit and wear, all exactly 0 with no field**, so a caller
-  blending by them falls back to the un-eroded look with no special case. `flow` is drainage, not
-  depth (rain falls on every cell, so standing water says nothing), log1p-compressed because
-  drainage is heavy-tailed. Its mean is near 0.4: a channel is the top few per cent, and a
-  threshold near the mean paints the whole map as riverbed.
-- **Rain over evaporation is the equilibrium water depth** in `erosion.c`. Set it to ten units over
-  two-unit cells and the terrain is a lake with nothing draining.
-- **The sim is bit-identical at any worker count, within one build.** `--terrain-erosion-probe`
-  prints an FNV-1a `digest` over all four planes, which is the only thing that can show it; the
-  budget sums cannot, since addition hides compensating differences. An `-O0` and an `-O2` build of
-  the same source differ.
-
-`docs/terrain.md` is where these belong, and most of them are not yet there.
+The contracts these flags reach (a field's two residencies, its levels, island shaping, bicubic
+sampling and clamping, thread safety, what the masks mean, the erosion's equilibrium and its digest)
+are in `docs/terrain.md`. `terrain-clamp` samples the first cell past the edge, the only place
+clamping the coordinate and clamping the taps differ.
 
 **Wind on the trees.** Both prototypes come from `tree_gen`, which authors the UV1 branch phase and
 flex weight, so wind is a material field. A swaying mesh carries a cull bound, so the trees stay
@@ -990,11 +951,8 @@ depends on the framing.
 - **`--no-lod`:** every draw at LOD level 0. LOD chains are built at import by meshoptimizer,
   which weights boundary and seam edges heavily, so leaf cards and grass blades barely simplify,
   and a skinned mesh is refused, since weights do not transfer to surviving vertices.
-- **Borders are weighted, not locked**: `lod.c` passes options 0, and only
-  `meshopt_SimplifyLockBorder` makes a border uncollapsible. Anything that tiles can therefore
-  T-junction between two neighbours at different levels.
-- **Only the `triangles` column** of the submission table moves with a level change; `draws` and
-  `instances` are blind to it.
+- Borders are weighted rather than locked, and only the `triangles` column of the submission table
+  sees a level change: `docs/architecture.md`, The draw list.
 
 ---
 

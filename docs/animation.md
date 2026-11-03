@@ -29,7 +29,9 @@ there would vanish. Each stage keeps its own place for a reason given in its sec
   in per-call scratch.
 - `pose_blend` mixes two poses.
 - `animation_state_apply_pose` turns a pose into `bone_matrices[128]`, and keeps the previous pose
-  for TAA motion vectors.
+  for TAA motion vectors. That previous pose goes up as three affine rows a bone
+  (`uPrevBoneRows` in `include/skin.glsl`): a second `mat4[128]` beside `boneMatrices` does not fit
+  the vertex stage's uniform budget and the program fails to link.
 
 A bone no clip drives copies its bind matrix rather than being rebuilt from a decomposed bind, which
 keeps the single-clip path bit-identical.

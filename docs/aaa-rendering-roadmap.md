@@ -314,9 +314,7 @@ Every item is built, and none cost a `pbr_frag` sampler unit.
 
 ### C1. Translucent shadow maps — Effort M → **L, DONE (spec 11.26)**
 Deep opacity maps behind `--translucent-shadows`, on the cascades only: hair casts a partial
-shadow, glass no black one. The layers live in the depth array on unit 10 and store
-transmittance `exp(-b0)`, not absorbance, because transmittance averages linearly and so PCF over
-it is exact; opaque casters stay out of it for the same reason. No doc describes it yet.
+shadow, glass no black one. See `docs/lighting.md`, Cascades.
 
 **Deferred, with reasons:**
 - the four-moment reconstruction: it pairs MSM's linear warp with MBOIT's, a configuration in
@@ -330,10 +328,7 @@ it is exact; opaque casters stay out of it for the same reason. No doc describes
 `--emissive-lights` fits a rectangle to each emissive mesh and registers it as a `LIGHT_AREA`. Off
 by default, because most emissive materials in practice are a flat bright colour rather than a
 lamp; a material declines with `emissiveLight: "off"`. See `docs/lighting.md`, Derived area panels
-and Captures. Two fit rules the doc does not yet hold: the in-plane axes come from the
-minimum-area rectangle over the mesh's own edge directions (a square panel's covariance is
-isotropic, so a principal axis is arbitrary), and a mesh is accepted as one rectangle by its FILL,
-`sum(A) / (w*h)`, since planarity reads 1.0 for an L, a ring or two strips apart.
+and Captures, which also hold the fit's rules.
 
 **Open:** a derived panel inherits `cast_shadows` false, so it lights through walls unless a
 `light_overrides` entry turns its shadow on, and the contact march (C5) skips area panels.
@@ -411,39 +406,14 @@ Jacobian, shoaling against a bed, an underwater medium and a `.cscn` block, on a
 `docs/shader-subsystems.md`, Water.
 
 **Refused: tessellation, and a geometry clipmap.** Patch density is a screen-space sampling
-problem with screen-space answers, so tessellation was never needed. The clipmap (11.33) could not
-reach the horizon, because its snap ties reach to the finest cell's size. Past what the grid
-resolves, the removed slope variance is handed to roughness through the Beckmann relation (11.42),
-added to the authored roughness, beside a Cox-Munk sun lobe fed the same unresolved slope.
+problem with screen-space answers, so tessellation was never needed; the clipmap (11.33) could not
+reach the horizon.
 
-The baked foam pattern (11.45) has two sampling rules: its footprint comes from the undisplaced
-position, since the shore band advects the lookup along a C0 bed gradient and an implicit footprint
-steps mip at every bed texel, printing the sea as a grid; and it is domain-warped, since a warp
-leaves the value distribution, and so the erosion threshold, untouched.
-
-Later work on the same surface, by spec:
-
-- **11.43**: `parse_env` reports a key nothing read, as `parse_water` does, and `water_fixture`'s
-  sun states the angle in effect. Gate boxes are derived from the glTF (`_water_ramp_band`) rather
-  than transcribed.
-- **11.44**: every physical length in the water is stated in metres and converted at use through
-  `waterUnitsPerMetre`, off `Sky.world_units_per_km`, the atmosphere's own authority, so the ocean
-  and its sky agree on the size of the world. `apps/tree` sets the number. Added `beach_fixture`, a
-  dome with a shoreline facing every direction.
-- **11.45**: the shore chain, a Lagrangian chain per alongshore column of the traced shoreline,
-  forced by the shallow-water pressure form (a linear spring has degenerate equilibria and settles
-  into piled-up states). The sea's lens and the sand's wetness read the same tips, through a std140
-  block rather than a sampler.
-- **11.46**: by-example texturing, D5 below.
-- **11.47**: whitecaps that break. The short cascade no longer votes on where foam is (its waves
-  outrun everything else in the path); the accumulator is mipped and read with `textureGrad`, never
-  an implicit derivative, since `oceanCascadeUv` wraps with `fract`; a fold births foam only near
-  its own band's crest, normalised by that band's RMS; crest and shore opacity are split. Coverage
-  is calibrated against Monahan and O'Muircheartaigh.
-- **11.48**: the swell has its own spectrum: two wave trains, `windSea{}` and `swell{}`, eight keys
-  each beside a shared `seaDepth`. Depth-limited breaking takes its face term from the wave's own
-  direction, never the bed's gradient, which is zero across a wave's travel and reversed past the
-  beam.
+Later work on the same surface, by spec: 11.43 (`parse_env` reports a key nothing read; gate boxes
+derived from the glTF), 11.44 (lengths in metres, `beach_fixture`), 11.45 (the shore chain and the
+baked foam pattern), 11.46 (by-example texturing, D5 below), 11.47 (whitecaps that break, coverage
+calibrated against Monahan and O'Muircheartaigh) and 11.48 (two wave trains). Their rules are in
+`docs/shader-subsystems.md`, Water.
 
 Two instruments from this series are worth reusing. `--water-foam-debug` writes a binary selection
 mask read at nadir, where a pinhole images a plane affinely, so pixel fraction is areal fraction
@@ -635,7 +605,7 @@ Per-pass GPU timing behind `--profiler`. `GL_TIME_ELAPSED` works on this driver 
 ### E5. Instancing + LOD + sorted submission — Effort L — **DONE, two limbs of three (specs 11.28 / 11.29)**
 Geometry dedup by `aiMesh` index, one flattened draw list, per-cascade shadow culling, instanced
 draws through a std140 `InstanceBlock`, and LOD chains built at import as index ranges in one EBO
-(`draw_list.h`). The third limb, material-sorted submission, moved to E6.
+(`docs/architecture.md`, The draw list). The third limb, material-sorted submission, moved to E6.
 
 In the camera lane, scatter order decides batching (the batcher joins only consecutive items, so
 props are Morton-ordered within a prototype) and LOD splits runs, since the batch key is
@@ -651,7 +621,7 @@ prepass are substitutes, the sort the cheaper (opaque 306 ms with neither, 169 w
 with the prepass), and no scene in the corpus has a configuration where the prepass pays.
 
 **Open: E5's third limb, material-sorted submission.** The sort key puts the depth bucket above
-material (`draw_list.c`), so material is ordered only within a bucket; grouping by material needs
+material (`docs/architecture.md`, The draw list), so material is ordered only within a bucket; grouping by material needs
 material above depth, a different sort to measure against overdraw. With the prepass off,
 front-to-back is the only lever on overdraw, so the two compete on one key.
 
@@ -932,19 +902,10 @@ the rules are `AGENTS.md`, Verifying. What this plan adds for every item:
 2. **On has a reference:** a deterministic headless golden or analytic gate arms. TAAU has
    neither: spec 11.7's PSNR threshold against native was never added to `gates.py`.
 3. **Every feature has a CLI flag** in the render app and an ImGui toggle bound to its field.
-4. **Falsify every arm against the mutation its docstring names.** An arm that cannot fail looks
-   exactly like one that works. For each coverage claim, name a one-line mutation the arm catches
-   and one it would not.
-5. **Ask whether the construction can show the effect** before believing a measurement taken on
-   it: a LUT whose channels each depend on two inputs hides tetrahedral's three-way term, and an
-   identity table exact in fp16 hides storage error.
-6. **A round trip compares every payload**, not the easiest one: a heightmap save that kept the
-   geometry and dropped the masks passed a geometry-only arm.
-7. **A state no flag can reach is not covered by any number of arms.** Build the lever
-   (`--shadows-off-at`, `--render-scale-at`).
-8. **Some defects only an instrument sees and some only a look sees**: a light counted twice is
-   invisible in the frame, and a mottled surface is invisible to the arms. Use both. Check a
-   review's correction before applying it, as you would a row.
+4. **Every arm is written to `docs/verification.md`, Writing a gate arm**: falsified against the
+   mutation it names, on a construction that can show the effect, a round trip comparing every
+   payload, a lever for any state no flag reaches, and a look beside the numbers.
+5. **Check a review's correction before applying it**, as you would a row.
 
 ## Execution workflow
 
