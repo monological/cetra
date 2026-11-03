@@ -1,7 +1,7 @@
 # Verification: gates, goldens and deterministic renders
 
 How this project decides that a change did what it claims, and what each instrument can and
-cannot see. `AGENTS.md` owns the architecture; this file owns the method.
+cannot see. `docs/architecture.md` owns the architecture; this file owns the method.
 
 Three instruments, answering different questions:
 
@@ -66,6 +66,12 @@ its re-bake moved once the textures were in before frame 1.
 - [The foot-planting path](#the-foot-planting-path) — what the `ik` group asserts about the
   solve, why eleven arms passed while the feet were welded to the floor, and why planting is
   not locking
+- [Reproducing a session: the config snapshot](#reproducing-a-session-the-config-snapshot-spec-1171)
+  — handing over a tuned session as one JSON file, what it carries, and what it cannot
+- [Debugging an animation](#debugging-an-animation) — the puppet, the retarget A/B, and the real
+  rig
+- [Where assets live](#where-assets-live) — the corpus split by kind, and the three couplings that
+  naming an asset through `fixture_paths` holds
 
 ---
 
@@ -310,7 +316,7 @@ covers it either.
 | `assets/models/strut_walk.fbx` | no | no | a real walk cycle, animation-only (no mesh): 52 channels, 86 ticks at 60 tps. Binds onto the puppet by EXACT name -- twenty-two channels, one per bone, with an identity retarget delta since an animation-only file carries no source skeleton -- which is what `anim-clip-loads` asserts and what a retarget delta is measured against. The unmatched 30 are fingers, a second toe joint and a head tip the puppet does not model. **How it LOOKS on the puppet is unverified**: the puppet's rest rotations are identity where a real rig's are not, so the absolute rotations land differently. That is the retarget question the puppet cannot answer -- see "The real-character path" below. |
 | `apps/shapes`, `apps/splash` | no | no | **no capture path, and none is planned** (spec 11.103). shapes keeps 4x MSAA deliberately, so there is nothing to regress; adding headless is 40-60 lines for a decision that is not changing. `apps/splash` cannot be captured at all without porting it onto `engine_run` — it draws to the default framebuffer and the engine's screenshot lives in the loop it does not use. |
 | `apps/sprites`, `apps/network` | particles / no | no | **capturable since 11.105** (`-x -f -S`) and **0 px run-to-run** (measured x2 at 30 frames in spec 11.108; both are 4x MSAA, TAA off under the 2D preset). Neither has a golden, so a capture against the previous commit is their whole proof; sprites' one recorded move is 11.107's clear colour (one 8-bit code over 1,222,050 px). |
-| `apps/pcb` | no | no | **A repository of its own since 11.105** (`../apps/pcb`, cetra as a submodule) and not gitignored, though `AGENTS.md`'s app table lists it; capturable the same way and **0 px run-to-run** (spec 11.108). Built against every phase of the three API specs from its submodule, which is what makes it the one consumer that tests the public surface from outside the tree. |
+| `apps/pcb` | no | no | **A repository of its own** (`../apps/pcb`, cetra as a submodule); capturable the same way and **0 px run-to-run** (spec 11.108). Built against every phase of the three API specs from its submodule, which is what makes it the one consumer that tests the public surface from outside the tree. |
 | `apps/forest` | no (deliberately) | no | **NOT pixel-deterministic. 34,991 px run-to-run** at 60 frames / 3200x1800, 7,134 at 20 / 1600x900 -- it accumulates, and **140,910 px (9.8%) at 20 frames / 800x450 with `--taa`** (measured on the pre-11.34 build, whose `--taa` target was accidentally 2-sample; re-measure before citing against the genuine 1-sample path), so the floor is far worse on the AA path it ships than on the MSAA one these older figures were taken at. **The Hillaire sky is the source**: `--no-sky` drops it to 4 px and `--render-mode 6` to 0. Physics is exact (two `--trace-player` traces diff byte-identical), as are geometry, scatter, LOD and textures. For a 0 px claim use `--no-sky` or `--render-mode 6`, or assert on the submission integers instead. Spec 11.29 asserted determinism as a precondition and never checked it -- every `forest-*` arm reads integers, so the suite has never compared two forest frames. **Its GPU timings are a different matter and are tight**: 0.23% run-to-run at 1600x900, and **0.8% at 3200x1800 when the runs are BACK-TO-BACK** (five samples, 330.3-332.9 ms). An earlier 11% recorded here was a protocol artefact -- those two samples had four other heavy configurations between them, so it measured drift across a sequence, not per-run jitter. **Interleave configurations (A/B/A/B) instead of running A then B**, and take each config's floor from samples adjacent in time to the ones compared; done that way the native-resolution comparison resolves a 1.5% effect cleanly. **No forest capture from before 11.62 compares, even on the 0 px paths.** `windObjectPhase` now rounds an object's position to a whole unit before hashing it -- which it does whether or not the origin has ever moved -- so every tree draws a different sway phase than it did. The LOOK is unchanged, since the phases are arbitrary either way, and nothing automated reports it: the only wind fixture runs `phase_variation = 0`, which returns before the snap. The round exists to absorb an ulp of reconstruction error that would otherwise re-phase objects on every shift, and it cannot wait for the first shift without producing exactly the pop it prevents. **And no capture from before 11.63 compares at all**: forest is an ISLAND on a terrain quadtree with resident regions now, which is a different world with a different scatter (prop counts fell about 7%, which is the margin — a region draws inside its own square and clips against the domain's, where the old scatter drew inside the clipped box so every draw landed). `--no-island --no-quadtree --no-regions` is as close to the old configuration as the flags reach, and it is not identical: the quadtree draws a different surface at a different density, which is the point of it. |
 | `assets/scenes/mask_fixture.cscn` | no | no | **the only visible ALPHA_MASK geometry in the corpus** (spec 11.31). An opaque quad, a MASK quad above the cutoff and one below it, in one frame. **It IS a golden**, and this said otherwise for several specs: it is the only golden rendering visible masked geometry at the 4x MSAA default, which is where alpha-to-coverage is live. Two of its four arms pass `--taa` to drop to one sample, because a fractional alpha there is *supposed* to become fractional sample coverage and the kept-quad equality only holds at one sample. What does NOT vary with the sample count is which quad is there at all -- `mask-samples` (spec 11.87) is the arm asking that, and it renders bare `--msaa 1`, the one configuration nothing else in the file exercises. |
 | `assets/scenes/water_fixture.cscn` | no | no | **the water instrument** (specs 11.32 to 11.35). A ramp DESCENDING toward the camera into the water over a flat bed, so one frame carries a shoreline, a continuous absorption ramp (path grows with distance as the sight line goes grazing), and a Fresnel reflection. **0 px x2 same build** -- the surface is a pure function of the frame clock. Read it as RATIOS: R/B falls 0.2168 -> 0.1461 -> 0.0963 with distance, dry land reads 1.98. Since 11.35 the frame also carries the HORIZON, which is what `water-horizon` reads as reach invariance and `water-farfield` reads as filtering; do NOT extend the absorption monotonicity read up into that band, where sky reflection legitimately raises R/B again. Since 11.33 the fixture's own `water{}` block creates the surface and authors every key -- 21 flat since 11.84 split `scatter` into `scatterAlbedo` and `scatterGlow`, and 8 in each of the two wave trains since 11.48 -- so an arm names only what it varies, and `--no-water` is what turns it off. Note an arm overriding one field of a train has to go through `_water_cscn_variant`'s one-level merge: a plain `dict.update` replaces the whole nested object and the seven fields it drops fall back to `create_water`'s defaults, which are this fixture's own values and so would hide the mistake. Its 31 arms also drive `--water-bed dome` (shoaling), `--water-probe` (the surface query on both wave models, the GPU pass printed beside the Gerstner closed form it is checked against), `--water-fft-probe` (the spectrum's variance and the transform against its closed form) and `--no-water-lod` (far-field filtering) off this one file. **Three arms author their own framing on top of it**, because the fixture's own cannot see what they measure: `water-waterline` needs crests closing OVER the eye (amplitude two orders above 0.06), `water-glitter` needs the sun dead ahead and lower, and `water-foam-persist` needs a 20 m/s sea over 90 frames AND raises the level to 1.1 to drown the ramp, so its box needs no notch cut round dry geometry. **Its sun was a lie until 11.43**: the block authored `sun_elevation` / `sun_azimuth` FLAT where `parse_env` reads them under a nested `sun` object, so the stated 26 degrees was never in effect and every arm here is calibrated against the sky's own 35. Rendering the stated 26 moves 85% of the frame. `parse_env` and `parse_water` now report a key nothing read. **The ramp's orientation flipped in 11.43** (it was a paper blade seen from beneath), which moved the waterline from row 0.5079 to 0.4530 -- so every box that reads the shoreline is now DERIVED from the wedge's corners in the glTF via `_water_ramp_band`, stated as heights on the ramp rather than as screen rows. No capture from before 11.43 compares. **Its golden was re-baked in spec 13.2**, when the refracted-grid caustics reached Gerstner water: the recipe's Gerstner frame had carried no caustics at all until then, since the old ones were FFT-only. `water_submerged` did not move (0 px): seen from under the surface, the bed does not come through the refraction path the caustics are applied on. No capture of this fixture from before 13.2 compares. **Re-baked again in spec 13.3** for the fine caustic level, whose 2.34 cm cells draw the lines on the ramp smooth where the 9.4 cm cells stepped. |
@@ -1130,86 +1136,89 @@ Five more things this cannot settle from here:
 
 ## Reproducing a session: the config snapshot (spec 11.71)
 
-**Reach for this whenever a question is "why does MY frame look like that".** A `.cscn`
-plus a command line does not describe a session — the GUI has ~185 controls and dragging
-any of them leaves the state on screen and nowhere else. `--config-dump <path>` (and the
-**Dump Config** button beside Print Camera) writes ~230 settings across engine, postfx,
-exposure, scene, shadow, sky, ibl, gi and water, plus every probe, light and material.
-`--config <path>` reads it back.
+**Reach for this whenever the question is "why does my frame look like that".** A `.cscn` plus a
+command line does not describe a session: the GUI has about 185 controls, and dragging one leaves
+its state on screen and nowhere else. `--config-dump <path>`, or the **Dump Config** button beside
+Print Camera, writes about 230 settings across engine, postfx, exposure, scene, shadow, sky, ibl,
+gi and water, plus every probe, light and material. `--config <path>` reads it back.
 
 ```bash
 ./out/bin/render -m assets/scenes/cornell_rooms.cscn        # drag sliders, hit Dump Config
-./out/bin/render --config cetra_config.json          # the same frame, no other flag
+./out/bin/render --config cetra_config.json                 # the same frame, no other flag
 ./out/bin/render --config cetra_config.json -x -f 2 -S /tmp/agent.ppm
 ```
 
-**It carries its own model and its own framing**, so the last line is the whole handoff:
-give somebody the JSON and they see your pixels. Measured on `cornell_rooms` at 400x300
-against a 0 px floor: a session under `--no-ssr --no-ssao --tonemap agx --sharpen 0.8
---vignette --grain 0.05` reproduces at **0 px** from the snapshot alone, where the same
-fixture without it differs by 87.6% of frame.
+**It carries its own model and framing**, so the JSON is the whole handoff: give it to somebody and
+they see your pixels, exactly.
 
-**When NOT to reach for it.** It is a *settings* snapshot, not a scene. It cannot create a
-light, bind a texture, place a probe or a fog volume, or author a road — everything in a
-`.cscn`'s load-time half has no runtime setter, so restoring those is a re-load. The
-snapshot NAMES the `.cscn` in its `source` block and applies on top of it. Precedence is
-`defaults → .cscn → CLI → snapshot`, and **the snapshot owns the look while the CLI owns
-the run**: `-x`, `-f`, `-S`, `--screenshot-every` and `--profiler` are never written and
-never applied, so handing one to a headless capture cannot fight itself.
+**It is a settings snapshot, not a scene.** It cannot create a light, bind a texture, place a probe
+or a fog volume, or author a road: a `.cscn`'s load-time half has no runtime setter, so restoring
+it is a reload. The snapshot names its `.cscn` in its `source` block and applies on top of it.
 
-**Three things it deliberately does not carry**, each for want of a stable key rather than
-effort: spring-bone params (per `SceneNode`), SSS profile SLOTS (assigned in
-material-block order at load), and `camera.near_clip` (`apps/render/src/render.c:2288` — the APP,
-not the engine's `render.c` — recomputes it every
-frame from the camera-to-target distance). `config-perturb` names all of them.
+**Precedence is defaults, then the `.cscn`, then the command line, then the snapshot.** The
+snapshot owns the look and the command line owns the run: `-x`, `-f`, `-S`,
+`--screenshot-every` and `--profiler` are never written or applied, so a snapshot handed to a
+headless capture cannot fight it.
 
-**A restored sun or cloud goes through the same chain the GUI sliders do** (spec 11.72).
-`scene_environment_changed` in `scene.c` is the one place the env cube, the sky-mirroring
-probes and the GI volume re-derive from — the GUI's two release sites and the config
-restore all call it. It lived as a file static in `gui.c` for a while, with a comment
-claiming it was the one chain, while the restore called bare `sky_update_sun`: a strict
-SUBSET, since `sky_bake` is `sky_bake_ex(..., false)`, so a restored sun stripped the cloud
-deck out of an env cube that had one, refreshed no probe and re-armed no GI.
+**Three things are not carried, each for want of a stable key:**
+- spring-bone parameters, which are per `SceneNode`;
+- SSS profile slots, assigned in material-block order at load;
+- `camera.near_clip`, which the render app (`apps/render/src/render.c`, not the engine's
+  `render.c`) recomputes every frame from the rig's arm unless `fit_clip` is on.
 
-**`--clouds` rides the `source` block, not a table row alone**, because the noise bake is a
-one-shot at startup gated on the layer being on. A row by itself stored `true` against
-noise that never existed: every consumer refused it, the sky came out clear, and the dump
-wrote `true` back so `config-roundtrip` passed on the wrong frame. `sky.clouds.enabled` now
-refuses by name when it finds no baked noise, and `config-clouds` reads both halves.
+`config-perturb` names all three.
 
-**A restored sun still does not re-capture a probe SET** — 11.70 defers that and a set
-cannot re-capture, since its members' cubes are released into the atlas. An env-only probe
-IS refreshed.
+**A restored sun or cloud goes through the chain the GUI's sliders do.** `scene_environment_changed`
+is the one place the env cube, the sky-mirroring probes and the GI volume re-derive from; the GUI's
+two release sites and the restore all call it. Bare `sky_update_sun` is a subset: it re-bakes the
+cube without the cloud deck, refreshes no probe and re-arms no GI. An environment-only probe is
+refreshed; a probe set is not re-captured, since its members' cubes were released into the atlas.
 
-**Animation debugging recipe:** (0) `render -m assets/scenes/puppet.cscn --anim-probe` poses a rig whose bind is pure translation and whose clips are authored in closed form, so a wrong axis, order or handedness reads as a NUMBER rather than a silhouette; `-a assets/models/strut_walk.fbx` on it is a real walk cycle bound by exact name -- **and by itself it is the FAILURE, not a baseline** (spec 12.11): that clip is authored on `t_pose.fbx`, the puppet rests in pure translation, and with only one rest pose in hand the loader has nothing to reconcile, so the delta is identity by construction and the rig folds its legs over its head. Add `-s assets/models/t_pose.fbx` and it walks. The pair is the A/B a retarget is read against, and `anim-retarget` is it as an arm: a foot above the hips and `0 retargeted` one way, below and all 22 the other. Then, on the real rig: (1) render the model with no animation as the bind-pose
-baseline; (2) play the animation on its native skeleton (e.g. `-m T-Pose.fbx -a clip.fbx`)
-to validate the core pipeline; (3) retarget onto the target model and compare frame
-strips. Feeding the T-pose itself as the animation (`-a T-Pose.fbx`) must reproduce the
-bind pose exactly -- a quick invariant test for the retargeting path. Cross-rig
-retargeting needs the source skeleton's rest pose: a clip exported WITH SKIN embeds its own
-rig and it is used automatically; for animation-only files pass `-s <tpose.fbx>` explicitly,
-or the rotations reach the target raw. **The loader now says which happened** -- the per-clip
-summary's third number counts corrections actually computed, so a run that reconciled nothing
-prints `0 retargeted` rather than repeating the matched count, and the bone table's `[R]`
-means the same thing. It used to say `52 matched, 52 retargeted` over a table of `0.0 deg [R]`
-on a load that had done nothing at all.
+**`--clouds` rides the `source` block, not a table row alone.** The cloud noise is baked once at
+start-up and only when the layer is on, so a row alone would store `true` against noise that never
+existed, render a clear sky, and dump `true` back, passing `config-roundtrip` on the wrong frame.
+`sky.clouds.enabled` refuses by name when no noise was baked, and `config-clouds` reads both halves.
+
+## Debugging an animation
+
+1. **Start on the puppet.** `render -m assets/scenes/puppet.cscn --anim-probe` poses a rig whose
+   bind is pure translation and whose clips are authored in closed form, so a wrong axis, order or
+   handedness reads as a number rather than a silhouette.
+2. **Retarget onto it.** `-a assets/models/strut_walk.fbx` on the puppet is a real walk cycle bound
+   by exact name, and by itself it is the failure case (spec 12.11): the clip is authored on
+   `t_pose.fbx`, and with only one rest pose the loader has nothing to reconcile, so the rig folds
+   its legs over its head. Add `-s assets/models/t_pose.fbx` and it walks. That pair is the A/B a
+   retarget is read against; `anim-retarget` is it as an arm.
+3. **Then the real rig:** render the model with no animation as the bind-pose baseline; play the
+   clip on its native skeleton (`-m T-Pose.fbx -a clip.fbx`) to check the core path; then
+   retarget onto the target model and compare frame strips. Feeding the T-pose itself as the
+   animation (`-a T-Pose.fbx`) must reproduce the bind pose exactly.
+
+Cross-rig retargeting needs the source skeleton's rest pose. A clip exported with its skin embeds
+its own rig, which is used automatically; for an animation-only file pass `-s <tpose.fbx>`, or the
+rotations reach the target raw. The loader says which happened: the per-clip summary's third
+number counts corrections actually computed, so a load that reconciled nothing prints
+`0 retargeted`, and the bone table's `[R]` means the same.
 
 ## Where assets live
 
-**`assets/` is split by KIND since spec 12.8** — `scenes/`, `models/`, `textures/`, `goldens/`,
-`generators/`, `lut/`, `ies/`, `data/`, with `abandoned_window/` and `ivy_arcade/` left
-whole because each carries its own scenes and producers. **Nothing that names an asset spells a
-directory**: a generator says `asset_path("foo.gltf")` to write one and `asset_ref("foo.png")` to
-name one inside a file it emits, `gates.py` says `asset("foo.cscn")`, and all three route through
-`fixture_paths.asset_subpath` — ONE statement of the taxonomy, imported rather than restated, so a
-new fixture lands in the right place with nothing to register and a later re-split changes one
-function rather than two hundred call sites. It shipped as two copies of the map and they had
-already drifted before either was used in anger, which is the argument for the import. Three couplings are what
-that routing exists to hold, and each renders a plausible frame when broken: a generator resolves
-its outputs against its own `__file__`, which is what lets `fixture-gen` sandbox one by copying it;
-a `.cscn` resolves its model against the SCENE FILE's directory, so it names `../models/<x>`; and a
-glTF image `uri` resolves through the texture pool, whose directory is the model's, so it names
-`../textures/<x>` — which works because `find_existing_subpath` probes `base + subpath` VERBATIM
-first and only then starts stripping leading segments. Stripping alone can only ever shorten a
-name, so a BARE sibling filename can never reach another kind's directory; the explicit `../` is
-what does the reaching.
+`assets/` is split by kind: `scenes/`, `models/`, `textures/`, `shaders/`, `fonts/`, `audio/`,
+`goldens/`, `generators/`, `lut/`, `ies/` and `data/`. `abandoned_window/` and `ivy_arcade/` stay
+whole, since each carries its own scenes and producers.
+
+**Nothing that names an asset spells a directory.** A generator writes one through
+`asset_path("foo.gltf")` and names one inside a file it emits through `asset_ref("foo.png")`;
+`gates.py` finds one through `asset("foo.cscn")`. All three route through
+`fixture_paths.asset_subpath`, the one statement of the taxonomy, imported rather than restated, so
+a new fixture lands in the right place with nothing to register.
+
+Three couplings depend on that routing, and each renders a plausible frame when broken:
+- **A generator resolves its outputs against its own `__file__`**, which is what lets `fixture-gen`
+  sandbox one by copying it. A generator joining an absolute path would overwrite the corpus the
+  gate compares against.
+- **A `.cscn` resolves its model against the scene file's directory**, so it names
+  `../models/<x>`.
+- **A glTF image `uri` resolves through the texture pool, whose directory is the model's**, so it
+  names `../textures/<x>`. That works because `find_existing_subpath` tries `base + subpath`
+  verbatim before stripping leading segments; stripping only shortens a name, so a bare sibling
+  filename can never reach another kind's directory.
