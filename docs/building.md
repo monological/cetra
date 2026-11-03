@@ -1,49 +1,71 @@
 # Building
 
-The build, the compiler flags, and using the engine from another project.
+The build, the compiler flags, editor diagnostics, and using the engine from another project.
 
 ## Build System
 
 ```bash
-./build.sh        # Build library + all apps (CMake + Ninja)
+./build.sh        # library and every app, Debug, into out/
+./build.sh -r     # Release, into out/release/
+./build.sh -c     # reconfigure from scratch first
 ```
 
-The build script runs CMake to configure and Ninja to build. Output goes to `out/`
-(`out/bin/<app>`).
+`build.sh` is a thin wrapper over `CMakePresets.json`: the presets own the generator (Ninja), the
+build type and the binary directory. Apps land in `out/bin/<app>` and load their assets relative
+to the repository root. `--target <macos|linux|windows>` syncs the working tree to that OS's build
+VM and builds there; `docs/build-vms.md` has the setup.
 
-**Using the engine from another project** (spec 11.105): `add_subdirectory` on a git submodule,
-or FetchContent. `README.md`, "Using cetra in your project", has the CMakeLists. There is no
-install; the comment at the end of `cetra/CMakeLists.txt` says why the old install rule was
-deleted. Three lines make the out-of-tree build work, and each could be mistaken for its
-neighbour: the output directories use `PROJECT_BINARY_DIR`, which is `out/` in this tree and the
-engine's own subdirectory of a parent's build (the draco include path stays `CMAKE_BINARY_DIR`,
-because draco writes there); `CETRA_BUILD_APPS` defaults to `PROJECT_IS_TOP_LEVEL`; and
-`shader_strings.h` is included only from `program.c`. To check the path, build a throwaway
-consumer in a scratch directory: the README's CMakeLists with `add_subdirectory` pointed at the
-checkout, plus a `main.c`. Then look for `build/bin` or `build/lib` appearing, and for the
-generated header in `ninja -t deps` for the consumer's object. On this Mac: 669 steps, 36 s cold.
+Every dependency is vendored under `cetra/src/ext/` and built from source as a static library
+(README, "Dependencies").
 
-**clangd / editor diagnostics:** the compilation database lands in `out/`, which is
-neither place clangd looks (beside the file, its ancestors, or a `build/` child), so a
-committed `.clangd` at the repo root points it there. Without it clangd guesses flags,
-fails to find `cglm/cglm.h`, turns every `vec3` into an unknown type, and buries the real
-diagnostics under an error-limit cutoff — a wall of red that says nothing about the code.
-If you see that, check `.clangd` survived before believing any of it. The BUILD is
-unaffected either way and always was.
+## Compiler
 
-**Compiler:** clang with `-Wall -g -std=gnu11 -pthread`, plus `-DGL_SILENCE_DEPRECATION` **on
-macOS only** (`CMakeLists.txt:239`, a `PLATFORM_ID:Darwin` generator expression — the same
-scoping trick as the define below, and for the same reason).
-`CMAKE_C_STANDARD 11` leaves `C_EXTENSIONS` at its default of ON, so the emitted
-flag is `gnu11`, not `c11` -- GNU extensions are available.
+- **Flags**: clang with `-Wall` on macOS and Linux, clang-cl with `/W4` on Windows, from one
+  interface target (`cetra_warnings`) the library and every app share. Debug or Release comes from
+  the preset.
+- **The C dialect is `gnu11`.** `CMAKE_C_STANDARD 11` leaves `C_EXTENSIONS` at its default of ON,
+  so GNU extensions are available.
+- **`GL_SILENCE_DEPRECATION` is defined on macOS only**, through a `$<PLATFORM_ID:Darwin>`
+  generator expression in the root `CMakeLists.txt`.
 
-The `cetra` target compiles with **`-D_POSIX_C_SOURCE=200809L` and `-D_DEFAULT_SOURCE` on LINUX
-ONLY**, through a `$<$<PLATFORM_ID:Linux>:...>` generator expression
-(`cetra/CMakeLists.txt:109-111`). The scoping is the thing to know, because the define does real
-damage where it is not wanted: on macOS it pins `__DARWIN_C_LEVEL` to the POSIX level and hides
-the Darwin extensions -- BSD types like `u_int` (which `<sys/sysctl.h>` is declared in terms of)
-and constants like `_SC_NPROCESSORS_ONLN` stop being declared at all. That is why it is not set
-there. `util.c` still defines `_DARWIN_C_SOURCE` before its first include for `get_cpu_cores`, but
-that is now belt-and-braces against the define coming back rather than a fix for anything the
-build currently does. Note the failure mode is an "undeclared identifier" compile error -- and
-wrapping the call in `#if defined(...)` turns that error into a silently wrong answer at runtime.
+**`_POSIX_C_SOURCE=200809L` and `_DEFAULT_SOURCE` are defined on the `cetra` target on Linux only**,
+through a `$<PLATFORM_ID:Linux>` generator expression in `cetra/CMakeLists.txt`. The scoping is the
+thing to know:
+- On macOS the define pins `__DARWIN_C_LEVEL` to the POSIX level and hides the Darwin extensions:
+  BSD types like `u_int`, which `<sys/sysctl.h>` is declared in terms of, and constants like
+  `_SC_NPROCESSORS_ONLN` stop being declared.
+- Set globally, it breaks the JoltC build (`alloca` undeclared).
+- The failure is an "undeclared identifier" compile error. Wrapping the call in `#if defined(...)`
+  to silence it turns the error into a wrong answer at runtime.
+
+`util.c` also defines `_DARWIN_C_SOURCE` before its first include, for `get_cpu_cores`, as a guard
+against the define reaching macOS.
+
+## Editor diagnostics
+
+The compilation database lands in `out/`, which is neither place clangd looks (beside the file,
+its ancestors, or a `build/` child), so a committed `.clangd` at the repository root points it
+there. Without it clangd guesses flags, cannot find `cglm/cglm.h`, makes every `vec3` an unknown
+type, and buries the real diagnostics under its error limit. If you see that, check `.clangd` is
+still there before believing any of it. The build itself does not depend on it.
+
+## Using cetra from another project
+
+Add the engine with `add_subdirectory` on a git submodule, or with FetchContent; README, "Using
+cetra in your project", has the CMakeLists. There is no install rule: the comment at the end of
+`cetra/CMakeLists.txt` says what a working one would need.
+
+Three things make the out-of-tree build work, and each is easy to undo by accident:
+- **The output directories use `PROJECT_BINARY_DIR`**, which is `out/` here and the engine's own
+  subdirectory of a parent's build. With `CMAKE_BINARY_DIR` every library and app lands in the
+  parent's `lib/` and `bin/`. The draco include path is the exception and stays `CMAKE_BINARY_DIR`,
+  because draco writes its generated header there.
+- **`CETRA_BUILD_APPS` defaults to `PROJECT_IS_TOP_LEVEL`**, so a consumer does not build the
+  example apps.
+- **`shader_strings.h` is included only from `program.c`**, so a consumer's objects do not depend
+  on the generated header (`docs/shaders.md`).
+
+To check the path, build a throwaway consumer in a scratch directory: the README's CMakeLists with
+`add_subdirectory` pointed at the checkout, plus a `main.c`. Then check that no `build/bin` or
+`build/lib` appears, and that the generated header is absent from `ninja -t deps` for the
+consumer's object. A cold build is about 670 steps.

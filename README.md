@@ -393,115 +393,94 @@ Notes:
 
 ## Dependencies
 
-**Everything is VENDORED under `cetra/src/ext/` and built from source as a static library.**
-There is no pkg-config and no vcpkg in this build -- GLFW (window/input), GLEW (GL extensions),
-cGLM (math), Assimp (model import), Jolt Physics (via the `JoltC` C wrapper), Dear ImGui (via
-`cimgui`) and meshoptimizer (LOD chains, cluster DAGs) are all `add_subdirectory` targets with
-`BUILD_SHARED_LIBS OFF`. The only `find_package` calls in the tree are `OpenGL`, `Threads` and
-`Git`, and `Python3` (REQUIRED — `gen_shader_header.py` runs at build time). This is what makes
-the three-platform build work from one command; anything that reaches for a system library
-instead has to answer for Windows.
+Everything is vendored under `cetra/src/ext/` and built from source as a
+static library, so one command builds on macOS, Linux and Windows. There is no
+pkg-config and no vcpkg; the only things CMake looks for on the system are
+OpenGL, threads, git, and Python 3 (which generates the shader header at build
+time).
 
-**Header-only:** stb_image (textures), stb_truetype + stb_rect_pack (SDF text),
-uthash (hash caches).
+- **Built as subprojects:** GLFW (window and input), GLEW (GL extensions), cglm
+  (math), Assimp (model import), Jolt Physics through the `JoltC` C wrapper,
+  Dear ImGui through `cimgui`, and meshoptimizer (LOD chains, cluster DAGs).
+- **Header-only:** stb_image (textures), stb_truetype and stb_rect_pack (SDF
+  text), uthash (hash tables), and miniaudio (audio, with its own CoreAudio,
+  ALSA and WASAPI backends, behind the game layer's `audio.h`).
+- **Compiled into the `cetra` target:** cwalk (paths), cJSON (scene files,
+  saves, settings and the config snapshot), log.c (logging), progressbar.c.
 
-**Compiled straight into the `cetra` target:** cwalk (path handling), cJSON (the config
-snapshot's reader/writer), log.c (logging), progressbar.c.
-
-**Audio is miniaudio**, single-header and vendored, carrying its own CoreAudio, ALSA and
-WASAPI backends, behind the game layer's `audio.c/h` (spec 12.0; see Game Framework).
-`COMPONENT_AUDIO_SOURCE` is implemented. This line said there was no backend for a spec
-cycle after it shipped. Zones (spec 13.33) are this layer's, not miniaudio's: miniaudio
-carries no rooms, and the zone's gain rides its node graph as an output-bus volume.
+A change that reaches for a system library instead has to build on Windows too.
 
 ## Common Operations
 
-**Load an FBX/GLB scene:**
+These build on the minimal `main.c` above.
+
+**Load a model.** FBX, OBJ, glTF and GLB load into a scene of their own.
+Textures stream in on the engine's loader threads and may still be decoding
+when the call returns; meshes and skeletons are ready. The loader is required:
+passing NULL returns NULL.
+
 ```c
-// The loader is REQUIRED -- passing NULL returns NULL rather than loading synchronously.
 Scene* scene = create_scene_from_model_path("model.fbx", "textures/", engine->async_loader);
 engine_add_scene(engine, scene);
 ```
 
-**Create a mesh with a material, and add it to the scene graph:**
-```c
-Mesh* mesh = create_mesh();
-mesh_generate_box(mesh, &(Box){.size = {1, 1, 1}});
-mesh->material = create_material();
-material_set_program(mesh->material, engine_get_program(engine, CETRA_PROGRAM_PBR));
+**Meshes and nodes.** Attaching a mesh to a node uploads it, if it has vertices
+and nothing on the GPU yet. The upload measures the bounding box, the wind and
+bone extents, and makes normals for a triangle mesh that has none. Call
+`mesh_upload` yourself only after editing a mesh's arrays in place, and build a
+LOD chain before attaching, since that rewrites the index array.
 
+```c
 SceneNode* node = create_node();
-node_set_name(node, "my_node");
-node_add_mesh(node, mesh); // uploads it, and the upload measures the AABB
+node_set_name(node, "crate");
+node_add_mesh(node, mesh);
+node_set_position(node, (vec3){0, 1, 0}); // the translation of its local transform
 node_add_child(scene->root_node, node);
 ```
-Attaching uploads a mesh that has vertices and nothing on the GPU, and `mesh_upload`
-takes the AABB, the wind and bone extents, and normals if a triangle mesh has none (spec
-11.107). Call `mesh_upload` yourself only after editing the arrays in place, and build a
-LOD chain before attaching, since it rewrites the index array. What the draw list will
-not draw it says once, naming the node and the reason (nothing uploaded, no material, no
-program, a program whose setup failed, a draw mode the program's geometry stage cannot
-take); nothing is dropped in silence and nothing reaches a GL error at the draw.
 
-**A camera and a light**, each from a description struct -- fill the fields you mean,
-zero is the default named in the header (spec 11.106):
+The log line for a mesh the engine will not draw names the node and the
+reason: nothing uploaded, no material, no program, a program that failed to set
+up, or a draw mode its program cannot take. None of these reaches a GL error at
+the draw.
+
+**Cameras and lights.** After creation, move a camera with `camera_set_position`
+and `camera_set_look_at`; each keeps the orbit parameters in step, so a camera
+placed by pose and then orbited carries on from where it is. Move a light with
+`light_set_position`, `light_set_direction` and `light_set_up`, which set the
+authored frame its node's transform carries. Every other field on either is a
+plain write.
+
+A light's `intensity` is the one description field whose zero means something:
+a light of zero emits nothing, so a lit light has to say how bright it is.
+
+**The frame loop.** `engine_run` takes three hooks, called in frame order, and
+any may be NULL:
+
 ```c
-CameraDesc cam = {.position = {0, 2, 5}, .fov = glm_rad(45.0f)};
-engine_set_camera(engine, create_camera(&cam));
+void update(Engine* engine, float dt);          // input, simulation
+void pre_render(Engine* engine, Scene* scene);  // the camera and any graph change
+void render(Engine* engine, Scene* scene);      // NULL draws the scene
 
-LightDesc key = {.type = LIGHT_DIRECTIONAL, .direction = {-0.3f, -1, -0.5f}, .intensity = 3};
-scene_add_light(scene, create_light(&key));
-```
-After creation a Camera's pose goes through `camera_set_position` / `camera_set_look_at`
-(each re-derives the orbit parameters, so a camera moved by pose and then orbited continues
-from where it is) and a Light's frame through `light_set_position` / `light_set_direction` /
-`light_set_up` (the authored copy the node transform carries); every other field on either is a
-plain write. A
-light's intensity is the one desc field whose zero is a value: zero emits nothing, which is
-how a scene file declines the default rig, so a lit light says how bright. A scene with no
-light at all, no environment and zero ambient is warned once as it renders; the zero light
-counts as an answer and is not (spec 11.107).
-
-**Everything else on a live object is a field, and the header says which** (spec 11.108; the
-three roles are stated once, at the top of "Key Data Structures"). Under a struct's SETTINGS
-banner the fields are plain writes at any time:
-```c
-engine->show_fps = true;
-engine->exit_after_frames = 30;
-engine->postfx->fog_density = 0.002f;
-mesh->draw_mode = MESH_LINES;
-node_set_position(node, (vec3){0, 1, 0}); // the translation column of original_transform
+engine_run(engine, update, pre_render, NULL);
 ```
 
-**Run the low-level engine loop:**
-```c
-EngineConfig cfg = {.title = "Title", .width = 1920, .height = 1080};
-Engine* engine = create_engine(&cfg); // window, GL context, targets, post chain, programs
-// Three hooks, in frame order; any may be NULL. pre_render is where the camera
-// and any graph change go -- the engine propagates the graph and derives the
-// camera's matrices right after it. A NULL render draws the scene itself.
-engine_run(engine, update_callback, pre_render_callback, NULL);
-free_engine(engine);
-```
-The frame clears to `engine->clear_color` (0.1 grey by default) where nothing draws.
+Put the camera, and any node you add, remove or move, in `pre_render`: the
+engine walks the graph and derives the camera's matrices right after it. Done
+in `render`, the change shows a frame late, shadows included. Where nothing
+draws, the frame clears to `engine->clear_color` (0.1 grey by default).
 
-Everything the window or the first render-target build reads is an `EngineConfig` field
-(`headless`, `profiler`, `msaa_samples`, `taa`, ...), which is what makes the old
-"before init / after init" ordering rules unwritable. For game-style apps (fixed timestep,
-physics, particles) use the game framework instead -- see the Game Framework section.
+For a fixed-timestep game with physics, entities, input and audio, use the game
+layer in `cetra/game/` instead (`docs/game-framework.md`).
 
-**Naming** (spec 11.106): subject first -- the first word is the type of the first parameter
-(`engine_`, `scene_`, `node_`, `mesh_`, `material_`, `camera_`, `light_`, `game_`), then the
-verb, then the object; `create_X` / `free_X` are the one exception. An `x_get_y` that returns
-NULL logs; an `x_find_y` is silent and for the optional case (`engine_get_program` versus
-`engine_find_program`). A mutator returns void and logs on a NULL argument or OOM; a request
-that can be refused for a reason the caller can act on (a bounded array, `node_remove_child`)
-returns bool; factories and lookups return NULL on failure. Built-in program names are the
-`CETRA_PROGRAM_*` constants in `program.h`.
+**Naming.** Beyond subject first: `create_X` makes and `free_X` frees. An
+`x_get_y` that finds nothing logs; an `x_find_y` is silent, for the optional
+case (`engine_get_program` and `engine_find_program`). A function that changes
+something returns void and logs a NULL argument or a failed allocation; one
+whose refusal you can act on (a full array, `node_remove_child`) returns bool;
+factories and lookups return NULL on failure.
 
-**Includes**: an app names only `cetra/<header>.h`. `cetra/CMakeLists.txt` allowlists which
-headers are public; every other header forwards to `cetra/internal/<header>.h`, which only
-in-tree apps can see (`add_cetra_app` adds that tree; a consumer through `add_subdirectory` or
-`FetchContent` cannot name it). An app that must include an internal header is a debug harness
-and says so in its header comment. The allowlist governs what an app may NAME in an include,
-not what a public header's closure reaches.
+**Includes.** Name only `cetra/<header>.h`. The allowlist in
+`cetra/CMakeLists.txt` says which headers are public; every other header
+forwards to `cetra/internal/<header>.h`, which only the in-tree apps can see
+(through `add_cetra_app`). An in-tree app that includes an internal header is a
+debug harness and says so in its header comment.

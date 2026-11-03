@@ -1,8 +1,7 @@
 # CLI reference
 
-Every flag the apps take beyond the basic headless capture set, and what each one is FOR.
-`AGENTS.md` keeps the capture flags (`-x`, `-f`, `-S`, `--screenshot-every`, `--headless-jitter`)
-because those are the everyday workflow; everything else is here.
+Every flag the apps take, and what each one is FOR. The headless capture set comes first, since
+it is the everyday workflow.
 
 Most entries carry more than a description. A flag in this engine usually exists because
 something was measured, or because a default reads as a bug when you meet it cold, and that
@@ -10,6 +9,8 @@ reason is recorded beside the flag rather than in whichever spec introduced it.
 
 ## Contents
 
+- [Headless Mode](#headless-mode) — the capture set, which apps take it, how a headless run starts
+  and ends, and the render app's animation flags
 - [PostFX and environment flags](#postfx-and-environment-flags) — the render app: TAA, water, sky,
   clouds, contact shadows, decals, IES, LUTs, layers, the probes, rain
 - [apps/tree](#appstree) — its own flag set, and two defaults that read as bugs
@@ -19,6 +20,72 @@ reason is recorded beside the flag rather than in whichever spec introduced it.
   the look's A/B switches, and its overcast day
 - [The other apps](#the-other-apps-and-the-aa-mode-each-one-chose) — gametest, spores,
   shapes, pcb, why splash is not in any of this, and the 2D canvas's own app
+
+---
+
+## Headless Mode
+
+Prefer a headless run for checking behaviour: the log output (asset imports, skeleton extraction,
+bone mapping, the first frame's animation dump, GL errors) and the rendered frame are the same as
+in a window, a run takes a few seconds, and it is what CI uses. From code, set `.headless = true`
+in the `EngineConfig` handed to `create_engine`.
+
+**The capture set:**
+- `-x, --headless` — a hidden GLFW window with vsync off. The whole pipeline still runs (GL
+  context, shaders, skinning, GUI code); nothing appears and no focus is taken. The render app
+  turns its orbit's auto-rotation off, so screenshots compare across runs.
+- `-f, --frames N` — exit cleanly after N frames.
+- `-S, --screenshot <path>` — save the final frame as binary PPM. Convert with
+  `magick out.ppm out.png`.
+- `--screenshot-every N` — also save `<path>_000400.ppm` and so on every N frames, for a
+  transition. Tile them with `magick f1.ppm f2.ppm ... -resize 384x216 +append strip.png`. It is
+  the engine field `screenshot_every`, which a game-framework app reaches through `game->engine`.
+- `-W`, `-H` — the window size, where an app takes them.
+- `--headless-jitter` — keep TAA's jitter headless, where it is otherwise off for determinism.
+
+**Which apps take it:**
+- render, forest and tree: `-x`, `-f`, `-S`, `--screenshot-every`, `-W`, `-H`.
+- spores: `-x`, `-f`, `-S`, `--screenshot-every`.
+- gametest: `-x`, `-f`, `-S`, `--screenshot-every`, `-W`, `-H`; with `--pad-script` and
+  `--trace-player` a headless run can play it.
+- silent: the same as gametest, and `--cam-eye`/`--cam-target` to pin a framing.
+- canvas: `-x`, `-f`, `-S`, `-W`, `-H`, its view through `--view`.
+- sprites and network: `-x`, `-f`, `-S`. shapes: `-x` and `-f`. splash: none.
+
+**Scripted input.** render, shapes and canvas take `--input-script <path>`, which moves and presses
+the pointer, types and presses keys through the same path as the window's callbacks, so a headless
+run can drag, click and type. The grammar is under the render app's `--input-script` entry below.
+
+**A headless run starts with every texture its start-up asked for** (spec 14.8): `engine_run`
+waits for the loader before frame 1, so frame N is the same picture on a busy machine as on an idle
+one. A window draws its first frame at once, and a texture asked for after the run has begun
+still streams. `textures-in` holds it.
+
+**Under idle mode a headless run ends at the first frame after which nothing asks for another**
+(spec 14.1), and that frame is its screenshot; `-f N` is then the most it draws, not the count.
+
+### The render app's capture and animation flags
+
+```bash
+./out/bin/render -m model.glb -a anim.fbx -x -f 2000 -S /tmp/run.ppm --screenshot-every 400
+```
+
+- `--no-springs` — no spring-bone secondary motion. Required for a byte-identical render of a rig
+  with spring bones (`docs/verification.md`).
+- `-b, --show-bones` — the bone X-ray overlay: bind pose green, animated pose red.
+- `--check-stretch` — skins every vertex on the CPU at frame 60 and reports triangle edges whose
+  animated length is over 3x the bind length, with the bone weights involved. The diagnostic for
+  "spike" artifacts: rigid geometry stays near 1x, a mis-bound vertex shows as a 100x edge.
+- `--anim-clip <name>` — play this clip rather than the first `-a` one.
+- `--anim-space <a>,<b>` and `--anim-blend <t>` — a two-entry blend space, `a` at 0 and `b` at 1,
+  and its knob. Parked on an entry it is that clip alone, to the pixel.
+- `--anim-switch-to <name>`, `--anim-switch-at <frame>`, `--anim-fade <sec>` — crossfade to a
+  clip on a frame (fade 0.25 by default). Once settled the pose is the incoming clip's own, as
+  though it had been snapped at the switch.
+- `--anim-layer <name>` and `--anim-mask <bone>` — play a clip on the override layer over that
+  bone's subtree; `--anim-layer-once` plays it once and lets it release itself.
+- `--anim-probe` — print the frame's weights and every bone's global pose at `%.9g`, so a textual
+  diff is a bit diff. The `anim` gate group reads it.
 
 ---
 
@@ -471,7 +538,7 @@ assert a viewer camera that nothing could press before. `apps/tree` and `apps/sh
 too, and shapes gained `-x` and `-f` with them: it is `PlaneDrag`'s only caller, so the plane
 camera had no automated coverage at all until it could run headless),
 `--config-dump <path>` / `--config <path>` (spec 11.71 — dump the whole tuned session to JSON on
-exit, and restore one. **See "Reproducing a session" below for when to reach for it**; the one thing
+exit, and restore one. **See `docs/verification.md`, "Reproducing a session", for when to reach for it**; the one thing
 to know here is that the apply lands AFTER the scene-radius derivation at `render.c:3349`, which is
 load-bearing: `fog_far`, `fog_floor_y`, `fog_density` and `fog_height_falloff` are unconditional
 ASSIGNMENTS there and `ssao_radius` / `ssr_max_distance` / `ssr_thickness_min` are `fmaxf` floors, so
@@ -655,7 +722,7 @@ a run changes it mid-way.
 candle-sized rim over a wall; render it with `--ortho 0.8 --tonemap linear` and the full shadow's
 radius reads off the wall in pixels. The `shadow-tiles` gate group traces its truth.
 
-**An app's own shaders, from a scene file** (spec 13.29; `AGENTS.md`, App Shaders). No flag sets
+**An app's own shaders, from a scene file** (spec 13.29; `docs/shader-subsystems.md`, Shader hooks). No flag sets
 any of them: they are scene content, each a `.glsl` resolved against the scene file as an IES
 profile is, and a file that does not read or compile is said by name and left out.
 - `post.passes: [{"at": "beforeDof" | "beforeBloom" | "afterTonemap", "shader": "...",
@@ -997,8 +1064,8 @@ instancing**, inherently: the batch key is `(mesh, lod)`, so one prototype
 spanning a range of distances splits into separate runs. It is a CPU-for-GPU
 trade whose direction depends on the framing.
 
-**AGENTS.md used to claim apps/tree is 0 px headless across two runs. It is
-not** -- measured 31,034 px between two runs of one unmodified build, and 5,655
+**apps/tree is not 0 px headless across two runs** on its orbit path -- measured 31,034 px between
+two runs of one unmodified build, and 5,655
 px at frame 1, so it is not accumulation. `camera_drag_update` at `tree.c:761`
 takes `glfwGetTime()`, deliberately, for drag damping. Anything comparing tree
 frames has to measure that floor first.
@@ -1798,9 +1865,8 @@ primitives carry a +Z normal since the flat generators started writing one; befo
 none, no light could reach them, and what read as red for years was the 3% ambient floor that
 spec 10.1 removed.
 
-**`apps/pcb` is gitignored** (`apps/.gitignore`) and so is not part of this repository at all, which
-is worth knowing before looking for it — the example-apps table in `AGENTS.md` still lists it. The
-same reasoning applies where it exists locally, plus one more: most of it draws through the `shape`
+**`apps/pcb` is a repository of its own** (`../apps/pcb`, with cetra as a submodule), not part of
+this one. The same reasoning applies to it, plus one more: most of it draws through the `shape`
 program, which writes no motion vector, while its filled primitives draw through `pbr`, which does,
 so a dragged shape would reproject two halves of one frame differently.
 
@@ -1954,81 +2020,3 @@ editor holds the focus, or the palette is up.
 In a window a drag pans and the wheel zooms the view under the cursor. G opens the debug GUI, and F
 the FPS readout, which under `--idle` counts the frames drawn; = and - zoom, 0 resets the view and
 P prints its centre.
-
-## Headless Mode
-
-**render**, **spores**, **forest** and **tree** support headless capture (this line said three
-apps for several specs while the table above already said tree was "yes" -- it takes `-x`, `-f`,
-`-S` and `--screenshot-every` like the others), since 11.105 **sprites** and **network** take
-`-x`, `-f` and `-S`, and **gametest** has taken `-x`, `-f`, `-S` and `--screenshot-every`
-since 11.103, plus `-W` and `-H` since 12.2 -- which it needed before it could own a golden,
-since a recipe states the size it was baked at (this list left it out for six specs while the table said "no" for the same
-span); with `--pad-script` and `--trace-player` (spec 11.109) it is also one of the two apps a
-headless run can PLAY. **silent** (spec 13.6) is the other: it takes `-x`, `-f`, `-S`,
-`--screenshot-every`, `-W`, `-H` and both of those, plus `--cam-eye`/`--cam-target` to pin a
-framing. **canvas** (spec 14.0) takes `-x`, `-f`, `-S`, `-W` and `-H`, its view through `--view`.
-**render, shapes and canvas take `--input-script`** (the pointer script until spec 14.2): a text
-file of frame-numbered lines that move and press the pointer and, since 14.2, type (`type=aé\s`)
-and press keys (`key=mod+k`, `mod` being Cmd on macOS and Ctrl elsewhere), through the same path
-as the callbacks -- which is how a headless run opens the palette and types into it.
-`docs/cli-reference.md` has the grammar.
-**Under idle mode (spec 14.1) a headless run ends when nothing more will ask for a frame**, and
-that frame is its screenshot: `-f N` is then the most it draws, not the count. A run with no idle
-mode is unchanged.
-**A headless run starts with every texture its start-up asked for** (spec 14.8): `engine_run`
-waits for the loader before frame 1, so frame N is the same picture on a busy machine as on an
-idle one. Streamed in at five uploads a frame, `local_exposure`'s frame 30 was a room half loaded
-under load, and its re-bake's two renders disagreed. A window still draws its first frame at once,
-and a texture asked for after the run has begun still streams; `textures-in` holds it.
-**`--screenshot-every` was the half of that claim
-that was not true until 11.62**: forest and spores parsed `-S` but not it, so capturing a
-TRANSITION cost one full process per frame -- which on forest is a terrain bake and a 5,000-prop
-scatter per sample. It is the plain field `screenshot_every` on the engine, which every
-game-framework app reaches through `game->engine` (it rode `GameConfig` from 11.62 until 11.106
-folded that struct down to what the game layer owns, and had a setter until 11.108). The render
-app:
-
-```bash
-./out/bin/render -m model.glb -a anim.fbx --headless --frames 2000 \
-    --screenshot /tmp/run.ppm --screenshot-every 400
-```
-
-- `-x, --headless` - Hidden GLFW window (`GLFW_VISIBLE=FALSE`), vsync off. Full pipeline
-  still runs (GL context, shaders, skinning, GUI code); nothing appears on screen, no
-  focus stolen. Orbit auto-rotation is disabled so screenshots are comparable across runs.
-- `-f, --frames N` - Exit cleanly after N frames (deterministic, no `timeout`/kill).
-- `-S, --screenshot <path>` - Save the final frame as binary PPM before exit. Convert
-  with `magick out.ppm out.png`.
-- `--screenshot-every N` - Also save `path_000400.ppm`, ... every N frames. Tile into a
-  strip: `magick f1.ppm f2.ppm ... -resize 384x216 +append strip.png`.
-- `--headless-jitter` - Keep TAA jitter active under headless (otherwise disabled for
-  determinism).
-- `--no-springs` - Disable spring-bone secondary motion. Required for a byte-identical
-  render of any rig that has spring bones (see `docs/verification.md`).
-- `-b, --show-bones` - Bone X-ray overlay (bind pose green, animated pose red).
-- `--check-stretch` - CPU-skins every vertex at frame 60 and reports triangle edges
-  whose animated length exceeds 3x bind length, with the offending bone weights. The
-  decisive diagnostic for "spike" artifacts (rigid geometry stays ~1x; a mis-bound
-  vertex shows up as a 100x+ edge).
-- `--anim-clip <name>` - Play this clip rather than the first `-a` one.
-- `--anim-space <a>,<b>` + `--anim-blend <t>` - A two-entry blend space, `a` at 0 and `b`
-  at 1, and its knob. Parked on an entry it is that clip alone, to the pixel.
-- `--anim-switch-to <name>` + `--anim-switch-at <frame>` + `--anim-fade <sec>` - Crossfade
-  to a clip on a named frame (default fade 0.25). After it settles the pose is the
-  incoming clip's own, as though it had been snapped at the switch.
-- `--anim-layer <name>` + `--anim-mask <bone>` - Play a clip on the override layer over
-  that bone's subtree; `--anim-layer-once` plays it once and lets it release itself.
-- `--anim-probe` - Print the frame's weights and every bone's global pose, `%.9g`, so a
-  textual diff is a bit diff. What the `anim` gate group reads.
-
-**Every other flag is in `docs/cli-reference.md`** — the render app's PostFX and environment set
-(TAA, water, sky, clouds, contact shadows, decals, IES, LUTs, layers, probes, the profiler), plus
-`apps/tree`'s and `apps/forest`'s own. Read it before driving either of those two apps: several of
-their defaults are surprising on purpose (tree's sun sits at 0.8 degrees, forest's sea level is
-−35), and the reference records why rather than leaving them to be met cold.
-
-**When to use it:** always prefer headless when verifying behavior -- inspecting log
-output (asset imports, skeleton extraction, bone mapping, the first-frame animation
-dump, GL errors) or visually checking rendered output. It is also the right mode for CI.
-A headless run takes a few seconds and produces the same diagnostics as an interactive
-session. From code, set `.headless = true` in the `EngineConfig` handed to `create_engine`.
