@@ -66,7 +66,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 | 9 | What the panes and the fonts need of the UI | **Built** | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
 
-Specs 14.7 and 14.9 to 14.13 are the smaller changes pcb's window asked for, listed under "Not
+Specs 14.7 and 14.9 to 14.14 are the smaller changes pcb's window asked for, listed under "Not
 among the nine". Spec 14.8 was not asked for by pcb: a headless run waits for the textures its
 start-up asked for before frame 1 (`docs/architecture.md`, Render Pipeline), which `pcb render`
 gets for free.
@@ -423,6 +423,10 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
 - **A label's text inside its padding, and rows on the baseline** -- spec 14.13, built, for pcb's
   key hints: a label draws its text inside its padding, and `UI_ALIGN_BASELINE` lines a row's
   children up by their text. pcb's key boxes use centring, which the first fix makes work.
+- **A line-number colour** -- spec 14.14, built, for pcb's theme file: `UITheme.line_numbers`, the
+  code editor's line numbers in a colour of their own (`code.line-number`), and the editor's text
+  at 38% while its alpha is 0. Every other name in pcb's theme reaches something cetra already
+  had, the focus rings included.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the
