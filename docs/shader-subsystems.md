@@ -1,8 +1,8 @@
 # Shader subsystems
 
-How each shader subsystem works and why it is built that way. `AGENTS.md` keeps the inventory —
-which files exist and what each one is for — plus the rules that constrain work in OTHER files;
-this is the per-subsystem detail behind those entries.
+How each shader subsystem works and why it is built that way. `docs/shaders.md` keeps the
+inventory -- which files exist and what each one is for -- and the rules that span files; this is
+the per-subsystem detail behind those entries.
 
 **Read the entry before changing its subsystem.** Most of what is recorded here is a rejected
 alternative or a failure mode that renders a plausible frame: a moon phase that inverts and still
@@ -10,10 +10,9 @@ looks like a moon, an IES fold that lights a room the wrong way round, a probe f
 every floor at zero, a road blended after the height instead of before. None of those produce an
 error, and several shipped green through the full gate suite. That is what these notes are for.
 
-**They also rot faster than the reasoning in them.** An audit of `AGENTS.md` found its wrong
-claims concentrated almost entirely in names, counts, line references and file lists — not in the
-rationale. So treat a `file.glsl:123` here as a starting point rather than a fact, and trust the
-argument further than the address.
+**Names, counts, line references and file lists rot faster than the reasoning.** Treat a
+`file.glsl:123` here as a starting point rather than a fact, and trust the argument further than
+the address.
 
 ## Contents
 
@@ -35,6 +34,8 @@ Surfaces: [Water](#water) · [Clustered decals](#clustered-decals) ·
 [Layered surfaces](#layered-surfaces) · [Roads](#roads) · [Composite cache](#composite-cache)
 
 Weather: [Rain](#rain)
+
+An app's own GLSL: [Shader hooks](#shader-hooks)
 
 ---
 
@@ -653,16 +654,15 @@ cascade texel so it outlives the crest that made it, three bands in one RGB targ
 a Cox-Munk sun lobe and a spectrum-derived far-field roughness inside `water_frag`, and
 the seeded spectrum's own **height and slope variance**, which is what the last two are
 built from. The variance is checked rather than asserted -- see `--water-fft-probe`.
-**The water program hit 16/16 declared samplers in 11.42 and 11.45 took it back to 11**, by
-folding six identical RGBA16F cascades into one `sampler2DArray` -- five units back for a
-change that alters no read. Its units are now **0 the cascade ARRAY, 1 the previous ARRAY**,
-2 foam pattern, 6 scene colour, 7 depth, 8 bed, 11 shadow array, 12-13 the IBL pair, 14 cloud
-shadow, 15 foam (`water.h:47-90`). Two separate arrays rather than more layers of one, because
-the two have different LIFETIMES -- the fields are this frame's render targets and the previous
-are a copy taken before they are overwritten. 11 is deliberately not `SHADOW_MAP_TEXTURE_UNIT`
-10, because two sampler TYPES against one image unit is an `INVALID_OPERATION` at draw.
-**It declares 14 since spec 13.4**: 13.2 put the caustics targets on 3 (an ARRAY since 13.3, a
-layer per level), 13.3 put the ripple band's own array on 4, and 13.4 the touch ripples on 5.
+**The water program declares 15 samplers of 16.** Six identical RGBA16F cascades are one
+`sampler2DArray`, which costs one unit where six textures would cost six. Its units: **0 the
+cascade array, 1 the previous array**, 2 foam pattern, 3 the caustics targets (a layer per
+level), 4 the ripple band's array, 5 the touch ripples, 6 scene colour, 7 depth, 8 bed, 9 the
+rain cover, 11 shadow array, 12-13 the IBL pair, 14 cloud shadow, 15 foam (the unit table in
+`water.h`). The cascades and their previous copy are two arrays rather than more layers of one,
+because they have different lifetimes: the fields are this frame's render targets and the
+previous are a copy taken before they are overwritten. Two sampler types against one image unit
+is an `INVALID_OPERATION` at draw, so a unit's type is fixed across the program.
 
 **The ripple band (spec 13.3)** is a fourth spectral band, past the short band's 24 rad/m, in
 its own 512² transform over 6 m -- 19 more draws, 64 a frame -- because a 128 over a tile short
@@ -761,6 +761,11 @@ Durand 2007 and Unreal 5's Local Exposure; `docs/papers/README.md` says what eac
 - **Stored** as homogeneous (sum, weight) tiles of one RG32F atlas, with the blurred luminance in
   its own region of the same atlas, so the tonemap reads it through one sampler.
 
+`local_exposure.c` owns the passes: the frame at half res, the grid gathered and blurred, the
+blurred luminance. It is made on first use and latched off if that fails, as `glare.c` is.
+`local_exposure_probe` (`--le-probe`) prints the frame's luminance percentiles in stops from grey,
+the range the settings are asked to fit; measure with it before tuning by eye.
+
 **What a plausible frame hid while it was built:**
 - **The window looked like it would need 10 stops of compression.** `--le-probe` measured 5.8:
   silent's kitchen is an ordinary overcast interior. The strength it needs comes from the day key
@@ -806,13 +811,16 @@ on `uv * 1024` so its grain stays the same size at any resolution; `purkinje_nig
 slot mask of his earlier crt-lottes (2014), both public domain; `docs/papers/README.md` has both.
 **Off by default**; an app turns it on with `postfx->crt_enabled`, the render app with `--crt`.
 
-**Where it runs.** With it on, the post chain writes the finished picture into a window-sized
-RGBA16F target instead of the window, and the debug tiles and the app's overlay draw into it after
-it. The CRT then draws that into the window, and the debug GUI goes on top. So a game's door prompt
-and menus are on the television and the developer's panel is not. The target is window-sized
-exactly, because the UI scissors in window pixels. Everything is in linear light: the resample
-decodes the picture through `include/display.glsl`'s inverse of the tonemap's 2.2, and the CRT
-encodes through the same file.
+**Where it runs.** With it on, the post chain writes the finished picture into PostFX's picture
+(`PostFX.picture`, window-sized RGBA16F, shared with an app's after-tonemap passes) instead of the
+window, and the debug tiles and the app's overlay draw into it after it. The CRT then draws that
+into the window, and the debug GUI goes on top. So a game's door prompt and menus are on the
+television and the developer's panel is not. The picture is window-sized exactly, because the UI
+scissors in window pixels. Everything is in linear light: the resample decodes the picture through
+`include/display.glsl`'s inverse of the tonemap's 2.2, and the CRT encodes through the same file.
+
+`crt.c` knows nothing of PostFX: `crt_present` takes the picture and a `CrtLook`. It is made on
+first use and latched off if that fails, as `glare.c` is.
 
 **How it draws.**
 - **The signal.** The picture is area-filtered down to `crt_lines` lines (480 by default), as wide
@@ -846,208 +854,185 @@ encodes through the same file.
   of the picture's fine detail, and the window's 8-bit write would have banded.
 - **It costs about 0.65 ms** at silent's 3200x1800 and is not why a heavy frame is slow; measure
   `--profiler`'s `crt` row before blaming it.
-- **The picture is PostFX's since spec 13.29** (`PostFX.picture`), because an app's after-tonemap
-  pass draws on it too; `crt_present` takes it as an argument. Same format, filter and wrap.
 
 ## Shader hooks
 
-Spec 13.29: an app's own GLSL at four places, after Unreal's material model. `AGENTS.md`, App
-Shaders, has the shape; this is how each works and what a plausible frame hid while it was built.
-`shader_hooks_fixture` and the `shader-hooks` gate group cover every place.
+An app, or a `.cscn`, puts its own GLSL at four places, so a new effect is a shader file and a
+setting rather than an engine module (spec 13.29). The shape is Unreal's: a surface material
+feeding the engine's lighting, a translucency pass of "After Motion Blur", and post materials at
+named Blendable Locations. The four are the post passes, the late lane, the surface hook and its
+offset; under them sit the include resolver and the shader params. `shader_hooks_fixture` has a
+piece at every place and the `shader-hooks` gate group an arm for each. The inventory of the
+files involved is in [shaders.md](shaders.md#inventory).
 
-**The resolver and the splice** (`shader.c`). `create_shader` expands every source's
-`#include "x.glsl"` against `shader_includes.h`, the `include/` chunks unexpanded -- nested,
-include-once, and after each top-level include a `#line` back to the including file's own
-numbering, so an app's compile error names its own line. `shader_source_splice` puts an app's
-chunk at a marker line in an engine shader, numbered as source string 1 so its errors read
-`1:<line>`, and leaves its includes to that one walk, which counts each build-time
-`// ---- begin X ----` line as X included from that line on.
-- **The splice used to expand the chunk itself, and got two things wrong that one walk cannot.**
-  It numbered nothing after an include, so a hook's error past one read its line plus the
-  chunk's length; and it marked every chunk anywhere in the host as held, so a hook spliced
-  above a chunk's build-time copy had its include dropped and then met an undefined name. Now a
-  hook including a chunk the host defines only further down is refused by name.
+### The include resolver and the splice
 
-**Post passes** (`postfx_add_pass`). Each draws its program over the frame into a scratch target
-and is blitted back; inputs bound by name are `sceneColor`, `sceneDepth` (render res), `texelSize`,
-`time`, `frame`, `projection`, `view` and the pass's params. Before DOF is the fogged frame with
-the late draw in it; before bloom is whatever DoF left, before the meter, so it is metered. After
-the tone map the tone map writes PostFX's picture -- whenever the CRT is on or such a pass is
-enabled on a tone-mapped frame -- skipping the dither, and the CRT or `present_frag` writes the
-window with it. `postfx_run` decides which once a frame (`PostFXShow`), and the engine draws its
-overlays into whatever that says. The HDR passes share their scratch with motion blur, whose use
-of it a frame never overlaps.
-- **The identity is not exact after the tone map.** The picture is fp16, and the dither then
-  lands one code differently on about 55,000 of 480,000 pixels against a frame written straight
-  to the window. The HDR copy-back is exact. The CRT path has had this property since 13.28.
-- **Each mark needs its own baseline.** `post-order` first measured every mark against the frame
-  with no passes, and the after-tonemap mark's ring read +1.2 codes: the neighbouring marks'
-  bloom. Each is measured against the frame without that one mark.
+`create_shader` (`shader.c`) expands every source's `#include "x.glsl"` against
+`shader_includes.h`, the `include/` chunks unexpanded, so an app's shader may include
+`noise.glsl` like the engine's own. The engine's shaders were expanded at build time and pass
+through unchanged.
+- **Nested and include-once**, with a `#line` back to the including file's own numbering after
+  each top-level include, so an app's compile error names its own line.
+- **The splice is text only.** `shader_source_splice` puts an app's chunk at a marker line in an
+  engine shader, numbered as source string 1 so its errors read `1:<line>`, and leaves its
+  includes to the one walk. A splice that expanded its own includes would number nothing after one
+  and would treat a chunk anywhere in the host as already held.
+- **Each build-time `// ---- begin X ----` line counts X as included from that line on**, so a hook
+  shares the copies above its marker. A hook including a chunk the host defines only below its
+  marker, directly or through another chunk, is refused by name rather than defining it twice.
 
-**The late lane** (`MATERIAL_PASS_LATE_DRAW`, `render_late_items`). Items farthest first, ties in
-graph order, premultiplied (alpha 0 adds, 1 replaces), with `late_surface_vert`'s varyings and
-`late_surface.glsl`'s `lateVisible` and `lateEmit`, drawn through the shared submission
-(`SubmitState`, `submit_draw_run`). Bound by name: `model`, `view`, the unjittered `projection`,
-`time` and `frame`, the material under the lit surface's names (`albedo`, `emissiveFactor`,
-`albedoTex`, `emissiveTex` with their `*TexExists`), its params, and what every late draw hands a
-shader -- `sceneDepth`, the fog volume and `viewport` -- through `postfx_late_draw_bind`, which
-fire and rain share.
-- **TAA is the whole reason.** The fixture's noise, drawn before the seam, keeps a 5-code spread
-  of its 31 and correlates +0.72 with the frame before: the history averages it into a grey
-  shimmer. After the seam it correlates -0.03.
-- **The rain needed its own exclusion.** The rain's cover ignores `DRAW_NO_CAST`, and would have
-  let a late surface keep rain off the ground; every caster set now names the lanes it takes, so a
-  lane casts nothing until it is listed.
-- **`node_set_programs` overwrote it.** The render app hands every material `pbr` after the scene
-  file applies, and the late material was refused on its first frame for carrying a lit-surface
-  program; neither subtree setter replaces a late material's program now.
+**Embedding.** `cetra_embed_shaders(<target> <dir>)` (CMake) turns an app's `shaders/*.glsl` into a
+header of strings, includes left for the resolver. Its sibling `cetra_embed_files(<target> <name>
+<INDEX> <file> ...)` (spec 14.6) builds files of bytes into the program, a font for instance, so
+the program is one file:
+- the table is `<target>_<name>[]` of `CetraEmbeddedFile` (`embedded_file.h`: its path from the
+  source root, its bytes and their count), indexed by `<TARGET>_<NAME>_<INDEX>`;
+- it is declared in `<target>_<name>.h` and defined in a generated source file of its own, so the
+  bytes are compiled only when a file changes, never with the code that reads them, and two files
+  including the header share one copy;
+- the path is the name a font made from the entry is pooled under, so two files of one name in two
+  directories are two fonts; `load_font_memory` and `create_glyph_cache_memory` make a font from an
+  entry;
+- the list is the one place a file is named: the code says only what each is for.
 
-**The surface hook** (`create_shader_hook`, `Material.shader_hook`). Two calls of one function,
-from the same gathered albedo and coverage, so a hook multiplying its albedo does it once: the first
-before the alpha test, keeping albedo and alpha, the second after the gather, keeping the rest.
-`create_shader_hook` compiles the hook's lit stages at every feature and at none, the skinned
-vertex stage too when it has an offset, so a hook that does not compile is refused where the app
-made it, and builds its two shadow programs. A variant that fails anyway -- a link, which the check
-does not do -- drops the hook everywhere (`ShaderHook.broken`), said once by name: its materials
-draw as unhooked by every reader, surface, bound and shadow. A scene file describes each hook
-once, under `shaderHooks`, and its materials name it.
-- **The cache key is the hook too.** Without the id in the name, every hooked material at one
-  mask draws with whichever hook compiled first -- `hooks-cache-key`'s red and blue boxes both
-  came out striped.
-- **The full mask alone could not refuse a hook.** A hook reading `sheenTex`, or including a
-  chunk `pbr_frag` expands only under the rain or the cached-tile bit, compiles at every feature
-  and nowhere a scene without that feature asks; it passed creation and failed at `pbr-0`. Mask 0
-  is the other end, and a hook built at both is built at any.
-- **A hook kept after its variant failed split the material in two**: the surface drew the old
-  program while `classify`, the bound and the shadow followed the hook, so the shadow moved where
-  the surface did not. Dropping it from every reader at once is what keeps them together; the
-  shadow pass runs before the resolver, so the frame it fails on is the one frame they differ.
-- **A surface that does not build into the shadow costs only its cut.** The shadow stage declares
-  the albedo and nothing else of the material, so a hook reading its normal map builds as a lit
-  surface and not as a shadow; it keeps its offset there and casts by its material's alpha.
-  Refused whole, it would have lost an offset over a surface detail.
+### Post passes
 
-**The offset** (`cetraOffset`, `object_position.glsl`). One splice reaches every stage that
-includes the chunk; a light draws a caster `classify` marked `DRAW_HOOKED_CASTER` through the
-hook's own shadow program.
-- **Only a surface moved away from the eye shows a broken prepass.** A lean prepass that never ran
-  the offset writes the unmoved surface's depth, and the shading pass's one-sided `LEQUAL` passes
-  every fragment that came nearer. The dome, which only rises toward the eye, rendered the same
-  with the prepass wrongly allowed; the pushed quad, half a metre back, lost 3,255 px of itself.
-- **One owner primes a shadow layer's programs.** `_draw_shadow_items` forgets the program the
-  last layer left bound and sets the light matrix and the displacement inputs on each program as
-  the layer first draws through it. The first version had the callers prime the depth program and
-  the walk prime hooked ones: the caller's matrix then went to whatever was bound, a hooked
-  program when the last layer ended on a hooked caster, and the plain casters of the next layer
-  drew through the previous layer's matrix while the uniform cache recorded the new one as held.
-- **A masked hook casts through its alpha**: `DRAW_FOLIAGE` accepts a hook in place of an albedo
-  map. Without its program the card's holes left its shadow and the dome cast none. Only a hook
-  whose alpha reached its shadow program counts: fell back to the plain one, a card with no albedo
-  map was cut by whatever texture the last caster left on unit 0.
-- **A kept face remembers how far a hook reached.** A caster's bound grows by its hook's
-  `offset_bound`, and when its hook changes the faces are drawn again over the old bound and the
-  new; marked from the new alone, a dome switched to a flat hook left its raised shadow in every
-  face that saw only the raised part.
+`postfx_add_pass(fx, at, program)`, over a program from `create_post_pass_program`, at
+`POSTFX_AT_BEFORE_DOF`, `POSTFX_AT_BEFORE_BLOOM` or `POSTFX_AT_AFTER_TONEMAP`. The pass borrows its
+program, which its owner registers with `engine_add_program`.
+- **Scratch and blit.** GL 4.1 has no texture barrier, so a pass draws over the frame into a
+  scratch target and is blitted back, the motion-blur idiom, and the frame keeps its handle. The
+  HDR passes share their scratch with motion blur, whose use of it a frame never overlaps.
+- **Inputs bound by name**: `sceneColor`, `sceneDepth` (render res), `texelSize`, `time`, `frame`,
+  `projection`, `view` and the pass's params. A pass that never declares `sceneDepth` costs the
+  frame no depth resolve.
+- **What each point sees.** Before DoF: the fogged frame with the late draw in it. Before bloom:
+  whatever DoF left, ahead of the meter, so the pass is metered. After the tone map: PostFX's
+  picture (`PostFX.picture`, the CRT's intermediate), which the tone map writes without its
+  dither; then the CRT or `present_frag` writes the window and dithers, so the dither stays last.
+- **Who writes the window is decided once a frame**, by `postfx_run` (`PostFXShow`): the CRT
+  whenever it is on, the present pass when a tone-mapped frame has passes after it, the tone map
+  otherwise. A passthrough frame, a debug view's or a display-ready one's, stays undithered and
+  runs no pass. The engine draws its overlays into whatever `PostFXShow` says. A picture that could
+  not be made is tried again at the next size, as the fog layer is.
+- **Replacing the tone map is not offered.** Its curve is a function inside a shader that also
+  composites AO, contact shadows, bloom, flare and glare and runs the curve at five sharpen taps,
+  which is not a stage boundary.
 
-## App Shaders (spec 13.29)
+Two things are easy to get wrong when measuring:
+- **The identity is not exact after the tone map.** The picture is fp16, and the dither lands one
+  code differently on about a tenth of the pixels against a frame written straight to the window.
+  The HDR copy-back is exact.
+- **Each mark needs its own baseline.** Measured against the frame with no passes, a mark picks up
+  its neighbours' bloom; `post-order` measures each against the frame without that one mark.
 
-**An app, or a `.cscn`, puts its own GLSL at four places, and a new effect is a shader file and a
-setting rather than an engine module.** The shape is Unreal's: a surface material feeding the
-engine's lighting, a translucency pass of "After Motion Blur", and post materials at named
-Blendable Locations. `shader_hooks_fixture` has a piece at every one and the `shader-hooks` gate
-group an arm for each.
+### The late lane
 
-- **The include resolver.** `create_shader` expands every source's `#include` lines, so an app's
-  shader may `#include "noise.glsl"` like the engine's own. The engine's shaders were expanded at
-  build time and pass through as copies, which is why adding it moved no golden. Include-once, and
-  each build-time `// ---- begin X ----` line counts X as included FROM THAT LINE ON, so a hook
-  spliced into an engine shader shares the copies above its marker -- and one including a chunk
-  the host defines only below it, directly or through another chunk, is refused by name rather
-  than defining it twice. The splice is
-  text only; the one walk is what expands, and what restores a hook's line numbers after an
-  include. `cetra_embed_shaders(<target> <dir>)` (CMake) turns an app's `shaders/*.glsl` into a
-  header of strings, includes left for the resolver. Its sibling `cetra_embed_files(<target>
-  <name> <INDEX> <file> ...)` (spec 14.6) builds files of bytes into the program -- a font, so the
-  program is one file -- as a generated table, `<target>_<name>[]` of `CetraEmbeddedFile`
-  (`embedded_file.h`: its path from the source root, its bytes and their count), indexed by
-  `<TARGET>_<NAME>_<INDEX>`; the path is the name a font made from it is pooled under, so two
-  files of one name in two directories are two fonts. The table is declared in `<target>_<name>.h` and
-  DEFINED in a generated source file of its own, so the megabytes of bytes are compiled when a
-  file changes and never with the code that reads them, and two files including the header share
-  one copy. The list is the one place a file is named: the code says only what each is for, and
-  `load_font_memory` and `create_glyph_cache_memory` make a font from the entry.
-- **Post passes**, `postfx_add_pass(fx, at, program)` over `create_post_pass_program`, at
-  `POSTFX_AT_BEFORE_DOF`, `_BEFORE_BLOOM` or `_AFTER_TONEMAP`. GL 4.1 has no texture barrier, so a
-  pass draws into an engine scratch and is BLITTED back, the motion-blur idiom, and the frame keeps
-  its handle. After the tone map the pass runs on PostFX's PICTURE -- the CRT's intermediate,
-  moved into PostFX because it stopped being the CRT's alone -- and the CRT or the new present
-  pass writes the window, so the dither stays last. Which of the three writes the window is
-  decided once a frame, by `postfx_run` (`PostFXShow`): the CRT whenever it is on, the present
-  pass when a tone-mapped frame has passes after it, the tone map otherwise -- so a passthrough
-  frame, a debug view's or a display-ready one's, stays undithered and runs no pass. A picture that
-  could not be made is tried again at the next size, as the fog layer is. A pass that never
-  declares `sceneDepth` costs the frame no depth resolve.
-  **Replacing the tone map is not offered**: its
-  curve is a function inside the shader that also composites AO, contact shadows, bloom, flare and
-  glare and runs the curve at five sharpen taps, which is not a stage boundary.
-- **The late lane**, `Material.pass = MATERIAL_PASS_LATE_DRAW` over `create_late_surface_program`,
-  is drawn by `render_late_items` from the late draw, ahead of fire and rain: past TAA and motion
-  blur, so a surface that changes every frame -- noise, a screen -- is not averaged into grey.
-  **Measured: noise drawn before the seam kept 5 codes of its 31 and correlated +0.72 frame to
-  frame.** The canvas has no depth attachment, so hiding is a compare against the resolved depth
-  (`include/late_surface.glsl`'s `lateVisible`), Unreal's own choice in that pass for the same
-  jitter reason. It casts no shadow -- the caster sets name the lanes they take -- no capture sees
-  it, it lights nothing under `--emissive-lights`, and neither subtree setter replaces its program.
-  Refused by name: either half of a late surface without the other, and one on a mesh that skins,
-  sways or is shadow-only, since the late vertex stage places a vertex by its model matrix alone.
-  It reads the material under the lit surface's names (`albedo`, `emissiveFactor`, `albedoTex`,
-  `emissiveTex`), and `vColor` is white on a mesh with no colours, as a hook sees it.
-- **The surface hook**, `create_shader_hook` and `Material.shader_hook`: `void cetraSurface(inout
-  CetraSurface s)` over `include/surface_hook.glsl`, spliced into `pbr_frag` at a marker before
-  `main()`. **Not a mask bit**: a bit switches off code the shader holds, a hook brings code in,
-  so its define arrives in the same string as its source. Called TWICE, from the same gathered
-  albedo and coverage: before the alpha test, keeping albedo and alpha (the cut, decals, the
-  albedo view and the prepass exit all read them), and after the gather, keeping normal,
-  roughness, metallic, AO and emission. The variant key gains the hook's id (`pbr-<mask>-h<id>`),
-  and the resolver moves a material whose program's hook is not its own. **A hook whose variant
-  does not build is dropped everywhere** (`ShaderHook.broken`, read through `shader_hook_live`):
-  said once, and every reader -- the resolver, `classify`, the bounds, the refusal -- treats its
-  materials as unhooked, so the surface, its bound and its shadow never disagree. A hook on a
-  material whose program is not a lit-surface variant is refused by name: its surface would
-  ignore it while its bounds and its shadow did not. **No sampler is spent**: the hook reads what
-  its variant already declares. `create_shader_hook` compiles the hook's lit stages at EVERY
-  feature and at NONE, the skinned vertex stage too when it has an offset -- a hook naming
-  something a feature declares (`sheenTex`, a chunk the host includes only under the rain bit)
-  compiles at the one and not the other -- to refuse it where the app made it. It links nothing,
-  so a hook whose halves disagree reaches the broken path instead. It builds the two shadow
-  programs then: a hook whose offset does not build into them is refused, and a surface that
-  does not -- one reading the normal map, which only the lit surface declares -- only loses its
-  shadow cut (`shadow_cuts`).
-- **The offset**, `vec3 cetraOffset(CetraVertex v)`, is spliced into `object_position.glsl`'s
-  `cetra_local_displacement` -- the third displacer, so ANYTHING ADDED THERE's rules hold:
-  `offset_bound` widens `draw_item_bounds`, every stage gets it from one splice (the previous
-  frame's at the previous time, for the motion vector), the lean prepass is sat out, and a light
-  draws the caster through the hook's own shadow program wherever `classify` marked it
-  `DRAW_HOOKED_CASTER` -- an offset, or the alpha of a foliage caster. A masked material casts
-  through its hook's alpha, since `DRAW_FOLIAGE` accepts a hook in place of an albedo map. A hook
-  declared `animated` is a mover for the kept shadow faces, whichever of the two it changes, and
-  a kept face redraws a caster whose hook or params change. **A shadow layer primes each program
-  as it first draws through it** (`_draw_shadow_items` alone sets the light matrix and the
-  displacement inputs): before that, a layer's matrix was written to the depth program while a
-  hooked caster's program from the layer before was still bound, and the plain casters drew
-  through the previous layer's matrix. **Only an offset moving a surface AWAY from the eye
-  shows a broken prepass**: the one-sided `LEQUAL` passes everything that came nearer, which is
-  why the fixture carries a pushed quad beside its dome.
-- **Shader params**, `ShaderParams` (`shader_params.h`, eight named vec4s and no GL), ride a
-  material or a pass and are uploaded by name wherever its program is bound -- the scene pass,
-  the late draw, the shadow passes. Nothing resets a name another owner of the same program set.
-  **The clock is one upload**: `shader_clock_upload` sets `time` and `frame` (wrapped at 2^24),
-  and `engine_upload_displacement_uniforms` calls it, so every stage that places geometry -- the
-  shadow passes included -- reads the same frame a hook does in the shading pass.
-- **In a `.cscn`**: `post.passes: [{at, shader, params, enabled}]`; a top-level
-  `shaderHooks: {name: {surface, offset, offsetBound, animated}}`, each one hook however many
-  materials name it; and on a material `shaderHook` (a name from that table), `lateShader` and
-  `shaderParams`. Shader paths resolve against the scene file, as an IES profile does.
+`Material.pass = MATERIAL_PASS_LATE_DRAW`, over a program from `create_late_surface_program`,
+drawn by `render_late_items` from the post chain's late draw, ahead of fire and rain: past TAA and
+motion blur, so a surface that changes every frame (noise, a screen) is not averaged into grey.
+Drawn before the TAA seam, the fixture's noise keeps 5 codes of its 31 and correlates +0.72 with
+the frame before.
+- **Order and blend**: farthest first, ties in graph order, premultiplied (alpha 0 adds, 1
+  replaces), through the shared submission (`SubmitState`, `submit_draw_run`).
+- **Hiding is a depth compare.** The late canvas has no depth attachment, so
+  `include/late_surface.glsl`'s `lateVisible` compares against the resolved depth, Unreal's own
+  choice in that pass for the same jitter reason. `lateEmit` carries emitted light through the
+  frame's fog and the pre-exposure.
+- **Bound by name**: `model`, `view`, the unjittered `projection`, `time` and `frame`, the material
+  under the lit surface's names (`albedo`, `emissiveFactor`, `albedoTex`, `emissiveTex` with their
+  `*TexExists`), its params, and through `postfx_late_draw_bind`, which fire and rain share,
+  `sceneDepth`, the fog volume and `viewport`. `vColor` is white on a mesh with no colours, as a
+  hook sees it.
+- **It reaches nothing else.** It casts no shadow, the rain's cover included: every caster set
+  names the lanes it takes, so a lane casts nothing until it is listed. No capture sees it, it
+  lights nothing under `--emissive-lights`, and neither subtree setter (`node_set_programs` among
+  them) replaces its program.
+- **Refused by name**: either half of a late surface without the other, and one on a mesh that
+  skins, sways or is shadow-only, since the late vertex stage places a vertex by its model matrix
+  alone.
+
+### The surface hook
+
+`create_shader_hook` and `Material.shader_hook` (`shader_hook.c/h`): `void cetraSurface(inout
+CetraSurface s)` over `include/surface_hook.glsl`, spliced into `pbr_frag` at
+`// CETRA_SURFACE_HOOK_CHUNK` before `main()`. It decides a lit surface's albedo, coverage, normal,
+roughness, metallic, AO and emission. The engine owns a hook; a material borrows it by a plain
+pointer, and a `.cscn` describes each hook once under `shaderHooks`, however many materials name
+it.
+- **Not a mask bit.** A bit switches off code the shader holds; a hook brings code in, so its define
+  arrives in the same string as its source.
+- **Called twice, from the same gathered albedo and coverage**, so a hook multiplying its albedo
+  does it once: before the alpha test, keeping albedo and alpha (the cut, decals, the albedo view
+  and the prepass exit read them), and after the gather, keeping normal, roughness, metallic, AO
+  and emission.
+- **No sampler is spent**: the hook reads what its variant already declares.
+- **The variant key includes the hook's id** (`pbr-<mask>-h<id>`), and the resolver moves a
+  material whose program's hook is not its own. Without the id every hooked material at one mask
+  draws with whichever hook compiled first.
+- **Refused where the app made it.** `create_shader_hook` compiles the hook's lit stages at every
+  feature and at none, plus the skinned vertex stage when it has an offset. A hook naming something
+  only a feature declares (`sheenTex`, a chunk the host includes only under the rain or cached-tile
+  bit) compiles at the full mask and fails at `pbr-0`; built at both ends, it builds at any. A hook
+  on a material whose program is not a lit-surface variant is refused by name, since its surface
+  would ignore it while its bound and shadow did not.
+- **Its shadow programs are built with it.** A hook whose offset does not build into them is
+  refused. A surface that does not, one reading the normal map (the shadow stage declares only the
+  albedo), keeps its offset and loses only its shadow cut (`shadow_cuts`), casting by its
+  material's alpha.
+- **A hook whose variant fails anyway is dropped everywhere** (`ShaderHook.broken`, read through
+  `shader_hook_live`). The check compiles but links nothing, so a hook whose halves disagree lands
+  here. It is said once by name, and every reader (the resolver, `classify`, the bound, the
+  refusal) treats its materials as unhooked, so the surface, its bound and its shadow never
+  disagree. The shadow pass runs before the resolver, so the frame it fails on is the one frame
+  they differ.
+
+### The offset
+
+`vec3 cetraOffset(CetraVertex v)`, spliced at `// CETRA_OFFSET_HOOK_CHUNK` into
+`object_position.glsl`'s `cetra_local_displacement`. It is the third displacer, so every displacer
+rule in [shaders.md, Vertex Attributes](shaders.md#vertex-attributes) holds:
+- **its bound**: `offset_bound` widens `draw_item_bounds`;
+- **one splice reaches every stage**, the previous frame's offset at the previous time for the
+  motion vector;
+- **the lean prepass is sat out**. Only a surface moved away from the eye shows a broken prepass:
+  the shading pass's one-sided `LEQUAL` passes every fragment that came nearer, which is why the
+  fixture carries a quad pushed back beside its dome.
+
+Shadows:
+- **A light draws a caster through the hook's own shadow program** wherever `classify` marked it
+  `DRAW_HOOKED_CASTER`: an offset, or the alpha of a foliage caster.
+- **A masked hook casts through its alpha**, since `DRAW_FOLIAGE` accepts a hook in place of an
+  albedo map. Only a hook whose alpha reached its shadow program counts; a card with no albedo map
+  falling back to the plain program is cut by whatever texture the last caster left on unit 0.
+- **One owner primes a shadow layer's programs.** `_draw_shadow_items` forgets the program the last
+  layer left bound and sets the light matrix and displacement inputs on each program as the layer
+  first draws through it. Primed by the caller instead, a layer's matrix went to whatever was
+  bound, and the plain casters of the next layer drew through the previous layer's matrix.
+- **Kept shadow faces.** A hook declared `animated` is a mover for the cached tiles, whichever of
+  the two halves it changes, and a kept face redraws a caster whose hook or params change, over
+  the old bound and the new: marked from the new alone, a face that saw only the old reach keeps
+  its stale shadow.
+
+### Shader params and the clock
+
+`ShaderParams` (`shader_params.h`, `SHADER_PARAM_MAX` 8 named vec4s, no GL, so a scene file's
+description carries them) ride a material or a pass and are uploaded by name wherever its program
+is bound: the scene pass, the late draw, the shadow passes. Nothing resets a name another owner of
+the same program set.
+
+**The clock is one upload.** `shader_clock_upload` sets `time` and `frame` (wrapped at 2^24), and
+`engine_upload_displacement_uniforms` calls it, so every stage that places geometry, the shadow
+passes included, reads the same frame a hook does in the shading pass.
+
+### In a `.cscn`
+
+- `post.passes: [{at, shader, params, enabled}]`;
+- a top-level `shaderHooks: {name: {surface, offset, offsetBound, animated}}`, each one hook
+  however many materials name it;
+- on a material, `shaderHook` (a name from that table), `lateShader` and `shaderParams`.
+
+Shader paths resolve against the scene file, as an IES profile's does.
 
 ## Atmosphere
 
@@ -1490,17 +1475,3 @@ small sources, or the drips past a lit window took none from its tubes.
 about the map's own mean, read from its coarsest mip. It is a bit of its own because it declares
 `heightTex`, and on `PBR_FEAT_RAIN` that unit would be paid by every material in a wet world.
 Layered materials are refused it: their unit 4 is the virtual-texture page.
-
-## Modules
-
-### `shader_hook.c/h`
-
-An app's SURFACE HOOK (spec 13.29): GLSL deciding a lit surface's albedo, coverage, normal, roughness, metallic, AO and emission, and optionally an OFFSET moving its vertices. Engine-owned, test-compiled when made, its two shadow programs built with it; a material borrows one by a plain pointer and the variant resolver builds the hooked variant. See App Shaders
-
-### `crt.c/h`
-
-The CRT (spec 13.28): the window-sized picture, its resample to a `crt_lines` signal in linear light, and the television drawn into the window. Made on first use and latched off if it fails, as `glare.c` is. Knows nothing of PostFX: it takes a `CrtLook`
-
-### `local_exposure.c/h`
-
-Local exposure's passes (spec 13.19): the frame at half res, the bilateral grid gathered and blurred, the blurred luminance, all into one RG32F atlas the tonemap slices. Made on first use and latched off if it fails, as `glare.c` is. `local_exposure_probe` prints the luminance range it is asked to fit
