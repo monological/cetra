@@ -2,13 +2,14 @@
 
 How each shader subsystem works and why it is built that way. `docs/shaders.md` keeps the
 inventory -- which files exist and what each one is for -- and the rules that span files; this is
-the per-subsystem detail behind those entries.
+the per-subsystem detail behind those entries. `docs/lighting.md` and `docs/architecture.md` hold
+the engine side of several of these subsystems.
 
 **Read the entry before changing its subsystem.** Most of what is recorded here is a rejected
 alternative or a failure mode that renders a plausible frame: a moon phase that inverts and still
 looks like a moon, an IES fold that lights a room the wrong way round, a probe fade that weighs
 every floor at zero, a road blended after the height instead of before. None of those produce an
-error, and several shipped green through the full gate suite. That is what these notes are for.
+error, and several pass the full gate suite.
 
 **Names, counts, line references and file lists rot faster than the reasoning.** Treat a
 `file.glsl:123` here as a starting point rather than a fact, and trust the argument further than
@@ -41,117 +42,134 @@ An app's own GLSL: [Shader hooks](#shader-hooks)
 
 ## Day/night cycle
 
-`sky_cycle_tick` (spec 11.81), called once per frame from `engine.c`
-BEFORE the GI sweep and the shadow pass — the key light it rewrites is what the cascades
-fit, and a completed swap must land before the frame's first `bind_ibl_textures`. An app
-render callback (the roadmap's sketch) is too late for both. Splits into `sky_cycle_advance`
-(clock → sun → live view LUT) and `sky_slicer_pump` (a frame's budget of the sliced
-re-bake), because a `--cycle-rebake-at` pumps without advancing and a frozen cycle advances
-without pumping. `cycle_hour` (0-24, noon at 12) is a **double** — an accumulator, where a
-float32 ulp near hour 24 is half a per-frame increment — and drives BOTH the sun (through
-`sky_sun_path`, the equinox path on the stars' own latitude frame) and `stars_hour_deg`, so
-sun and stars wheel off one clock. **The cost is inverted from what "slice the bake"
-suggests**: the six env faces are ~10 ms and ~90% is the GGX + Charlie prefilter chains, so
-the schedule is texel-WEIGHTED work items with mip 0 split by face, and the budget sits just
-under the heaviest item so those run alone. The per-frame peak is one mip-0 face and is
-irreducible without sub-face slicing (measured 4.74 ms at 800x500 through the `sky cycle`
-profiler scope). Slices render into SHADOW textures and swap all four handles plus
-`max_reflection_lod` atomically, adopting the outgoing chain rather than reallocating; the
-tick returns whether a swap landed and `engine.c` marks the GI volume, because sky.c must
-not know what a Scene is. **An atomic bake CANCELS a slice in flight** — without that, a GUI
-floor edit or a config restore is silently reverted a few frames later by content baked
-before it. Off by default everywhere; `--day-cycle <s>` (0 = frozen clock), `--time-of-day
-<h>`, `--no-day-cycle`, `environment.cycle {enabled, day_seconds, hour}`, three config rows,
-and `--cycle-rebake-at` as the diagnostic the 0 px `cycle-slice` arm rides.
+`sky_cycle_tick` (spec 11.81), called once per frame from `engine.c` before the GI sweep and the
+shadow pass: the key light it rewrites is what the cascades fit, and a completed swap must land
+before the frame's first `bind_ibl_textures`. An app render callback is too late for both.
+
+**Two halves.** `sky_cycle_advance` moves the clock, the sun and the live view LUT;
+`sky_slicer_pump` spends a frame's budget of the sliced re-bake. They are separate because
+`--cycle-rebake-at` pumps without advancing and a frozen cycle advances without pumping.
+
+**One clock.** `cycle_hour` (0-24, noon at 12) is a `double`: it is an accumulator, and a float32
+ulp near hour 24 is half a per-frame increment. It drives both the sun (through `sky_sun_path`, the
+equinox path on the stars' own latitude frame) and `stars_hour_deg`, so sun and stars wheel off one
+clock.
+
+**The cost is not where "slice the bake" suggests.** The six env faces are about 10 ms, and about
+90% of that is the GGX and Charlie prefilter chains. So the schedule is texel-weighted work items,
+mip 0 split by face, with the budget just under the heaviest item so those run alone. The per-frame
+peak is one mip-0 face (4.74 ms at 800x500 under the `sky cycle` profiler scope) and cannot fall
+without slicing below a face.
+
+**The swap.** Slices render into shadow textures and swap all four handles plus
+`max_reflection_lod` at once, adopting the outgoing chain rather than reallocating. The tick
+returns whether a swap landed and `engine.c` marks the GI volume, because `sky.c` must not know
+what a Scene is. **An atomic bake cancels a slice in flight**: otherwise a GUI floor edit or a
+config restore is silently reverted a few frames later by content baked before it.
+
+**Reached by:** off by default everywhere; `--day-cycle <s>` (0 = frozen clock),
+`--time-of-day <h>`, `--no-day-cycle`, `environment.cycle {enabled, day_seconds, hour}`, three
+config rows, and `--cycle-rebake-at`, the diagnostic the `cycle-slice` arm runs on.
 
 ## The moon
 
-`include/moon.glsl` + one guarded block in `include/sky_radiance.glsl`, over
-the surface `moon_surface.c` bakes (spec 11.82) — the sun-disc pattern a THIRD time, in the
-two background variants and nowhere else, so the LUT chain, the slicer and the bake cadence
-needed **zero** changes.
-**PHASE IS DERIVED, NEVER AUTHORED**: `cos(alpha) = -dot(moon_dir, sun_dir)`, the NEGATIVE
-of the elongation's cosine because alpha is measured at the moon (0 at full, 180 at new).
-Get that sign wrong and the feature inverts while still rendering a plausible moon — and
-the two readings AGREE at elongation 90, so a ladder that does not straddle it cannot see
-the error. Deriving rather than authoring is what makes a crescent facing the wrong way
-**unrepresentable**: the terminator is `dot(n, sunDir)` crossing zero in a disc frame whose
-sunward axis IS the projected sun, so there is no sign to invert and no parameter to
-mis-author. It also deletes a field rather than adding one.
-**A full moon is NOT a Lambertian sphere**, and that is its whole visual signature —
-regolith backscatters, so the quarter moon is ~1/11 of full and not 1/2 (Krisciunas &
-Schaefer 1991, one line), and the lit face is FLAT with no centre-to-limb gradient.
-Shading it by `cos(theta)` renders a snooker ball. Hence a soft STEP terminator one pixel
-wide off `fwidth`, and `MOON_LIMB` 0.85 against the sun's 0.4 — same form, opposite intent.
-**The PHYSICAL disc size is `sun_disc_deg`**, shared: the two subtend 0.53 and 0.52 degrees,
-which is why eclipses work, and a second field would have cost six authoring surfaces for a
-difference of ~1/50 px. The GUI slider is "Disc Size" for that reason. `moon_size` multiplies
-it for the LOOK — a life-size moon is a dozen pixels — and the aureole's width divides by
-its SQUARE ROOT rather than tracking it, because a halo scaled linearly onto a 12x disc is
-50 degrees across and floods the star field the moon is meant to hang in front of.
-**The SURFACE IS BAKED, and it carries relief and albedo both.** `moon_surface_bake` stamps
-~43,000 craters over three size tiers into one 2048x1024 RGBA8 at startup (~0.09 s debug),
-RGB the tangent-space normal and A the albedo, threaded on `cetra_bake_bands` and
-bit-identical at any worker count. Three things about it are load-bearing. **An impact
-EXCAVATES**: the stamp erases prior relief inside the rim and piles it at the crest, in
-crater order, which is what makes a young crater cut a clean notch through an old one —
-summing bumps averages the overlap into mush, and the overlap is what the eye reads as a
-crater field. **The normal is TANGENT-space**, so a coarse mip averages toward flat; in the
-body frame it averages toward the mean of the sphere's own normals, which is zero, and a
-distant moon turns to noise. And **craters are height AND albedo**, because relief is
-invisible at full phase (Lommel-Seeliger, below) and albedo is all there is — a moon built
-from relief alone renders a blank disc at exactly the phase people picture.
-The reason it is baked rather than evaluated per pixel is a POPULATION ceiling, not a cost
-one: a 3x3x3 lattice holds ~27 candidates per octave, and no tuning reaches a saturated
-field from there.
-**The maria come from DATA** (`moon_map.h`, 32 KB generated by `tools/gen_moon_map.py` from
-published selenographic centres) in a **face-locked** frame — indexed by the world normal
-they swim, indexed by the terminator's own sun-relative frame they spin, and the second is
-the natural wrong turn since that code builds such a frame anyway. Procedural noise gives a
-plausible cratered world that is not the Moon: where the seas are is a historical accident
-with no generating process to model. Only the LOW-FREQUENCY layout is data — craters, rays
-and grain stay synthetic, which is what keeps the face sharp at any `--moon-size` where a
-photograph would blur. Earthshine on the dark limb, blue because it is light off an ocean
+`include/moon.glsl` and one guarded block in `include/sky_radiance.glsl`, over the surface
+`moon_surface.c` bakes (spec 11.82). It follows the sun disc's pattern, in the two background
+variants and nowhere else, so the LUT chain, the slicer and the bake cadence know nothing of it.
+
+**Phase is derived, never authored**: `cos(alpha) = -dot(moon_dir, sun_dir)`, negative because
+alpha is measured at the moon (0 at full, 180 at new). With the sign wrong the feature inverts and
+still renders a plausible moon, and the two readings agree at elongation 90, so a test ladder that
+does not straddle 90 cannot see it. The terminator is `dot(n, sunDir)` crossing zero in a disc
+frame whose sunward axis is the projected sun, so a crescent facing the wrong way cannot be
+represented: there is no sign to invert and no parameter to mis-author.
+
+**A full moon is not a Lambertian sphere**, and that is its visual signature. Regolith
+backscatters, so the quarter moon is about 1/11 of full rather than 1/2 (Krisciunas & Schaefer
+1991), and the lit face is flat with no centre-to-limb gradient. Shading it by `cos(theta)`
+renders a snooker ball. Hence a soft step terminator one pixel wide off `fwidth`, and `MOON_LIMB`
+0.85 against the sun's 0.4: same form, opposite intent.
+
+**Shading is Lommel-Seeliger**, `mu0/(mu0+mu)`: at full phase the two are equal everywhere so the
+disc reads flat, and near the terminator it falls off slowly enough that crater walls throw their
+own shade. One term gives both halves of the signature.
+
+**Size.** The physical disc size is `sun_disc_deg`, shared with the sun: the two subtend 0.53 and
+0.52 degrees, and a second field would have cost six authoring surfaces for about 1/50 px. The GUI
+slider is "Disc Size" for that reason. `moon_size` multiplies it for the look, since a life-size
+moon is a dozen pixels. The aureole's width divides by its square root rather than tracking it: a
+halo scaled linearly onto a 12x disc is 50 degrees across and floods the star field the moon hangs
+in front of.
+
+**The surface is baked, and carries relief and albedo both.** `moon_surface_bake` stamps about
+43,000 craters over three size tiers into one 2048x1024 RGBA8 at startup (about 0.09 s debug): RGB
+the tangent-space normal, A the albedo, threaded on `cetra_bake_bands` and bit-identical at any
+worker count. It is baked rather than evaluated per pixel for a population ceiling, not cost: a
+3x3x3 lattice holds about 27 candidates per octave, and no tuning reaches a saturated field from
+there. Three things about it are load-bearing:
+- **An impact excavates.** The stamp erases prior relief inside the rim and piles it at the crest,
+  in crater order, so a young crater cuts a clean notch through an old one. Summing bumps averages
+  the overlap into mush, and the overlap is what the eye reads as a crater field.
+- **The normal is tangent-space**, so a coarse mip averages toward flat. In the body frame it
+  averages toward the mean of the sphere's normals, which is zero, and a distant moon turns to
+  noise.
+- **Craters are height and albedo**, because relief is invisible at full phase under
+  Lommel-Seeliger and albedo is all there is. A moon of relief alone renders a blank disc at the
+  phase people picture.
+
+**The maria come from data** (`moon_map.h`, 32 KB, generated by `tools/gen_moon_map.py` from
+published selenographic centres), in a face-locked frame. Indexed by the world normal they swim;
+indexed by the terminator's sun-relative frame, the natural wrong turn since that code builds such
+a frame anyway, they spin. Procedural noise gives a plausible cratered world that is not the Moon:
+where the seas are has no generating process to model. Only the low-frequency layout is data;
+craters, rays and grain stay synthetic, which keeps the face sharp at any `--moon-size` where a
+photograph would blur. Earthshine lights the dark limb, blue because it is light off an ocean
 planet.
-**Shading is LOMMEL-SEELIGER**, `mu0/(mu0+mu)`: at full phase the two are equal everywhere
-so the disc reads flat, and near the terminator it falls off slowly enough that crater walls
-throw their own shade. One term gives both halves of the signature.
-The LIGHT is a second `LIGHT_DIRECTIONAL` created **unconditionally** whenever a sky sun
-is — gating it on enabled makes `sky.moon` a snapshot row that restores a disc and no
-light, since a restore cannot CREATE a Light (measured 139,768 px). Free when disabled:
-`shadow.c`'s classification skips non-casting lights BEFORE counting directionals.
-`cast_shadows` rides `sky_night_factor`, an exact zero above +3°, so **above +3° the moon
-never casts** and the daylight caster count is what it always was; the both-casting window
-is exactly (0°, 3°), open at BOTH ends — `sky_night_factor` is an exact zero AT +3° and
-`sky_horizon_fade` an exact zero AT 0°, so neither boundary casts — 17 scene-minutes, ≤7 s at
-the GUI's longest day.
-Under the cycle, `moon_hour = cycle_hour − cycle_moon_offset` with the lag advancing at
-24 h per 29.53 simulated days — ONE rate behind two facts, because "rises ~50 minutes
-later each day" and "the phase evolves through the month" are the same fact. Left
-UNWRAPPED: `sky_sun_path` takes sin/cos of the hour and −5 h vs 19 h agree mathematically,
-not bitwise. OFF by default in the library, ON in tree (`--no-moon` off); `--moon`,
+
+**The light** is a second `LIGHT_DIRECTIONAL`, created whenever a sky sun is, whether or not the
+moon is enabled: gated on enabled, `sky.moon` would be a snapshot row that restores a disc and no
+light, since a restore cannot create a Light. It costs nothing when disabled, because `shadow.c`'s
+classification skips non-casting lights before counting directionals. `cast_shadows` rides
+`sky_night_factor`, an exact zero above +3 degrees, so above +3 the moon never casts and the
+daylight caster count is unchanged. The window where both cast is (0, 3) degrees, open at both
+ends: `sky_night_factor` is exactly zero at +3 and `sky_horizon_fade` exactly zero at 0. That is
+17 scene-minutes, at most 7 s at the GUI's longest day.
+
+**Under the cycle**, `moon_hour = cycle_hour - cycle_moon_offset`, the lag advancing 24 h per
+29.53 simulated days: one rate behind two facts, since rising about 50 minutes later each day and
+the phase evolving through the month are the same fact. The offset is left unwrapped:
+`sky_sun_path` takes sin and cos of the hour, and -5 h and 19 h agree mathematically, not bitwise.
+
+**Reached by:** off by default in the library, on in tree (`--no-moon` off); `--moon`,
 `--moon-brightness`, `--moon-size`, `--moon-elevation`, `--moon-azimuth`, `--sky-disc`,
 `--no-moon-maria`, `--no-moon-glow`, `--no-earthshine`, `--moon-probe`;
-`environment.moon {enabled, brightness, size, elevation, azimuth}` — **no `phase` key,
-deliberately**, since one beside a position could author a full moon next to the sun.
+`environment.moon {enabled, brightness, size, elevation, azimuth}`. There is deliberately no
+`phase` key: one beside a position could author a full moon next to the sun.
 
 ## Night floor
 
-one term at the end of `sky_view_frag.glsl`'s march (spec 11.80) — airglow +
-zodiacal + integrated starlight as a PREMULTIPLIED uniform, added to sky-side texels only and
-dimmed by the ray's own `through`. Living in the LUT bake is the whole design: the background,
-the env cube (and so the IBL and every lit surface), and the cloud march's ambient all sample
-that LUT, and it re-bakes exactly when the ramp's one input (the sun) moves — so a floor
-implemented in the background shader instead lifts the sky and never the ground, which is the
-`nightfloor-ground` arm's named mutation. The CPU zenith march adds the same term before its
-below-horizon early-out (night fog ambient); constants are C-side only in `sky.c`
-(`SKY_NIGHT_FLOOR_*`) because a premultiplied uniform leaves no GLSL copy to sync. The tint
-rides at the stars' 0.35 saturation — full extinction browns the whole lower sky at any level.
-Shares `sky_night_factor` (the ONE definition of night, +3° to −8°) with the stars. The level
-is a LOOK constant, not physics — exposure only darkens, so it stands in for the dark-adapted
-eye. OFF by default in the library, ON in tree (`--no-night-floor` off); `--night-floor` /
-`--night-floor-brightness` on render; `environment.night_floor {enabled, brightness}` in a
-`.cscn`; GUI checkbox + slider ride the sun's re-bake chain, NOT the stars' live-uniform path.
+One term at the end of `sky_view_frag.glsl`'s march (spec 11.80): airglow, zodiacal light and
+integrated starlight as a premultiplied uniform, added to sky-side texels only and dimmed by the
+ray's own `through`.
+
+**It lives in the LUT bake, and that is the whole design.** The background, the env cube (so the
+IBL and every lit surface) and the cloud march's ambient all sample that LUT, and it re-bakes
+exactly when the ramp's one input, the sun, moves. A floor in the background shader instead lifts
+the sky and never the ground; that is the `nightfloor-ground` arm's named mutation. The CPU zenith
+march adds the same term before its below-horizon early-out (the night fog ambient).
+
+- **Constants are C-side only**, in `sky.c` (`SKY_NIGHT_FLOOR_*`): a premultiplied uniform leaves
+  no GLSL copy to keep in step.
+- **The tint rides at the stars' 0.35 saturation**: full extinction browns the whole lower sky at
+  any level.
+- **Night is one definition**, `sky_night_factor` (+3 to -8 degrees), shared with the stars.
+- **The level is a look constant, not physics**: exposure only darkens, so the floor stands in for
+  the dark-adapted eye.
+
+**Reached by:** off by default in the library, on in tree (`--no-night-floor` off);
+`--night-floor` and `--night-floor-brightness` on render; `environment.night_floor {enabled,
+brightness}` in a `.cscn`. The GUI checkbox and slider ride the sun's re-bake chain, not the stars'
+live-uniform path.
 
 ## Overcast
 
@@ -165,11 +183,11 @@ Its horizon constant fades on the night ramp, so an overcast evening darkens wit
 
 **The model lives in C, and the shaders only apply it.**
 - `SkyEmission` = {clear, sun_scale, dome_zenith, dome_floor, scatter_max} is computed once, from
-  the sun the bake is FOR. The slicer bakes from a latched sun, and a dome read from the live one
+  the sun the bake is for. The slicer bakes from a latched sun, and a dome read from the live one
   would seam the env faces.
 - `sky_bind_emission` is its only upload: to the sky-view LUT, the aerial volume, the env faces and
   the cloud march.
-- The dome terms arrive PREMULTIPLIED by the amount, so a clear sky adds exact zeros and multiplies
+- The dome terms arrive premultiplied by the amount, so a clear sky adds exact zeros and multiplies
   by exactly 1. No branch guards the default path, and none should: a branch around unchanged
   arithmetic is not byte-identical on this driver.
 
@@ -180,9 +198,8 @@ night reflects a town.
 **Four places carry the dome, and each has a named asymptote:**
 - **The LUT.** Sky rays go toward the curve, and ground rays toward the floor it lights,
   GROUND_ALBEDO·(7/9)·Lz.
-- **The virtual ground.** Its overcast share is linear in the amount; the first version weighted
-  it twice.
-- **The aerial volume converges on the HORIZON, Lz/3,** the sky drawn right behind a far surface.
+- **The virtual ground.** Its overcast share is linear in the amount, weighted once.
+- **The aerial volume converges on the horizon, Lz/3,** the sky drawn right behind a far surface.
   Any other asymptote seams, and fading the sun's share alone takes distance to black.
 - **The CPU zenith march** adds (7/9)·Lz: the dome's horizontal irradiance over π, which is what
   the fog ambient and the water read it as.
@@ -201,39 +218,39 @@ group holds the dome's level, shape and zero against the probe's Lz.
 `SkyAtmosphere.radiance_scale` K (spec 13.7): nits per unit of the sky's relative scale.
 
 **Why it exists.** On the relative scale a noon zenith is a couple of units, about four decades
-under a real sun, and so a sky scene and a photometric lamp could not share an exposure. That was
-spec 10.2's open item. At `SKY_PHOTOMETRIC_SCALE` (`SKY_SUN_KLUX`·1000 / `SKY_SUN_ILLUMINANCE` =
-42,500) an unattenuated sun delivers 127.5 klux.
+under a real sun, so a sky scene and a photometric lamp cannot share an exposure. At
+`SKY_PHOTOMETRIC_SCALE` (`SKY_SUN_KLUX`·1000 / `SKY_SUN_ILLUMINANCE` = 42,500) an unattenuated sun
+delivers 127.5 klux.
 
-**K is applied where things are BAKED, never where they are read.** Both alternatives fail:
+**K is applied where things are baked, never where they are read.** Both alternatives fail:
 - folded into the IBL intensity, it counts twice in GI and in scene-captured probes, which already
   see the scaled sky;
 - stored relative and scaled at read, it sinks the night floor into fp16 subnormals.
 
-**So it rides `SkyEmission`, and everything the SUN drives is stored absolute:** the LUTs, the
+**So it rides `SkyEmission`, and everything the sun drives is stored absolute:** the LUTs, the
 dome, the cloud march, the disc (20·K), the zenith march and the sun light
 (`sun_base_intensity × K`).
-- **The sun's scatter is held under `100·K`,** exactly the old 100 at K = 1: the key light carries
-  the sun's energy, and the IBL is not meant to.
-- **Storage is a separate bound, `SKY_STORE_FP16_MAX`, applied at every sky target's WRITE.** A sum
+- **The sun's scatter is held under `100·K`,** 100 at K = 1: the key light carries the sun's
+  energy, and the IBL is not meant to.
+- **Storage is a separate bound, `SKY_STORE_FP16_MAX`, applied at every sky target's write.** A sum
   of bounded terms is not bounded -- the dome, the floor and a cloud composite are all added after
   the scatter ceiling -- so one clamp on one term could not keep RGBA16F from overflowing.
-- **The background clamps in WORKING space, after the exposure,** because a photometric disc is
+- **The background clamps in working space, after the exposure,** because a photometric disc is
   850,000 nits.
-- **K is in the sun light's FULL level, not in its fade,** so the cast floor (a thousandth of the
-  full level) scales with it. As a fade it would have kept a photometric sun casting at 2.4e-8 of
-  its light.
+- **K is in the sun light's full level, not in its fade,** so the cast floor (a thousandth of the
+  full level) scales with it. As a fade it would keep a photometric sun casting at 2.4e-8 of its
+  light.
 
-**The night terms are ABSOLUTE and do not take K:** the floor, the stars, the moon disc and the
+**The night terms are absolute and do not take K:** the floor, the stars, the moon disc and the
 moon light. So a night frame is the same on either scale, and on the photometric one twilight sits
 K above the floor, where a meter can open for it.
 
 **The sun's base.** `sun_base_intensity = SKY_SUN_ILLUMINANCE` is the value at which the sun agrees
 with the sky. The render app keeps its 10, which is 3.3 times sun-heavy on either scale. The moon's
-light is a fraction of the same base WITHOUT the scale, so an app that zeroes the base loses its
+light is a fraction of the same base without the scale, so an app that zeroes the base loses its
 moonlight too.
 
-**K is a change of UNITS, not of look.** A scene-captured probe is shot once, at load, so a K that
+**K is a change of units, not of look.** A scene-captured probe is shot once, at load, so a K that
 arrives after it leaves every reflection of the sky tens of thousands of times off. That is why the
 config snapshot carries K in its `source` block, applied before the load, as well as in the
 `sky.radiance_scale` row. The GUI's live checkbox leaves such probes as shot and says so, as an
@@ -247,183 +264,191 @@ same range. The `scale` group's `sky` entry holds it invariant at x1000, to 1 LS
 
 ## Stars
 
-`include/stars.glsl` + one term in `include/sky_radiance.glsl` (spec 11.79) — a
-procedural night field beside the sun disc, in BOTH background variants and nowhere else:
-the env/IBL path must never carry it, the sun-disc firefly rule. Two octahedral lattices
-(bright + faint wash) gathered 3×3 — one cell truncates at some zoom, since the core is
-sized in PIXELS off `fwidth` while cells are fixed in angle. Hashed with its own PCG, not
-`noise.glsl`'s sin-fract: cell ids are the integer lattice E10 measured at 1047 distinct of
-4096, and the correlation rendered as visible strings of stars (E10's revival clause, on a
-new consumer; the four existing consumers stand). The flux tail cap is the knob that bounds
-the LARGEST halo — the glare wing scales with flux, and a hard wing cap flattens the glow
-that is the look. `starIntensity` carries a CPU ramp through civil twilight (+3° to −8°) —
-a visibility ramp standing in for the exposure adaptation `exposure_auto_gain` refuses, so
-daylight is an exact 0 px; `starFrame` (latitude + hour angle) is what turns the sky.
-OFF by default in the library (three gate arms assume a quiet sub-horizon backdrop), ON in
-tree. Authored as `environment.stars` (a closed nested block), `--stars` /
-`--stars-brightness` / `--no-stars` on render, four plain config rows. The `stars` gate
-group reads every arm as a delta against a `--no-stars` twin — raw brightness moves the
-OPPOSITE way as the sun drops — and its horizon arm's R/B leg is the load-bearing half.
+`include/stars.glsl` and one term in `include/sky_radiance.glsl` (spec 11.79): a procedural night
+field beside the sun disc, in both background variants and nowhere else. The env and IBL path must
+never carry it, for the sun disc's reason: a point that bright in a prefiltered cube is a firefly.
+
+- **Two octahedral lattices**, bright stars and a faint wash, each gathered 3x3. One cell
+  truncates at some zoom, since a star's core is sized in pixels off `fwidth` while cells are
+  fixed in angle.
+- **Hashed with its own PCG, not `noise.glsl`'s sin-fract.** The cell ids are an integer lattice,
+  on which the sin-fract hash collapses to few distinct values (see `docs/shaders.md`, Hashes), and
+  the correlation renders as visible strings of stars.
+- **The flux tail cap bounds the largest halo.** The glare wing scales with flux, and a hard cap
+  on the wing instead flattens the glow that is the look.
+- **`starIntensity` carries a CPU ramp through civil twilight** (+3 to -8 degrees): a visibility
+  ramp standing in for the exposure adaptation `exposure_auto_gain` refuses, so daylight is
+  exactly untouched. `starFrame` (latitude and hour angle) is what turns the sky.
+
+**Reached by:** off by default in the library, since several gate arms assume a quiet sub-horizon
+backdrop; on in tree. `environment.stars` (a closed nested block), `--stars`, `--stars-brightness`
+and `--no-stars` on render, and four plain config rows. The `stars` gate group reads every arm as a
+delta against a `--no-stars` twin, because raw brightness moves the opposite way as the sun drops;
+its horizon arm's R/B leg is the load-bearing half.
 
 ## Tonemap / exposure
 
-`tonemap_frag`, `lum_measure_frag`, `lum_histogram_frag`,
-`lum_reduce_frag` (there is no `lum_adapt_frag`; the GPU adaptation pass and its 1x1 ping-pong
-were deleted in `f98ab0a` and the blend moved to the CPU, where the value already had to arrive
-for the readback). The metering chain is measure -> bin -> collapse since spec 11.52: a 64x64
-R16F of log2 luminances, a 128-bin RG32F histogram carrying each bin's COUNT and SUM (laid out
-128x8 and reduced by summing the rows -- `LUM_HISTOGRAM_ROWS` exists so one fragment is not
-looping all 4096 texels alone), and a 1x1
-the CPU reads back. A **gather** histogram, one fragment per bin looping the whole source, which
-is O(bins x texels) and still the right trade at 4096 texels -- GL 4.1 has no compute, no atomics
-and no imageStore, so the alternative is additive blending of point primitives
+`tonemap_frag`, `lum_measure_frag`, `lum_histogram_frag`, `lum_reduce_frag`. There is no adaptation
+pass on the GPU: the blend runs on the CPU, where the value already arrives for the readback.
+
+**Metering is measure, bin, collapse** (spec 11.52):
+- a 64x64 R16F of log2 luminances;
+- a 128-bin RG32F histogram carrying each bin's count and sum, laid out 128x8 and reduced by
+  summing the rows (`LUM_HISTOGRAM_ROWS`, so no one fragment loops all 4096 texels alone);
+- a 1x1 the CPU reads back.
+
+The histogram is a gather, one fragment per bin looping the whole source: O(bins x texels), and
+still the right trade at 4096 texels. GL 4.1 has no compute, no atomics and no `imageStore`, so
+the only alternative is additive blending of point primitives.
 
 **The finished frame is read through `sceneLight`** (`include/view.glsl`, spec 13.20): under
 `WS_SCENE_MAX`, and never below zero. The neutral curve's toe offsets every channel by
-`x - 6.25x^2` of the smallest, which for a negative `x` ADDS to all three, and the local exposure
-takes a log and lifts what is dark tenfold; a few thousandths below zero from the wet SSR fold were
-invisible until the local exposure arrived and turned them into white dots along silent's porch
-rails. 13.21 removed the fold's, and TAA still leaves a few beside a very bright window. The tonemap, the glare source (which thresholds what the tonemap takes out, so the two must
-read the same light) and the local exposure's grid all read through it. A NaN now comes out black
-where the bare `min` gave white; GLSL leaves either undefined.
+`x - 6.25x^2` of the smallest, which for a negative `x` adds to all three, and the local exposure
+takes a log and lifts what is dark tenfold, so a few thousandths below zero turn into white dots.
+TAA still leaves a few beside a very bright window. The tonemap, the glare source (which
+thresholds what the tonemap takes out, so the two must read the same light) and the local
+exposure's grid all read through it. A NaN comes out black where a bare `min` gives white; GLSL
+leaves either undefined.
 
 ## Purkinje / scotopic shift
 
-`include/purkinje.glsl` + `tools/gen_scotopic_weights.py`
-(spec 11.83) — rod vision in dim light: colour drains, the image shifts blue, reds go
-near-black. **It is NOT in the finishing stack**, which is entirely downstream of
-`toneSelect`, and the roadmap's own row said otherwise for four specs. It splices into
-`sceneToToned` between the `WS_SCENE_MAX` sanitize and the tone curve, on **the file's
-THIRD siting rule**: the gamma line orders stages by whose data space they were authored
-in and only rules out post-gamma, while chromatic aberration is already sited by the
-OPTICAL CHAIN as a lens effect "before the sensor". This is the sensor's own spectral
-response, so it lands after the lens and before the response curve — and grain, already
-sited as sensor noise after that curve, is its other half. **Three wrong sites, each of
-which renders a plausible frame**: `sceneTap` misses `bloomAdd`, so every night lamp gets
-a fully-coloured halo round a drained core, and sits UPSTREAM of the sanitize where
-`mix(c, INF*tint, 0.0)` is NaN; `toneSelect` is called by debug view 5, which would drain
-for reasons nothing in the frame explains; and applying it to `color` after the call
-makes the sharpen block high-pass the Purkinje term itself.
-**The weight is a PRODUCT of two gates, and that is a measurement not a preference.** A
-per-pixel gate on absolute radiance (via `oneOverPreExposure`, already in scope) and a
-whole-frame gate on the metering 1×1, sampled on unit 7 — which is where its own ancestor
-lived. Measured: the day frame's darkest decile sits at log2 −7.85, so **without the
-global veto a noon shadow takes wLocal 0.997**, and the day frame's darkest half sits
-BELOW the night frame's brightest third, so no per-pixel threshold separates them. Both
-failure cases (a daylit shadow, a lamp at night) want a veto rather than a vote.
-**This is why `postfx_measure_luminance` and `postfx_read_luminance` are separate**: the
-readback stays gated on `automatic`,
-the three draws run whenever the shift is on. `adapted_luminance` does not exist under
-`--no-auto-exposure` — all 27 goldens and ~60 arms — so a term keyed to it would have been
-structurally invisible to the suite, which is what the roadmap booked.
-`PURKINJE_SCOTOPIC_W` is DERIVED (V′/V at each primary's dominant wavelength, normalised
-to sum to exactly 1 so grey keeps its brightness) and anchored against the display white's
-published S/P ratio at 2.36 vs ~2.4; `PURKINJE_ROD_TINT` is CHOSEN, with unit photopic
-luma enforced, and is **algebraically identical** to Kirk & O'Brien's per-cone injection
-rather than an approximation of it, since rods are monochromats and the LMS round trip of
-a scalar collapses to one vector. Acuity and rod noise ship too, separately toggled.
-**Every threshold is a LOOK constant**: this engine's whole day-to-night range is 4.2
-stops where reality is ~17, and its sky runs four decades under the real photometric scale
-unless an app sets it photometric (spec 13.7), so `purkinjeBiasEV` is the one knob that migrates
-them for an app that does.
-OFF by default everywhere including `tree` (B15: its night sea is wrong, and a
-desaturating model over it reads as a partial fix that has not happened). `--purkinje`,
-`--no-purkinje`, `--purkinje-strength`, `--purkinje-bias`, `--purkinje-acuity`,
-`--no-purkinje-acuity`, `--purkinje-noise`, `--no-purkinje-noise`, `--purkinje-debug`;
-`post.purkinje {enabled, strength, bias_ev, acuity, noise}`.
-**The 0 px daylight identity holds at the shipped bias, not at every bias** —
-`--purkinje-bias 2` moves 396,713 px on a daylight frame, which is the flag doing its job.
+`include/purkinje.glsl` and `tools/gen_scotopic_weights.py` (spec 11.83): rod vision in dim light.
+Colour drains, the image shifts blue, reds go near-black.
+
+**It is not in the finishing stack**, which is entirely downstream of `toneSelect`. It splices into
+`sceneToToned` between the `WS_SCENE_MAX` sanitize and the tone curve. The siting rule: this is
+the sensor's own spectral response, so it lands after the lens (chromatic aberration is sited
+before the sensor) and before the response curve; grain, sensor noise after that curve, is its
+other half. **Three wrong sites, each of which renders a plausible frame:**
+- `sceneTap` misses `bloomAdd`, so every night lamp gets a fully coloured halo round a drained
+  core; and it sits upstream of the sanitize, where `mix(c, INF*tint, 0.0)` is NaN.
+- `toneSelect` is called by debug view 5, which would drain for reasons nothing in the frame
+  explains.
+- Applied to `color` after the call, the sharpen block high-passes the Purkinje term itself.
+
+**The weight is a product of two gates, and that is a measurement, not a preference.** A per-pixel
+gate on absolute radiance (through `oneOverPreExposure`), and a whole-frame gate on the metering
+1x1, sampled on unit 7. A day frame's darkest decile sits at log2 -7.85, so without the global
+veto a noon shadow takes wLocal 0.997; and the day frame's darkest half sits below the night
+frame's brightest third, so no per-pixel threshold separates them. Both failure cases, a daylit
+shadow and a lamp at night, want a veto rather than a vote.
+
+**So `postfx_measure_luminance` and `postfx_read_luminance` are separate**: the three draws run
+whenever the shift is on, and the blocking readback only under automatic exposure.
+`adapted_luminance` does not exist under `--no-auto-exposure`, which most goldens and many arms
+run with, so a term keyed to it would be invisible to the suite.
+
+**The weights.** `PURKINJE_SCOTOPIC_W` is derived: V′/V at each primary's dominant wavelength,
+normalised to sum to exactly 1 so grey keeps its brightness, and checked against the display
+white's published S/P ratio (2.36 against about 2.4). `PURKINJE_ROD_TINT` is chosen, with unit
+photopic luma enforced. It is algebraically identical to Kirk & O'Brien's per-cone injection, not
+an approximation of it: rods are monochromats, and the LMS round trip of a scalar collapses to one
+vector. Acuity and rod noise are separately toggled.
+
+**Every threshold is a look constant.** This engine's whole day-to-night range is 4.2 stops where
+reality's is about 17, and its sky runs four decades under the photometric scale unless an app sets
+it photometric (spec 13.7), so `purkinjeBiasEV` is the one knob that moves them for an app that
+does. The daylight identity holds at the shipped bias, not at every bias: a bias of 2 moves a
+daylight frame, which is the flag doing its job.
+
+**Reached by:** off by default everywhere, `tree` included: its night sea is wrong
+(`docs/aaa-rendering-roadmap.md`, B15), and a desaturating model over it reads as a partial fix
+that has not happened. `--purkinje`, `--no-purkinje`, `--purkinje-strength`, `--purkinje-bias`,
+`--purkinje-acuity`, `--no-purkinje-acuity`, `--purkinje-noise`, `--no-purkinje-noise`,
+`--purkinje-debug`; `post.purkinje {enabled, strength, bias_ev, acuity, noise}`.
 
 ## Specular occlusion
 
-`spec_occ_composite_frag` + `include/spec_occ.glsl`
-(specs 11.3, 11.4, 11.75, 11.76, 11.77). **Three** modes — off / legacy / split — default
-`split`, and `POSTFX_SPEC_OCC_SPLIT` is **2**, renumbered when `bent` went.
-**The default's term is computed in `gtao_frag`, not here** — the reflection lobe is tested
-against the sector bitmask while that mask is still live, since it is loop-local and nothing
-downstream can see it. Carried on a THIRD attachment of the GTAO FBO as the estimator's two
-sums `(visible, total)`, RG16F at half res, divided only at the consumer: the accumulation, the
-blur and the bilateral upsample all average this and the denominator varies per pixel, so a mean
-of quotients is not the quotient of the means. It also hands the sweep's early-outs a true
-neutral — `(0,0)` contributes nothing and leaves a neighbour's ratio alone. **Occluders use the
-ROUND hit criterion and the lobe uses TOUCH**, which is not an inconsistency: an occluder is
-asked whether it covers a sector, a lobe whether it reaches one, and a mirror lobe narrower than
-one sector would round away to nothing and report the surface unoccluded. **Clamping the lobe's
-sector range to the hemisphere IS the horizon reference** the cone form needed a second overlap
-to estimate. **The cone is GONE** (11.77) — `specOcclusionCone`, `coneOverlap`,
-`VIS_EDGE_SOFTNESS` and `TRUST_OPEN` with it, once `--spec-occ bent` was retired and took
-their only call site. 11.76 kept them on the argument that a term with no live alternative
-cannot be falsified; that was wrong, because `ao-ring` never ran the mode — the cone was
-falsified against the pre-change renderer through git. **Keeping a bad implementation
-reachable is not the same as keeping a comparison**, and only one of those is worth a mode.
-The half-res roughness the sweep reads (`linDepthTex.w`) is the one thing the move gives up;
-the depth-bilateral upsample cannot help at a roughness edge on flat ground.
-**The bent NORMAL is a different thing and still ships** — written by `gtao_frag` into
-`AoOut.gba`, carried by the blur/accumulation/upsample, read now by debug view 9 alone. It
-costs a 64-iteration-per-pixel loop the shader's own comment flags as its one real ALU spend
-for it. Whether that survives is an open question wanting a MEASUREMENT, not the roadmap's
-booking of it for SSGI directionality / SSR occlusion / DDGI sampling — the same booking
-reasoning 11.76 falsified for the specular case
+`spec_occ_composite_frag` and `include/spec_occ.glsl` (specs 11.3, 11.4, 11.75, 11.76, 11.77).
+Three modes, off, legacy and split, default split (`POSTFX_SPEC_OCC_SPLIT`, 2).
+
+**The default's term is computed in `gtao_frag`, not here.** The reflection lobe is tested against
+the sector bitmask while that mask is live; it is loop-local and nothing downstream can see it.
+
+- **It is carried as the estimator's two sums, `(visible, total)`**, on a third attachment of the
+  GTAO FBO, RG16F at half res, and divided only at the consumer. The accumulation, the blur and the
+  bilateral upsample all average it and the denominator varies per pixel, so a mean of quotients
+  is not the quotient of the means. It also gives the sweep's early-outs a true neutral: `(0,0)`
+  contributes nothing and leaves a neighbour's ratio alone.
+- **Occluders use the round hit criterion and the lobe uses touch.** An occluder is asked whether
+  it covers a sector, a lobe whether it reaches one; a mirror lobe narrower than one sector would
+  round away to nothing and report the surface unoccluded.
+- **Clamping the lobe's sector range to the hemisphere is the horizon reference.** A cone-overlap
+  estimate needed a second overlap to estimate it; that form (the old `bent` mode) was removed,
+  and git, not a mode, is its comparison.
+- **What it gives up**: the sweep reads half-res roughness (`linDepthTex.w`), and the
+  depth-bilateral upsample cannot help at a roughness edge on flat ground.
+
+`ao-ring` is the only arm that runs any specular-occlusion mode.
+
+**The bent normal is a different thing and still ships.** `gtao_frag` writes it into
+`AoOut.gba`, the blur, accumulation and upsample carry it, and only debug view 9 reads it. It
+costs a 64-iteration-per-pixel loop, the shader's one real ALU spend for it. Whether it stays is an
+open question wanting a measurement; booking it for SSGI directionality, SSR occlusion or DDGI
+sampling on argument alone is the reasoning that failed for the specular case.
 
 ## IES profiles
 
-`include/lights_ubo.glsl`'s `IesBlock` + `iesProfile` (spec 11.57) — the
-measured angular distribution of a real luminaire (IESNA LM-63), which **REPLACES** a spot's
-analytic cone rather than multiplying it. Full 2D: rotational, quadrant, bilateral and fully
-asymmetric all ship, because the roadmap deferred the asymmetric case by pricing a 2D table in
-SAMPLER units and a UBO block costs bytes. Ceiling 32 vertical x 16 horizontal taps, two
-independent limits (8 descriptors, 3968 shared pool floats = seven fully asymmetric profiles or
-~125 symmetric ones), **its own block at binding 6** because the per-frame cluster upload orphans
-its buffer and rewrites only the live light prefix -- a table sharing `LightsBlock` would be
-undefined every frame. Per-light index rides `attenCutoff.y`, `-1` = none, matching
-`shadowMisc.y`'s convention at zero bytes.
-**The table is NORMALISED to peak 1 and multiplies `intensity`**, and the loader seeds `intensity`
-from the file's own peak candela when the scene authors none -- so it is absolute by default
-(normalised x peak IS absolute) while `intensity` stays the one brightness control and
-`gates.py`'s `_scale_emitters` stays true. **The tail tap is exactly 0**, which is a contract:
-`pbr_frag` skips nine shadow taps and the whole GGX chain on `attenuation <= 0.0`.
-Note the tail is exact because a **snap** makes it so, not because files carry zeros:
-`ies_tinytail.ies` is the only fixture whose 90-degree candela is nonzero (1.2e-6 cd), and
-before it existed deleting that snap from both readers left every arm green.
-**A partial horizontal sweep MIRRORS, it does not repeat** -- a bilateral file measured 0..180
-describes 190 degrees as 170, not 10 -- and that fold exists three times (`iesFold`,
-`ies_fold_horizontal`, `tools/gen_ies_table.py`). They cannot share a token: `mod()`, `fmodf`
-and `%` disagree on negative input. **Each copy is held by a different thing, and for a spec
-cycle two of the three were held by nothing** -- this file and both source comments claimed
-`--ies-probe` held all three, which was false in a specific and instructive way. The probe
-samples AT the taps, deliberately, and every tap lies inside `[0, span]` where a mirror and a
-modulo agree exactly; so did both of the C fold's call sites. Now: the tool's copy is asserted
-directly by `gen_ies_fixture.py`, the C copy by the probe's **`mirror` rows** (which ask for
-`span + d` on purpose), and the GLSL copy -- the one that decides pixels -- only by a rendered
-frame, which is what `ies-mirror` is. Replacing it with a modulo moves that arm from 0.0055 to
-0.9861 and moved nothing else in the suite.
-Outside the file's measured vertical range the profile is **zero, not the
-clamped edge**: a file measured 0..90 stopped there because the luminaire emits nothing above it.
+`include/lights_ubo.glsl`'s `IesBlock` and `iesProfile` (spec 11.57): the measured angular
+distribution of a real luminaire (IESNA LM-63), which **replaces** a spot's analytic cone rather
+than multiplying it. Every symmetry ships -- rotational, quadrant, bilateral and fully asymmetric --
+since a 2D table costs bytes in a UBO, not a sampler unit.
+
+**Storage.** At most 32 vertical by 16 horizontal taps, under two independent limits: 8
+descriptors and 3968 shared pool floats (seven fully asymmetric profiles or about 125 symmetric
+ones). It is its own block, at binding 6, because the per-frame cluster upload orphans its buffer
+and rewrites only the live light prefix: a table sharing `LightsBlock` would be undefined every
+frame. A light's profile index rides `attenCutoff.y`, `-1` for none, matching `shadowMisc.y`'s
+convention at no cost in bytes.
+
+**The table is normalised to peak 1 and multiplies `intensity`**, and the loader seeds `intensity`
+from the file's own peak candela when the scene states none. So a profile is absolute by default
+(normalised times peak is absolute), `intensity` stays the one brightness control, and `gates.py`'s
+`_scale_emitters` stays true.
+
+**The tail tap is exactly 0, and that is a contract**: `pbr_frag` skips nine shadow taps and the
+whole GGX chain on `attenuation <= 0.0`. The tail is exact because both readers snap it, not
+because files carry zeros. `ies_tinytail.ies`, whose 90-degree candela is 1.2e-6 cd, is the
+fixture that sees a missing snap.
+
+**Outside the file's measured vertical range the profile is zero, not the clamped edge**: a file
+measured 0..90 stopped there because the luminaire emits nothing above it.
+
+**A partial horizontal sweep mirrors, it does not repeat.** A bilateral file measured 0..180
+describes 190 degrees as 170, not 10. The fold exists three times (`iesFold`,
+`ies_fold_horizontal`, `tools/gen_ies_table.py`) and they cannot share a token: `mod()`, `fmodf`
+and `%` disagree on negative input. Each copy is held by a different thing:
+- the tool's, by `gen_ies_fixture.py`;
+- the C one, by `--ies-probe`'s `mirror` rows, which ask for `span + d` on purpose. The probe's
+  other rows sample at the taps, all inside `[0, span]`, where a mirror and a modulo agree exactly,
+  so they cannot see the fold;
+- the GLSL one, which decides pixels, only by a rendered frame: `ies-mirror`. A modulo there fails
+  that arm and no other.
 
 ## Contact shadows
 
-`contact_shadow_frag` — a full-internal-res depth march toward the key
-directional AND toward every clustered point/spot light with **no punctual shadow map**
-(spec 11.56). That second population is the larger one and is why the pass exists at all
-now: the punctual atlas holds 8 layers and a point light spends 6, so past the FIRST point
-light in a scene there is no map to be had, and every 11.49-derived panel is ineligible
-because `create_light` defaults `cast_shadows` false. A light that DOES have a map is
-skipped, which is a correctness requirement and not a budget — its 3x3-PCF perspective map
-already resolves the contact (9.8's hairline was far-side depth STORAGE, fixed in
-10.3/10.4; the map is 2048² at 2-6 punctual layers, 4096² for a lone spot, 1024² at 7+),
-so marching it too would darken the seam twice. **Area panels are skipped from MARCHING**
--- a direction exists, but `pbr_frag` shades a panel through an LTC integral over its whole
-area, so one ray at its centre is a DIFFERENT approximation, worse than none.
-The per-light visibilities fold into the one R8 channel **weighted by each light's
-contribution** -- radiance x `getDistanceAtt` x N.L, the fraction of direct light the pixel
-loses. **The denominator is every light that REACHES the pixel, not every light marched**:
-a mapped light and an area panel still deliver light here, and leaving them out made one
-blocked practical beside a bright mapped spot take 23% off a pixel that should lose 1%.
-Reads the cluster list through `#include "lights_ubo.glsl"` with **no C-side binding work**:
-`create_post_program` links through `ubo_wire_blocks` against buffers bound for the
-context's lifetime, which `froxel_inject` has relied on since 9.5.
-A CACHED point light (spec 13.16) holds tiles rather than a layer and counts as mapped:
-the mapless count asks `shadow_light_mapped`, never the layer field.
+`contact_shadow_frag`: a full-internal-res depth march toward the key directional and toward every
+clustered point or spot light with **no punctual shadow map** (spec 11.56). The second population
+is why the pass exists: the punctual pool holds sixteen layers and a point light takes six, so a
+scene with more than a few point lights has lights with no map.
+
+- **A light with a map is skipped**, as a correctness requirement, not a budget. Its PCF map
+  already resolves the contact, and marching it too darkens the seam twice. A cached light (spec
+  13.16) holds tiles rather than a layer and counts as mapped: its `shadowMisc.y` is
+  `SHADOW_TILE_MARK`, and the C-side mapless count asks `shadow_light_mapped`, never the layer
+  field.
+- **Area panels are not marched.** A direction exists, but `pbr_frag` shades a panel through an LTC
+  integral over its whole area, so one ray at its centre is a different approximation, worse than
+  none.
+- **The per-light visibilities fold into the one R8 channel weighted by each light's
+  contribution**: radiance x `getDistanceAtt` x N.L, the fraction of direct light the pixel loses.
+  **The denominator is every light that reaches the pixel, not every light marched**: a mapped
+  light and an area panel still deliver light there. Leaving them out makes one blocked practical
+  beside a bright mapped spot take 23% off a pixel that should lose 1%.
+
+It reads the cluster list through `#include "lights_ubo.glsl"` with no C-side binding work:
+`create_post_program` links through `ubo_wire_blocks` against buffers bound for the context's
+lifetime, as `froxel_inject` does.
 
 ## Cascade soft shadows
 
@@ -437,282 +462,256 @@ its depth range** (spec 13.58).
 - **What the depth range is:** a cascade's light eye is pushed back past its slice by the scene
   pad (`0.5 * far_plane`, and the render app's far plane is 8 scene radii). So the range, and any
   fraction of it, is about 4% of the scene's radius, at any scale.
-- **What a fraction of it cost:** the blocker search gated at 1% of the distance from that eye,
-  and the catcher took a flat 0.5% of the range. Every occluder shorter than that cast no soft
-  shadow, and nothing on the catcher. A resistor on pcb's board lost its shadow, and its printed
-  marking, 10 µm taller, cast a ghost of the text.
-- **Now:** the blocker margin is one texel (`CSM_BLOCKER_TEXELS`, the cached tiles'
+- **What a fraction would cost:** a blocker margin of 1% of the distance from that eye, or a
+  catcher bias of 0.5% of the range, gives every occluder shorter than that no soft shadow and
+  nothing on the catcher -- a resistor on a circuit board, or the printed marking on top of it.
+- **So:** the blocker margin is one texel (`CSM_BLOCKER_TEXELS`, the cached tiles'
   `TILE_BIAS_TEXELS`), and the catcher's bias is the receiver-plane floor.
-- **The cost, accepted on look:** the old margin also hid a shadow map's self-shadowing at a
-  curved surface's terminator, which PCF has always shown and PCSS now shows too.
-- **The particles, the water and the fog keep the flat bias:** air and a refracted bed have no
-  plane to extrapolate.
+- **The cost, accepted on look:** a shadow map's self-shadowing at a curved surface's terminator,
+  which PCF has always shown, shows under PCSS too.
+- **The particles, the water and the fog keep a flat bias:** air and a refracted bed have no plane
+  to extrapolate.
 - **What holds it:** the `pcss` gate group, on `short_occluder_fixture`.
 
 ## Area-light shadows
 
-`panelCubeFace` in `include/cube_face.glsl`, read in `pbr_frag`'s area branch (spec 13.27). A
-panel's per-frame shadow is FIVE layers of the punctual pool: a cube in the panel's own frame --
-`r = cross(up, normal)`, the width axis `ltc.glsl` uses, then the up and the normal, as x, y and
-z -- drawn +r -r +u -u +n from the panel's centre, each face rolled to another frame axis rather
-than to world up, so its square frustum covers the region `punctualCubeFace` assigns it in that
-frame. The face behind the panel is never drawn: every direction whose dominant frame axis is
--n is behind the panel's plane, where `ltcPanel` is already zero. In a WORLD-axis cube that skip
-is wrong for a tilted panel -- the face opposite the normal's dominant axis still covers
-directions in front of it -- and `area-tilt` is the arm that sees it. The occlusion is a hard
-binary test of the panel's centre, multiplied into the whole LTC integral; nothing occludes one
-edge of the rectangle and not the other.
+`panelCubeFace` in `include/cube_face.glsl`, read in `pbr_frag`'s area branch (spec 13.27). The
+engine side, the pool and the range, is in `docs/lighting.md`, The per-frame punctual pool.
 
-**The faces end at the panel's range.** At the scene's far plane a kitchen tube's side faces
-took in the whole street, 5.65 million triangles and 14.4 ms of GPU, where the range costs 0.96
-ms; a panel lights nothing past its range, so nothing past it can stand between the panel and
-what it lights. Points and spots keep the scene's far plane.
+**The frame.** A panel's per-frame shadow is five layers of the punctual pool: a cube in the
+panel's own frame -- `r = cross(up, normal)`, the width axis `ltc.glsl` uses, then the up and the
+normal, as x, y and z -- drawn +r -r +u -u +n from the panel's centre. Each face is rolled to
+another frame axis rather than to world up, so its square frustum covers the region
+`punctualCubeFace` assigns it in that frame.
 
-**What it replaced read most of a room as lit.** Until 13.27 a panel cast ONE perspective map
-down its normal with a fixed 120-degree cone, and `punctualShadow` reads anything off a map as
-lit by design -- so every receiver more than 60 degrees off the normal was unshadowed, walls
-included, and a ceiling tube lit the hall beside its kitchen through the wall, with the
-frustum's side plane drawn as a diagonal across the hall. Spec 10.4 had already refused fitting
-the cone, since a room's walls reach the panel's own plane and the conservative cone is 180
-degrees. Unreal shadows a rect light the same way as this, from its centre, as a point light.
+**The face behind the panel is never drawn**: every direction whose dominant frame axis is -n is
+behind the panel's plane, where `ltcPanel` is already zero. In a world-axis cube that skip is wrong
+for a tilted panel, since the face opposite the normal's dominant axis still covers directions in
+front of it; `area-tilt` is the arm that sees it.
+
+**The occlusion is a hard binary test of the panel's centre**, multiplied into the whole LTC
+integral; nothing occludes one edge of the rectangle and not the other. Unreal shadows a rect light
+the same way, from its centre, as a point light.
+
+**The faces end at the panel's range**, since a panel lights nothing past it. Points and spots
+keep the scene's far plane.
+
+**Rejected:** one perspective map down the normal with a fixed 120-degree cone.
+`punctualShadow` reads anything off a map as lit by design, so every receiver more than 60 degrees
+off the normal is unshadowed, walls included, and a ceiling tube lights the room beside it through
+the wall. Fitting the cone instead is no better: a room's walls reach the panel's own plane, so the
+conservative cone is 180 degrees.
 
 ## Cached shadows
 
-`include/punctual_tiles.glsl` over `include/tile_lookup.glsl` (spec 13.16). A point light with
-`cast_shadows`, `shadow_cache` and a range keeps its cube faces as 256² tiles of the punctual
-array, drawn once by `shadow.c` and kept. **So may a panel since 13.27**, cached from its centre
-over the same six WORLD-axis faces with one view and no body -- `light_has_body` is false for a
-panel whatever it carries, and `create_light` refuses it one by name, since the capsule would run
-along its normal. Its near plane is worth stating: a cached light's default is 0.2% of its range,
-and silent's strips sit inside the steel channel that holds them, which at that near plane
-shadowed the ceiling round every tube from within, a hard dark patch the per-frame cube's 0.1 m
-had clipped away. The app states one past the channel, as the hall lantern states one past its
-panes. The lookup projects onto a face ANALYTICALLY from
-the view's origin, the near plane and the far, with per-face axis/right/up tables written from
-`glm_lookat` over `light_space_up` -- six matrices a light would not fit in any uniform array,
-where a projection is three dot products and a divide -- and finds the tile from the array's
-own size. A light with no body takes the per-frame map's 3x3 receiver-plane PCF.
+`include/punctual_tiles.glsl` over `include/tile_lookup.glsl` (spec 13.16). What a cached light
+is, how the budget and the store cells are given out, and how the kept faces follow scene changes
+are in `docs/lighting.md`, Cached point- and area-light shadows; this is the lookup and the views.
 
-**A light with a body is the average of views over it.** Eight views, each a real cube map from
-a point of the body as it was when drawn: view 0 at its centre (which keeps the fog's single tap
-and a bodiless light's one view on the same origin with no new packing) and the rest by R3,
-stratified along the segment with a point of the ball each. `tile_body_point` in C and
-`tileBodyPoint` here are two copies of one formula, and a drift between them reads as views
-projected from the wrong point -- loud, which is why two copies are allowed. The drawn body is
-packed whole, in slots no type reads for anything else: centre in `shadowTile.xyz`, segment in
-`attenCutoff.zw` and `shadowMisc.x` (the reserved slot and the cone cosines, which only a spot
-reads, and a spot is never cached), radius in `colorIntensity.w` and near plane in `upArea.w`.
-The radius and the near plane rode `shadowMisc.zw` until 13.27, a panel's extent, which would
-have shrunk a cached panel's LTC rectangle to them -- `tiles-area-size` is what sees that.
-`tileLightAt` in `tile_lookup.glsl` is the one place that decodes it, for the surface and the
-fog alike, and it asks no light's type.
+A point light with `cast_shadows`, `shadow_cache` and a range keeps its cube faces as 256² tiles
+of the punctual array, drawn once by `shadow.c` and kept. A panel may be cached too (spec 13.27),
+from its centre over the same six world-axis faces, with one view and no body: `light_has_body` is
+false for a panel whatever it carries, and `create_light` refuses it one by name, since the capsule
+would run along its normal.
 
-**Three designs were measured and refused before this one**, on `tile_core_fixture` against a
-trace of the same body against the rim with no shadow map (the trace is `tiles-truth`'s):
-- **PCSS capped at the guard band** (the first soft edge): 8 texels of a 256 tile is about 2.7 cm
-  each side on a desk 40 cm under a candle, where the flame spreads the edge over tens.
+**The lookup projects onto a face analytically** from the view's origin, the near plane and the
+far, with per-face axis, right and up tables written from `glm_lookat` over `light_space_up`, and
+finds the tile from the array's own size. Six matrices a light would fit in no uniform array; a
+projection is three dot products and a divide. A light with no body takes the per-frame map's 3x3
+receiver-plane PCF.
+
+**A cached panel's near plane must clear its fitting.** A cached light's default near plane is
+0.2% of its range. A strip set inside a steel channel then shadows the ceiling round the tube from
+within, a hard dark patch the per-frame cube's 0.1 m clips away, so the app states a near plane
+past the channel, as a lantern states one past its panes.
+
+### Views over a body
+
+**A light with a body is the average of views over it.** Eight views (`SHADOW_TILE_VIEWS`), each a
+real cube map from a point of the body as it was when drawn: view 0 at its centre, which keeps the
+fog's single tap and a bodiless light's one view on the same origin with no new packing, and the
+rest by R3, stratified along the segment with a point of the ball each. `tile_body_point` in C and
+`tileBodyPoint` here are two copies of one formula; a drift between them projects views from the
+wrong point, which is loud, which is why two copies are allowed.
+
+**`source_length` is the length between the end caps, not the whole spine.** Written as the whole
+spine, the caps carry the body a diameter too far, into the wax of a candle, where views inside
+the candle see straight through it.
+
+**The drawn body is packed whole, in slots no type reads for anything else**: the centre in
+`shadowTile.xyz`, the segment in `attenCutoff.zw` and `shadowMisc.x` (the reserved slot and the
+cone cosines, which only a spot reads, and a spot is never cached), the radius in
+`colorIntensity.w` and the near plane in `upArea.w`. Never `shadowMisc.zw`: that is a panel's
+extent, and the LTC would read a cached panel's rectangle from it (`tiles-area-size`).
+`tileLightAt` in `tile_lookup.glsl` is the one place that decodes it, for the surface and the fog
+alike, and it asks no light's type.
+
+**Three designs were refused**, measured on `tile_core_fixture` against a trace of the same body
+against the rim with no shadow map (`tiles-truth`):
+- **PCSS capped at the guard band**: 8 texels of a 256 tile is about 2.7 cm each side on a desk
+  40 cm under a candle, where the flame spreads the edge over tens.
 - **A march through one view** (Unreal's SMRT): a march decides a ray is blocked when a step is
-  behind a stored surface, and every ray from a point the view cannot see starts there -- so the
-  full shadow is the size of the CENTRE'S hard shadow, 25.5 cm against 12.5 traced. One view
+  behind a stored surface, and every ray from a point the view cannot see starts there, so the
+  full shadow is the size of the centre's hard shadow, 25.5 cm against 12.5 traced. One view
   cannot tell "hidden from me" from "solid".
 - **A march through three views along the flame**: each view still cannot light what it cannot
-  see, so the result was the views' hard shadows stacked -- a staircase, full shadow to 18.6 cm.
-  Unreal closes this with an unpublished gap-filling guess; worked through, the depth-jump form
-  of it lets light through the rim wherever a ray enters its face near its edge.
+  see, so the result is the views' hard shadows stacked, a staircase with full shadow to 18.6 cm.
+  Unreal closes this with an unpublished gap-filling guess; worked through, the depth-jump form of
+  it lets light through the rim wherever a ray enters its face near its edge.
 
-**The blur, and the two ways it failed while plausible.** A finite count draws the shadow as
-overlapping copies, one in eight at each view's hard edge. Each view stands for about
-s = cbrt(volume / 8) of the body, whose own penumbra is a ramp s (dR - dB) / dB wide on the
-receiver, so a second pass reads each view at a point jittered across the receiver's plane by
-that, and the jitter averages to the ramp under TAA. dB comes from the first pass: each view that
-finds the receiver hidden reports its occluder's depth.
+### The blur
+
+A finite count draws the shadow as overlapping copies, one in eight at each view's hard edge. Each
+view stands for about s = cbrt(volume / 8) of the body, whose own penumbra is a ramp
+s (dR - dB) / dB wide on the receiver, so a second pass reads each view at a point jittered across
+the receiver's plane by that, and the jitter averages to the ramp under TAA. dB comes from the
+first pass: each view that finds the receiver hidden reports its occluder's depth. Two ways it
+fails while plausible:
 - **Without TAA the jitter does not turn**, and a fixed jitter moves each view's copy bodily,
   sheared by the spread -- worse than the copies. Off TAA the result is the plain average.
-- **A first pass at the receiver alone cut the outer half of every ramp**: past the last view's
-  edge no view is hidden, the lookup returns 1, and where the views' edges coincide (beside a
-  candle's vertical side) that half is most of the step, so the edge came back crisp. The first
-  pass reads at jittered points too, its width the ramp an occluder a body's length from the
-  light would cast.
+- **The first pass must read at jittered points too.** At the receiver alone it cuts the outer half
+  of every ramp: past the last view's edge no view is hidden, the lookup returns 1, and where the
+  views' edges coincide (beside a candle's vertical side) that half is most of the step, so the
+  edge comes back crisp. Its width is the ramp an occluder a body's length from the light would
+  cast.
+
+Jittered reads at a corner slide off the receiver's plane into the surface beside it. A guard for
+it moved nothing measurable and is not in; if it shows, that is the place.
 
 **The dance is a read, not a redraw.** A light moved by D casts its shadow -D (dR - dB) / dB from
 where it was, so the kept views are read at the receiver moved +D (dR - dB) / dB, D being the
-centre's move since drawing. It is first order: a flame's LEAN is a rotation one shift of the
+centre's move since drawing. It is first order: a flame's lean is a rotation one shift of the
 centre cannot express, and is what remains of the gap to the current flame's reference
-(`tiles-dance`: 0.145 with it, 0.376 without).
+(`tiles-dance`).
 
-**Movers are drawn over a copy.** A face that sees a kept caster which has moved in the last
-120 frames keeps its still casters in a STORE CELL, and each frame it is that copy plus the
-movers. A 0 px match against the scene never moved, at the swing's rest frame, is what
-`tiles-movers` holds; it fails if the overlay is skipped, since the store leaves the mover out.
+### Movers and the kept faces
 
-**The store is a pool of 64 cells on top of the budget, one a face** (spec 13.26). Until then a
-store was a whole block of its light's own size, taken from the same budget after the lights
-had theirs, so sixteen bodied lights -- silent's -- filled the budget and left no store at all,
-and every face that saw a mover was drawn whole, every caster in it, every frame. A cell goes to
-a face DRAWN this frame, nearest light first: a face out of the camera's view is not drawn, so a
-cell held there by distance alone starved one on screen. A face keeps its cell while nothing
-moves in it, so a mover coming back finds the copy still good, and gives it up only to a drawn
-face that needs one -- an idle cell first, the farthest light's, then a cell of a light more than
-2 m farther. A face left without one is drawn whole, which is said by name each time the pool
-runs out, and `--tile-stores 0` is that path for comparison. `tiles-store` holds the copy and the
-whole draw to the same picture.
+A face that sees a moving caster is its store cell's copy of the still casters plus the movers,
+drawn each frame. `tiles-movers` holds that copy to the scene that never moved, at the swing's rest
+frame, and fails if the overlay is skipped; `tiles-store` holds the copy and the whole draw to the
+same picture. A drawn face that needs a cell and finds none free takes an idle cell first, the
+farthest light's, then a cell of a light more than 2 m farther. What is easy to get backwards on
+the drawing side:
 
-**A pose is a mover on every frame** (spec 13.18). A skinned, swaying or morphing surface moves
-without its node moving, so a face drawn once would freeze it. It is in no store and no face
-drawn whole and kept: it is drawn only over a copy, into the faces its posed bounds reach this
-frame, which keeps it out of every face that is not drawn again the next. A face is drawn over
-its copy until a frame in which no moving caster reaches it, and is kept from then on, so a cat
-walking past a candle costs that candle's faces only while it is in them.
-
-**A sway is a mover only when the scene's wind can move it** (spec 13.26), which classification
-asks of `wind_max_offset`: a wind response under no wind moved nothing and still redrew every
-face it reached. **And a material may keep its sway out of the kept faces**: with
-`cachedShadowWind: "rest"` the caster is still to them, and every kept set draws it with a wind
-response of 0, so each face holds it at its rest pose, while the camera, the cascades and the
-per-frame layers keep the sway -- Unreal's "Rigid" cache behaviour. Rest is one end of the lean,
-not its middle, so a swaying caster sees its own shadow off by at most its sway; silent's trees,
-held at rest or not, move 0 px at the street end and from the drive, and 4 and 8 px at one code
-in the study and dining room. Two things about it are easy to get backwards. The response is set
-per DRAW, not with the material's block, which is uploaded once across every set of the depth
-pass: a rest material uploaded for a cascade and then drawn into a kept face would keep its sway
-there. And the kept faces compare the draw list with the one they last saw, item by item
-(`tiles_mark_changed_looks`): a material that moves a caster into or out of them -- this row,
-its wind, its opacity, its shadow role, its cut-out -- changes nothing in the graph, and a face
-drawn before would keep the caster where it stood or leave it out of a store copy for good. Such
-a caster is drawn again where it stands and where it stood (`tiles-rest-toggle`).
-
-**A change to which items the list holds is matched by IDENTITY, not by place** (spec 13.38,
-`tiles_mark_graph_change`). Until then it drew every face again, and silent's woods, hung and
-taken down as the player walked, made frames of 650 ms of it. Each item is known by its node's
-SERIAL and its mesh's id. Both lists are sorted on that and merged:
-- an item gone marks the box it was last drawn in;
-- an item new marks the box it stands in;
-- an item held whose looks changed, or whose mesh was uploaded again, marks both.
-
-Three things about it are easy to get backwards:
-- **Not by place in the list**, which one insertion shifts for every item after it.
-- **Not by pointer.** `free_node` and `create_node` hand the same address straight back, and
-  `tiles-graph-replace` builds exactly that: a node freed and another hung, moved, in its place.
-  Matched by pointer it is the same caster that never moved, and its old shadow stays in the
-  kept faces.
-- **The recorded box is kept current while its node moves**, in the loop that already marks a
-  moving caster's faces each frame. A box left where an item was first recorded would mark the
-  wrong faces when the item goes.
-
-Every face is drawn again only where the rule cannot answer:
-- out of memory;
-- a caster with no bound that is gone, new or changed;
-- the first frame after a whole frame with no note (shadows off, no block held), whose movers the
-  record never saw.
-
-Otherwise `tile_generation` is not bumped, since it means the array was lost. An origin shift
-moves the recorded boxes with the blocks.
-
-**What else rendered a plausible frame on the way:**
-- **The body a diameter too long**: the fire wrote the whole spine as `source_length`, and the caps
-  carried it 6 mm into the wax, where views inside the candle saw straight through it.
-- **Glass drawn solid**: the depth pass has no transmittance, so a clear pane put the hall clock's
-  dial in shadow. The kept caster sets leave glass out.
-- **A store taken mid-frame landed past the array** until the region grew, and its blit was an
-  invalid framebuffer. Stores are now taken with every other block, before the region is laid
-  out.
-- **A rebuild inside a capture lost the rain's cover.** The array carries the kept tiles across a
-  rebuild, and the per-frame layers are redrawn by the same pass, but the rain's layer is drawn
-  only by the rain pass, which a capture does not run. Silent's GI sweep rebuilt the array on its
-  first frame, every probe was lit under a layer nothing drew, and the volume kept the hall 3.6
-  per cent darker. The cover now moves with the tiles, folded for the new edge. `--no-gi` in
-  silent is what found it: a change that only moved the rebuild's timing put two builds 3.6 per
-  cent apart, and identical with the volume left out.
-- **Jittered reads at a corner** slide off the receiver's plane into the surface beside it; a guard
-  for it was built, moved nothing measured, and was removed. If it shows, that is the place.
+- **A pose is a mover on every frame** (spec 13.18). A skinned, swaying or morphing surface moves
+  without its node moving, so a face drawn once would freeze it. It is in no store and in no face
+  drawn whole and kept: it is drawn only over a copy, into the faces its posed bounds reach this
+  frame. A face is drawn over its copy until a frame in which no moving caster reaches it, and is
+  kept from then on, so a character walking past a candle costs that candle's faces only while it
+  is in them.
+- **A sway is a mover only when the scene's wind can move it**, which classification asks of
+  `wind_mesh_max_offset`.
+- **`cachedShadowWind: "rest"` sets the wind response per draw**, to 0 in every kept set, not with
+  the material's block, which is uploaded once across every set of the depth pass: a rest material
+  uploaded for a cascade and then drawn into a kept face would keep its sway there. Rest is one end
+  of the lean, not its middle, so a swaying caster sees its own shadow off by at most its sway.
+- **A material change the graph cannot see is found by comparing the draw list with the one the
+  faces last saw**, item by item (`tiles_mark_changed_looks`): its wind, its opacity, its shadow
+  role, its cut-out, or the rest setting can move a caster into or out of the kept faces. Such a
+  caster is drawn again where it stands and where it stood (`tiles-rest-toggle`).
+- **A graph change is matched by node serial and mesh id**, both lists sorted on that and merged
+  (`tiles_mark_graph_change`). Matched by pointer, a node freed and another hung in its place at
+  the same address is the same caster that never moved, and its old shadow stays in the kept faces
+  (`tiles-graph-replace`). `tile_generation` is bumped only when the array's contents are lost,
+  never for a graph change, and an origin shift moves the recorded boxes with the blocks.
+- **Stores are taken with every other block, before the region is laid out.** A store taken
+  mid-frame lands past the array until the region grows, and its blit is to an invalid
+  framebuffer.
+- **The rain's cover moves with the tiles when the array is rebuilt.** The per-frame layers are
+  redrawn by the same pass, but the rain's layer is drawn only by the rain pass, which a capture
+  does not run; a rebuild inside a capture otherwise lights every GI probe under a layer nothing
+  drew, and the volume keeps the result. The cover is folded for the new edge.
 
 ## Water
 
-`water_vert/frag` + `water_spectrum_frag` + `water_fft_frag` +
-`include/ocean.glsl` (spec 11.32). The two spectral passes are a Tessendorf ocean run
-as **fragment ping-pong** -- 3 cascades x (1 evolve + 14 Stockham stages) = 45 draws at
-128² per frame under `--water-waves fft`. That works because a Stockham butterfly is a
-pure gather (two texels plus a twiddle row, one texel out to two MRT targets) with no
-shared memory, atomic or scatter, so GL 4.1's missing compute stage costs draws rather
-than a redesign. **And the cost lands on CPU, not GPU**: +0.24 ms GPU against +1.19 ms
-CPU at 800x500, because 45 dispatches become 45 framebuffer binds and uniform groups.
-Deterministic regardless -- two runs of 45 ping-pong passes diff 0 px. The include is the
-surface evaluation -- position AND analytic normal from one place, so a normal cannot
-be derived from a different height than the raster used. Its own program rather than a
-`pbr_frag` feature because it samples the resolved scene depth, and `pbr_frag` has
-declared all sixteen fragment samplers the driver allows.
-Since spec 11.33 the include also owns the PREVIOUS position (`oceanPreviousWorld`), so
-the spectral path reports the motion its waves have rather than camera motion only --
-which needs last frame's transform kept alive, and the 14 stages land back in buffer 0,
-so one copy out of it before the evolve overwrites it is the whole mechanism. The
-position arithmetic is factored (`oceanSpectralPosition`) for the same reason the file
-exists: current and previous must be the same sum, or the velocity describes a surface
-the raster never drew. `procedural/water_waves.c` is the CPU twin of the Gerstner half
-and duplicates its constants -- **nothing compares the two**, which is the known gap.
-Spec 11.42 adds `water_foam_frag` (one more pass a frame: whitewater accumulated per
-cascade texel so it outlives the crest that made it, three bands in one RGB target),
-a Cox-Munk sun lobe and a spectrum-derived far-field roughness inside `water_frag`, and
-the seeded spectrum's own **height and slope variance**, which is what the last two are
-built from. The variance is checked rather than asserted -- see `--water-fft-probe`.
-**The water program declares 15 samplers of 16.** Six identical RGBA16F cascades are one
-`sampler2DArray`, which costs one unit where six textures would cost six. Its units: **0 the
-cascade array, 1 the previous array**, 2 foam pattern, 3 the caustics targets (a layer per
-level), 4 the ripple band's array, 5 the touch ripples, 6 scene colour, 7 depth, 8 bed, 9 the
-rain cover, 11 shadow array, 12-13 the IBL pair, 14 cloud shadow, 15 foam (the unit table in
-`water.h`). The cascades and their previous copy are two arrays rather than more layers of one,
-because they have different lifetimes: the fields are this frame's render targets and the
-previous are a copy taken before they are overwritten. Two sampler types against one image unit
-is an `INVALID_OPERATION` at draw, so a unit's type is fixed across the program.
+`water_vert/frag`, `water_spectrum_frag`, `water_fft_frag` and `include/ocean.glsl` (spec 11.32).
 
-**The ripple band (spec 13.3)** is a fourth spectral band, past the short band's 24 rad/m, in
-its own 512² transform over 6 m -- 19 more draws, 64 a frame -- because a 128 over a tile short
-enough for centimetre waves repeats every metre or two. It shades and never displaces, and it is
-sampled at the mip its FOOTPRINT asks for rather than faded by distance: the slope variance each
+**The ocean is a Tessendorf FFT run as fragment ping-pong**: 3 cascades x (1 evolve + 14 Stockham
+stages) = 45 draws at 128² per frame under `--water-waves fft`. A Stockham butterfly is a pure
+gather (two texels plus a twiddle row, one texel out to two MRT targets) with no shared memory,
+atomic or scatter, so GL 4.1's missing compute stage costs draws rather than a redesign. The cost
+lands on the CPU, not the GPU (+0.24 ms GPU against +1.19 ms CPU at 800x500), because 45 dispatches
+are 45 framebuffer binds and uniform groups. It is deterministic.
+
+**`include/ocean.glsl` is the surface evaluation**: position and analytic normal from one place, so
+a normal cannot be derived from a different height than the raster used. Water is its own program
+rather than a `pbr_frag` feature because it samples the resolved scene depth, and `pbr_frag` has
+no sampler left.
+
+**Motion vectors.** The include also owns the previous position (`oceanPreviousWorld`, spec 11.33),
+so the spectral path reports the motion its waves have, not only camera motion. That needs last
+frame's transform kept alive: the 14 stages land back in buffer 0, and one copy out of it before
+the evolve overwrites it is the whole mechanism. The position arithmetic is factored
+(`oceanSpectralPosition`) because current and previous must be the same sum, or the velocity
+describes a surface the raster never drew.
+
+**The CPU twin.** `procedural/water_waves.c` is the CPU twin of the Gerstner half and duplicates
+its constants. Nothing compares the two; that is a known gap.
+
+**Foam and roughness** (spec 11.42). `water_foam_frag` accumulates whitewater per cascade texel, so
+it outlives the crest that made it, in three bands of one RGB target. `water_frag` adds a Cox-Munk
+sun lobe and a far-field roughness, both built from the seeded spectrum's own height and slope
+variance, which `--water-fft-probe` checks rather than asserts.
+
+**The water program declares 15 samplers of 16.** The six identical RGBA16F cascade textures are
+one `sampler2DArray`, one unit where six textures would take six. The units (the table in
+`water.h`): 0 the cascade array, 1 the previous array, 2 foam pattern, 3 the caustics targets (a
+layer per level), 4 the ripple band's array, 5 the touch ripples, 6 scene colour, 7 depth, 8 bed,
+9 the rain cover, 11 shadow array, 12-13 the IBL pair, 14 cloud shadow, 15 foam.
+- The cascades and their previous copy are two arrays rather than more layers of one, because
+  their lifetimes differ: the fields are this frame's render targets, the previous a copy taken
+  before they are overwritten.
+- Two sampler types against one image unit is an `INVALID_OPERATION` at draw, so a unit's type is
+  fixed across the program.
+
+**The ripple band (spec 13.3)** is a fourth spectral band, past the short band's 24 rad/m, in its
+own 512² transform over 6 m -- 19 more draws, 64 a frame -- because a 128 transform over a tile
+short enough for centimetre waves repeats every metre or two. It shades and never displaces. It is
+sampled at the mip its footprint asks for rather than faded by distance: the slope variance each
 level keeps is predicted at seeding, so what a footprint filters out is a known number handed to
-roughness, and `water-ripple-mips` holds that prediction against what `glGenerateMipmap` built.
+roughness. `water-ripple-mips` holds that prediction against what `glGenerateMipmap` built.
 
-**The caustics have LEVELS since 13.3**: the 40 m window of 9.4 cm cells, and a 10 m window of
-2.34 cm cells -- two ripple texels -- blended over it where it reaches, used only in water
-shallower than 8 m of traced depth (ripple focus does not survive further, and over a 9 m bed
-the fine level lost a quarter of its light for a reason still open). The lattice reads its
-traced points by vertex-stage `texelFetch`, and **a `glFlush` between the trace and the draw is
-load-bearing**: on Apple's GL the fetch otherwise sees the texture from before the pass that
-rendered it -- the caustics were a frame late for all of 13.2. And the key's visibility at the
-bed is averaged over a disc as wide as the waves spread the refracted key over the path down,
-so a shadow falling on the bed fades the caustics out rather than stopping them on a line.
+**The caustics have two levels** (spec 13.3): the 40 m window of 9.4 cm cells, and a 10 m window
+of 2.34 cm cells (two ripple texels) blended over it where it reaches, used only in water shallower
+than 8 m of traced depth. Ripple focus does not survive deeper, and over a 9 m bed the fine level
+loses a quarter of its light for a reason still open.
+- **A `glFlush` between the trace and the lattice draw is load-bearing.** The lattice reads its
+  traced points by vertex-stage `texelFetch`, and on Apple's GL that fetch otherwise sees the
+  texture from before the pass that rendered it: the caustics run a frame late.
+- **The key's visibility at the bed is averaged over a disc** as wide as the waves spread the
+  refracted key over the path down, so a shadow falling on the bed fades the caustics out rather
+  than stopping them on a line.
 
-**Spec 13.4 took what Clearwater does better**, and three of the six are easy to get wrong:
-
-- **Light reaching a submerged surface is weakened on the way DOWN**, in `pbr_frag`, through
+**What came from Clearwater** (spec 13.4). Three of the six are easy to get wrong:
+- **Light reaching a submerged surface is weakened on the way down**, in `pbr_frag`, through
   `include/water_light.glsl`: `1 - F` at the surface and Beer-Lambert along the key's refracted
-  path, the sky by its diffuse coefficient. Before it the bed was lit as though in air and only
-  the view path absorbed. `water_fixture`'s bed is emissive and blind to it -- `water-downwell`
-  runs on `water_downwell_fixture.cscn`, and solves the depth from each channel at two key
-  angles, which is what catches a vertical path or a missing Fresnel.
+  path, the sky by its diffuse coefficient. `water_fixture`'s bed is emissive and blind to it.
+  `water-downwell` runs on `water_downwell_fixture.cscn` and solves the depth from each channel at
+  two key angles, which is what catches a vertical path or a missing Fresnel.
 - **The in-scatter is normalised against the nadir, not the sphere.** Both the refracted sight
   line and the refracted sun point down, so an eye above the water only ever sees the back of a
-  forward-peaked lobe; a sphere normalisation dimmed every sea to a third, which Clearwater
-  covers with a constant of 3.2. The column is integrated exactly, where theirs samples the sun
-  at mid-depth -- an estimate that sends bottomless water to black.
-- **The caustics' colour is one trace spread across the spectrum**, and the spread gets the
-  AMOUNT right and not the PLACEMENT. At a few metres the ripples' light has crossed itself
-  before the floor and each wavelength's crossings land elsewhere; 8 traced bands against 16
-  still disagree by 0.7 of the signal. Three traces at three indices, Clearwater's way, is three
-  samples of a continuous spectrum and prints saturated speckle at every fold. A per-point
-  dispersion from the trace was tried and did not earn its second target. `--water-caustic-bands`
-  and `--water-caustic-debug 3` are the instrument, and `water-caustic-spectrum` holds the amount.
+  forward-peaked lobe; a sphere normalisation dims every sea to a third, which Clearwater covers
+  with a constant of 3.2. The column is integrated exactly, where Clearwater samples the sun at
+  mid-depth, an estimate that sends bottomless water to black.
+- **The caustics' colour is one trace spread across the spectrum**, which gets the amount right
+  and not the placement. At a few metres the ripples' light has crossed itself before the floor,
+  and each wavelength's crossings land elsewhere; 8 traced bands against 16 still disagree by 0.7
+  of the signal. Three traces at three indices, Clearwater's way, is three samples of a continuous
+  spectrum and prints saturated speckle at every fold. A per-point dispersion from the trace was
+  tried and did not earn its second target. `--water-caustic-bands` and
+  `--water-caustic-debug 3` are the instrument, and `water-caustic-spectrum` holds the amount.
 
-The other three are plainer: a cubic B-spline read of the shading bands where they are
-magnified, the bed's relief read off its brightness against its neighbourhood, and sunlit
-specks in the column. The touch ripples are a 256² wave equation over 7 m that follows the view,
-stepped at a fixed 60 Hz from the frame clock so a headless run repeats, and read through
-`oceanShadingNormal` so the caustics refract through the rings as well.
+The other three are plainer: a cubic B-spline read of the shading bands where they are magnified,
+the bed's relief read off its brightness against its neighbourhood, and sunlit specks in the
+column. The touch ripples are a 256² wave equation over 7 m that follows the view, stepped at a
+fixed 60 Hz from the frame clock so a headless run repeats, and read through `oceanShadingNormal`
+so the caustics refract through the rings as well.
 
 ## Diffraction glare
 
-`glare.c` plus four `glare_*_frag` passes and `include/glare_threshold.glsl` (spec 13.4 after
-Clearwater, and spec 13.5). **Off by default**; a `.cscn` turns it on with `post.glare`, an app
-with `postfx->glare_enabled`.
+`glare.c` plus four `glare_*_frag` passes and `include/glare_threshold.glsl` (specs 13.4 and 13.5,
+after Clearwater). **Off by default**; a `.cscn` turns it on with `post.glare`, an app with
+`postfx->glare_enabled`.
 
 **How it works.** The aperture's diffraction pattern is the power spectrum of a round lens with
 flattened sides, scratches and dust. It is summed over 32 wavelengths between Clearwater's eight
@@ -721,19 +720,19 @@ past `glare_threshold` by FFT on a 512x256 grid, so the cost does not depend on 
 there are. Red and green ride one complex signal and are separated in the multiply by Hermitian
 symmetry.
 
-**It moves light rather than adding it** (13.5). The tonemap takes what the star carries away out
-of the pixel it came from, by the same threshold rule the source pass uses, and the frame's light
-is conserved to 1.007 (`glare-conserves`). A frame with nothing past the threshold is identical to
+**It moves light rather than adding it.** The tonemap takes what the star carries away out of the
+pixel it came from, by the same threshold rule the source pass uses, and the frame's light is
+conserved to 1.007 (`glare-conserves`). A frame with nothing past the threshold is identical to
 `--no-glare`.
 
 **Three decisions that look like tuning and are not:**
 - **The Airy disk is cut from the kernel**, and its light, about three quarters, stays where it
   was at full resolution. The grid's cell is several frame pixels, and moving the core through it
-  redrew every bright edge soft and stepped.
+  redraws every bright edge soft and stepped.
 - **The source thresholds every frame texel before it downsamples.** Thresholding a block's
-  average misses a lone glint, and put back 58% of what the tonemap removed.
+  average misses a lone glint, and puts back 58% of what the tonemap removed.
 - **Clearwater's eightfold far-field lift is not carried.** It imitates a phone lens rather than
-  an aperture, and over a glittering sea it summed into a veil and long streaks.
+  an aperture, and over a glittering sea it sums into a veil and long streaks.
 
 ## Local exposure
 
@@ -791,19 +790,19 @@ monochrome draw a pixel, scaled by `grain_strength` and by a midtone weight that
 at black and white. **Off by default**; `--grain <f>`, `post.grain`.
 
 **Every frame is new noise, from `frameNoise`** (`include/noise.glsl`, spec 13.28): Jarzynski &
-Olano's `pcg4d` (`include/pcg4d.glsl`, the rain's and the fire's) over (pixel x, pixel y, frame),
-the top 24 bits. Unreal does the same job by jumping a grain texture to a random offset each frame.
+Olano's `pcg4d` (`include/pcg4d.glsl`, also the rain's and the fire's) over (pixel x, pixel y,
+frame), the top 24 bits. Unreal does the same job by jumping a grain texture to a random offset each
+frame. The Purkinje rod noise draws from it too, on `uv * 1024` so its grain stays one size at any
+resolution.
 
-**What it replaced is the thing to know.** The grain was `hash21(gl_FragCoord.xy + seed)` with the
-frame number as the seed, which adds the frame to BOTH coordinates: each frame was the frame before,
-moved one pixel along the diagonal. Measured on the grain alone, consecutive frames correlated 0.994
-at that shift, and the eye followed it as lines crawling across the picture. Any "advance the
-pattern by an offset" seeding does this; it is fine under a temporal filter that averages it away,
-and wrong for noise that is SEEN. The Purkinje rod noise was seeded the same way and moved with it,
-on `uv * 1024` so its grain stays the same size at any resolution; `purkinje_night` was re-baked.
+**Never seed noise that is seen by adding the frame to its coordinates.** `hash21(gl_FragCoord.xy +
+frame)` adds the frame to both coordinates, so each frame is the last one moved a pixel along the
+diagonal (0.994 correlated at that shift), and the eye follows it as lines crawling across the
+picture. Any "advance the pattern by an offset" seeding does this. It is fine for noise a temporal
+filter averages away, and wrong for noise that is seen.
 
-`grain-still` reads the crawl (0.005 now), and `grain-amount` the spread against the uniform draw's
-1/sqrt(12). The dither is not grain and was left alone: it is static on purpose (spec 11.24).
+`grain-still` reads the crawl, and `grain-amount` the spread against the uniform draw's
+1/sqrt(12). The dither is not grain: it is static on purpose (spec 11.24).
 
 ## The CRT
 
@@ -1036,442 +1035,449 @@ Shader paths resolve against the scene file, as an IES profile's does.
 
 ## Atmosphere
 
-`froxel_inject/integrate/composite_frag` + `include/froxel.glsl` (fog, a 3D
-volume, spec 9.5; the screen-space `fog_frag` march it replaced is deleted) and
-`aerial_lut_frag` (spec 9.6). `froxel_composite_frag` folds BOTH media into one
-`(inscatter, transmittance)` pair, since the blend carries only one; either can run alone.
-**`froxel_inject_frag` is where every medium meets** and now carries four: the global height
-fog, a submerged water body (11.33), local volumes and the cloud deck's shadow (both 11.39).
-Only the first is `fog_enabled`; the rest arm the pass by joining the union at the gate, because
-that flag belongs to the app and the GUI and is never cleared per frame. Two media sharing a cell
-combine **σ-weighted**, not added — the integrate pass reads the rgb channel as the medium's
-source function rather than as radiance already scaled by how much medium is there, so adding
-would count the light once per medium.
-**Since 11.78 the composite resolves its fold at TWO depths, not one.** The aux attachment holds
-one linear Z per pixel and the late pass never writes it — `engine_set_scene_draw_buffers(engine,
-false)`, called from `engine_end_oit_pass` (`engine.c:2099`), drops the draw-buffer
-count to 1 when the opaque scope closes, so the write `pbr_frag` still performs is discarded by
-the buffer LIST, not by the depth mask — and a translucent surface was therefore fogged at the
-depth of the wall behind it. The MBOIT moments already measure what aux cannot: `b0` is the
-translucent stack's total absorbance along the pixel and `b1/b0` the absorbance-weighted mean of
-its warped depth, so one atlas fetch gives both how much of the pixel is translucent and how far
-off that part of it is. `mediumAt()` is called at the surface's depth and at the stack's, and the
-two `(inscatter, transmittance)` pairs are mixed by `1 - exp(-b0)`. **The mix is the exact split
-when the layers carry the background's own radiance and when coverage is 0 or 1, and an
-approximation between** — the exact form wants the un-composited translucent colour, and the
-accumulation buffer holding it is upstream of the TAA resolve this pass deliberately runs after.
-`--no-oit-moments` carries no depth statistic and keeps the single-depth composite exactly, which
-is the bisect lever. Costs no sampler unit anywhere: the post chain has its own ledger and this
-is its fifth declaration of sixteen.
+`froxel_inject/integrate/composite_frag` + `include/froxel.glsl` (the fog, a 3D froxel volume,
+spec 9.5) and `aerial_lut_frag` (the aerial perspective, spec 9.6). `froxel_composite_frag` folds
+both into one `(inscatter, transmittance)` pair, since the blend carries only one; either can run
+alone.
 
-**Since 13.45 a cell with no history takes several samples.** The volume covers the view and no
-more, so as the camera turns the cells entering at the leading edge reproject outside the
-previous volume and have nothing to blend. Each kept its one jittered sample beside neighbours
-averaged over many frames: the jitter moves a sample across its whole depth slice, and the rain's
-binary cover tap and steep handover vary a great deal within one. A turn drew that difference as
-a hard-edged band along the grid's columns, gone when the camera stopped. Such a cell averages
-`fog_history_miss_samples` (4) points instead: this frame's and the ones before it in the Halton
-sequence, which its neighbours' averages weigh most, wrapping at the sequence's start. That is
-Unreal's and Flax's `MissedHistorySamplesCount`. On the `fog-miss` turn it takes the band from
-1.40 codes to 0.13. Three things about it are easy to get backwards.
-- **It is a branch in the inject's own `main`, and a second pass is the refused alternative.**
-  A pass that discarded every cell with history would keep identity by construction, against the
-  130 px an untaken branch once moved on this driver. It cost 2.8 ms of GPU on every frame the
-  camera moved, at 2, 4 or 8 samples alike: each layer attached is a render pass of its own on
-  this GPU, and a second walk over the 64 slices is 64 more. Drawn inside the inject's passes it
-  still cost 0.94 ms. The branch costs nothing on a still frame, where no cell misses, and only
-  the cells that miss otherwise. It renders the same pixels as the pass, and every still frame
-  and every cell with history to the pixel. The goldens hold the first, being the only frames
-  rendered before the branch existed; `fog-miss-confined` holds the second on a turn, and
-  `fog-miss-jitter` that TAA's jittered projection, which a window builds the volume from, makes
-  no still cell miss.
+### Where the media meet
+
+`froxel_inject_frag` evaluates every medium once a cell.
+- **The media.** The global height fog, the local fog volumes (spec 11.39) and the falling rain
+  (spec 13.9, see Rain) share a cell. A submerged water body (spec 11.33) does not: a cell under the
+  water's surface is the water's alone. The cloud deck's shadow is not a medium but a visibility
+  term on the sun, multiplied into the fog's light (see Cloud shadow).
+- **Only the global fog is `fog_enabled`.** The others arm the pass by joining the union in
+  `postfx_has_medium`, because that flag belongs to the app and the GUI and is never cleared per
+  frame.
+- **Media sharing a cell combine σ-weighted, not added.** The integrate pass reads a cell's rgb as
+  the medium's source function, not as radiance already scaled by how much medium there is, so
+  adding would count the light once per medium.
+
+### The composite at two depths
+
+The aux attachment holds one linear Z per pixel, and the late pass never writes it:
+`engine_end_oit_pass` drops the draw-buffer count to 1 (`engine_set_scene_draw_buffers(engine,
+false)`) as the opaque scope closes, so the write `pbr_frag` still performs is discarded by the
+buffer list, not by the depth mask. Folded at that depth alone, a translucent surface is fogged at
+the depth of the wall behind it. So the composite resolves its fold at two depths (spec 11.78):
+- **The MBOIT moments measure what aux cannot.** `b0` is the translucent stack's total absorbance
+  along the pixel and `b1/b0` the absorbance-weighted mean of its warped depth, so one atlas fetch
+  gives how much of the pixel is translucent and how far off that part is.
+- **`mediumAt()` is evaluated at the surface's depth and at the stack's**, and the two pairs are
+  mixed by `1 - exp(-b0)`.
+- **The mix is exact when the layers carry the background's own radiance and when coverage is 0 or
+  1, and approximate between.** The exact form wants the un-composited translucent colour, and the
+  buffer holding it is upstream of the TAA resolve this pass deliberately runs after.
+- **`--no-oit-moments`** carries no depth statistic and keeps the single-depth composite: the
+  bisect lever.
+
+The moments are the composite's fifth sampler of sixteen; the post chain has its own ledger, so
+they cost the lit surface nothing.
+
+### A cell with no history
+
+The volume covers the view and no more, so as the camera turns, the cells entering at the leading
+edge reproject outside the previous volume and have nothing to blend. With one jittered sample
+beside neighbours averaged over many frames, such a cell differs a great deal from them -- the
+jitter moves a sample across its whole depth slice, and the rain's binary cover tap and steep
+handover vary within one -- and a turn draws a hard-edged band along the grid's columns. So a cell
+that misses its history averages `fog_history_miss_samples` (4) points (spec 13.45): this frame's
+and the ones before it in the Halton sequence, which its neighbours' averages weigh most, wrapping
+at the sequence's start. That is Unreal's and Flax's `MissedHistorySamplesCount`.
+
+- **It is a branch in the inject's own `main`; a second pass is the refused alternative.** A pass
+  that discarded every cell with history would leave the rest unchanged by construction, which a
+  branch on this driver does not promise. But it cost 2.8 ms of GPU on every frame the camera moved,
+  at any sample count: each layer attached is a render pass of its own on this GPU, and a second
+  walk over the 64 slices is 64 more (0.94 ms even drawn inside the inject's passes). The branch
+  costs nothing on a still frame, where no cell misses. `fog-miss-confined` holds that a turn
+  changes no cell with history, and `fog-miss-jitter` that TAA's jittered projection, which a
+  window builds the volume from, makes no still cell miss.
 - **A turn misses rows as well as columns.** A level turn grows a cell's height on screen by
-  cos t / cos(t + step), which takes the top and bottom rows near the leading edge over the
-  previous frame's vertical edge. The same growth makes a cell read its history from nearer the
-  top or bottom than itself, so a missed row's value creeps inward over the turn, and the turn
-  carries it across the screen. `fog-miss-count` holds the count to the geometry exactly: 34,048
-  cells a frame, 5 whole columns and 82 column-rows.
-- **It costs by what a sample costs.** On the fixture a turn reads within noise. In silent's rain
-  and clustered lights it is +1.0 ms of GPU while turning, +0.23 at two samples and +2.6 at
-  eight. A cut misses every cell and costs the full N on that frame.
+  cos t / cos(t + step), which takes the top and bottom rows near the leading edge past the
+  previous frame's vertical edge. The same growth makes a cell read its history from nearer the top
+  or bottom than itself, so a missed row's value creeps inward over a turn. `fog-miss-count` holds
+  the count to that geometry exactly.
+- **It costs what a sample costs.** In silent's rain and clustered lights it is +1.0 ms of GPU while
+  turning, +0.23 at two samples and +2.6 at eight. A cut misses every cell and pays the full N that
+  frame.
 
 `FROXEL_MISS_COUNT` compiles the same `main` a second time as `--fog-miss-probe`'s count: every
 other way out discards and the several-samples branch writes and returns, so the count is that
 branch rather than a second statement of when it is taken. It is drawn with colour writes off
-under an occlusion query, and made on first use. **Not every band at the leading edge of a turn
-is the fog's.** In silent the larger one was wet ground's reflection, which fell back to the
-environment's share where the previous frame's SSR trace did not reach, until spec 13.46 had it
-take the nearest of that frame's reflections (see Rain, "Wet ground in SSR").
+under an occlusion query, and made on first use.
+
+**Not every band at the leading edge of a turn is the fog's.** Wet ground's reflection has one of
+its own to avoid; see Rain, "Wet ground in SSR".
 
 ## Cloud shadow
 
-`cloud_shadow_frag` (spec 11.39) — a 256² R16F sun-transmittance map marched
-through the deck, built by `sky_clouds_march` from the SAME wind offset so the shadow cannot sit
-a frame from the deck it belongs to. Read by shearing a froxel up to the shell, which is exact
-rather than approximate for a horizontal layer, and tiled by `GL_REPEAT` because with detail off
-the density field is periodic over the shape noise's own 8 km. World-anchored while the deck is
-camera-anchored, deliberately: a dapple you can never walk out of is wrong in a way the sky's own
-anchoring is not.
+`cloud_shadow_frag` (spec 11.39): a 256² R16F map of the sun's transmittance through the deck,
+built by `sky_clouds_march` from the same wind offset as the march, so the shadow cannot sit a frame
+off the deck it belongs to. The fog reads it as a visibility term on the sun.
+- **Read by shearing** a froxel up to the shell, which is exact, not approximate, for a horizontal
+  layer.
+- **Tiled by `GL_REPEAT`**: with detail off the density field is periodic over the shape noise's
+  own 8 km, so one tile is the whole world.
+- **World-anchored while the deck is camera-anchored**, on purpose: a dapple you can never walk out
+  of is wrong in a way the sky's own anchoring is not.
 
 ## Clustered specular probes
 
-`probe_project_frag` + `include/probe_specular.glsl` (spec
-11.70) — the first resamples one roughness level of a probe's prefiltered cube into one
-octahedral atlas row (no second GGX importance sampler: `ibl_prefilter_cubemap` already ran
-the tested kernel, and row r reads mip r); the second owns the blend, the box weights and the
-atlas addressing. **Its sampler is a function PARAMETER**, which GLSL 330 allows and which is
-the whole reason the lit surface and SSR share one weight formula across two programs with
-different unit ledgers — pbr_frag passes `giAtlasTex`, ssr_frag its own. The row geometry is
-NOT recomputed here: the CPU publishes a table, because every probe's column has the same
-rows and a shader-side copy of the halving rule would force the row size to be a power of two
-(C shifts, GLSL would divide by exp2, and those agree nowhere else).
+`probe_project_frag` + `include/probe_specular.glsl` (spec 11.70), the shader half of the
+reflection probe set. The engine half -- authoring, the box fade's direction, capture, the atlas
+and residency -- is in `docs/lighting.md`, Reflection probes and The lighting atlas and residency.
 
-**A box's fade is a fraction of each axis's OWN half-size** (`probeBoxWeight`), so one fade is a
-different distance on every axis: the longest reaches furthest, and a distance stated for every
-axis holds only on that one. The engine floors it at a thousandth of each half-size. silent's
-13.13 comment said its fades stopped "halfway into the thinnest wall"; on the hall's short axis
-that was 1.9 cm, and a door hung 2.5 cm into the wall was outside every box (spec 13.23).
+- **`probe_project_frag`** resamples one roughness level of a probe's prefiltered cube into one
+  octahedral atlas row: row r reads mip r. There is no second GGX importance sampler, since
+  `ibl_prefilter_cubemap` has already run the kernel.
+- **`probe_specular.glsl`** owns the blend, the box weights and the atlas addressing. **Its sampler
+  is a function parameter**, which GLSL 330 allows, and that is what lets the lit surface and SSR
+  share one weight formula across two programs with different unit ledgers: `pbr_frag` passes
+  `giAtlasTex`, `ssr_frag` its own.
+- **The row geometry comes from a table the CPU publishes**, never recomputed in the shader. Every
+  probe's column has the same rows, and a shader copy of the halving rule would force the row size
+  to a power of two (C shifts, GLSL divides by exp2, and those agree nowhere else).
+- **The descriptors are in probe order.** Only loaded resident probes are published, in the order
+  of their indices rather than their slots, since the blend sums in descriptor order. `pbr_frag`
+  takes the set on `probeInfo.x >= 1`, after the single-probe cube path, which a world of one probe
+  keeps.
+- **A box's fade is a fraction of each axis's own half-size** (`probeBoxWeight`), so one fade is a
+  different distance on each axis: the longest axis reaches furthest, and on a short axis the fade
+  can be a centimetre or two, so a door hung a little way into a wall can fall outside every box
+  (spec 13.23). The engine floors it at a thousandth of each half-size.
 
-**What falls outside every box reflects the global environment**, dimmed by `envVisible` to the
-room's brightness but keeping the sky's colour and its evenness, so in the shaded frame a miss is
-only a faint grey sheen. **`RENDER_MODE_PROBE_COVERAGE` (14) is how to see one**: the albedo,
-turned magenta by `envShare`, the share of the reflection no probe answers. Outdoors everything
-is magenta, and right; indoors any magenta is a miss. It shows the fallback and NOT a wrong
-probe: a surface inside another room's box reads as covered, and that is found from OUTSIDE,
-where anything not magenta has taken a room's probe. Two misses no box can avoid: a wall at 45
-degrees and the top of a pitched roof under a box that must reach the ridge. `probe-set-coverage`
-holds the view to the albedo view inside a box and to pure magenta outside every box.
+### Seeing a miss
 
-**The probes and the GI volumes STREAM (spec 13.24).** The world holds any number of each; the
-nearest sixteen probes and eight volumes are resident in slots of one scene-owned lighting
-atlas, ranked once a frame by distance from the camera to their boxes. Four things about it are
-easy to get backwards.
-- **A slot is a place, not an item.** Each is captured ONCE; its texels are read back to the CPU
-  as half floats when it is evicted, before the slot's next holder writes over them, and put back
-  by upload when it comes into range again -- bit for bit, which is why
-  an item returns to its HOME slot when it is free: readmitted one column over, its texels sample
-  at UVs rounded differently (24 px on the round trip that is 0 px with homes). Two runs with
-  different histories still place items differently, so they agree to a code, not a bit.
-- **The mask is per DESCRIPTOR, in probe order.** Only loaded resident probes are published, in
-  the order of their indices rather than their slots, since the blend sums in descriptor order.
-  `pbr_frag` arms the set on `probeInfo.x >= 1`; a world of one probe keeps the cube path.
-- **A capture waits for what it will keep.** A probe captures only when every GI volume its box
-  touches is resident and swept, and every cached light reaching it holds a whole block of shadow
-  tiles -- a light without one is unshadowed and lights the room through its walls, which a probe
-  would keep for good. The tiles are assigned once a frame before any capture, so the test reads
-  the assignment: a held block counts when it is whole, or when its light emits, since the
-  capture's own depth pass then draws it whole. `scene_capture_ready` is the one statement of
-  the rule, the texture loader's idleness included.
-- **Captures leave out what moves**: skinned meshes and `capture_hidden` nodes, surface AND
-  shadow. Hiding the surface alone left the props' shadows in the probes through the cached
-  tiles, so such a caster is never held by a kept face and the movers pass redraws every
-  dynamic face inside a capture burst.
+What falls outside every box reflects the global environment, dimmed by `envVisible` to the room's
+brightness but keeping the sky's colour and evenness, so in the shaded frame a miss is only a faint
+grey sheen. **`RENDER_MODE_PROBE_COVERAGE` (14) is how to see one**: the albedo, turned magenta by
+`envShare`, the share of the reflection no probe answers.
+- Outdoors everything is magenta, and right; indoors any magenta is a miss.
+- It shows the fallback, not a wrong probe. A surface inside another room's box reads as covered;
+  that is found from outside, where anything not magenta has taken a room's probe.
+- Two misses no box can avoid: a wall at 45 degrees, and the top of a pitched roof under a box that
+  must reach the ridge.
 
-**A GI grid can switch its own probes off** (`classify`, set by `create_gi_volume_spaced`). In
-the opening sweep each probe also captures back faces only; `gi_project_frag`'s mode 2 compares
-their depth with the front faces' over the sphere, and past a quarter of directions writes 0 into
-the irradiance tile's alpha, which the sampler multiplies the weight by. A re-convergence
-projects through an RGB-only mask, so the alpha is the classification's alone: blended at the
-re-convergence's 0.97 it crept an in-wall probe back to half weight over a few sun changes. A probe inside a wall sees out both
-sides of it, so unswitched it lit the room with the sky beyond: on `stream_rooms`'s twin rooms
-it moves the misaligned grid from 2.3 grey codes off its aligned twin to 0.9. **The back faces
-are drawn DEPTH ONLY** (spec 13.32, `_render_capture_depth`): the opaque lane through each
-item's own program at `SUBMIT_PASS_DEPTH_ONLY` with colour masked, and the shadow catcher, which
-writes depth too, through the one function the scene pass calls. That is the same depth to the
-bit -- every discard in `pbr_frag` sits above the depth-only exit, and nothing writes
-`gl_FragDepth` -- and it was half of a sweep while it was shaded, lights and all, for a colour
-nothing read. DDGI's own production form (Majercik et al. 2021, §6) counts back faces from the
-same rays that gather the light; one capture drawing both sides would do that here, but it changes
-what a probe sees through one-sided geometry, so it is a look to choose and not this.
+`probe-set-coverage` holds the view to the albedo view inside a box and to pure magenta outside
+every box.
 
-**What a capture costs, and when it may be taken** (spec 13.32). Two costs were a frame's worth
-each and are not now:
-- **The light grid.** Every cube face used to rebuild the 3,072-cell grid on the CPU, for a GI
-  face of 16x16 pixels: more than half a GI capture. A capture now gathers its lights ONCE
-  (`light_cluster_capture_begin`, from `scene_capture_faces`) -- every light whose reach meets
-  the sphere the capture sees out to, the nearest past the cap -- and each face assigns its
-  cells from that list (`light_cluster_capture_face`). A face no wider than twice the grid
-  points every cell at the whole list, built for its first face and kept for the rest. A light
-  reaching nothing in the face is windowed to an exact 0, so only a light with no range shades
-  differently -- its tail past the cull radius, which the cells cut off -- and the capture's
-  index pool, which overflowed in silent, no longer drops lights. Reflection probes' 2048 px
-  faces keep their cells.
-- **The single frame.** Every capture is paced by `Engine.capture_budget_ms`, the GI's opening
-  sweep included, each kind taking its first unit a frame. A reflection probe is taken a face a
-  unit, every face of a frame in one burst, holding its cube between frames, so a light that
-  flickers between them can differ across its faces. Headless the budget is 0, no limit, so
-  every golden is as it was; what moves is a streamed opening, which ran at `stream_rate`'s 32
-  probes a frame and now lands in the frame it begins. `stream-paced` holds a budgeted run, one
-  capture of each kind a frame, to the same digests as the unbudgeted one: captures run at
-  render time 0 and an opening writes outright, so the frame a capture is taken in cannot
-  matter. `stream-paced-walk` leaves a probe and a volume half captured, and
-  `stream-paced-single` paces a world of one probe; both land on the unbudgeted lighting.
-- **A volume evicted mid-sweep** keeps nothing, and its next opening clears the slot first
-  (`lighting_atlas_clear`): an irradiance tile is narrower than the column it shares with a
-  visibility tile, so the tiles do not cover the slot, and between them it held its last
-  holder's texels, laid out by that holder's grid. Nothing sampled them; the slot's digest did,
-  and `stream-paced-walk` found it.
+### Streaming and capture, the parts the shaders see
+
+The probes and the GI volumes stream (spec 13.24); `docs/lighting.md` has the residency rules and
+the capture rules. Four consequences are easy to miss:
+- **Two runs with different histories agree to a code, not a bit.** An item comes back to its home
+  slot bit for bit, but different histories place items differently.
+- **A probe's readiness reads the shadow tiles' assignment.** The tiles are assigned once a frame
+  before any capture, and a held block counts when it is whole or when its light emits, since the
+  capture's own depth pass then draws it whole. `scene_capture_ready` states the whole rule, the
+  texture loader's idleness included.
+- **A `capture_hidden` caster is never held by a kept shadow face**, and the movers pass redraws
+  every dynamic face inside a capture burst. Hiding the surface alone would leave its shadow in the
+  probes through the cached tiles.
+- **A capture's gathered light list shades like the per-cell lists** (`docs/lighting.md`,
+  Captures): a light reaching nothing in a face is windowed to an exact 0, so only a light with no
+  range differs, by its tail past the cull radius, which the cells would cut off.
+
+### GI classification, the shader half
+
+`classify` (set by `create_gi_volume_spaced`; `docs/lighting.md`, GI volumes) switches off a probe
+inside a wall, which otherwise sees out both sides and lights the room with the sky beyond. In the
+opening sweep each probe also captures back faces only; `gi_project_frag`'s mode 2 compares their
+depth with the front faces' over the sphere and, past a quarter of directions, writes 0 into the
+irradiance tile's alpha, which the sampler multiplies the probe's weight by.
+- **A re-convergence projects through an RGB-only mask**, so the alpha is the classification's
+  alone. Blended at the re-convergence's 0.97, an in-wall probe creeps back to half weight over a
+  few sun changes.
+- **The back faces are drawn depth only** (spec 13.32, `_render_capture_depth`), and that is the
+  shaded pass's depth to the bit only while every discard in `pbr_frag` sits above the depth-only
+  exit and nothing writes `gl_FragDepth`.
+- **Counting back faces from the gather's own rays**, DDGI's production form (Majercik et al. 2021,
+  §6), would need one capture drawing both sides, which changes what a probe sees through one-sided
+  geometry: a look to choose, not a drop-in.
 
 ## Clustered decals
 
-`include/decals_ubo.glsl` (spec 11.73) — marks projected through an
-oriented box onto whatever surface lies inside it, selected by a per-froxel 16-bit mask on
-the same grid the lights and probes use. Declares **no sampler**: a decal image is a tenant
-of `materialArray`, so the atlas arrives as a function PARAMETER exactly as the probe atlas
-does. **Spliced into `pbr_frag` in TWO halves and the split is not tidiness**: the
-accumulation and its albedo land above the `renderMode == 6` return, because that view is
-what a gate reads painted bytes through and a mark invisible there could not be asserted as
-an exact code; the normal, roughness and occlusion land at the wet-sand seam, where those
-three finally exist and where modifying them in place is already precedented. Decals apply
-AFTER the wetness — a poster covers the water rather than being soaked by it — and after
-`sampleLayeredSurface`, which is why the composite cache and the VT bake need no change at
-all, unlike roads. The loop's trip count is the CAP, broken on a dynamically uniform count,
-so a scene with no decals takes one branch; the moment and depth-only passes skip it, a mark
-changing neither coverage nor depth. **The facing test is what stops a projector smearing its
-image down every wall it grazes**, and it reads the GEOMETRIC normal, since relief answering
-"which way does this surface lie" would let a normal map punch holes in a poster.
-**It takes its own derivatives rather than sharing `ddxWorld`, and that is measured**:
-hoisting that pair up to serve both cost **11% of the opaque pass on scenes with no decals in
-them**, against 3.1% for the whole feature — two vec3s live across the shader body is register
-pressure every fragment pays whether or not it takes the branch, where recomputing them is two
-instructions. `prepass-crossover` is what caught it, reading the prepass as a RATIO of the
-opaque pass, so a uniformly heavier `pbr_frag` shrinks it — and it failed on MASTER in the same
-session at a different noise floor, so the reading had to be attributed before it could be
-acted on.
+`include/decals_ubo.glsl` (spec 11.73): marks projected through an oriented box onto whatever
+surface lies inside it, selected by a per-froxel 16-bit mask on the grid the lights and probes use,
+the boxes in a UBO on binding 10. It declares no sampler: a decal image is a tenant of
+`materialArray`, so the array arrives as a function parameter, as the probe atlas does.
+
+- **Spliced into `pbr_frag` in two halves, and the split is not tidiness.** The accumulation and
+  its albedo land above the `renderMode == 6` return, because that view is what a gate reads painted
+  bytes through, and a mark invisible there could not be asserted as an exact code. The normal,
+  roughness and occlusion land at the wet-sand seam, where those three first exist.
+- **After the wetness and after `sampleLayeredSurface`.** A poster covers the water rather than
+  being soaked by it, and because the layered blend comes first, the composite cache and the VT bake
+  need no change, unlike roads.
+- **The loop's trip count is the cap, broken on a dynamically uniform count**, so a scene with no
+  decals takes one branch. The moment and depth-only passes skip it, since a mark changes neither
+  coverage nor depth.
+- **The facing test stops a projector smearing its image down every wall it grazes**, and it reads
+  the geometric normal: relief answering "which way does this surface lie" would let a normal map
+  punch holes in a poster.
+- **It takes its own derivatives rather than sharing `ddxWorld`.** Hoisting that pair to serve both
+  cost 11% of the opaque pass on scenes with no decals, against 3.1% for the whole feature: two
+  vec3s live across the shader body are register pressure every fragment pays, where recomputing
+  them is two instructions. `prepass-crossover`, which reads the prepass as a ratio of the opaque
+  pass, is the arm that sees a uniformly heavier `pbr_frag`; attribute its reading against master
+  before acting on it, since its noise floor moves between sessions.
 
 ## Layered surfaces
 
-`include/layers.glsl` + `include/triplanar.glsl` (spec 11.60) — N material
-layers blended per texel from a splat map, height-weighted so gravel interlocks with sand rather
-than averaging into mud, sampled through a WORLD-ALIGNED projection because a ground plane's UV is
-top-down and stretches by 1/cos(slope) on exactly the slopes worth looking at. Declares **no
-sampler**: the layers are tenants of `materialArray`. Gated on `layerCount`, which is 0 for every
-material that has not asked, so the whole path is an exact identity and all 24 pre-existing
-goldens are 0 px. **The splat's coordinate SPACE is a material field, not a policy** — world XZ
-cannot address a vertical surface and a mesh-local reading makes the weights swim across a moving
-prop, and shipping UV1-only made the feature inert on terrain, which writes UV1 as a literal zero.
-Two things in `triplanar.glsl` are correctness rather than tuning: the cutoff is floored against
-the largest weight (a fixed one collapses past sharpness 10.05 and returns a **NaN normal** into
-the HDR target), and every tap is `textureGrad` (the skips are fragment-varying flow, where an
-implicit-LOD fetch is undefined in GLSL 3.30 — the same rule `pbr_frag` and `stochastic.glsl`
-already follow)
+`include/layers.glsl` + `include/triplanar.glsl` (spec 11.60): N material layers blended per texel
+from a splat map, height-weighted so gravel interlocks with sand rather than averaging into mud.
+They are sampled through a world-aligned projection, because a ground plane's UV is top-down and
+stretches by 1/cos(slope) on exactly the slopes worth looking at. No sampler is declared: the layers
+are tenants of `materialArray`. The path is gated on `layerCount`, 0 for every material that has not
+asked, so an unlayered material is an exact identity.
+
+- **The splat's coordinate space is a material field, not a policy.** World XZ cannot address a
+  vertical surface, a mesh-local reading makes the weights swim across a moving prop, and terrain
+  writes UV1 as a literal zero, so no one space serves every material.
+- **The triplanar cutoff is floored against the largest weight.** A fixed cutoff collapses past
+  sharpness 10.05 and returns a NaN normal into the HDR target.
+- **Every tap is `textureGrad`.** The skips are fragment-varying flow, where an implicit-LOD fetch
+  is undefined in GLSL 3.30; `pbr_frag` and `stochastic.glsl` follow the same rule.
 
 ## Roads
 
-`roadReshapedWeights` in `layers.glsl` + `include/roads_ubo.glsl` (spec 11.68) — a
-world-XZ polyline that OVERRIDES the splat weights toward one of the material's own layers,
-capsule SDF, mask `smoothstep(halfWidth, halfWidth + feather)`, applied **before the height
-blend**. Before is the whole design: a road blended in afterwards is a stripe painted over the
-ground, where one reshaped here is MADE of a layer and its shoulder height-interlocks with what
-it runs over — measured as a 0.166 shoulder-width ratio against its own linear twin, where
-after-the-blend reads exactly 1.000. The bake inherits roads by calling `sampleLayeredSurface`
-UNCHANGED, so the fallback, the pages at 4x, the per-texel path, the dominant index and the
-detail term all follow with **no bake code** — and `--no-layers-vt` stays lossless, which
-drawing into the atlas FBO would have cost. Positions ride `authoredPos`; the lane write is a
-constant-lane `equal()` compare, not `w[L]`, because that would be the dynamic local index the
-file's own header rule forbids. Segments live in a UBO on binding 8 (`GpuRoadsBlock`, 1104 B —
-geometry small enough for uniform space costs zero samplers, the IES lesson a fourth time), and
-the whole path is a structural no-op at road count 0, which every scene but two is.
-**`material_roads_ensure` (`roads.c`) is the one owner of the armed state** and arms ONE
-road-bearing material per scene, refusing a UV1 splat outright rather than warning about it.
-Roads join `MaterialLayersVtKey` as the struct itself, so a width change re-bakes the cache and
-a field added to `MaterialRoad` joins the key by construction. Authored per material as
-`roads: [{points, width, feather, layer}]` — the scene format's only array of arrays, where a
-malformed vertex refuses the whole road, and `CSceneRoad` deliberately does not exist: an
-authored road IS a `MaterialRoad`, so the applier assigns rather than copying field by field.
-`roads_polyline_distance_xz` is the CPU twin the scatter rejects against; the two cannot share
-a token and the gate arms are what hold them together.
-**The caps are small and are the first thing to check before planning against this**: 4 roads
-of 16 points, one road-bearing material per scene, evaluated per fragment on the per-texel path
-(the default path is the cache, which pays nothing — roads reach it through the bake). A road
-NETWORK wants the paged content era, not a hundred polylines.
+`roadReshapedWeights` in `layers.glsl` + `include/roads_ubo.glsl` (spec 11.68): a world-XZ polyline
+that overrides the splat weights toward one of the material's own layers, by a capsule SDF masked
+with `smoothstep(halfWidth, halfWidth + feather)`.
+
+- **Applied before the height blend, which is the whole design.** A road blended in afterwards is a
+  stripe painted over the ground; one reshaped here is made of a layer, and its shoulder
+  height-interlocks with what it runs over.
+- **The bake inherits roads by calling `sampleLayeredSurface` unchanged**, so the fallback, the
+  pages, the per-texel path, the dominant index and the detail term all follow with no bake code,
+  and `--no-layers-vt` stays lossless, which drawing roads into the atlas FBO would cost.
+- **Positions ride `authoredPos`.** The lane write is a constant-lane `equal()` compare, not `w[L]`,
+  which would be the dynamic local index the file's header rule forbids.
+- **Segments live in a UBO** on binding 8 (`GpuRoadsBlock`, 1104 bytes), so roads cost no sampler,
+  and the path is a structural no-op at road count 0.
+- **`material_roads_ensure` (`roads.c`) is the one owner of the armed state.** It arms one
+  road-bearing material per scene and refuses a UV1 splat outright.
+- **Roads join `MaterialLayersVtKey` as the struct itself**, so a width change re-bakes the cache and
+  a field added to `MaterialRoad` joins the key by construction.
+- **Authored per material** as `roads: [{points, width, feather, layer}]`, the scene format's only
+  array of arrays; a malformed vertex refuses the whole road. There is no `CSceneRoad`: an authored
+  road is a `MaterialRoad`, so the applier assigns rather than copying field by field.
+- **`roads_polyline_distance_xz` is the CPU twin** the scatter rejects against. The two cannot share
+  a token, so the gate arms are what hold them together.
+
+**The caps are small; check them before planning against roads**: 4 roads of 16 points
+(`MATERIAL_MAX_ROADS`, `MATERIAL_MAX_ROAD_POINTS`), one road-bearing material per scene, evaluated
+per fragment on the per-texel path. The default path is the cache, which pays nothing, since roads
+reach it through the bake. A road network wants paged content, not a hundred polylines.
 
 ## Composite cache
 
-`layers_vt_bake_frag` + `sampleCachedSurface` in `layers.glsl` (spec 11.66,
-D10 stage 1) — a WORLD-XZ-splat layered material's blend baked once into two 2D textures over its
-splat domain (the MACRO: which layer wins where, with every layer at its top-mip mean via
-`layerGrainFrozen`, so grain never lives in the atlas at any resolution), read back at `3 + 2A`
-taps against the per-texel path's 9/17/25: two filtered macro taps, one `texelFetch` of the
-dominant-layer index riding the atlas alpha (NEVER filtered — bilinear between indices passes
-through every index between them), and one triplanar detail tap of that layer's own maps whose
-albedo is a RATIO to the layer's mean (exactly 1 on a flat map, which is what makes the flat case
-byte-exact) and whose roughness/AO are additive deviations. The pair rides units 0/1
-(`albedoTex`/`normalTex`, provably unread when layered) and is deliberately NOT a `materialArray`
-tenant — the canonical-size rule would promote every other layer to atlas resolution. Derived
-res: half a unit per texel, clamped 256..2048 (forest: 2048², 42.7 MB); `--layers-vt-res` is the
-diagnostic override, `--no-layers-vt` the bisect lever, `--layer-blend-at <frame:value>` the one
-headless way to make the by-value bake key go stale (a fresh process always bakes from final
-authored values — the `--shadows-off-at` reasoning exactly). UV1-splat materials never take the
-cache, which keeps the per-texel path the general mechanism and `layer_fixture`'s four arms its
-coverage.
-**Spec 11.67 paged it**: a 64-slot guttered page atlas (256² tiles at 4x the fallback's density
-— a RATIO, which bounds the virtual grid at 34² for every domain size), its page table a UBO on
-binding 7 (`vt_pages.glsl` + `layers_vt_pages.h`, the IES tables-cost-no-samplers lesson), the
-page pair riding units 3/4 (`clearcoatNormalTex`/`heightTex`, freed by an IES-style REFUSAL: a
-layered material refuses both maps — the height half independently a bug fix, since POM ran a
-dead march on layered surfaces that could discard). Residency is frustum prediction sorted
-(seen, distance, id) with the capacity clamp as governor, an N-bakes-per-frame budget and
-hysteresis-guarded farthest eviction, all owned by `material_layers_vt_ensure` on frame N−1's
-pose. `layers_vt_feedback_vert/frag` is the **vote pass**: paged surfaces rasterize page IDs
-into a small depth-tested target, read back through a **fixed-latency PBO ring** (always the
-slot from 4 frames ago, never "whichever fence signalled" — content stays a pure function of
-frame history, so every arm is deterministic; measured never stalling at R=4, the whole stage
-+0.23 ms GPU). On today's content pages are a measured 0 px identity — the macro's finest
-content is the splat the fallback already over-resolves — so their content era is roads/decals
-drawn INTO pages through the bake FBO. Flags: `--no-layers-vt-pages` (stage 1 exactly),
-`--no-layers-vt-feedback` (prediction alone), `--layers-vt-page-slots` (the churn knob),
-`--layers-vt-page-budget` (bakes per frame, capped at 8), `--layers-vt-probe` (residency
-counters + digest), and `--cam-at <frame:ex,ey,ez,tx,ty,tz>` (the teleport — the worst case
-no walk can produce)
+`layers_vt_bake_frag` + `sampleCachedSurface` in `layers.glsl` (spec 11.66, roadmap D10 stage 1):
+a world-XZ-splat
+layered material's blend baked once into two 2D textures over its splat domain, then read back at
+`3 + 2A` taps against the per-texel path's 9/17/25.
+
+- **The bake is the macro**: which layer wins where, with every layer at its top-mip mean via
+  `layerGrainFrozen`, so grain never lives in the atlas at any resolution.
+- **The read**: two filtered macro taps; one `texelFetch` of the dominant-layer index riding the
+  atlas alpha, never filtered, since bilinear between indices passes through every index between
+  them; and one triplanar detail tap of that layer's own maps. The detail albedo is a ratio to the
+  layer's mean, exactly 1 on a flat map, which keeps the flat case byte-exact; roughness and AO are
+  additive deviations.
+- **The pair rides units 0 and 1** (`albedoTex`/`normalTex`, provably unread when layered) and is
+  not a `materialArray` tenant: the canonical-size rule would promote every other layer to the
+  atlas's resolution.
+- **Resolution** is derived, half a unit a texel clamped to 256..2048 (forest: 2048², 42.7 MB).
+- **UV1-splat materials never take the cache**, which keeps the per-texel path the general mechanism
+  and `layer_fixture`'s four arms its coverage.
+- **Flags**: `--layers-vt-res` overrides the resolution, `--no-layers-vt` is the bisect lever, and
+  `--layer-blend-at <frame:value>` is the one headless way to make the by-value bake key go stale,
+  since a fresh process always bakes from the final authored values.
+
+### Pages
+
+The cache is paged (spec 11.67):
+- **A 64-slot guttered page atlas** of 256² tiles at 4x the fallback's density. The density is a
+  ratio, which bounds the virtual grid at 34² for every domain size.
+- **Its page table is a UBO** on binding 7 (`vt_pages.glsl`, `layers_vt_pages.h`), so it costs no
+  sampler.
+- **The page pair rides units 3 and 4** (`clearcoatNormalTex`/`heightTex`), freed by a refusal: a
+  layered material refuses both maps. Refusing the height map is right on its own, since parallax
+  would run a dead march on a layered surface, and one that could discard.
+- **Residency** is frustum prediction sorted by (seen, distance, id), with the capacity clamp as
+  governor, a bakes-per-frame budget and hysteresis-guarded farthest eviction, all owned by
+  `material_layers_vt_ensure` on frame N-1's pose.
+- **The vote pass** (`layers_vt_feedback_vert/frag`): paged surfaces rasterize page IDs into a
+  small depth-tested target, read back through a fixed-latency PBO ring, always the slot from
+  `VT_FEEDBACK_RING` (4) frames ago, never whichever fence signalled. Content stays a pure function
+  of frame history, so every arm is deterministic. At 4 it does not stall, and the whole stage costs
+  about 0.23 ms of GPU.
+- **On today's content pages add nothing over the fallback**: the macro's finest content is the
+  splat, which the fallback already over-resolves. Their use is content drawn into pages through
+  the bake FBO, such as roads and decals.
+
+Flags: `--no-layers-vt-pages` (the unpaged cache), `--no-layers-vt-feedback` (prediction alone),
+`--layers-vt-page-slots` (the churn knob), `--layers-vt-page-budget` (bakes per frame, capped at
+8), `--layers-vt-probe` (residency counters and a digest), and
+`--cam-at <frame:ex,ey,ez,tx,ty,tz>` (a teleport, the worst case no walk produces).
 
 ## Rain
 
-Spec 13.9. One master knob, `Rain.rate_mmh`, from which Marshall-Palmer and Atlas derive the drop
-sizes, speeds, density, extinction and splash flux; every other knob is a scale that defaults to
-physical. The numbers the CPU and the GPU must agree on are `include/rain_constants.glsl`, the
-fourth include both languages compile.
+Spec 13.9, with wind, glass, drips and puddle relief from spec 13.12. The engine half -- `rain.c`'s
+one knob `rate_mmh` and the physics it derives, the wetness state, `Rain.travel`, the drip lines and
+how the wind carries the rain -- is in `docs/lighting.md`, Rain. The numbers the CPU and the GPU
+must agree on are `include/rain_constants.glsl`, which both languages compile.
 
-**Cover** is an orthographic depth map along the rain's travel, a TENANT of the punctual shadow
-array (its own layer past every light's, a fixed 1024² corner of it), so the rain costs the lit
-surface no sampler. The render matrix and the lookup matrix differ by that corner and must not be
-confused. `include/rain_occlusion.glsl` answers it two ways: one tap for a point (streak ends,
-splash droplets, fog cells) and, for a SURFACE, a PCSS-shaped blocker search then a 12-tap Vogel
-disk as wide as the rain's spread over the blocker's height. A regular grid of taps wider than a
-texel printed ghost copies of a lamp arm as dry stripes on the pavement. **The map is stored with
-the shadow pass's slope bias** (`RAIN_MAP_SLOPE_BIAS`), so anything that needs the SURFACE rather
-than a side of it has to take the bias back out -- splashes buried themselves 5 cm under a windy
-fixture until they did. `shadow_rain_cover_ask/answer` is the CPU half, a texel read back through
-a fixed-latency ring.
+### Cover
+
+An orthographic depth map along the rain's travel, a tenant of the punctual shadow array (its own
+layer past every light's, a fixed 1024² corner of it), so the rain costs the lit surface no sampler.
+- **The render matrix and the lookup matrix differ by that corner** and must not be confused.
+- **`include/rain_occlusion.glsl` answers it two ways**: one tap for a point (streak ends, splash
+  droplets, fog cells), and for a surface a PCSS-shaped blocker search, then a 12-tap Vogel disk as
+  wide as the rain's spread over the blocker's height. A regular grid of taps wider than a texel
+  prints ghost copies of a lamp arm as dry stripes on the pavement.
+- **The map is stored with the shadow pass's slope bias** (`RAIN_MAP_SLOPE_BIAS`), so anything that
+  needs the surface rather than a side of it takes the bias back out. Left in, splashes bury
+  themselves 5 cm under a windy surface.
+- **In wind, the cover and the splashes read the gust cycle's mean**, `1 - a + a * 5/16` of the
+  peak, and the drops this instant's air: a cover that followed the gusts would crawl across the
+  ground.
+- **The cover is asked on the struck side.** A glass roof shelters its own underside, so asked where
+  it is seen it never beads from below.
+- **A vertical pane does not shelter its own lee** in the map. The rain meets it nearly edge on,
+  and the slope-scaled offset stores it deeper than the point behind it; an arm reading the struck
+  side has to use a flat canopy.
+- `shadow_rain_cover_ask/answer` is the CPU half, a texel read back through a fixed-latency ring.
+
+### Streaks and splashes
 
 **Streaks** (`rain_vert/frag`) are stateless: a drop's position is a function of its index and the
-rain's clock, wrapped into three nested boxes that follow the camera. Drawn from PostFX's late
-draw, after TAA -- thin, fast, motionless-to-the-velocity-buffer streaks are ghosted or clamped
-away by a temporal filter -- in HDR, each fogged at its own depth. Four things a plausible frame
-hid:
-- A streak's opacity is its drop's image area over the area drawn, times the drops it stands for.
-  At physical opacity and a drawable count the rain was invisible.
-- A drop refracts a MIPPED COPY of the frame, its field being about 165 degrees. Showing the sky or
-  the fog behind it drew black sticks in front of every lit wall.
-- `streak_sheen` lifts what a drop refracts. Physical rain at night is invisible outside its lamps.
-- Glints are Rayleigh's ringing, and only drops over a millimetre ring visibly. Given to every drop
-  the small-drop majority striped each streak with twenty to thirty bands.
-**Splashes** are the droplets a crown throws, drawn by the same program as small drops on
-ballistic arcs, from a world-anchored grid of slots firing at the flux of drops over 1 mm, landing
-on the map's surface found back up the rain's own path. Straight up in any wind lands them tens
-of metres downwind.
+rain's clock, wrapped into three nested boxes that follow the camera. They are drawn from PostFX's
+late draw, after TAA, since a temporal filter ghosts or clamps away thin, fast streaks that the
+velocity buffer sees as still; in HDR, each fogged at its own depth. Four things a plausible frame
+hides:
+- **Opacity**: a streak's is its drop's image area over the area drawn, times the drops it stands
+  for. At physical opacity and a drawable count the rain is invisible.
+- **What a drop refracts** is a mipped copy of the frame, its field being about 165 degrees.
+  Showing the sky or the fog behind it draws black sticks in front of every lit wall.
+- **`streak_sheen`** lifts what a drop refracts. Physical rain at night is invisible outside its
+  lamps.
+- **Glints** are Rayleigh's ringing, and only drops over a millimetre ring visibly. Given to every
+  drop, the small-drop majority stripes each streak with twenty to thirty bands.
 
-**Wet surfaces** (`include/rain_surface.glsl`, one call in `pbr_frag` under `PBR_FEAT_RAIN`, bit
-64) run the shore's own model, `include/wet_surface.glsl`: porosity darkening, a Lekner-Dorf hue
-power, a film that smooths and flattens. Only up-facing surfaces hold a film, and open ground holds
-0.6 of one: with a full film everywhere every wet surface was already the mirror a puddle is, and
-no puddle could read. **Puddles** are value noise under a level, on ground within eight degrees of
-level, only where the rain lands, with a one-pixel waterline and rings from
-`include/rain_ripples.glsl`, which `water_frag` also takes -- through the cover, on unit 9, or water
-under a roof rang. Darkening the bed under standing water was rejected: the film's power already
-darkens at least as much as a flat water surface's internal reflection does.
+**Splashes** are the droplets a crown throws, drawn by the same program as small drops on ballistic
+arcs, from a world-anchored grid of slots firing at the flux of drops over 1 mm.
+- **Each lands on the map's surface found back up the rain's own path**; straight up, in any wind,
+  would land it tens of metres downwind.
+- **On water a splash lands on the water's plane**, met by walking up the travel from the map's
+  surface. Water is not in the occlusion map, so a crown thrown from the bed under it would never
+  break the surface.
 
-**Wet ground in SSR.** A wet texel marks the normals alpha BELOW -1, as `-(1 + film)`; the catcher
-keeps (-1, 0), and every reader asks `include/ssr_marker.glsl` rather than testing the value -- a
-sign test hands wet ground the catcher's treatment. Three things make it right rather than merely
-visible:
-- SSR reads the texel's own roughness from the aux buffer and water's F0.
-- The reflection REPLACES the pixel's share of the environment's, where the lerp dimmed the diffuse
-  by a Fresnel already applied, and the replacement is made in the split composite, BEFORE TAA
-  (spec 13.21, `wetReflection` in `spec_occ_composite_frag`): `spec * SO * (1 - coverage) +
-  reflection`, every term non-negative. The pair carries the reflection with its Fresnel and the
-  coverage bare. On a wet frame the late fold (`ssr_fold_wet_frag`) folds only the catcher, its
-  tent averaging the catcher only with its own class, and gives wet and unmarked pixels nothing --
-  a puddle's coverage taken as a catcher's Fresnel would lerp the floor beside it.
+### Wet surfaces
+
+`include/rain_surface.glsl`, one call in `pbr_frag` under `PBR_FEAT_RAIN` (bit 64), runs the
+shore's model, `include/wet_surface.glsl`: porosity darkening, a Lekner-Dorf hue power, a film that
+smooths and flattens.
+- **Only up-facing surfaces hold a film, and open ground holds 0.6 of one.** With a full film
+  everywhere every wet surface is already the mirror a puddle is, and no puddle reads.
+- **Puddles** are value noise under a level, on ground within eight degrees of level, only where the
+  rain lands, with a one-pixel waterline and rings from `include/rain_ripples.glsl`. `water_frag`
+  takes the rings too, through the cover on unit 9, or water under a roof would ring.
+- **Darkening the bed under standing water is rejected**: the film's power already darkens at least
+  as much as a flat water surface's internal reflection does.
+- **Puddle relief** (`PBR_FEAT_RELIEF`, bit 128) moves a puddle's depth by the material's height map
+  about the map's own mean, read from its coarsest mip. It is a bit of its own because it declares
+  `heightTex`, which under `PBR_FEAT_RAIN` every material in a wet world would pay. Layered
+  materials are refused it: their unit 4 is the virtual-texture page.
+
+### Wet ground in SSR
+
+A wet texel marks the normals alpha below -1, as `-(1 + film)`; the catcher keeps (-1, 0). Every
+reader asks `include/ssr_marker.glsl` rather than testing the value: a sign test hands wet ground
+the catcher's treatment.
+
+- **SSR reads the texel's own roughness** from the aux buffer, and water's F0.
+- **The reflection replaces the pixel's share of the environment's** rather than lerping the pixel,
+  which would dim the diffuse by a Fresnel already applied. The replacement is made in the split
+  composite (spec 13.21, `wetReflection` in `spec_occ_composite_frag`):
+  `spec * SO * (1 - coverage) + reflection`, every term non-negative. The pair carries the
+  reflection with its Fresnel and the coverage bare. What it replaces is the share the composite
+  put back under its occlusion, not the unoccluded share, which would take puddles under a roof
+  black.
+- **It must be made before TAA.** Subtracted after TAA, it takes this frame's render-res specular
+  out of a frame TAA has resolved and, at a render scale, upscaled. The two agree on open ground and
+  not on a thin ripple or an object's edge, which go below zero as dark outlines and rings.
+  `rain-ssr-taa` and `rain-ssr-taau` hold the frame at no pixel below zero; every other rain arm runs
+  without TAA, where the two orders agree.
+- **The late fold** (`ssr_fold_wet_frag`), on a wet frame, folds only the catcher, its tent averaging
+  the catcher only with its own class, and gives wet and unmarked pixels nothing: a puddle's coverage
+  taken as a catcher's Fresnel would lerp the floor beside it.
 - **The pair is the frame before's** (`PostFX.ssr_prev`), the only trace there is when the
   composite runs, read at the pixel less the surface's velocity and scaled to this frame's
-  pre-exposure. Only the frame immediately before is one velocity away, so the first wet frame, or
-  the first after SSR was off, shows the environment's reflection alone. It is kept by handle,
-  since which buffer holds it -- the raw trace, the accumulator's side or the denoised one --
-  depends on that frame's switches. A reflection moves with parallax rather than with its surface,
-  which the SSR accumulator's reprojection already accepts. The trace reads the canvas after TAA,
-  which now holds the frame before's wet reflections, so a puddle can see another's, bounded by its
-  Fresnel. And the read is bilinear and blind to class, so where wet ground meets the catcher it
-  can take a catcher's pair as wet; neither fixture has that border.
+  pre-exposure.
+  - Only the frame immediately before is one velocity away, so the first wet frame, or the first
+    after SSR was off, shows the environment's reflection alone.
+  - It is kept by handle, since which buffer holds it (the raw trace, the accumulator's side or the
+    denoised one) depends on that frame's switches.
+  - A reflection moves with parallax rather than with its surface, which the SSR accumulator's
+    reprojection already accepts.
+  - The trace reads the canvas after TAA, which holds the frame before's wet reflections, so a
+    puddle can see another's, bounded by its Fresnel.
+  - The read is bilinear and blind to class, so where wet ground meets the catcher it can take a
+    catcher's pair as wet; no fixture has that border.
 - **Off the frame before's edge, wet ground takes the nearest of its reflections** (spec 13.46).
-  - **Why the edge needs it.** The strip a turn reveals at its leading edge has no previous
-    position on the frame. It used to take the environment's share alone, what `--no-ssr` shows.
-    At the edge the trace's hits fade (`edgeFade`: wet ground reflects within its own column, so
-    its hits sit at the edge too), and the reflection probe takes their weight. So wet ground at
-    the edge is the probe's reflection, and under a fogged night sky that is far darker than the
-    environment's share. Every turn in silent flashed a strip there for one frame: 0.62 codes over
-    the last fog columns, +3.4 on the rows of street. Borrowed, it is 0.08 against a floor of
-    0.05.
+  The strip a turn reveals at its leading edge has no previous position on the frame. Falling back
+  to the environment's share alone, what `--no-ssr` shows, it flashes for a frame: beside it, at the
+  edge, the trace's hits fade (`edgeFade`; wet ground reflects within its own column, so its hits
+  sit at the edge too) and the reflection probe takes their weight, which under a fogged night sky
+  is far darker than the environment's share.
   - **The borrow fades out between `WET_EDGE_REACH` (0.1 of the frame off its edge) and twice
     that.** A cut has every position far off the frame, and lending one edge column to the whole
-    wet ground landed 1.24 codes from the true frame on a 90° cut, against 0.46 for the
-    environment's share. Past the reach a cut takes that share as it always did, and a turn of
-    up to several times the gate's rate is borrowed whole.
-  - **`rain-ssr-edge` holds it, and needs a probe.** Its rule: the wet pixels at the leading edge
-    of a turn must not sit at exactly their `--no-ssr` value, as 98% did before and 1.8% do now.
-    With no probe the pair at the edge is nearly empty, and a fallback cannot be told from a
-    reflection: the yard's own environment is too dark for one to show.
-- **Why before TAA.** Until 13.21 the late fold added the trace and SUBTRACTED the replaced share
-  after TAA. What it took out was this frame's render-res specular; what it took it from TAA had
-  resolved and, at a render scale, upscaled. On open ground they agreed; on a thin ripple or an
-  object's edge they did not, and silent's porch went 2,490-4,250 pixels below zero a frame: dark
-  outlines on the rails, a red arc, dark rings on the pavement. 13.20 had already made it take what
-  the composite put back UNDER its occlusion rather than the unoccluded share, which had taken the
-  kitchen sill's puddles under the pent roof black. Composited before TAA, the reflection and what
-  it replaces are one image, and `rain-ssr-taa` and `rain-ssr-taau` hold the frame at 0 pixels
-  below zero, where the old fold went to 1,369 and 1,330.
-- A replacing hit is seen through the global height fog along its own reflected segment
+    wet ground lands further from the true frame (1.24 codes on a 90° cut) than the environment's
+    share does (0.46). Past the reach a cut takes that share; a turn of several times the gate's
+    rate is borrowed whole.
+  - **`rain-ssr-edge` holds it, and needs a probe.** Its rule: the wet pixels at a turn's leading
+    edge must not sit at exactly their `--no-ssr` value. With no probe the pair at the edge is
+    nearly empty, and a fallback cannot be told from a reflection.
+- **A replacing hit is seen through the global height fog** along its own reflected segment
   (`reflectedThroughFog`), because the environment it replaces is baked through the same fog
   (`include/env_medium.glsl`, `IBLResources.reflect_fog`). Unfogged, a puddle on a foggy street
-  mirrored the houses across it as holes.
+  mirrors the houses across it as holes.
 
-**The medium** past the streaks is a third medium in `froxel_inject_frag`: the Marshall-Palmer
+### The medium
+
+Past the streaks the rain is a medium in `froxel_inject_frag` (see Atmosphere): the Marshall-Palmer
 extinction times `mist`, lit through the drops' phase (`include/rain_phase.glsl`, which the streaks
-share), folded in by extinction like the local volumes, absent under cover, and coming in only past
-the outermost streak box, inside which the streaks already stand for every drop. Its lobe is its
-own, `mist_forward_g`, since 13.12.
+share) with its own lobe, `mist_forward_g`. It folds in by extinction like the local volumes, is
+absent under cover, and comes in only past the outermost streak box, inside which the streaks
+already stand for every drop.
 
-### What spec 13.12 added
+### Drops on glass
 
-**Wind.** A scene `Wind` that states `air_speed` carries the rain. The cover map and the splashes
-read the gust cycle's MEAN, `1 - a + a * 5/16` of the peak, and the drops read this instant's
-air: a cover that followed the gusts would crawl across the ground. `Rain.travel` is the
-direction the rain last fell, and the cover keeps it after the rain stops. Without it the map
-snapped to vertical as the rain ended, and a window the wind had wet under an eave read as
-covered from that frame on, its beads gone at once rather than drying.
+`include/rain_glass.glsl`, pure arithmetic and no sampler:
+- **The beads**: two layers of jittered cells.
+- **The running drops**: lanes with a stick-slip motion and a trail.
+- **The optics**: a paraboloid cap tilts the normal and clears the smear's roughness. Each drop is a
+  lens that shifts the transmission sample, and a dark rim marks total internal reflection past
+  water's critical angle; that rim is what outlines a bead against a lit street.
 
-**Splashes on water** land on the water's plane, met by walking up the rain's travel from the
-map's surface. Water is not in the occlusion map, so a crown thrown from the bed under half a
-metre of water never broke the surface.
-
-**Drops on glass** (`include/rain_glass.glsl`, pure arithmetic, no sampler):
-- **The beads:** two layers of jittered cells.
-- **The running drops:** lanes with a stick-slip motion and a trail.
-- **The optics:** a paraboloid cap tilts the normal and clears the smear's roughness. Each drop
-  is a lens that shifts the transmission sample, and a dark rim marks total internal reflection
-  past water's critical angle. That rim is what outlines a bead against a lit street.
-
-Four things a plausible frame hid:
-- **The cover is asked on the STRUCK side.** A glass roof shelters its own underside, so asked
-  where it is seen it never beads from below.
-- **A VERTICAL pane does not shelter its own lee** in the map. The rain meets it nearly edge on,
-  and the slope-scaled offset stores it deeper than the point behind it. This is why the arm
-  that reads the struck side uses a flat canopy.
-- **The lens is not faded where the beads are unresolved, and the tilt is.** Sub-pixel beads
-  still spread the view inside a pixel, which is what raises the transmission's mip and makes a
-  wet window across a room a diffuser.
-- **Zero-weight steps are skipped,** not run with a weight of zero. A renormalised normal is not
+Two things a plausible frame hides (the cover's side and a pane's lee are under Cover):
+- **The lens is not faded where the beads are unresolved, and the tilt is.** Sub-pixel beads still
+  spread the view inside a pixel, which is what raises the transmission's mip and makes a wet
+  window across a room a diffuser.
+- **Zero-weight steps are skipped**, not run with a weight of zero. A renormalised normal is not
   bit-equal to the one it started as.
 
-**Drips** are a third instance range in `rain_vert`, after the splash droplets. Each drip is a
-hanging bead that grows as the cube root of its time, then a fall under linear drag, then the
-splash crown, shared with the splashes through `crownDroplet`. The fall time is solved by Newton
-on both sides. A line's slots are shared by rate times cycle. Drips skip the cover, since a
-drip comes off the edge that made the cover. They fall straight down: drifted with the open
-air, a gutter's drop crossed the wall into the kitchen. And they take light from area panels as
-small sources, or the drips past a lit window took none from its tubes.
+### Drips
 
-**Puddle relief** (`PBR_FEAT_RELIEF`, bit 128) moves a puddle's depth by a material's height map
-about the map's own mean, read from its coarsest mip. It is a bit of its own because it declares
-`heightTex`, and on `PBR_FEAT_RAIN` that unit would be paid by every material in a wet world.
-Layered materials are refused it: their unit 4 is the virtual-texture page.
+A third instance range in `rain_vert`, after the splash droplets. Each drip is a hanging bead that
+grows as the cube root of its time, then a fall under linear drag, then the splash crown, shared
+with the splashes through `crownDroplet`. The fall time is solved by Newton on both sides.
+- **Drips skip the cover**: a drip comes off the edge that made the cover.
+- **They fall straight down.** Drifted with the open air, a gutter's drop crosses the wall into the
+  room behind it.
+- **They take light from area panels as small sources**, or the drips past a lit window take none
+  from its tubes.
