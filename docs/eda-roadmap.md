@@ -424,8 +424,7 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
   key hints: a label draws its text inside its padding, and `UI_ALIGN_BASELINE` lines a row's
   children up by their text. pcb's key boxes use centring, which the first fix makes work.
 - **A line-number colour** -- spec 14.14, built, for pcb's theme file: `UITheme.line_numbers`, the
-  code editor's line numbers in a colour of their own (`code.line-number`), and the editor's text
-  at 38% while its alpha is 0. Every other name in pcb's theme reaches something cetra already
+  code editor's line numbers in a colour of their own (`code.line-number`). Every other name in pcb's theme reaches something cetra already
   had, the focus rings included.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is

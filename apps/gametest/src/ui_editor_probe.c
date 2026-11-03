@@ -1795,17 +1795,19 @@ static int probe_editor_shapes(UISystem* ui) {
     return 0;
 }
 
-// The glyphs drawn left of the text's first column at x, the line numbers, and those right of it,
-// the code: how many of each, and whether each is in its colour. The editor's glyphs are bitmaps
-// from its face, so they are image quads, kind 1.
+// The editor's glyphs on one side of the text's first column: how many, the first one's colour,
+// and whether any other differs from it.
 typedef struct {
-    int numbers, code;
-    bool numbers_in, code_in;
-} Glyphs;
+    int count;
+    vec4 colour;
+    bool mixed;
+} GlyphSide;
 
-static Glyphs glyphs_by_side(const UISystem* ui, float x, const float* number, const float* code) {
+// The editor's glyphs split at the text's first column x by their centres, as a click is: the line
+// numbers left of it, the code right. They are bitmaps from its face, so image quads, kind 1.
+static void glyph_sides(const UISystem* ui, float x, GlyphSide* numbers, GlyphSide* code) {
+    *numbers = *code = (GlyphSide){0};
     const UIDrawList* dl = ui_draw_list(ui);
-    Glyphs g = {.numbers_in = true, .code_in = true};
     for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
         UIRect r;
         vec4 colour;
@@ -1813,57 +1815,54 @@ static Glyphs glyphs_by_side(const UISystem* ui, float x, const float* number, c
         ui_draw_list_quad(dl, i, &r, colour, &kind);
         if (kind != 1)
             continue;
-        if (r.x < x) {
-            g.numbers++;
-            g.numbers_in = g.numbers_in && same_colour(colour, number);
-        } else {
-            g.code++;
-            g.code_in = g.code_in && same_colour(colour, code);
-        }
+        GlyphSide* side = r.x + r.w * 0.5f < x ? numbers : code;
+        if (side->count++ == 0)
+            glm_vec4_copy(colour, side->colour);
+        else if (!same_colour(colour, side->colour))
+            side->mixed = true;
     }
-    return g;
+}
+
+static bool side_in(const GlyphSide* side, const float* colour) {
+    return side->count > 0 && !side->mixed && same_colour(side->colour, colour);
 }
 
 // The line numbers in the text's colour at 38% with theme.line_numbers zeroed, in its colour once
-// set while the code keeps its own, and at 38% again with the theme put back.
+// set while the code keeps its own, and at 38% again with it zeroed once more.
 static int probe_editor_line_numbers(UISystem* ui) {
     TextDoc* doc = create_text_doc(SEAM_TEXT, strlen(SEAM_TEXT));
     UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
     const UITheme before = *ui_theme(ui);
+    UITheme plain = before, red = before;
+    glm_vec4_zero(plain.line_numbers);
+    glm_vec4_copy((vec4){1.0f, 0.0f, 0.0f, 1.0f}, red.line_numbers);
+    ui_set_theme(ui, &plain);
     editor_pass(ui);
     float x = 0.0f, y = 0.0f;
     ui_editor_point_of(ed, 0, &x, &y);
-    // The code's colour as drawn: the first glyph right of the numbers.
-    const UIDrawList* dl = ui_draw_list(ui);
-    vec4 fg = {0};
-    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
-        UIRect r;
-        vec4 colour;
-        int kind = 0;
-        ui_draw_list_quad(dl, i, &r, colour, &kind);
-        if (kind == 1 && r.x >= x) {
-            glm_vec4_copy(colour, fg);
-            break;
-        }
-    }
+    GlyphSide numbers, code;
+    glyph_sides(ui, x, &numbers, &code);
+    vec4 fg;
+    glm_vec4_copy(code.colour, fg);
     const vec4 dim = {fg[0], fg[1], fg[2], fg[3] * 0.38f};
-    Glyphs g = glyphs_by_side(ui, x, dim, fg);
-    say_flag("editor-line-numbers", "default", "dim",
-             g.numbers == 3 && g.numbers_in && g.code > 0 && g.code_in);
-
-    UITheme red = before;
-    glm_vec4_copy((vec4){1.0f, 0.0f, 0.0f, 1.0f}, red.line_numbers);
-    ui_set_theme(ui, &red);
-    editor_pass(ui);
-    g = glyphs_by_side(ui, x, red.line_numbers, fg);
-    say_flag("editor-line-numbers", "set", "red",
-             g.numbers == 3 && g.numbers_in && g.code > 0 && g.code_in);
-
+    const struct {
+        const char* label;
+        const char* key;
+        const UITheme* theme;
+        const float* numbers;
+    } passes[] = {
+        {"default", "dim", &plain, dim},
+        {"set", "red", &red, red.line_numbers},
+        {"cleared", "dim", &plain, dim},
+    };
+    for (size_t i = 0; i < sizeof(passes) / sizeof(passes[0]); i++) {
+        ui_set_theme(ui, passes[i].theme);
+        editor_pass(ui);
+        glyph_sides(ui, x, &numbers, &code);
+        say_flag("editor-line-numbers", passes[i].label, passes[i].key,
+                 numbers.count == 3 && side_in(&numbers, passes[i].numbers) && side_in(&code, fg));
+    }
     ui_set_theme(ui, &before);
-    editor_pass(ui);
-    g = glyphs_by_side(ui, x, dim, fg);
-    say_flag("editor-line-numbers", "cleared", "dim",
-             g.numbers == 3 && g.numbers_in && g.code > 0 && g.code_in);
     free_text_doc(doc);
     return 0;
 }
