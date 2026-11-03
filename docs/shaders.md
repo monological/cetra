@@ -665,3 +665,9 @@ panel has it.
 
 The clearcoat-normal view was reached by the literal 13 for a while, with nothing in this enum to
 name it; it has a member now, and the enum covers every value the shader handles.
+
+## Modules
+
+### `program.c/h`, `shader.c/h`, `uniform.c/h`
+
+Shader program compile, uniform setup. **Never ask the driver about uniforms one index at a time** (spec 13.39): an active uniform is every member of every element of every uniform block too, and Apple's driver finds a uniform by index by walking all of them. So `_count_program_samplers` cost more than compiling and linking -- 1.5 s of silent's load, a batched index query included -- until it asked the BLOCKS for their members and only the rest for their types. `shader.c` also holds the runtime `#include` resolver every source passes through, and the splice that puts an app's GLSL at a marker line (spec 13.29)
