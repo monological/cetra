@@ -28431,8 +28431,8 @@ def run_ui_gate(workdir):
       ui-editor-line-numbers the code editor's line numbers in theme.line_numbers
                      (spec 14.14): with it zeroed, every number glyph is the
                      text's colour at 38% of its alpha; set to red, every number
-                     is red and the code's glyphs keep their colour; with the
-                     theme put back, the numbers are at 38% again.
+                     is red and the code's glyphs keep their colour; zeroed once
+                     more, the numbers are at 38% again.
       ui-editor-steps each action told with its step: typing joined into words
                      shares one; a group holds one over typing, a Backspace and
                      more typing, one undo takes the group back and one redo makes
@@ -29671,7 +29671,7 @@ def run_ui_gate(workdir):
 
     ok, detail = doc_flags("editor-line-numbers", 3, "the line numbers in the text's colour at 38% "
                            "with theme.line_numbers zeroed, all red with it set while the code "
-                           "keeps its colour, and at 38% again with the theme put back")
+                           "keeps its colour, and at 38% again with it zeroed once more")
     print(f"  ui-editor-line-numbers {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-line-numbers", ok)
 
