@@ -13212,7 +13212,7 @@ BEACH_DEPTH_AZIMUTHS = (120, 140, 160, 180, 200)
 # Seen to fail: --no-water reads 1.2042 -> 1.2051 over the same five radii, every step
 # 1.00x, because what is left is the emissive bed with no column in front of it.
 # The ramp deliberately stops at 21: absorption has saturated by 27 (0.2386) and RISES
-# again by 33 as sky reflection takes over, which is the same band AGENTS.md warns not to
+# again by 33 as sky reflection takes over, which is the same band docs/verification.md warns not to
 # read absorption monotonicity through on the ramp fixture.
 BEACH_DEPTH_STEP_MIN = 1.15
 # A MAGNITUDE, not inequality. Output dither is on by default and puts +/-1 LSB on every
@@ -16936,7 +16936,7 @@ def run_forest_gate(workdir):
 
     Every arm reads the SUBMISSION table, which is integers with no noise floor.
     The app pins its own exposure, so nothing here inherits the adaptation hazard
-    that CLAUDE.md names for cross-configuration comparison.
+    that docs/verification.md names for cross-configuration comparison.
     """
     if not os.path.exists(FOREST):
         print("  forest       SKIP  (forest not built)")
@@ -19080,7 +19080,7 @@ def run_submission_gate(workdir):
         # what puts them on _gpu_cmd's pinned exposure. Rendering them here
         # instead cost two extra renders AND dropped the pin, leaving the arm
         # asserting 0 px across a live auto-exposure -- the one difference
-        # CLAUDE.md names as able to move every pixel in the frame.
+        # docs/verification.md names as able to move every pixel in the frame.
         on = os.path.join(workdir, "gpu_submit_base.ppm")
         off = os.path.join(workdir, "gpu_submit_nobatch.ppm")
         ae, _ = compare(on, off)

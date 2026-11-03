@@ -274,8 +274,8 @@ void kit_collider(Kit* kit, const vec3 centre, const vec3 half, float yaw);
 
 // A static triangle soup to stand on (spec 13.25): `vertices` 3 floats each and `indices` 3 a
 // triangle, in the kit's coordinates. Borrowed for the call: the physics copies them. Long runs
-// of exactly coplanar triangles hit Jolt's debug-build trace (AGENTS.md, physics), so a soup with
-// large flats wants them as boxes.
+// of exactly coplanar triangles hit Jolt's debug-build trace (docs/modules.md, physics), so a
+// soup with large flats wants them as boxes.
 void kit_mesh_collider(Kit* kit, const float* vertices, int vertex_count,
                        const unsigned int* indices, int index_count);
 

@@ -598,8 +598,9 @@ static const ConfigField CFG_FIELDS[] = {
      * The adaptation state, and it is CONFIGURATION here even though it is
      * history everywhere else. Auto-exposure multiplies every pixel, and a
      * restored session that re-approaches from cold differs from the one it was
-     * taken from in the whole frame -- AGENTS.md measures a provably-no-op change
-     * at 99.77% of pixels for exactly this reason. Carrying the two makes the
+     * taken from in the whole frame -- `docs/verification.md` measures a
+     * provably-no-op change at 99.77% of pixels for exactly this reason.
+     * Carrying the two makes the
      * first restored frame continue rather than converge.
      */
     CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "adapted_luminance", adapted_luminance),

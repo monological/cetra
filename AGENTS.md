@@ -1,219 +1,182 @@
-# Cetra Graphics Library
+# Cetra
 
-A C11 PBR rendering engine on OpenGL 3.3+ / 4.1 (GL 4.1 is the hard ceiling on
-macOS -- no compute shaders). Forward-rendered into a fat HDR MSAA G-buffer,
-followed by a large screen-space post-processing stack. Scene-graph core, with an
-optional game framework layer (fixed-timestep loop + Jolt physics + entities).
+A C11 PBR rendering engine on OpenGL 4.1, the ceiling on macOS, so there are no compute shaders.
+It forward-renders into an HDR MSAA G-buffer and runs a screen-space post chain over it, around a
+scene graph. An optional game layer (`cetra/src/game/`) adds a fixed-timestep loop, Jolt physics,
+entities, input and audio. The 2D canvas, idle mode and the UI's text, panes and code editor are
+there for pcb, an EDA program built on cetra in its own repository.
 
-## Planning Workflow
+This file is the rules. What the engine is and how it works is in `docs/`.
 
-When a new plan is approved (ExitPlanMode), before writing any implementation code, do these
-steps in order:
+## Read before you touch
 
-1. **Branch off master.** If currently on `master`, create a new feature branch off it. If NOT
-   on `master`, STOP and ask the user how to proceed -- do not branch off or commit onto an
-   unexpected branch.
+| Touching | Read first |
+|----------|------------|
+| The frame, the scene graph, ownership, the render pipeline | `docs/architecture.md` |
+| A source file | its row in `docs/modules.md`, then its header |
+| A shader, a sampler, a vertex attribute | `docs/shaders.md`, then the subsystem in `docs/shader-subsystems.md` |
+| Shadows, GI, IBL, the sky, probes, rain | `docs/lighting.md` |
+| `cetra/src/game/`, particles | `docs/game-framework.md` |
+| The build, compiler flags, using cetra from another project | `docs/building.md` |
+| Gates, goldens, any measurement | `docs/verification.md` |
+| An app's flags, headless runs | `docs/cli-reference.md` |
+| An example app | `apps/<app>/README.md` |
+| A 14.x spec | `docs/eda-roadmap.md` |
 
-   **ALWAYS prefix the branch name with the spec number it implements.** The branch name is the
-   spec's `specs/` filename with the `.md` dropped, so the two cannot drift apart and anyone on
-   the branch can find the document that explains it. A branch named for what the work felt like
-   at the start stops describing what it turned out to be, and once the name has drifted nothing
-   connects the branch to its spec. Rename the branch whenever the spec is renamed; if the work
-   turns out to be two specs, split the branch so each keeps its own number.
+## Build
 
-   **When the work wants a worktree, use the `EnterWorktree` tool, not `git worktree add`.**
-   It puts the checkout in `.claude/worktrees/<name>` and switches the session into it;
-   `ExitWorktree` leaves, keeping or removing. `git worktree add` at a path of your own
-   choosing leaves the session in the ORIGINAL tree, so every subsequent edit lands on
-   master while the branch you just made sits untouched -- and a path inside the repo needs
-   a `.gitignore` entry it does not have, so the checkout shows up as untracked in the
-   parent's `git status`.
+`./build.sh` configures with CMake and builds with Ninja into `out/`; apps land in `out/bin/<app>`.
+Every dependency is vendored under `cetra/src/ext/` and built from source. Never reach for a system
+library: the same command has to build on macOS, Linux and Windows.
 
-   **A worktree gets these instructions automatically.** `AGENTS.md` and `CLAUDE.md` are
-   TRACKED, so a fresh checkout contains them and nothing needs symlinking back. They were
-   gitignored until they were not, and the old instruction to `ln -s` them into the worktree
-   is gone with that -- doing it now would leave a symlink shadowing a real tracked file.
-   `CLAUDE.md` is committed as a symlink to `AGENTS.md`, so there is still exactly one copy
-   of this content and an edit through either name is the same edit.
-2. **Copy the plan into `specs/`** as a markdown file.
-3. **Commit the plan** (the `specs/` file, on the new branch) as its own commit, before touching
-   any code.
-4. **Create a task list** with the task tool -- one item per major step of the plan. ALWAYS update
-   the task list as you go and complete items. Do not forget to update the list as you go.
-5. **Start the implementation.**
+A committed `.clangd` points clangd at `out/`. If clangd shows a wall of errors, starting with
+`cglm/cglm.h` not found, check that file survived before believing any of them.
 
-**If the work has a look, the plan needs a step where somebody looks at it, and that step is not
-the last one.** A plan made of instruments produces instruments. Spec 12.9 put "build the
-instrument first" at phase 0 and "watch it" at phase 6, and what shipped was six green phases and
-a demo that could not show the feature -- found in five minutes by the person who asked for it,
-after seven review agents and nineteen passing arms had not. Run the app at the end of each phase
-that changes what it draws.
+## Workflow
 
-**The 14.x series has a master plan, `docs/eda-roadmap.md`, and every 14.x spec keeps it true.**
-It lists what cetra gains so that pcb, an EDA program, can be built on it: the 2D canvas,
-idle mode, skipping the 3D pass, the 3D scene in part of the window, text input and scrolling panes,
-the editor widget, rendering at any scale, the glTF import's differences, and what the panes and
-the fonts need of the UI. Read the item before
-planning its spec. Then update the roadmap on the spec's own branch, at least in its as-built
-commit, whenever any of these happens:
-- an item is started or finished, or gets a spec number;
-- a decision listed under "To decide" is made;
-- the spec does something other than what the roadmap says, which is stated with the reason;
-- an item, or a need of pcb's, is found that the roadmap does not list;
-- the order changes.
+When a plan is approved:
 
-A roadmap that still describes the plan from before the work is how this tree's documents have gone
-wrong before: the next spec plans against it and trusts it.
+1. **Branch off master**, named after the spec: its `specs/` filename without `.md`. If you are not
+   on master, ask before branching. Rename the branch when the spec is renamed.
+2. **Copy the plan into `specs/`** and commit it alone, before any code.
+3. **Keep a task list**, one item per step, and update it as you go.
+4. **Look at it.** Work that changes what something draws needs a phase, before the last one, where
+   the app is run and somebody looks. Run the app at the end of every phase that changes what it
+   draws.
+5. **After each phase**, update the spec's As built and commit it.
 
-## Example Apps
+A 14.x spec keeps `docs/eda-roadmap.md` true on its own branch, at least in its as-built commit,
+whenever an item is started, finished or numbered; a decision under "To decide" is made; the spec
+departs from the roadmap (say why); a need of pcb's turns up that the roadmap lacks; or the order
+changes.
 
-Each app's `README.md`, in its own directory, says what it is and how to drive it.
+For a worktree, use the `EnterWorktree` tool, never `git worktree add`, which leaves the session in
+the original tree.
 
-| App | Path | Headless |
-|-----|------|----------|
-| render | `apps/render/` | yes |
-| spores | `apps/spores/` | yes |
-| forest | `apps/forest/` | yes |
-| gametest | `apps/gametest/` | yes |
-| tree | `apps/tree/` | yes (but NOT frame-deterministic on the orbit path: floor is 9k-31k px depending on framing, see `docs/verification.md`) |
-| silent | `apps/silent/` | yes |
-| shapes | `apps/shapes/` | no |
-| sprites | `apps/sprites/` | yes |
-| network | `apps/network/` | yes |
-| splash | `apps/splash/` | no |
-| canvas | `apps/canvas/` | yes |
+## Verifying
 
-## Verification
+- `scripts/gates.py` asserts analytic properties; `scripts/goldens.py` compares the committed
+  golden PNGs. Run gates scoped, `--only <group>,<group>`. The full suite takes over 40 minutes:
+  ask before starting it.
+- Never build, render or edit `scripts/gates.py` while gates or goldens run. A commit counts as an
+  edit, since the pre-commit hook stashes unstaged files.
+- Prefer headless runs (`-x -f N -S out.ppm`) for checking behaviour and for measuring.
+- Before quoting a pixel difference, render one configuration twice. The difference between those
+  two is the noise floor, and a number without it means nothing.
+- **Look at it before you believe a number.** A green suite means nothing already covered broke. It
+  does not mean the new thing works.
+- Name an asset through `fixture_paths` (`asset_path`, `asset_ref`, `asset`), never by its
+  directory.
 
-**`docs/verification.md` owns this** — how to run the two suites, what a release run moves, the
-determinism-by-source table, the per-asset ledger of what is safe to compare, and the cross-build
-recipe with the six times it has moved. `scripts/gates.py` asserts analytic properties;
-`scripts/goldens.py` compares 33 committed PNGs.
+## Rules that break silently
 
-**`assets/` is split by KIND since spec 12.8** — `scenes/`, `models/`, `textures/`, `goldens/`,
-`generators/`, `lut/`, `ies/`, `data/`, with `abandoned_window/` and `ivy_arcade/` left
-whole because each carries its own scenes and producers. **Nothing that names an asset spells a
-directory**: a generator says `asset_path("foo.gltf")` to write one and `asset_ref("foo.png")` to
-name one inside a file it emits, `gates.py` says `asset("foo.cscn")`, and all three route through
-`fixture_paths.asset_subpath` — ONE statement of the taxonomy, imported rather than restated, so a
-new fixture lands in the right place with nothing to register and a later re-split changes one
-function rather than two hundred call sites. It shipped as two copies of the map and they had
-already drifted before either was used in anger, which is the argument for the import. Three couplings are what
-that routing exists to hold, and each renders a plausible frame when broken: a generator resolves
-its outputs against its own `__file__`, which is what lets `fixture-gen` sandbox one by copying it;
-a `.cscn` resolves its model against the SCENE FILE's directory, so it names `../models/<x>`; and a
-glTF image `uri` resolves through the texture pool, whose directory is the model's, so it names
-`../textures/<x>` — which works because `find_existing_subpath` probes `base + subpath` VERBATIM
-first and only then starts stripping leading segments. Stripping alone can only ever shorten a
-name, so a BARE sibling filename can never reach another kind's directory; the explicit `../` is
-what does the reaching.
+Each of these has rendered a plausible frame when broken, with the suite green. The doc says why.
 
-**Look at it before you believe a number.** The suites exist so a change can be re-checked
-cheaply later, not so a feature can be declared working without anybody seeing it. Spec 12.4's
-defect was found by watching the character walk and reported as "the legs don't move" while
-eleven of its twelve arms were green; spec 12.9 repeated that exactly, declaring six phases done
-off probe output and shipping a demo that could not show the feature at all. A green suite means
-nothing broke that was already covered. It does not mean the thing works.
+- **Never assume `clip.w = -z`.** Branch on `projection[2][3]` through `include/depth.glsl`'s
+  helpers; orthographic cameras are real. (`docs/architecture.md`, Render Pipeline)
+- **Anything that moves vertices in `cetra_local_position`** needs a CPU bound in the draw list and
+  must reach all five programs that include the chunk, through
+  `engine_upload_displacement_uniforms`. (`docs/shaders.md`, Vertex Attributes)
+- **`pbr_frag` declares 16 samplers, the most it can have.** Read the sampler model before adding
+  one; there is usually a way that costs no unit. (`docs/shaders.md`, Texture / Sampler Model)
+- **The lit shader's variant mask is subtractive**: no define means every feature, so a mask never
+  assembled gives the slow program, never a broken one. Keep it that way. (`docs/shaders.md`)
+- **A header both C and GLSL include** (`include/*_constants.glsl`, `pbr_features.glsl`) holds
+  `#define`s only, and every float literal takes `f`. (`docs/shaders.md`)
+- **`shader_strings.h` is generated into `out/generated/`**, never into `cetra/src/`, and only
+  `program.c` includes it. (`docs/shaders.md`)
+- **What the frame's geometry depends on goes in the app's pre-render hook**: the camera, and any
+  node added, removed or moved. Written in the render hook it is a frame late, shadows included.
+  (`docs/architecture.md`, Render Pipeline)
+- **The transform walk may run again in a frame; the latch must not.** `scene_latch_prev_transforms`
+  runs once, or every motion vector goes to zero. (`docs/architecture.md`)
+- **TAA is on in a window and off headless** unless `--taa`, so anything gated on `taa_resolving`
+  can be invisible in a golden. (`docs/architecture.md`)
+- **A length the engine chose is multiplied by `Engine.typical_size`; a length the scene states
+  never is.** (`docs/architecture.md`, The Typical Size)
+- **The `_POSIX_C_SOURCE` define is Linux-only.** On macOS it hides Darwin's declarations.
+  (`docs/building.md`)
 
-`docs/verification.md` has the rest -- noise floors, what pins exposure across builds, which
-binary directory goes with which suite, and when a bake needs `--no-cook`. Read it when you are
-about to quote a measurement, not before every change.
+## Code
 
-Both run on macOS, Linux and Windows (`./build.sh --target`, see `docs/build-vms.md`). Most gate
-arms pass everywhere; timing arms and goldens are the two things that do not travel.
-
-## Conventions
-
-- All transforms are 4x4 matrices (mat4 from cGLM).
-- Positions in world space; transforms propagate parent-to-child.
-- Y-up, right-handed coordinate system.
-- Angles in radians.
-- Colors as vec3 (0.0-1.0) or hex integers.
+- **Names are subject first**: the first word is the type of the first parameter (`scene_add_light`,
+  `node_set_position`), then the verb, then the object.
+- **`create_X` makes and `free_X` frees** every object. Never swap a factory for `malloc` to skip
+  its defaults.
+- **`x_get_y` logs when it returns NULL; `x_find_y` is silent**, for the optional case. A mutator
+  returns void and logs bad arguments. A request the caller can act on when refused returns bool.
+- **A public struct's fields sit under three banners**: ENGINE-OWNED (read, never write), BY
+  FUNCTION (write through the function named beside it), SETTINGS (plain writes at any time). A
+  setter exists only where the library has to react.
+- **An app names only `cetra/<header>.h`.** The allowlist in `cetra/CMakeLists.txt` says which
+  headers are public.
+- **Conventions**: Y-up, right-handed, radians, 4x4 `mat4` transforms (cglm), colours as vec3 in
+  0..1 or hex.
+- **Python files never have whitespace-only lines.**
+- **Change behaviour with the Edit tool**, so the change can be read as it is made. A script
+  rewriting a file shows the script, not the result. Scripts are for mechanical sweeps nobody will
+  read line by line: a rename across thirty files, a regenerated fixture.
 
 ## Comments
 
-The test for every comment: **does it say something the code at this location
-cannot?** Intent, invariants, units, non-obvious whys -- never a restatement of
-the code beside it.
+The test for every comment: **does it say something the code at this location cannot?** Intent,
+invariants, units, non-obvious whys; never a restatement of the code beside it.
 
-- **Declaration comments state the contract, in one line.** What the field
-  means or what setting it does, in the codebase's own vocabulary:
-  `bool area_lights_enabled; // false = LIGHT_AREA lights are skipped at gather`
-  -- not the downstream mechanism that gives it effect.
-- **Mechanism is documented where it is implemented.** Never narrate another
-  file's causal chain (a header comment describing what the .c or a shader
-  does rots silently -- whoever edits the mechanism has no reason to know the
-  distant comment exists).
-- **Never name the callers.** "(GUI toggle)" on a struct field points the
-  dependency arrow backwards and goes stale the moment a second caller
-  appears.
-- **No self-praise and no verification claims** ("exactly the no-panel path",
-  "measured 0 px") -- those are commit-message material, not code.
-- **Long comments must earn their length** by recording something the code
-  cannot express: a rejected alternative, a measured tradeoff, a failure mode
-  being avoided (the `touched` bitset comment in `light_cluster.h` and the
-  `_POSIX_C_SOURCE` note in this file are the house standard). Length is
-  fine; content-free length is not.
+- **Declaration comments state the contract, in one line**, in the codebase's own vocabulary:
+  `bool area_lights_enabled; // false = LIGHT_AREA lights are skipped at gather`. Not the
+  mechanism that gives it effect.
+- **Mechanism is documented where it is implemented.** A header comment describing what the .c or a
+  shader does rots silently: whoever edits the mechanism has no reason to know it exists.
+- **Never name the callers.** "(GUI toggle)" on a field points the dependency backwards and goes
+  stale when a second caller appears.
+- **No self-praise and no verification claims** ("exactly the no-panel path", "measured 0 px").
+  Those belong in a commit message.
+- **Long comments must earn their length** with something the code cannot express: a rejected
+  alternative, a measured tradeoff, a failure mode being avoided. The `touched` bitset comment in
+  `light_cluster.h` is the standard.
+
+## Docs
+
+- **A doc describes the engine as it is.** How it got there belongs to the specs and git history.
+  Pointing at the spec that explains something is fine; narrating it is not: no "until 12.17 this
+  was", no "this line said X for several specs", no measurement that only proves a change worked.
+- **One home per fact.** Say a thing in the doc that owns it and link to it from anywhere else.
+- **This file stays rules.** Engine knowledge goes in `docs/`, an app's in its own README.
 
 ## Reviews
 
-Always run code-quality reviews in BACKGROUND agents, and wait for all of them to finish before
-applying any change. Applying fixes while a review is still running means the next one reports
-against a file that has moved, and its line numbers stop resolving.
+- Run code-quality reviews as background agents at effort high, and apply nothing until all of them
+  are back: a fix applied mid-review moves the lines the next one reports against.
+- Two are used here, neither shipped with this repository: `/thermo-nuclear-code-quality-review`
+  (the Cursor Team Kit's,
+  <https://github.com/cursor/plugins/blob/main/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md>),
+  which hunts for restructurings that delete complexity, and `/simplify`, a fan-out for reuse,
+  simplification, efficiency and depth. Neither is a correctness pass, and neither replaces
+  reading the diff or running the thing.
+- **File length is never a finding**, whatever a checklist says. A split is argued from structure:
+  two things in one file that change for different reasons, or a function nobody can hold in their
+  head.
 
-Two are used here, neither of them shipped with this repository:
+## Example apps
 
-- **`/thermo-nuclear-code-quality-review`** — an ultra-strict quality audit from the Cursor Team
-  Kit, at
-  <https://github.com/cursor/plugins/blob/main/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md>.
-  Install it, or read the SKILL.md and apply its standard by hand; the useful part is that it
-  hunts for restructurings that DELETE complexity rather than rearranging it.
-- **`/simplify`** — a fan-out of reviewers over the diff for reuse, simplification, efficiency and
-  whether a fix sits at the right depth. Quality only; it is not a correctness pass.
+Each has a `README.md` in its directory.
 
-Neither substitutes for reading the diff, and neither substitutes for running the thing. A
-review that returns nineteen findings against code nobody has watched work is an expensive way
-to polish something broken.
+| App | What it is | Headless |
+|-----|------------|----------|
+| `apps/render` | Model and scene viewer; every golden is rendered by it | yes |
+| `apps/spores` | Particle demo on the game loop | yes |
+| `apps/forest` | A walkable island: terrain quadtree, instanced props, a character | yes |
+| `apps/gametest` | The game layer: physics, a character, animation, audio, menus, the UI probes | yes |
+| `apps/tree` | Procedural tree generator on an island | yes |
+| `apps/silent` | A first-person walk through a foggy night town; the engine's largest user | yes |
+| `apps/canvas` | The 2D canvas, idle mode and the UI's text input, panes and editor | yes |
+| `apps/shapes` | Procedural geometry | no |
+| `apps/sprites` | A particle globe under the 2D preset | yes |
+| `apps/network` | A wireframe sphere with its own shaders | yes |
+| `apps/splash` | SDF text | no |
 
-**File length is not a review finding in this repo, and any review checklist saying otherwise is
-overridden here** -- specifically the 1000-line threshold the thermo-nuclear skill treats as a
-presumptive blocker. Decomposition is argued from structure:
-two things in one file that change for different reasons, or a function nobody can hold in their
-head. A file that is long because the subject is long stays long.
+## Never run rm -rf
 
-## Edits
-
-**Default to the Edit tool, and the reason is REVIEW, not tooling taste.** An Edit shows the
-before and after in the transcript, so a change can be read as it is made; a `python3 - <<'PY'`
-heredoc that rewrites a file shows the script and not the result, so the same change arrives
-invisible and is only reviewable after the fact by diffing. Prefer Edit even when a script would
-be fewer keystrokes.
-
-Python is still the right tool for a mechanical sweep no human is going to read line by line --
-renaming a symbol across thirty files, regenerating a fixture, reformatting a table. Use it there.
-The test is whether the edit is one somebody would want to see: if it changes behaviour, use Edit.
-
-## Where the rest is
-
-| Doc | What it holds |
-|-----|---------------|
-| `docs/architecture.md` | The objects, ownership, patterns, the frame loop and render pipeline, the typical size |
-| `docs/modules.md` | What each source file is for |
-| `docs/shaders.md` | Shader sources and variants, vertex attributes, textures and samplers, render modes |
-| `docs/shader-subsystems.md` | Each shader subsystem in detail, app shaders included |
-| `docs/lighting.md` | Shadows, GI, IBL, sky, probes, rain, captures |
-| `docs/game-framework.md` | The game layer and the particle system |
-| `docs/building.md` | The build, compiler flags, out-of-tree use |
-| `docs/verification.md` | Gates, goldens, determinism, the config snapshot |
-| `docs/cli-reference.md` | Every app's flags, and headless mode |
-| `README.md` | Features, setup, using cetra in a project, dependencies, common operations |
-| `apps/<app>/README.md` | Each example app |
-
-# ABSOLUTE RULE -- NEVER RUN rm -rf
-
-**NEVER** run `rm -rf` (or any recursive/forced delete) for any reason, including cleaning up
-temp or scratch directories mid-task. It triggers a permission prompt that BLOCKS the session,
-which kills any unattended run dead until a human comes back. Leave stale temp files and
-directories alone -- disk is cheap and a blocked session is not. If a fresh directory is needed,
-use a new differently-named path instead of deleting the old one. If something genuinely must be
-deleted, ask the user and let them do it.
+Never run `rm -rf`, or any recursive or forced delete, for any reason: it stops for a permission
+prompt and blocks an unattended session. Leave stale temp files alone, and use a new path when a
+fresh directory is needed. If something must be deleted, ask the user to do it.
