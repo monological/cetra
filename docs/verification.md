@@ -1127,3 +1127,69 @@ Five more things this cannot settle from here:
   before the rename, which is the departure from `settings.c` and `config_snapshot.c` that a
   player's progress justifies. Nothing has actually pulled the plug on one to watch the old
   file survive.
+
+## Reproducing a session: the config snapshot (spec 11.71)
+
+**Reach for this whenever a question is "why does MY frame look like that".** A `.cscn`
+plus a command line does not describe a session — the GUI has ~185 controls and dragging
+any of them leaves the state on screen and nowhere else. `--config-dump <path>` (and the
+**Dump Config** button beside Print Camera) writes ~230 settings across engine, postfx,
+exposure, scene, shadow, sky, ibl, gi and water, plus every probe, light and material.
+`--config <path>` reads it back.
+
+```bash
+./out/bin/render -m assets/scenes/cornell_rooms.cscn        # drag sliders, hit Dump Config
+./out/bin/render --config cetra_config.json          # the same frame, no other flag
+./out/bin/render --config cetra_config.json -x -f 2 -S /tmp/agent.ppm
+```
+
+**It carries its own model and its own framing**, so the last line is the whole handoff:
+give somebody the JSON and they see your pixels. Measured on `cornell_rooms` at 400x300
+against a 0 px floor: a session under `--no-ssr --no-ssao --tonemap agx --sharpen 0.8
+--vignette --grain 0.05` reproduces at **0 px** from the snapshot alone, where the same
+fixture without it differs by 87.6% of frame.
+
+**When NOT to reach for it.** It is a *settings* snapshot, not a scene. It cannot create a
+light, bind a texture, place a probe or a fog volume, or author a road — everything in a
+`.cscn`'s load-time half has no runtime setter, so restoring those is a re-load. The
+snapshot NAMES the `.cscn` in its `source` block and applies on top of it. Precedence is
+`defaults → .cscn → CLI → snapshot`, and **the snapshot owns the look while the CLI owns
+the run**: `-x`, `-f`, `-S`, `--screenshot-every` and `--profiler` are never written and
+never applied, so handing one to a headless capture cannot fight itself.
+
+**Three things it deliberately does not carry**, each for want of a stable key rather than
+effort: spring-bone params (per `SceneNode`), SSS profile SLOTS (assigned in
+material-block order at load), and `camera.near_clip` (`apps/render/src/render.c:2288` — the APP,
+not the engine's `render.c` — recomputes it every
+frame from the camera-to-target distance). `config-perturb` names all of them.
+
+**A restored sun or cloud goes through the same chain the GUI sliders do** (spec 11.72).
+`scene_environment_changed` in `scene.c` is the one place the env cube, the sky-mirroring
+probes and the GI volume re-derive from — the GUI's two release sites and the config
+restore all call it. It lived as a file static in `gui.c` for a while, with a comment
+claiming it was the one chain, while the restore called bare `sky_update_sun`: a strict
+SUBSET, since `sky_bake` is `sky_bake_ex(..., false)`, so a restored sun stripped the cloud
+deck out of an env cube that had one, refreshed no probe and re-armed no GI.
+
+**`--clouds` rides the `source` block, not a table row alone**, because the noise bake is a
+one-shot at startup gated on the layer being on. A row by itself stored `true` against
+noise that never existed: every consumer refused it, the sky came out clear, and the dump
+wrote `true` back so `config-roundtrip` passed on the wrong frame. `sky.clouds.enabled` now
+refuses by name when it finds no baked noise, and `config-clouds` reads both halves.
+
+**A restored sun still does not re-capture a probe SET** — 11.70 defers that and a set
+cannot re-capture, since its members' cubes are released into the atlas. An env-only probe
+IS refreshed.
+
+**Animation debugging recipe:** (0) `render -m assets/scenes/puppet.cscn --anim-probe` poses a rig whose bind is pure translation and whose clips are authored in closed form, so a wrong axis, order or handedness reads as a NUMBER rather than a silhouette; `-a assets/models/strut_walk.fbx` on it is a real walk cycle bound by exact name -- **and by itself it is the FAILURE, not a baseline** (spec 12.11): that clip is authored on `t_pose.fbx`, the puppet rests in pure translation, and with only one rest pose in hand the loader has nothing to reconcile, so the delta is identity by construction and the rig folds its legs over its head. Add `-s assets/models/t_pose.fbx` and it walks. The pair is the A/B a retarget is read against, and `anim-retarget` is it as an arm: a foot above the hips and `0 retargeted` one way, below and all 22 the other. Then, on the real rig: (1) render the model with no animation as the bind-pose
+baseline; (2) play the animation on its native skeleton (e.g. `-m T-Pose.fbx -a clip.fbx`)
+to validate the core pipeline; (3) retarget onto the target model and compare frame
+strips. Feeding the T-pose itself as the animation (`-a T-Pose.fbx`) must reproduce the
+bind pose exactly -- a quick invariant test for the retargeting path. Cross-rig
+retargeting needs the source skeleton's rest pose: a clip exported WITH SKIN embeds its own
+rig and it is used automatically; for animation-only files pass `-s <tpose.fbx>` explicitly,
+or the rotations reach the target raw. **The loader now says which happened** -- the per-clip
+summary's third number counts corrections actually computed, so a run that reconciled nothing
+prints `0 retargeted` rather than repeating the matched count, and the bone table's `[R]`
+means the same thing. It used to say `52 matched, 52 retargeted` over a table of `0.0 deg [R]`
+on a load that had done nothing at all.

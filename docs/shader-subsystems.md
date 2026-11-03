@@ -949,6 +949,106 @@ hook's own shadow program.
   new; marked from the new alone, a dome switched to a flat hook left its raised shadow in every
   face that saw only the raised part.
 
+## App Shaders (spec 13.29)
+
+**An app, or a `.cscn`, puts its own GLSL at four places, and a new effect is a shader file and a
+setting rather than an engine module.** The shape is Unreal's: a surface material feeding the
+engine's lighting, a translucency pass of "After Motion Blur", and post materials at named
+Blendable Locations. `shader_hooks_fixture` has a piece at every one and the `shader-hooks` gate
+group an arm for each.
+
+- **The include resolver.** `create_shader` expands every source's `#include` lines, so an app's
+  shader may `#include "noise.glsl"` like the engine's own. The engine's shaders were expanded at
+  build time and pass through as copies, which is why adding it moved no golden. Include-once, and
+  each build-time `// ---- begin X ----` line counts X as included FROM THAT LINE ON, so a hook
+  spliced into an engine shader shares the copies above its marker -- and one including a chunk
+  the host defines only below it, directly or through another chunk, is refused by name rather
+  than defining it twice. The splice is
+  text only; the one walk is what expands, and what restores a hook's line numbers after an
+  include. `cetra_embed_shaders(<target> <dir>)` (CMake) turns an app's `shaders/*.glsl` into a
+  header of strings, includes left for the resolver. Its sibling `cetra_embed_files(<target>
+  <name> <INDEX> <file> ...)` (spec 14.6) builds files of bytes into the program -- a font, so the
+  program is one file -- as a generated table, `<target>_<name>[]` of `CetraEmbeddedFile`
+  (`embedded_file.h`: its path from the source root, its bytes and their count), indexed by
+  `<TARGET>_<NAME>_<INDEX>`; the path is the name a font made from it is pooled under, so two
+  files of one name in two directories are two fonts. The table is declared in `<target>_<name>.h` and
+  DEFINED in a generated source file of its own, so the megabytes of bytes are compiled when a
+  file changes and never with the code that reads them, and two files including the header share
+  one copy. The list is the one place a file is named: the code says only what each is for, and
+  `load_font_memory` and `create_glyph_cache_memory` make a font from the entry.
+- **Post passes**, `postfx_add_pass(fx, at, program)` over `create_post_pass_program`, at
+  `POSTFX_AT_BEFORE_DOF`, `_BEFORE_BLOOM` or `_AFTER_TONEMAP`. GL 4.1 has no texture barrier, so a
+  pass draws into an engine scratch and is BLITTED back, the motion-blur idiom, and the frame keeps
+  its handle. After the tone map the pass runs on PostFX's PICTURE -- the CRT's intermediate,
+  moved into PostFX because it stopped being the CRT's alone -- and the CRT or the new present
+  pass writes the window, so the dither stays last. Which of the three writes the window is
+  decided once a frame, by `postfx_run` (`PostFXShow`): the CRT whenever it is on, the present
+  pass when a tone-mapped frame has passes after it, the tone map otherwise -- so a passthrough
+  frame, a debug view's or a display-ready one's, stays undithered and runs no pass. A picture that
+  could not be made is tried again at the next size, as the fog layer is. A pass that never
+  declares `sceneDepth` costs the frame no depth resolve.
+  **Replacing the tone map is not offered**: its
+  curve is a function inside the shader that also composites AO, contact shadows, bloom, flare and
+  glare and runs the curve at five sharpen taps, which is not a stage boundary.
+- **The late lane**, `Material.pass = MATERIAL_PASS_LATE_DRAW` over `create_late_surface_program`,
+  is drawn by `render_late_items` from the late draw, ahead of fire and rain: past TAA and motion
+  blur, so a surface that changes every frame -- noise, a screen -- is not averaged into grey.
+  **Measured: noise drawn before the seam kept 5 codes of its 31 and correlated +0.72 frame to
+  frame.** The canvas has no depth attachment, so hiding is a compare against the resolved depth
+  (`include/late_surface.glsl`'s `lateVisible`), Unreal's own choice in that pass for the same
+  jitter reason. It casts no shadow -- the caster sets name the lanes they take -- no capture sees
+  it, it lights nothing under `--emissive-lights`, and neither subtree setter replaces its program.
+  Refused by name: either half of a late surface without the other, and one on a mesh that skins,
+  sways or is shadow-only, since the late vertex stage places a vertex by its model matrix alone.
+  It reads the material under the lit surface's names (`albedo`, `emissiveFactor`, `albedoTex`,
+  `emissiveTex`), and `vColor` is white on a mesh with no colours, as a hook sees it.
+- **The surface hook**, `create_shader_hook` and `Material.shader_hook`: `void cetraSurface(inout
+  CetraSurface s)` over `include/surface_hook.glsl`, spliced into `pbr_frag` at a marker before
+  `main()`. **Not a mask bit**: a bit switches off code the shader holds, a hook brings code in,
+  so its define arrives in the same string as its source. Called TWICE, from the same gathered
+  albedo and coverage: before the alpha test, keeping albedo and alpha (the cut, decals, the
+  albedo view and the prepass exit all read them), and after the gather, keeping normal,
+  roughness, metallic, AO and emission. The variant key gains the hook's id (`pbr-<mask>-h<id>`),
+  and the resolver moves a material whose program's hook is not its own. **A hook whose variant
+  does not build is dropped everywhere** (`ShaderHook.broken`, read through `shader_hook_live`):
+  said once, and every reader -- the resolver, `classify`, the bounds, the refusal -- treats its
+  materials as unhooked, so the surface, its bound and its shadow never disagree. A hook on a
+  material whose program is not a lit-surface variant is refused by name: its surface would
+  ignore it while its bounds and its shadow did not. **No sampler is spent**: the hook reads what
+  its variant already declares. `create_shader_hook` compiles the hook's lit stages at EVERY
+  feature and at NONE, the skinned vertex stage too when it has an offset -- a hook naming
+  something a feature declares (`sheenTex`, a chunk the host includes only under the rain bit)
+  compiles at the one and not the other -- to refuse it where the app made it. It links nothing,
+  so a hook whose halves disagree reaches the broken path instead. It builds the two shadow
+  programs then: a hook whose offset does not build into them is refused, and a surface that
+  does not -- one reading the normal map, which only the lit surface declares -- only loses its
+  shadow cut (`shadow_cuts`).
+- **The offset**, `vec3 cetraOffset(CetraVertex v)`, is spliced into `object_position.glsl`'s
+  `cetra_local_displacement` -- the third displacer, so ANYTHING ADDED THERE's rules hold:
+  `offset_bound` widens `draw_item_bounds`, every stage gets it from one splice (the previous
+  frame's at the previous time, for the motion vector), the lean prepass is sat out, and a light
+  draws the caster through the hook's own shadow program wherever `classify` marked it
+  `DRAW_HOOKED_CASTER` -- an offset, or the alpha of a foliage caster. A masked material casts
+  through its hook's alpha, since `DRAW_FOLIAGE` accepts a hook in place of an albedo map. A hook
+  declared `animated` is a mover for the kept shadow faces, whichever of the two it changes, and
+  a kept face redraws a caster whose hook or params change. **A shadow layer primes each program
+  as it first draws through it** (`_draw_shadow_items` alone sets the light matrix and the
+  displacement inputs): before that, a layer's matrix was written to the depth program while a
+  hooked caster's program from the layer before was still bound, and the plain casters drew
+  through the previous layer's matrix. **Only an offset moving a surface AWAY from the eye
+  shows a broken prepass**: the one-sided `LEQUAL` passes everything that came nearer, which is
+  why the fixture carries a pushed quad beside its dome.
+- **Shader params**, `ShaderParams` (`shader_params.h`, eight named vec4s and no GL), ride a
+  material or a pass and are uploaded by name wherever its program is bound -- the scene pass,
+  the late draw, the shadow passes. Nothing resets a name another owner of the same program set.
+  **The clock is one upload**: `shader_clock_upload` sets `time` and `frame` (wrapped at 2^24),
+  and `engine_upload_displacement_uniforms` calls it, so every stage that places geometry -- the
+  shadow passes included -- reads the same frame a hook does in the shading pass.
+- **In a `.cscn`**: `post.passes: [{at, shader, params, enabled}]`; a top-level
+  `shaderHooks: {name: {surface, offset, offsetBound, animated}}`, each one hook however many
+  materials name it; and on a material `shaderHook` (a name from that table), `lateShader` and
+  `shaderParams`. Shader paths resolve against the scene file, as an IES profile does.
+
 ## Atmosphere
 
 `froxel_inject/integrate/composite_frag` + `include/froxel.glsl` (fog, a 3D
