@@ -1490,3 +1490,17 @@ small sources, or the drips past a lit window took none from its tubes.
 about the map's own mean, read from its coarsest mip. It is a bit of its own because it declares
 `heightTex`, and on `PBR_FEAT_RAIN` that unit would be paid by every material in a wet world.
 Layered materials are refused it: their unit 4 is the virtual-texture page.
+
+## Modules
+
+### `shader_hook.c/h`
+
+An app's SURFACE HOOK (spec 13.29): GLSL deciding a lit surface's albedo, coverage, normal, roughness, metallic, AO and emission, and optionally an OFFSET moving its vertices. Engine-owned, test-compiled when made, its two shadow programs built with it; a material borrows one by a plain pointer and the variant resolver builds the hooked variant. See App Shaders
+
+### `crt.c/h`
+
+The CRT (spec 13.28): the window-sized picture, its resample to a `crt_lines` signal in linear light, and the television drawn into the window. Made on first use and latched off if it fails, as `glare.c` is. Knows nothing of PostFX: it takes a `CrtLook`
+
+### `local_exposure.c/h`
+
+Local exposure's passes (spec 13.19): the frame at half res, the bilateral grid gathered and blurred, the blurred luminance, all into one RG32F atlas the tonemap slices. Made on first use and latched off if it fails, as `glare.c` is. `local_exposure_probe` prints the luminance range it is asked to fit
