@@ -1,11 +1,10 @@
 # CLI reference
 
-Every flag the apps take, and what each one is FOR. The headless capture set comes first, since
+Every flag the apps take, and what each one is for. The headless capture set comes first, since
 it is the everyday workflow.
 
-Most entries carry more than a description. A flag in this engine usually exists because
-something was measured, or because a default reads as a bug when you meet it cold, and that
-reason is recorded beside the flag rather than in whichever spec introduced it.
+Beside each flag is its default and any rule a user needs: a flag that only means something with
+another, or a default that surprises on purpose and the reason for it.
 
 ## Contents
 
@@ -16,8 +15,8 @@ reason is recorded beside the flag rather than in whichever spec introduced it.
 - [apps/tree](#appstree) — its own flag set, and two defaults that read as bugs
 - [apps/forest](#appsforest) — instancing, LOD, culling, the island, erosion, streaming, origin
   shifting
-- [apps/silent](#appssilent) — the fog-street kitchen: the title, saves and pause menu, framing,
-  the look's A/B switches, and its overcast day
+- [apps/silent](#appssilent) — the town walked in first person: the title, saves and pause menu,
+  framing, the look's A/B switches, and its overcast day
 - [The other apps](#the-other-apps-and-the-aa-mode-each-one-chose) — gametest, spores,
   shapes, pcb, why splash is not in any of this, and the 2D canvas's own app
 
@@ -91,556 +90,515 @@ still streams. `textures-in` holds it.
 
 ## PostFX and environment flags
 
-**PostFX / environment CLI flags** (render app): `--taa`, `--render-scale <f>`
-(TAAU; headless needs `--taa --headless-jitter`),
-`--idle` (spec 14.1 — the engine's idle mode. A scene with anything in it still draws every frame,
-so a scene loaded here draws as it does without it, which is what the `idle-3d` arm holds),
-`--render-scale-at <frame:scale[,...]>` (diagnostic: switch scale mid-run,
-exercising the runtime rebuild; same headless preconditions),
-`--exposure-at <frame:multiplier>` (spec 13.20 — diagnostic: write the exposure multiplier on a
-named frame; with `--no-auto-exposure` an exact one-frame step, where the meter moves 4% a frame.
-A physical camera ignores the multiplier. Read against a run at the new value from frame 0, it is
-what shows whether the temporal histories follow the exposure),
-`--no-history-rescale` (spec 13.20 — diagnostic: histories of light keep the exposure they were
-written at, so a change of exposure lags by the blend; the A/B for the rescale),
-`--negative-probe` (spec 13.21 — diagnostic: every frame, the float frame the tonemap is about to
-read, read back, and a `negative-probe` row with the pixels below -0.0005 and below -0.005 and the
-most negative value. Light below zero is a bug wherever it comes from, and the tonemap clamps it
-out of sight; this is what finds it. A whole-frame readback, so not for timing),
-`--fog-history-miss-samples <n>` (spec 13.45: how many samples a fog cell with no history to blend
-takes, 1..8, default 4. Such a cell is one entering the view as the camera turns or moves, and with
-one sample it showed one jitter position beside neighbours averaged over many: a hard-edged band at
-the leading edge of a turn. 1 gives that back, for the A/B),
-`--fog-miss-probe` (spec 13.45 — diagnostic: every fog frame, a `fog-miss-probe frame= armed=
-cells=` row: whether any cell could take several samples, history existing and more than one
-asked for, and how many did, from an occlusion query read at once, so not for timing),
-`--shadows-off-at <frame>` (spec 11.56 — diagnostic: clear `shadow_system->enabled` mid-run, which
-is the ONE state `--no-shadows` cannot produce. That flag clears the switch before frame 0, so no
-punctual layer is ever assigned and every index the depth pass maintains is still at its initial
-value; turning it off AFTER the pass has run is what leaves `Light.shadow_layer` pointing at layers
-nothing draws, and it is the state the GUI checkbox produces. **A defect reachable only through that
-transition is invisible to every headless arm until this flag exists** — 11.56 shipped one and the
-full suite was green), `--no-ssao`, `--ssgi`,
-`--no-ssr`, `--fog`, `--sss` (`--sss-radius`, `--sss-color`),
-`--contact-shadows` (`--cs-distance <f>`, `--cs-strength <f>`, `--cs-debug`; all three imply
-enable, and `--cs-distance 0` is the exact off path. OFF by default. Since spec 11.56 it marches
-the key directional AND every map-less local light, so **the run gate is "a directional OR a
-point/spot with no punctual layer"** -- before that a room lit only by practicals skipped the pass
-entirely, which is where the feature was needed most. `--cs-debug` shows the raw visibility term
-with **no display encode on it**: read those bytes linearly, since decoding sRGB reports a measured
-0.6326 as 0.3564. Costs 2.43 ms per FULLY-COVERING light at 3200x2000 internal (0.38 ms per
-megapixel per light), but cost tracks COVERAGE rather than count -- sixteen lights spread across a
-scene cost +0.77 ms against the +38 ms sixteen coincident ones would, because a pixel marches only
-the lights whose cluster entry reaches it. There is deliberately no per-pixel light cap),
-`--motion-blur`, `--dof`,
-`-E/--exposure` / `--no-auto-exposure`, `--no-bloom`, `--glare` (the aperture's diffraction star,
-OFF by default since spec 13.5; `--no-glare` overrides a scene file's `post.glare`,
-`--glare-strength` is the share of the light past the threshold moved into the star, 0 to 1,
-`--glare-threshold` the working-space radiance a point must pass, and `--glare-probe` prints the
-light the star carries against its source's and the frame's light taken out against put back),
-`--local-exposure` (spec 13.19: an exposure per pixel on top of the camera's, OFF by default and
-the identity until a contrast is lowered; `--no-local-exposure` overrides a scene file's
-`post.local_exposure`. `--le-highlights` and `--le-shadows` are the base's contrast above and
-below middle grey, 1 unchanged and 0.6-1 Unreal's suggestion; `--le-detail` the detail's contrast;
-`--le-blend` the base's share from the blurred luminance, 0.6 by default and 0 the pure bilateral
-grid, which held a lit room's window best; `--le-kernel` that blur's width as a share of the
-frame; `--le-grey-bias` stops added to the middle grey it all scales about. `--le-probe` prints
-the frame's luminance percentiles in stops from middle grey, which is the range to tune against),
-`--crt` (spec 13.28: the finished picture, the app's overlay included and the debug GUI not, on a
-consumer CRT television. OFF by default, and each setting below implies it. `--crt-lines <n>` is
-the signal's lines, 480 by default; `--crt-scanlines <f>` 0 fused to 1 thin with dark gaps, which
-fade to fused anyway below 2.5 window pixels a line, so a 400x300 capture at 480 lines shows none
--- pass `--crt-lines` a quarter of the window's height to see them; `--crt-mask <f>` the slot
-mask's depth; `--crt-curvature <f>` the tube's bow, 0 flat; `--crt-bleed <f>` the composite colour
-bleed. The tone curve holds mid-grey and compresses what is brighter, so the frame comes out a
-little darker; that is CRTS's design and not exposure going wrong),
-`--loading-screen` (spec 13.34: the engine's loading screen over the frame from the start, never
-lifted -- a preview of it, headless too, where its clock is a frame's fixed step and so a capture
-is frame-exact. Windowed, **P** cycles its palette, **R** plays it again and **H** lifts it; a frame
-it covers draws nothing of its own, so the preview runs at the screen's own cost),
-`--loading-palette <n>` (its palette: 0 sunset, 1 harvest, 2 phosphor, 3 broadcast; implies
-`--loading-screen`),
-`--loading-lift-at <n>` (let it go at frame n, so a headless run reaches its switch-off. It lifts
-only once its ident has played, glitch included; implies `--loading-screen`),
-`--loading-ready-at <n>` (say the game is ready at frame n: once the ident has played, its LOADING
-sign becomes PLAY and it waits for `--loading-lift-at`; implies `--loading-screen`),
-`--tonemap <neutral|aces|agx|linear>`
-(`linear` is the identity curve WITH the display encode, which passthrough is not: an authored
-colour at unit exposure reaches the screen as authored, and it is what `engine_set_2d_preset`
-selects for a flat-colour scene; **not** `passthrough`: `render_args.h` notes the "unset" sentinel deliberately coincides
-with `POSTFX_TONEMAP_PASSTHROUGH = 0`, so it is unreachable from the CLI by design — any
-gate needing a linear read has to be written as a ratio instead, spec 11.32),
-`--water` (`--water-level <f>`, `--water-extent <f>`, `--water-waves <gerstner|fft>`,
-`--water-bed <none|dome>`, `--water-probe`, `--water-fft-probe`, `--water-caustic-debug <1|2|3>`
-(1 the factor the caustics multiplied the bed by, 2 the raw caustics target laid on the surface,
-3 that target spread across the spectrum and the key's disc at the reference plane's depth;
-half grey where nothing is concentrated), `--water-caustic-probe` (the target's mean, min and max
-over its inner 80%, per colour channel, and the mean is the energy check: 1 for any sea),
-`--water-caustic-bands <0..16>` (trace the caustics in N real bands of the spectrum rather than
-once and spread -- the reference the spread is measured against, a whole trace per band),
-`--water-drop x,z,frame` (press a ripple into the water there on that frame, repeatable) and
-`--water-touch-probe` (the ripples' deepest point and its distance from the first drop), spec
-13.4; `--water-bounds x0,z0,x1,z1` (hold the water to that xz rectangle: past it there is no
-surface, no light weakened under the level, no submerged medium and no rain landing on the plane;
-all zero, the default, is everywhere, spec 13.41); `--water-dry cx,cz,yaw,hl,hw[,power]` (a dry
-shape: no water inside that superellipse, its length along the yaw in degrees from +z, power 2 an
-ellipse by default -- the inside of a floating hull, spec 13.56); `--no-water`, `--no-water-caustics`, `--no-water-glitter`, `--no-water-downwell`,
-`--no-water-caustic-relief`, `--no-water-specks`, `--no-water-foam-history`,
-`--no-water-coverage`, `--no-water-lod`; specs 11.32 to 11.35 and 11.42 — suppresses the shadow catcher,
-see the pass order above. Gerstner is the default and allocates nothing; `fft` is an OCEAN and adds 64
-passes a frame: three cascades at 128² and, since spec 13.3, a ripple band at 512². **Crest foam is FFT-only**, and that is by construction rather than an
-omission: it is selected from Jacobian compression, and the Gerstner path's steepness is clamped
-so its mapping cannot compress. **Caustics run on both** since spec 13.2: they refract the key
-light through the surface normal onto the floor, which needs a normal and not a fold. The SHORE foam band is
-not — it is selected from the shoal factor and runs on both models, which is what makes
-Gerstner the way to isolate it.
-**A scene file can author the whole surface** (`water{}`, 21 keys -- 13.4 added `scatterG` -- plus 8 in each of two nested
-wave trains — the 16th flat key is `farLod`, added by 11.35 for far-field filtering; specs 11.33
-phase 5, 11.35, 11.42, 11.48), and the flags override it rather than the reverse — so `--no-water`
-exists and is the only way to switch off a surface a `.cscn` asked for.
-`assets/scenes/water_fixture.cscn` authors all 37 and is the block's worked example (35 until 11.84 split the in-scatter in two, 36 until 13.4). **No flag can set any
-of the SEA STATE**, which makes a scene file the only way in and `water-seastate` the only arm on
-that path; editing any of it re-seeds the initial spectrum on the next frame, which is a CPU pass
-over three 128² grids.
+The render app's flags for the post chain, the environment and the scene's content, and the
+diagnostics that read them. Where a feature is also authored in a `.cscn`, the flag wins over the
+file, and a `--no-*` flag is the only way off something the file asked for.
 
-**The sea state is two WAVE TRAINS since spec 11.48**, `windSea{}` and `swell{}`, each a complete
-set of the same eight keys (`windSpeed`, `fetch`, `direction`, `scale`, `peakEnhancement`, `focus`,
-`spreadGain`, `spreadBlend`) beside a shared flat `seaDepth`. 11.42's four flat keys `windSpeed` /
-`fetch` / `peakEnhancement` / `swell` are **gone**, and `parse_water`'s closed `known[]` now warns
-per key on a scene still using them. The reason is that the swell was never authorable at all: it
-was seeded from a hardcoded 8.4 m/s over 310 km, so a scene lowering its wind kept a gale's swell —
-in `apps/tree` that was **300% of the wind sea**, and since `Breaking` tests the depth-limited
-criterion `disp.y / (0.39 · depth)`, a shallow shelf under it broke everywhere at once and painted
-a white blob over the whole bay. `Breaking` was reporting the truth about an absurd sea, which is
-why 11.47's six commits on the foam path never touched it. Note the old flat `swell` was ONE knob
-doing TWO jobs — the wind sea's directional sharpener AND the swell's amplitude — so it migrates to
-two: `windSea.focus` and `swell.scale`. `swell.scale` 0 removes the train.
-`--water-fft-probe`'s cascade 2 carries no swell (`secondary_scale` 0) and read bit-identical
-across the change, which is what pins the wind sea as untouched.
+### Resolution, TAA and idle
 
-**`windDirection` now reaches BOTH wave models** (11.42). It was Gerstner-only, and the spectral
-seeding used a private −0.48 rad constant — so a scene authoring a wind direction got a spectral sea
-travelling somewhere else entirely. Unifying them means the DEFAULT spectral sea rotated by about
-58°, since `create_water`'s documented lake default (0.86, 0.51) is +0.535 rad. No golden moved with
-it: both water goldens are Gerstner.
+- `--taa` — temporal antialiasing. The render app turns it on for every windowed session and leaves
+  it off headless (`docs/architecture.md`, Render Pipeline).
+- `--render-scale <f>` — TAAU, rendering at f of the post resolution (0.5 to 1). Headless needs
+  `--taa --headless-jitter`, or the app refuses and renders at full resolution.
+- `--render-scale-at <frame:scale[,...]>` — diagnostic: switch the scale mid-run, exercising the
+  runtime rebuild. Same headless preconditions.
+- `--idle` (spec 14.1) — the engine's idle mode. A scene with anything in it still draws every
+  frame, so a scene loaded here draws as it does without it; the `idle-3d` arm holds that.
+- `--dof-max-coc` is in half-render-resolution texels, so under `--render-scale` the same value
+  blurs about 1/scale wider on screen. This is not compensated.
 
-**The in-scatter is a FRACTION of the light falling on the water, plus an optional floor**
-(spec 11.84). `scatterAlbedo` is dimensionless and `scatterGlow` is absolute radiance added
-regardless; the old flat `scatter` was a radiance on its own, so the sea was as bright at midnight
-as at noon and **`water.scatter` is now refused BY NAME** — its units changed rather than its
-meaning, so an old value still parses and means something several times too large (six, on
-water_fixture). Convert by dividing by the scene's own daylight `incident`, which
-`--water-probe` reports. The two fields exist separately because **one value cannot do both jobs**:
-an authored constant reproduces a stylised night sea and cannot produce a dark realistic one, and
-a pure albedo does the reverse. **Nothing in tree ships with a non-zero glow**: `apps/tree` was the
-motivating case and tried it, then reverted to a pure albedo lifted by real MOONLIGHT
-(`moon_brightness` 2, `moon_size` 6), which keeps the sea tracking its light. So the field is an
-authoring escape hatch with no in-tree consumer but the `water-glow` arm — worth knowing before
-citing it as a worked example.
-**The key light is the BRIGHTEST directional**, ranked by `intensity x peak channel`
-(`water_key_light`), not the sky's sun by name: a sun below the horizon still exists with its
-intensity faded to zero, so water used to hold a direction pointing underground and could never
-reach the moon. A weight of zero selects nothing, which is what switches the caustics off in true
-darkness. **Do not read brightness on `water_fixture` and call it lighting** — its geometry is
-emissive over a black base, which is what makes it a good absorption instrument and what makes its
-water band read 0.2207 at midnight against 0.2478 at noon whatever the sea does. Every arm in the
-`water-night` group is a twin DELTA for that reason.
+### Exposure and tone
 
-**`absorption` is extinction per WORLD UNIT, and the library default is clear water per METRE**
-(spec 11.36) — the two agree only where a unit IS a metre, which is true of the fixture and false
-of `apps/tree` at 22 units to the metre, where it made the sea about six times too absorbing and
-nothing under the surface visible. An app whose unit is not a metre divides the default by its own
-scale; the in-scatter carries no length and does NOT scale. The path clamp that hid it is now a budget in
-extinction lengths (`WATER_MAX_OPTICAL_DEPTH`) rather than a length in units, with the old
-`WATER_MAX_PATH` kept as a floor so the change can only lengthen a clamp. Truncation at the clamp
-leaves at most 2.15%, which is the bound to quote — grazing sight lines to a deep bed DO get
-clamped. Note the shader still has no idea how big a world unit is, so `WATER_MAX_BEND`,
-`WATER_SHORT_NEAR/FAR` and `OCEAN_SHOAL_*` remain mis-scaled by the same
-factor in tree; `Sky.world_units_per_km` is the number the engine already has and tree never sets.
-**Below the surface is finished too** since 11.33 phase 2: submerging the camera arms the
-froxel volume for that frame and the body becomes a second medium, so submerged geometry is
-absorbed. Two approximations, both in `froxel_inject_frag.glsl` — a cell holds one scalar
-extinction, so water's per-channel value arrives as its luminance mean with the colour moved
-into the in-scatter, and the in-scatter is constant rather than scattered sunlight, so there
-are no shafts in the body.
-**The grid is a PROJECTED grid** since 11.35 — a fixed lattice in NDC, one draw, each vertex a
-ray onto the still plane — so density is uniform in PIXELS and the surface reaches the horizon.
-The clipmap it replaced (11.33 phase 1) welded those two together: rings tile only because
-every level snaps to the coarsest cell, so pushing the extent toward the horizon coarsened the
-finest cell until the swell disappeared, and the surface stopped 5° short while a comment
-claimed otherwise. **`--water-extent` is now the SHOALING BED's domain and nothing else** — it
-does not bound the drawn surface, and outside it the bed field reads its edge, which is open
-water. Both shipped D3 *without* spending the tessellation stage the roadmap scheduled it to
-open.
-**The far field is a filtering problem, not a mesh-reach one** (11.35 phase 2): distant cells
-cover more than a wave period, so each model drops what sits under its cell footprint — mip
-levels on the spectral path, whole octaves on the Gerstner one — and hands the removed slope
-energy to roughness. **Since 11.42 that energy is an absolute mean square slope rather than a
-fraction, and converts to a lobe width by the Beckmann relation** — so the horizon is as rough as
-the waves it stopped resolving instead of lerping toward an inherited 0.115 literal, which was low
-by about a factor of three against this spectrum's own slope variance and made the horizon the same
-roughness for a millpond and a gale. It composes with the authored roughness by adding variances, so
-it collapses to exactly the authored value where nothing is filtered.
-`--no-water-lod` is the bisect lever and reaches the unfiltered surface
-exactly; without it the horizon aliases into a speckle band. What survives in the mid field is
-the longest octave alone, which at grazing incidence reads as regular swell lines: that is the
-corduroy a single-direction Gerstner train gives, and the FFT path's directional spectrum does
-not have it.
-`--water-bed dome` installs an analytic bed so shoaling has a deterministic fixture at all;
-`--water-probe` prints the surface query over a 4x4 grid after the last frame, which is otherwise
-invisible from outside the process: `h=` is `water_probe_result` on either wave model, and on
-Gerstner `cpu_h=` is the closed form beside it at the instant that answer describes (spec 13.1). It answers
-`WATER_PROBE_LATENCY` (2) passes late, so fewer than three frames prints `available=0
-reason=unfilled`. `--no-water-coverage` is the bisect lever for the shoreline's derivative coverage
-and reaches the pre-11.33 frame),
-`--film`, `--sky` (`--sun-elevation`, `--sun-azimuth`, `--sky-debug`; `--overcast <0..1>`,
-`--sky-scale <f|photometric>` and `--sky-probe`, spec 13.7, whose entries in
-`docs/shader-subsystems.md` say what each changes), `-e/--env <hdr>`,
-`--world-scale <units-per-km>` (atmosphere scale; 1000 = 1 unit is 1 metre),
-`--typical-size <metres>` (spec 13.57 — the size of what the scene holds, `Engine.typical_size`: 1
-for rooms, the default, and 0.001 for a circuit board. Every length the engine chose for itself --
-AO's reach, SSR's thickness, the contact march's start, a soft particle's fade, the cascade near
-plane, the streaming margins -- is its metre value times this; nothing the scene states is touched.
-Overrides a `.cscn`'s `typicalSize`, and refuses anything but a positive number, "1mm" included.
-**It is not `--import-scale`**, which scales the model and leaves every one of the engine's lengths
-at a metre's: a board imported a thousand times larger renders as a room, and its lights, fog and
-camera have to be scaled with it by hand),
-`--fit-clip` (spec 13.57 — the camera's near and far planes fitted every frame to the mesh boxes in
-front of the eye, with the shadow catcher's quad or a bounded water's rectangle when one draws.
-Far is 1.1 times the farthest depth. Near is 0.9 times the larger of the nearest depth and the
-nearest distance times the frustum corner's cosine, and never under far / 1e4. A sea with no
-bounds is fitted as a square a thousand typical sizes out from under the eye. **The boxes are at
-rest**: wind, a skinned pose, the terrain's morph, a hook's offset or a wave's crest can carry
-geometry past a fitted plane, and particles, fire and rain are not counted. A `.cscn` camera's
-`fitClip` is the same switch, and with it on the render app's own per-frame near stands down),
-`--no-aerial`,
-`--no-cloud-shadows` (spec 11.39 — the deck casts into the froxel fog by default whenever
-`--clouds` is on, because a cloud that casts nothing is wrong rather than un-featured.
-**`--sky-debug` now shows the shadow map itself** as a tile below the two cloud-noise fields
-(spec 11.40), and that tile is the only way to tell a bad map from a bad lookup: the gate arms
-watch the shadow's EFFECT on the fog, and a map with no range at all still darkens the frame and
-still varies downstream. That is not hypothetical — 11.39 shipped a map saturated to zero at every
-texel and both arms passed. **Spec 11.41 shadows the GROUND too** — `pbr_frag`, the shadow catcher
-and water's caustics — and it needed no sampler unit freed: the map rides `sceneColorTex` by
-`#define` in the opaque pass, where unit 6 is idle in every scene. The `pbr_frag` half was booked as
-hard-blocked on D0 for a spec cycle and never was.
-**11.41 also rewrote the march, and every cloud figure taken before it is stale.** The old
-`CLOUD_SHADOW_SPAN_CAP_KM` capped the SLANT path at 1.2 km while crossing the deck takes
-`2.5/sin(el)`, so the fraction of cloud traversed fell with the sun — 48% at the zenith, 4% at 5° —
-and below ~10° the march never left the cloud base and the map came back uniformly **1.0**.
-`apps/tree`'s 0.8° sun had never had a cloud shadow from either half. The march now steps equal
-ALTITUDE increments across the whole deck and clamps only the HORIZONTAL excursion, at the shape
-field's own **8 km tile period** (the reason to clamp is that wandering further re-reads the same
-field and decorrelates a texel from its column; 1.2 km was tried first and binds below 64°, which
-reported the map lighter than the truth everywhere).
-**Coverage is a GAP fraction as far as the ground is concerned.** Extinction 25/km over a 2.5 km deck
-makes tau 62.5 × density, so half transmittance needs density 0.011 — any real cloud in a column
-blocks the sun outright and the dapple is a map of the holes. Measured fraction of the map above half
-transmittance at a 35° sun: **47.9% at coverage 0.10 against 0.0% at the 0.45 default**, where the
-deck instead casts a flat 32% dimming with no pattern in it. The default stays 0.45; the gate arms
-pin `--cloud-coverage 0.10` explicitly, because an arm wants the configuration where the property is
-legible and must not be silently re-tuned by a change of default. Costs nothing where nothing reads
-it — with no `--fog` and no lit ground the map is still built and the frame is 0 px either way),
-`--no-fog-volumes` (spec 11.39 — drops a scene file's `fogVolumes[]`. Local fog volumes are
-world-space AABBs with density, an inward feather and a tint, authored ONLY in `.cscn` since a box
-needs a place and a size that no flag can carry; this is the only way off, mirroring `--no-water`.
-A volume arms the froxel pass by itself and must never set `fog_enabled`. **Note the narrowing that
-came with it:** `fog_enabled` now means "the global height medium exists" and the pass gate means
-"some medium does", so the global density uploads as zero when the app did not ask for fog — before
-there was one medium and the two were the same statement),
-`--no-decals` / `--decal-probe <n>` (spec 11.73 — drop a scene file's `decals[]`, and print the
-decal diagnostic every n frames. Authored ONLY in `.cscn`, the fog-volume rule and then some: a
-decal needs a place, a size, a FACING and an image. Cap `DECAL_MAX` 16, and that number is what
-sizes the froxel mask — 32 would pin the descriptor at seven vec4 rows forever and 64 would not fit
-GL 4.1's guaranteed 16 KB block at all, so it is a structural ceiling rather than a preference.
-**The probe is the instrument, not the frame**: a mark projected through a box half a metre out
-still lands on a wall and still looks like a poster, so what is checkable from outside the process
-is the froxel mask and the array layers — and it names why a decal is not live, since an authored
-decal whose image never loaded is invisible in exactly the way one that was never authored is.
-Costs nothing where nothing uses it: every golden is 0 px and a decal-free scene compares 0 px
-ACROSS BUILDS against master),
-`--emissive-lights` (spec 11.49 — an emissive mesh becomes a real LTC area panel: plane-fit a
-rectangle, take the material's radiance in nits, register it in the cluster list. **OFF by default,
-and that is a measurement rather than caution** — 30 of 32 emissive materials in this corpus are the
-unlit-flat-colour trick, a glow over a BLACK base used to make something a flat bright colour, so
-on-by-default turns every one of them into a lamp. A material declines individually with
-`emissiveLight: "off"` in a `.cscn`. Two shape tests, and the second was missing for a spec cycle:
-planarity is FLATNESS only, so an L, a ring, a quad with a hole and two strips five metres apart all
-read exactly 1.0 and got one rectangle spanning the lot — `fill` is what rejects those. A derived
-panel inherits `cast_shadows` FALSE like any other light, so it lights through walls until a
-`light_overrides` entry says otherwise, which is the one thing to know before using it in an
-interior; the same entry's `shadow_cache` keeps that shadow, with a `range` beside it, which a
-derived panel otherwise lacks and a cached light needs for its far plane. Costs 0.017–0.021 ms CPU to reconcile and +2–3 ms of shading per panel — the price is the
-LIGHT, not the machinery),
-`--emissive-light-probe` (prints the panel every emissive mesh would derive, plus every skip and its
-reason, in the `--water-fft-probe` idiom. The instrument exists because a wrong fit hides inside a
-plausible image: a panel half a metre off or sqrt(2) too wide still lights the room),
-`--ies-profile <file>` (spec 11.57 -- apply an IES file to every point and spot light, overriding
-whatever the scene authored. Added after the fact, because a `.cscn` was the ONLY way to attach a
-profile and the four fixture files could not be looked at without hand-editing a committed asset --
-which is also the real workflow, since the thing you want to do with this feature is point it at a
-manufacturer's `.ies` on a scene you already have. Directionals and area panels are skipped for the
-same reason they refuse an authored one. Applied AFTER `apply_cscene_light_overrides`, so the flag
-wins, and byte-identical to authoring the same file: `ies-flag` asserts **0 px** against the
-authored twin, which is the reading that says the two paths are one path),
-`--ies-probe` (spec 11.57 -- one row per loaded IES profile and one per sampled angle, carrying
-`rel` and absolute `cd`. The instrument exists because a profile's correctness is a NUMERIC claim
-no frame can make: a table resampled off the wrong plane, folded with a modulo where LM-63 mirrors,
-or scaled by the wrong multiplier still lights a room plausibly. Sampled AT the taps, not between
-them -- a value between two tests the lerp, a value at one tests the table, and it is the table a
-resample gets wrong. **Plus `mirror` rows, which are the exception to that rule and exist because
-of it**: every tap lies inside `[0, span]`, where a mirror and a modulo agree exactly, so
-tap-sampling alone left the C fold unreachable from outside the process. Those rows ask for
-`span + d` and pair it against `span - d`. Note the probe still says nothing about the SHADER's
-fold -- for that see `ies-mirror`, which has to look at a frame),
-`--tree-probe` (spec 13.35 -- each tree in the scene file's `trees` block grown again from the
-parameters it was built with: a `tree-probe` row with an FNV-1a digest of every stream of its bark
-and foliage meshes, and for a conifer a `tree-shape` row (trunk top, highest spray, longest branch
-per crown quarter, each mesh's height range) and a `tree-lod` row (sprays per level of detail).
-The digests are taken before any chain is built, so a level of detail never moves them. Read by
-the `conifer` group over `conifer_fixture.cscn`, whose `trees` entries each serve an arm),
-`--occlusion-probe` (spec 11.98 — the masked occlusion buffer against its brute-force twin, as
-`occlusion-probe` k=v rows after the loop with no GL and no frame. Two-sided: hierarchical-hidden
-must imply reference-hidden with zero exceptions over the scene's items AND a seeded frustum sweep,
-and the catch rate must clear a floor so the safety half cannot pass by hiding nothing. The twin
-replays the RECORDED box set the frame accepted — not a re-gather, which could drift — through the
-same raster path at 4x resolution, so what it verifies is the hierarchy: the tile fold, the footprint
-rounding, the mask. Also validates every material-flagged proxy's interior contract, box against its
-own triangles, with both violation kinds judged against the 3x3 neighbourhood because the
-conservative fill leaves a diagonal seam a box face does not have. Read by `occl-probe`),
-`--wind-bound-probe` (spec 11.54 — per wind-responsive mesh, the largest displacement `windOffset`
-can be driven to beside the bound `wind_max_offset` claims, as `max_abs` / `max_l2` / `bound` and
-their ratios. **It drives the REAL shader through transform feedback**, not a CPU port: the two
-halves share their coefficients through `wind_bounds.glsl` and cannot share their arithmetic, so a
-term added to the shader makes the bound non-conservative and culling then drops geometry that is on
-screen. A port was built first and thrown away on the numbers — it catches a term added to the model
-(0.966 → 1.258) and reads straight through one added to the GLSL (0.966, unmoved), which is the
-failure the probe is for. Read by the `cull-bound` arm, which asserts BOTH `measured <= bound` and a
-floor on the tightest sweep, since the worst case is genuinely reachable and a low reading means the
-grid stopped sweeping rather than that the bound got safer),
-`--exposure-probe` (spec 11.52 — one line per METERED frame: raw and adapted luminance, the gain,
-the camera multiplier, their product and EV100. Silent on a pinned frame, because there is no
-measurement on one. Nothing else can observe the metered value: no log line, and the GUI readout
-came with the same spec),
-`--meter-mode <uniform|centre|spot>` / `--meter-radius <f>` / `--meter-low <f>` / `--meter-high <f>` /
-`--adapt-up <f>` / `--adapt-down <f>` (spec 11.52 — the metering mask and the percentile tails, also
-authorable as a `post.metering` block in a `.cscn`, CLI winning. **Low defaults to 0.70 and that is
-not conservatism**: a meter including the black background is measuring the background, and zero
-times a thousand is still zero, so a mild low percentile leaves the metered value barely moving when
-the scene brightens. Measured at x1000 the metered value moves 3.85 stops at low 0.10 against 9.96
-at 0.70, where 9.97 is correct. Same reason UE's Low Percent defaults to 80. The adaptation rates are
-per FRAME, not per second, because a headless run of N frames must adapt identically every time),
-`--lut <f.cube>` / `--no-lut` / `--lut-strength <f>` / `--lut-interp <trilinear|tetrahedral>`
-(spec 11.58 — a 3D colour-grading LUT, the general map lift/gamma/gain cannot be. **DISPLAY-REFERRED:
-the table is applied AFTER `displayEncode`**, which is the space a colourist's `.cube` is authored in;
-applying one to the LDR-linear values `toneSelect` returns gives a plausible frame that is not the
-look the artist made. Also authorable as a `post.lut` block, CLI winning, and `--no-lut` is the only
-way off one a `.cscn` asked for. **Size comes from the file** (2–64; 33³ is Resolve's default and the
-roadmap's "32³" is not a size the format produces). **Tetrahedral is the default, and the 0.076-of-a-code
-figure 11.58 first published for it is WRONG by 28x** — that was measured on a table whose every
-output channel is a ridge function of two inputs, so trilinear degenerates to bilinear on it and the
-three-way cross term tetrahedral drops is identically zero. On a table with a real three-way term
-(any saturation rolloff) it reads **2.7 codes**. It also ships for two exact properties: greys stay
-exactly grey where trilinear tints them 5 codes, and an identity table is a bit-exact 0 px where
-trilinear is 12,088 px at PAE 1/255 (the texture unit's fixed-point filter weights). fp16 storage
-costs 0.004 of a code — the fp32 rejection was ALSO first measured on an identity table whose lattice
-values are exactly representable in fp16, so it could not have shown storage error at all. Trilinear stays reachable because
-tetrahedral alone cannot be falsified. **A log/show LUT loads cleanly and renders washed out** and
-nothing in the format lets the loader tell — a non-0..1 `DOMAIN` is refused by name, but log tables
-often use 0..1 too, so the mid-grey heuristic is a warning rather than a test. Costs nothing when
-unused: the loaded texture IS the enable, so all 24 goldens are 0 px),
-`--no-layers-vt` / `--layers-vt-res <n>` / `--layer-blend-at <frame:value>` (spec 11.66 — the
-composite cache's bisect lever, its diagnostic resolution override, and the one headless way to make
-its by-value bake key go stale; all three exist in `render`, the first two in `forest` too),
-`--no-layers-vt-pages` / `--no-layers-vt-feedback` / `--layers-vt-page-slots <n>` /
-`--layers-vt-page-budget <n>` / `--layers-vt-probe <n>` / `--cam-at <frame:ex,ey,ez,tx,ty,tz>`
-(spec 11.67 — the paged near field's bisect levers, the churn and bake-rate knobs, the residency
-probe, and the camera teleport; all but `--cam-at` in `forest` too. `--cam-at` is REPEATABLE since
-13.24, up to 128 since 13.45, a schedule that walks one run through several places or turns the
-camera a step a frame),
-`--stream-probe <n>` / `--tile-blocks-per-frame <n>` / `--capture-hide <node>`
-/ `--remove-node <node>` (spec 13.24, render only — lighting data that streams. The probe prints,
-every n frames and at exit, the resident GI volumes and reflection probes by slot, each one's
-distance, capture count, state, a probe's faces drawn of a capture under way, and an FNV digest
-of its texels -- read from the atlas while it is resident, from the kept copy while it is not --
-the residency the frame before left, and the cached lights in distance order with
-whether each holds a whole block of shadow tiles: what the `lighting-stream` gates read.
-`--gi-stream-rate`, the probes a frame of an opening sweep begun after load, went in spec 13.32,
-when every sweep came under the capture budget below. The blocks-per-frame is how many cached
-lights may be given shadow tiles a frame once
-the tiles have opened (default 2, 0 = no limit), and at 1 a room with two lights takes two frames to
-be shadowed, which is what makes a capture's wait for its lights visible. `--capture-hide` leaves a
-named node out of every GI and probe capture, surface and shadow, as a skinned mesh always is;
-`--remove-node` takes one out of the scene, the reference a hidden one is compared against.
-`--draw-distance <node> <m>` (spec 13.38, repeatable) sets a node's draw distance -- the camera
-draws nothing of it, or of what hangs under it, past m metres, while shadows and captures still
-take it -- and `root` names the scene's root whatever the file called it. A
-`.cscn` authors any number of GI volumes as `giVolumes: [{boxMin, boxMax, spacing, classify}]`, and
-up to 64 probes and 64 lights),
-`--capture-budget-ms <f>` (spec 13.32, render and silent — the most of a frame, in milliseconds,
-the GI probes and the reflection probes' faces may take before the rest wait for the next frame:
-`Engine.capture_budget_ms`. By default 8 windowed and no limit headless, where a run must repeat
-to the bit; the flag pins it either way, which is how a headless run reaches the paced path, and
-0 means no limit. render takes 0 to 1000. Each kind of capture takes at least one a frame, so
-every one finishes, and 0.001 lets through exactly that and no more, the same on every run.
-silent's own default is 100 while its view is black and the engine's once it comes up; the flag
-pins it there too),
-`--capture-timing` (spec 13.42 — the GI world's `timing`: each GI volume prints what its sweep
-cost as it converges. A `gi-timing` row gives each part's CPU and wall milliseconds as `cpu/wall`
--- the bursts' setup with their shadow pass, the shaded faces, the classification's back-face
-faces and the projections -- with the faces' draws and triangles, which the profiler's capture
-row then goes without. Each part is bracketed by a glFinish, so a timed sweep runs slower than an
-untimed one; compare `cpu` with `wall` for how much of a part is submission),
-`--gi-cull-pixels <f>` (spec 13.42, render and silent — the GI world's `cull_pixels`: a GI probe
-leaves out what spans fewer than f pixels across its 16-pixel faces, unless it gives off light
-with what flickers held at rest, holds the probe inside its bound, or hangs under a node set
-`capture_always`. Decided once a probe, for its shaded faces and its wall test alike. 0, the
-default, takes everything),
-`--gi-cook` (spec 13.42 — the scene's `cook_lighting`: a volume's opening sweep and
-a probe's column are loaded from the cook when a run of the same scene stored them, and stored
-when not. The key is the scene at rest within the capture's reach, the engine's source and the
-driver, so any change to what a capture would see misses; a scene that changes during a sweep is
-not stored and logs `gi-cook volume=N result=unstable`. Off by default, since the suite shares one
-cook directory; `--cook-dir` and `--no-cook` apply. silent turns it on),
-`--capture-rest-unshadow <light>` (spec 13.44 — a scene capture rest hook under which the named
-shadow-casting light casts none while a capture burst holds the scene at rest, and casts again
-after, which is what silent's rest does with its flashlight. The headless way to give a burst
-fewer per-frame shadow layers than its frame, which `capture-keeps-shadow-array` reads. A light
-that does not exist or does not cast is refused, exiting 1, and the run prints
-`capture-rest-unshadow rests=N`, the bursts the hook held, at exit),
-`--road-width-at <frame:value>` (spec 11.68 — set every road's width mid-run. The `--layer-blend-at`
-idiom, and it exercises BOTH halves of the road path in one stroke: the segment block re-uploads
-and the composite cache's by-value key goes stale. A road is authored only in a `.cscn`, so this
-is the one headless way to change one after the first bake),
-`--material-at <frame> <material> <key> <value>` (spec 13.26 — set one parameter of every material
-of that name on a frame, a number or an enum label, as a `.cscn` sets it; repeatable, up to 8. Four
-words rather than `frame:value`, since a label may hold a space ("vegetation branch"). A material
-field is a plain write that changes nothing in the graph, so this is the headless way to change one
-after something has kept what it decided. A frame that is not a number, a value past an enum's
-labels, and a material the scene does not have are each refused by name rather than run as a no-op),
-`--input-script <path>` / `--trace-camera` (spec 12.19 — replay a MOUSE from a text file, and
-print the pose the frame draws from, its near and far planes at the line's end since spec 13.57,
-which is what the `fit-clip` group reads. It was `--pointer-script` until spec 14.2 added typing to
-it. The input script is `--pad-script`'s grammar through the
-same parser: one line per frame or `from-to` range, `#` comments, the last matching line winning,
-with tokens `at=x,y` (framebuffer pixels, +Y up), `by=dx,dy`, `down`, `shift` and `wheel=<f>`. A
-range states the pointer's STATE, so a press is `down` appearing and a release is it going. Typing
-is events: `type=TEXT` (UTF-8, `\s` a space and `\\` a backslash) and `key=NAME` with modifiers
-joined before it by `+` (`shift`, `ctrl`, `alt`, `super`, and `mod`, the platform's shortcut key:
-`key=mod+k`), delivered on every frame of their range in the line's order. A NAME is a letter, a
-digit, `f1` to `f25` (since spec 14.4), or one of `left`, `right`, `up`, `down`, `home`, `end`,
-`pageup`, `pagedown`, `backspace`, `delete`, `enter`, `tab`, `escape`, `space` and `slash`.
-`close` (spec 14.7) asks to close the window as its close button would, through the app's close
-hook: once, as the first frame of its range ends, so a close taken makes that frame the run's last
-and its screenshot. It drives the engine's own pointer path, so a replayed drag reaches the drag state, the ray picking
-and the app's forwarded callback exactly as a hand does — which is what let the `camera` group
-assert a viewer camera that nothing could press before. `apps/tree` and `apps/shapes` take both
-too, and shapes gained `-x` and `-f` with them: it is `PlaneDrag`'s only caller, so the plane
-camera had no automated coverage at all until it could run headless),
-`--config-dump <path>` / `--config <path>` (spec 11.71 — dump the whole tuned session to JSON on
-exit, and restore one. **See `docs/verification.md`, "Reproducing a session", for when to reach for it**; the one thing
-to know here is that the apply lands AFTER the scene-radius derivation at `render.c:3349`, which is
-load-bearing: `fog_far`, `fog_floor_y`, `fog_density` and `fog_height_falloff` are unconditional
-ASSIGNMENTS there and `ssao_radius` / `ssr_max_distance` / `ssr_thickness_min` are `fmaxf` floors, so
-an apply above that block loses the first four outright and silently raises the rest. Also note a
-restored sun does not re-capture a probe SET — 11.70 defers that, and a set cannot re-capture because
-its cubes are released into the atlas, so on `cornell_rooms` a moved sun lands 0.144 RMSE from the
-flag answer against the original's 0.159; on a probe-free scene it is exactly 0 px),
-`--no-texture-compression` / `--texture-compress-colour` / `--texture-probe` (spec 11.85 — the
-bisect lever, the opt-in for the lossy half, and the ledger. The probe is the instrument because
-texture memory is invisible from outside the process and a saving is a NUMERIC claim no frame
-can make: a scene whose normals silently failed to compress renders exactly like one whose
-normals compressed. It prints the internal format the driver HOLDS, not the one asked for,
-which is what catches a format being declined. Its lines are the house `<prefix> <kind> k=v`
-shape since 11.86, read through `_probe_render` like every other probe; `apps/tree` has
-`--texture-probe` too, and is the only place a purely procedural texture set can be priced;
-since 11.101 each row also carries `distribute_from=`, the first mip level whose alpha is a
-binary dither -- -1 on every texture whose chain never enters one before its 1x1 tail, which on
-this corpus is everything but a regular lattice), `--no-alpha-jitter` (spec 11.101 — the
-diagnostic lever for the jittered alpha lookup, which is live only while TAA accumulates at one
-sample and is gated off under alpha-to-coverage. With it the dot lattice's deep mips churn 358
-pixels a frame on `assets/alpha_ladder_fixture`; without it 2,917, and the Moire returns. It
-recovers none of the coverage the one-sample path loses -- MSAA 4 is the path that keeps it, and
-spec 11.102 priced that path at +296% of frame on a dense cutout scene and found it recovers
-nothing the eye can see, so this is the shipped answer and not a stopgap for one --
-and it rides the config snapshot as `engine.alpha_jitter`, because the GUI has the same switch
-and `config-coverage` refuses a control with no row),
-`--clearcoat-debug` (spec 11.86 — the coat normal as bytes, `Nc * 0.5 + 0.5` where there is a
-coat and EXACT black where there is not. A named spelling of `--render-mode 13`, and a render
-MODE rather than a late flag because the quantity is written in `pbr_frag`: any non-PBR mode
-takes the passthrough blit, so these bytes arrive with no tonemap, no display encode and no
-dither. **Read them LINEARLY** — the `--cs-debug` trap. Black is unambiguous because a
-normalized vector cannot encode there, the darkest reachable being (-1,-1,-1)/sqrt(3) at 0.211,
-which is what makes an uncoated surface an in-frame control),
-`--render-mode 14` (the probe-coverage view: the albedo, magenta by the share of each pixel's
-reflection that no reflection probe covers and the sky answers instead. Indoors any magenta is a
-surface outside every probe box; outdoors it is everything, and right. Also "Probe Coverage" in
-the GUI's Render Mode list, which is how an app without this flag reaches it),
-`--no-oit` / `--no-oit-moments`, `--no-instancing`, `--no-frustum-cull` (spec 11.53 — submit every
-item, culled or not. A bisect lever in the `--no-instancing` idiom and 0 px by construction, since
-culling only ever removes geometry that contributed nothing; it is what the `cull` gate group compares
-against),
-`--no-occlusion-cull` (spec 11.98 — occlusion rejection off, the same kind of lever held to the same
-0 px bar: the cull is conservative by four stated roundings, so this differing from the default is a
-defect and the `occlusion` group's identity arms are what say so. Camera-pass-only either way — shadow
-layers and captures never see the occlusion answer, so the flag cannot move them),
-`--no-lod` / `--lod-bias <f>`,
-`--no-sort-opaque` (front-to-back opaque ordering is ON by default, spec 11.30, and it is the larger
-of the two overdraw levers by a wide margin — `apps/forest` opaque 306 → 169 ms. Still **not** a 0 px
-flag, but only barely and no longer for the reason 11.30 gave: masked materials stopped blending in
-11.31, and what is left is coplanar ties, where draw order decides which of two surfaces at exactly
-equal depth wins. Raiden moves 31 px, `cornell_box` 1),
-`--ortho <height>` (orthographic camera, view volume height in world units; spec 11.103. The
-engine has always had this camera mode and until 11.103 nothing that could CAPTURE a frame could
-ask for it, which is how the TAA jitter came to be wrong there for the whole life of the feature
-— derived for perspective, it shifted the raster by ~150 px a frame under an orthographic camera.
-Applied AFTER the auto-framing, which decides the projection shape along with the clip planes.
-**A real camera since spec 11.104**, which took the perspective-only maths out of everything an
-orthographic frame reaches: the depth inverse, the view-position reconstruction (GTAO, contact
-shadows, fog), the five near-plane recoveries, the world-to-screen lengths (GTAO's radius, the SSS
-footprint), the view ray (fog integration, spec-occ), the per-fragment view vector (specular,
-Fresnel, the parallax march, water, SSR), the light cluster wedge, LOD selection, the occluder
-backface test and the cascade fit. Every site branches on `projection[2][3]`, the element
-`glm_ortho` zeroes and `glm_perspective` sets to −1, and the perspective side of each branch is
-the previous expression. The `ortho` gate group carries the proof; `taa-ortho` still compares an
-orthographic leg against an orthographic leg and cannot see any of it.
-**Deferred, recorded rather than fixed**: the skybox cube (a ±1 cube covers about 1% of an
-orthographic frame) and the sky background, the ocean's projected grid, the cloud march, the
-depth-sort key (perf only) and the gizmo's world-per-pixel. An orthographic camera looking at a
-sky is a design question, and none of these is a wrong pixel on the content the fix is for. The
-grid is deferred for cause and not for want of a branch: one was tried, and under a parallel
-view its far-capped rows spike (fp32 at a million units lands them pixels off) while its uniform
-lattice moires against the wave field, which the perspective grid's near-dense rows never
-showed; and the water plane crosses the near plane under any tilted parallel view, so where the
-eye sits along the axis decides how much of the plane is clipped. Water's own shading is
-orthographic since 11.104; the placement of its mesh is not),
-`--depth-prepass` (depth before shading, OFF by default and measured to LOSE everywhere in this
-corpus — spec 11.31. Masked geometry IS prepassed since 11.31, through its own program in a
-depth-only mode, and reaches a better depth complexity than the sort while still being slower.
-**It reverses sign under alpha-to-coverage** (spec 11.102): at `--msaa 4` on a dense cutout scene
-it halves the opaque row, 105.6 → 47.9 ms, because A2C is what stops the alpha test discarding and
-leaves the overdraw for a prepass to remove. At one sample on the same scene it moves 17.3 → 15.6
-and does not separate from the floor, so the standing verdict holds on the path this engine ships),
-`--profiler` (per-pass GPU time, CPU time and submission
-counts; HUD tables under "Profiler" and three on stdout at exit, specs 11.27 and 11.28.
-**It cannot price a sub-millisecond scope inside a heavy frame, and it reports that as 0.000 ms
-rather than as a failure** — timer queries are checked and never waited on (`PROFILER_RING` 4,
-deliberately: a blocking read would report the stall it caused as the pass's cost). On a frame with
-a 31 ms opaque pass, contact shadows, the GTAO sweep, the AO denoise, spec-occ, SSR and all three
-resolves ALL retired unavailable on every slot and printed zero, while the same scopes read
-normally on a light frame. So a zero row is not a free pass; price a small pass on a LIGHT scene at
-high resolution instead. The GPU column also drifts by a factor of ~3 between sessions on the same
-build — a sun-only contact-shadow pass read 0.29 ms and 0.055 ms an hour apart with every other
-small scope moving together — so **only samples adjacent in time may be differenced**, which is the
-same A/B/A/B rule the forest note below states for a different reason).
-Note `--dof-max-coc` is in half-RENDER-res texels: under `--render-scale` the
-same value blurs ~1/scale wider on screen (documented, not compensated).
-`--oit-moments` implies `--oit` (it is a better weight inside the same
-accumulate, not a second transparency path) and costs a large amount of VRAM --
-two fp32 moment targets at the scene sample count plus a double-height resolve
-atlas, 156 MB at 640x400 on a Retina framebuffer, logged at allocation. Both are
-now ON by default, so `--oit` and `--oit-moments` are only useful for restating
-a default that a `.cscn` or another flag turned off.
+- `-E/--exposure`, `--no-auto-exposure`.
+- `--exposure-at <frame:multiplier>` (spec 13.20) — diagnostic: write the exposure multiplier on a
+  named frame. With `--no-auto-exposure` it is an exact one-frame step, where the meter moves 4% a
+  frame. A physical camera ignores the multiplier. Read against a run at the new value from frame 0,
+  it shows whether the temporal histories follow the exposure.
+- `--no-history-rescale` (spec 13.20) — diagnostic: histories of light keep the exposure they were
+  written at, so a change of exposure lags by the blend. The A/B for the rescale.
+- `--exposure-probe` (spec 11.52) — one line per metered frame: raw and adapted luminance, the gain,
+  the camera multiplier, their product and EV100. Silent on a pinned frame, which has no
+  measurement. Nothing else shows the metered value but the GUI readout.
+- `--meter-mode <uniform|centre|spot>`, `--meter-radius <f>`, `--meter-low <f>`,
+  `--meter-high <f>`, `--adapt-up <f>`, `--adapt-down <f>` (spec 11.52) — the metering mask and the
+  percentile tails, also authorable as a `post.metering` block.
+  - **Low defaults to 0.70 on purpose**: a meter that includes a black background is measuring the
+    background, and a low percentile leaves the metered value barely moving when the scene
+    brightens (at x1000 it moves 3.85 stops at low 0.10 against 9.96 at 0.70, where 9.97 is
+    correct). Unreal's Low Percent defaults to 80 for the same reason.
+  - The adaptation rates are per frame, not per second, so a headless run of N frames adapts the
+    same every time.
+- `--tonemap <neutral|aces|agx|linear>` — `linear` is the identity curve with the display encode,
+  which passthrough is not: an authored colour at unit exposure reaches the screen as authored, and
+  it is what `engine_set_2d_preset` selects. `passthrough` cannot be reached from the CLI by design,
+  because the "unset" sentinel in `render_args.h` is `POSTFX_TONEMAP_PASSTHROUGH = 0`; a gate that
+  needs a linear read is written as a ratio instead.
+- `--lut <f.cube>`, `--no-lut`, `--lut-strength <f>`, `--lut-interp <trilinear|tetrahedral>`
+  (spec 11.58) — a 3D colour-grading LUT. Also a `post.lut` block.
+  - **Display-referred: the table is applied after `displayEncode`**, the space a colourist's
+    `.cube` is authored in. Applied to the linear values `toneSelect` returns it gives a plausible
+    frame that is not the artist's look.
+  - The size comes from the file, 2 to 64 (33³ is Resolve's default).
+  - Tetrahedral is the default: greys stay exactly grey where trilinear tints them by 5 codes, and
+    an identity table is bit-exact where trilinear is not (the texture unit's fixed-point filter
+    weights). Trilinear stays as the comparison. fp16 storage costs 0.004 of a code.
+  - **A log or show LUT loads cleanly and renders washed out**, and nothing in the format tells the
+    loader. A `DOMAIN` outside 0..1 is refused by name, but log tables often use 0..1 too, so the
+    mid-grey heuristic only warns.
+  - The loaded texture is the enable, so an unused LUT costs nothing.
+
+### Post effects
+
+- `--no-ssao`, `--ssgi`, `--no-ssr`, `--fog`, `--motion-blur`, `--dof`, `--no-bloom`, `--film`.
+- `--sss` (`--sss-radius`, `--sss-color`).
+- `--fog-history-miss-samples <n>` (spec 13.45) — how many samples a fog cell with no history takes,
+  1 to 8, default 4. Such a cell is one entering the view as the camera turns or moves; with one
+  sample it shows one jitter position beside neighbours averaged over many, a hard-edged band at
+  the leading edge of a turn. 1 gives that back, for the A/B.
+- `--contact-shadows` (`--cs-distance <f>`, `--cs-strength <f>`, `--cs-debug`; each implies the
+  enable, and `--cs-distance 0` is the exact off path). Off by default.
+  - It marches the key directional and every local light with no punctual shadow layer, so the pass
+    runs when the scene has a directional or a point or spot without a map.
+  - **`--cs-debug` shows the raw visibility term with no display encode**: read the bytes linearly,
+    since decoding them as sRGB reports 0.6326 as 0.3564.
+  - It costs 2.43 ms per fully covering light at 3200x2000 internal (0.38 ms per megapixel per
+    light). Cost tracks coverage rather than count, because a pixel marches only the lights whose
+    cluster entry reaches it, so there is no per-pixel light cap.
+- `--glare` (spec 13.5) — the aperture's diffraction star, off by default. `--no-glare` overrides a
+  scene file's `post.glare`; `--glare-strength` is the share of the light past the threshold moved
+  into the star, 0 to 1; `--glare-threshold` the working-space radiance a point must pass;
+  `--glare-probe` prints the light the star carries against its source's, and the frame's light
+  taken out against put back.
+- `--local-exposure` (spec 13.19) — an exposure per pixel on top of the camera's, off by default and
+  the identity until a contrast is lowered. `--no-local-exposure` overrides a scene file's
+  `post.local_exposure`.
+  - `--le-highlights` and `--le-shadows`: the base's contrast above and below middle grey, 1
+    unchanged, 0.6 to 1 Unreal's suggestion.
+  - `--le-detail`: the detail's contrast.
+  - `--le-blend`: the base's share from the blurred luminance, 0.6 by default; 0 is the pure
+    bilateral grid, which holds a lit room's window best.
+  - `--le-kernel`: that blur's width as a share of the frame.
+  - `--le-grey-bias`: stops added to the middle grey everything scales about.
+  - `--le-probe`: the frame's luminance percentiles in stops from middle grey, the range to tune
+    against.
+- `--crt` (spec 13.28) — the finished picture, the app's overlay included and the debug GUI not, on
+  a consumer CRT television. Off by default; each setting below implies it.
+  - `--crt-lines <n>`: the signal's lines, 480 by default.
+  - `--crt-scanlines <f>`: 0 fused to 1 thin with dark gaps. Scanlines fade to fused below 2.5
+    window pixels a line, so a 400x300 capture at 480 lines shows none; pass `--crt-lines` a
+    quarter of the window's height to see them.
+  - `--crt-mask <f>` the slot mask's depth, `--crt-curvature <f>` the tube's bow (0 flat),
+    `--crt-bleed <f>` the composite colour bleed.
+  - The tone curve holds mid-grey and compresses what is brighter, so the frame comes out a little
+    darker. That is CRTS's design, not exposure going wrong.
+
+### The loading screen
+
+- `--loading-screen` (spec 13.34) — the engine's loading screen over the frame from the start,
+  never lifted: a preview of it. Headless too, where its clock is a frame's fixed step, so a capture
+  is frame-exact. Windowed, **P** cycles its palette, **R** plays it again and **H** lifts it. A
+  frame it covers draws nothing of its own, so the preview runs at the screen's own cost.
+- `--loading-palette <n>` — 0 sunset, 1 harvest, 2 phosphor, 3 broadcast.
+- `--loading-lift-at <n>` — let it go at frame n, so a headless run reaches its switch-off. It lifts
+  only once its ident has played, glitch included.
+- `--loading-ready-at <n>` — say the game is ready at frame n: once the ident has played, its
+  LOADING sign becomes PLAY and it waits for `--loading-lift-at`.
+
+The last three imply `--loading-screen`.
+
+### Water
+
+`--water` turns on a water surface, which suppresses the shadow catcher (`docs/architecture.md`,
+Render Pipeline). Its flags:
+- `--water-level <f>`, `--water-extent <f>`, `--water-waves <gerstner|fft>`,
+  `--water-bed <none|dome>`.
+- `--water-bounds x0,z0,x1,z1` (spec 13.41) — hold the water to that xz rectangle: past it there is
+  no surface, no light weakened under the level, no submerged medium and no rain landing on the
+  plane. All zero, the default, is everywhere.
+- `--water-dry cx,cz,yaw,hl,hw[,power]` (spec 13.56) — a dry shape: no water inside that
+  superellipse, its length along the yaw in degrees from +z, power 2 (an ellipse) by default. The
+  inside of a floating hull.
+- `--water-drop x,z,frame` (repeatable) — press a ripple into the water there on that frame.
+- Off switches: `--no-water`, `--no-water-caustics`, `--no-water-glitter`, `--no-water-downwell`,
+  `--no-water-caustic-relief`, `--no-water-specks`, `--no-water-foam-history`,
+  `--no-water-coverage` (the shoreline's derivative coverage), `--no-water-lod` (the far-field
+  filtering, below).
+- Probes:
+  - `--water-probe` — the surface query over a 4x4 grid after the last frame: `h=` is
+    `water_probe_result` on either wave model, and on Gerstner `cpu_h=` is the closed form beside it
+    at the instant that answer describes (spec 13.1). The answer is `WATER_PROBE_LATENCY` (2) passes
+    late, so a run of fewer than three frames prints `available=0 reason=unfilled`. It also reports
+    the daylight `incident`.
+  - `--water-fft-probe` — the spectral cascades.
+  - `--water-caustic-debug <1|2|3>` — 1 the factor the caustics multiplied the bed by, 2 the raw
+    caustics target laid on the surface, 3 that target spread across the spectrum and the key's disc
+    at the reference plane's depth. Half grey where nothing is concentrated.
+  - `--water-caustic-probe` — the target's mean, min and max over its inner 80%, per channel. The
+    mean is the energy check: 1 for any sea.
+  - `--water-caustic-bands <0..16>` — trace the caustics in N real bands of the spectrum rather than
+    once and spread: the reference the spread is measured against, at a whole trace per band.
+  - `--water-touch-probe` — the ripples' deepest point and its distance from the first drop.
+
+**The two wave models.** Gerstner is the default and allocates nothing. `fft` is an ocean and adds
+64 passes a frame: three cascades at 128² and a ripple band at 512².
+- Crest foam is FFT-only by construction: it is selected from Jacobian compression, and the Gerstner
+  path's steepness is clamped so its mapping cannot compress.
+- Caustics run on both: they refract the key light through the surface normal onto the floor, which
+  needs a normal and not a fold.
+- The shore foam band runs on both, selected from the shoal factor, which makes Gerstner the way to
+  isolate it.
+- In the mid field Gerstner's longest octave reads as regular swell lines at grazing incidence, the
+  corduroy a single-direction train gives. The FFT's directional spectrum does not have it.
+
+**A scene file can author the whole surface** in a `water{}` block, and the flags override it.
+`assets/scenes/water_fixture.cscn` authors every key and is the worked example. **No flag sets the
+sea state**, so a scene file is the only way in and `water-seastate` the only arm on that path.
+Editing any of it re-seeds the initial spectrum on the next frame, a CPU pass over three 128² grids.
+
+**The sea state is two wave trains**, `windSea{}` and `swell{}`, each with the same eight keys
+(`windSpeed`, `fetch`, `direction`, `scale`, `peakEnhancement`, `focus`, `spreadGain`,
+`spreadBlend`), beside a shared `seaDepth`.
+- The old flat keys `windSpeed`, `fetch`, `peakEnhancement` and `swell` are warned per key by
+  `parse_water`'s list of known keys. The old `swell` did two jobs and maps to two keys:
+  `windSea.focus` and `swell.scale`. `swell.scale` 0 removes the train.
+- Author the swell for the scene. `Breaking` tests the depth-limited criterion
+  `disp.y / (0.39 · depth)`, so a swell too big for a shallow shelf breaks everywhere at once and
+  paints the whole bay white; that is `Breaking` reporting an absurd sea, not a foam bug.
+- `windDirection` reaches both wave models.
+
+**The in-scatter is a fraction of the light falling on the water, plus an optional floor**
+(spec 11.84). `scatterAlbedo` is dimensionless; `scatterGlow` is absolute radiance added
+regardless.
+- The old `water.scatter` is refused by name: it was a radiance, so an old value would still parse
+  and mean something several times too large. Convert it by dividing by the scene's daylight
+  `incident`, which `--water-probe` reports.
+- There are two fields because one cannot do both jobs: a constant reproduces a stylised night sea
+  and cannot make a dark realistic one, and a pure albedo does the reverse. Nothing in the tree uses
+  a non-zero glow but the `water-glow` arm; `apps/tree` lights its night sea with moonlight
+  instead.
+
+**The key light is the brightest directional**, ranked by intensity times peak channel
+(`water_key_light`), not the sky's sun by name, so the moon can be the key. A weight of zero selects
+nothing, which switches the caustics off in true darkness. **Do not read brightness on
+`water_fixture` as lighting**: its geometry is emissive over a black base, which makes it a good
+absorption instrument and leaves its water band almost the same at midnight and noon. Every arm in
+the `water-night` group is a twin delta for that reason.
+
+**`absorption` is extinction per world unit, and the library default is clear water per metre**
+(spec 11.36). They agree only where a unit is a metre; an app whose unit is not divides the default
+by its units per metre, or its sea is that factor too absorbing. The in-scatter carries no length
+and does not scale. The shader's own lengths (the refraction bend, the short band's fade, the
+shoal window, the caustic window) convert through `Sky.world_units_per_km`, so an app at another
+scale sets that. The path clamp is a budget in extinction lengths (`WATER_MAX_OPTICAL_DEPTH`), with
+`WATER_MAX_PATH` as a floor; truncation at the clamp leaves at most 2.15%, and grazing sight lines
+to a deep bed do get clamped.
+
+**Below the surface**, a submerged camera arms the froxel volume for that frame and the body
+becomes a second medium. Two approximations, both in `froxel_inject_frag.glsl`: a cell holds one
+scalar extinction, so water's per-channel value arrives as its luminance mean with the colour moved
+into the in-scatter; and the in-scatter is constant rather than scattered sunlight, so there are no
+shafts in the body.
+
+**The surface is a projected grid**: a fixed lattice in NDC, one draw, each vertex a ray onto the
+still plane, so density is uniform in pixels and the surface reaches the horizon. **`--water-extent`
+is the shoaling bed's domain and nothing else**: it does not bound the drawn surface, and outside it
+the bed reads its edge, which is open water. `--water-bed dome` installs an analytic bed so
+shoaling has a deterministic fixture.
+
+**The far field is filtered.** Distant cells cover more than a wave period, so each model drops
+what sits under its cell footprint (mip levels on the spectral path, whole octaves on Gerstner) and
+hands the removed slope energy to roughness, as a mean square slope converted to a lobe width by the
+Beckmann relation. It adds to the authored roughness as a variance, so it is exactly the authored
+value where nothing is filtered. `--no-water-lod` reaches the unfiltered surface, whose horizon
+aliases into a speckle band.
+
+### Sky, scale and the camera's planes
+
+- `--sky` (`--sun-elevation`, `--sun-azimuth`, `--sky-debug`), and `--overcast <0..1>`,
+  `--sky-scale <f|photometric>` and `--sky-probe` (spec 13.7, `docs/shader-subsystems.md`).
+- `-e/--env <hdr>` — an HDR environment.
+- `--world-scale <units-per-km>` — the atmosphere's scale; 1000 is 1 unit a metre.
+- `--no-aerial` — no aerial perspective.
+- `--typical-size <metres>` (spec 13.57) — `Engine.typical_size`, the size of what the scene holds:
+  1 for rooms, the default, and 0.001 for a circuit board. Overrides a `.cscn`'s `typicalSize`, and
+  refuses anything but a positive number, "1mm" included. `docs/architecture.md`, The Typical Size,
+  says which lengths it scales. **It is not `--import-scale`**, which scales the model and leaves
+  every one of the engine's lengths at a metre's: a board imported a thousand times larger renders
+  as a room, and its lights, fog and camera have to be scaled by hand.
+- `--fit-clip` (spec 13.57) — the camera's near and far fitted every frame to what is in front of
+  it, as `docs/architecture.md`, The Typical Size, describes. A `.cscn` camera's `fitClip` is the
+  same switch, and with it on the render app's own per-frame near stands down. The boxes are at
+  rest, so wind, a skinned pose, the terrain's morph, a hook's offset or a wave's crest can carry
+  geometry past a fitted plane, and particles, fire and rain are not counted.
+
+**Cloud shadows.** With `--clouds` on, the deck casts into the froxel fog and onto the ground
+(`pbr_frag`, the shadow catcher and water's caustics) by default; `--no-cloud-shadows` turns it off.
+The map rides `sceneColorTex` by `#define` in the opaque pass, where unit 6 is idle.
+- `--sky-debug` shows the shadow map as a tile below the two cloud-noise fields, and that tile is
+  the only way to tell a bad map from a bad lookup: the gate arms watch the shadow's effect on the
+  fog, and a map with no range at all still darkens the frame.
+- The march steps equal altitude increments across the whole deck and clamps only the horizontal
+  excursion, at the shape field's 8 km tile period (further re-reads the same field).
+- **Coverage is a gap fraction as far as the ground is concerned.** Extinction 25/km over a 2.5 km
+  deck blocks the sun outright under any real cloud, so the dapple is a map of the holes. At the
+  0.45 default the deck casts a flat dimming with no pattern; at 0.10 about half the map is lit.
+  The gate arms pin `--cloud-coverage 0.10`, where the property is legible, so a change of default
+  cannot re-tune them.
+- The map is built even when nothing reads it.
+
+### Scene content from the scene file
+
+- `--no-fog-volumes` (spec 11.39) — drop a scene file's `fogVolumes[]`: world-space boxes with a
+  density, an inward feather and a tint, authored only in a `.cscn`, since a box needs a place and a
+  size no flag can carry. A volume arms the froxel pass by itself and must never set `fog_enabled`,
+  which means only that the global height medium exists; the global density uploads as zero when
+  the app did not ask for fog.
+- `--no-decals`, `--decal-probe <n>` (spec 11.73) — drop a scene file's `decals[]`, and print the
+  decal diagnostic every n frames. Decals are authored only in a `.cscn`: each needs a place, a
+  size, a facing and an image.
+  - `DECAL_MAX` is 16, a structural ceiling: it sizes the froxel mask, 32 would pin the descriptor
+    at seven vec4 rows and 64 would not fit GL 4.1's guaranteed 16 KB block.
+  - **The probe is the instrument, not the frame**: a mark projected through the wrong box still
+    lands on a wall and looks like a poster. The probe prints the froxel mask and the array layers,
+    and names why a decal is not live, since one whose image never loaded is invisible exactly as
+    one never authored is.
+- `--emissive-lights` (spec 11.49) — an emissive mesh becomes a real LTC area panel: a rectangle
+  plane-fitted to it, the material's radiance in nits, registered in the cluster list.
+  - **Off by default because most emissive materials are not lamps**: 30 of the 32 in this corpus
+    are a glow over a black base used to make something a flat bright colour. A material declines
+    with `emissiveLight: "off"` in a `.cscn`.
+  - Two shape tests: planarity, which is flatness only, and `fill`, which rejects an L, a ring, a
+    quad with a hole or two strips far apart, all perfectly flat.
+  - A derived panel has `cast_shadows` false like any light, so it lights through walls until a
+    `light_overrides` entry says otherwise. That entry's `shadow_cache`, with a `range`, caches its
+    shadow.
+  - It costs about 0.02 ms of CPU to reconcile and 2 to 3 ms of shading per panel.
+- `--emissive-light-probe` — the panel every emissive mesh would derive, and every skip with its
+  reason. A wrong fit hides in a plausible image: a panel half a metre off or sqrt(2) too wide still
+  lights the room.
+- `--ies-profile <file>` (spec 11.57) — apply an IES file to every point and spot light, overriding
+  what the scene authored, so a manufacturer's `.ies` can be tried on any scene. Directionals and
+  area panels are skipped, as they refuse an authored profile. It is applied after
+  `apply_cscene_light_overrides`, so the flag wins, and it is the same as authoring the file
+  (`ies-flag`).
+- `--ies-probe` (spec 11.57) — one row per loaded profile and one per sampled angle, with `rel` and
+  absolute `cd`. A profile's correctness is a numeric claim no frame can make. Rows are sampled at
+  the taps, where they test the table rather than the lerp; the `mirror` rows ask for `span + d`
+  against `span - d`, the only way to reach the C fold from outside, since inside `[0, span]` a
+  mirror and a modulo agree. The shader's fold is `ies-mirror`'s.
+- `--tree-probe` (spec 13.35) — each tree in the scene file's `trees` block grown again from its
+  parameters: a `tree-probe` row with an FNV-1a digest of every stream of its bark and foliage
+  meshes, and for a conifer a `tree-shape` row (trunk top, highest spray, longest branch per crown
+  quarter, each mesh's height range) and a `tree-lod` row (sprays per level of detail). The digests
+  are taken before any chain is built, so a level of detail never moves them. Read by the `conifer`
+  group over `conifer_fixture.cscn`.
+
+### Lighting that streams, and the captures
+
+- `--stream-probe <n>` (spec 13.24) — every n frames and at exit: the resident GI volumes and
+  reflection probes by slot, each one's distance, capture count, state, a probe's faces drawn of a
+  capture under way, and an FNV digest of its texels (from the atlas while resident, from the kept
+  copy while not); the residency the frame before left; and the cached lights in distance order,
+  with whether each holds a whole block of shadow tiles. The `lighting-stream` gates read it.
+- `--tile-blocks-per-frame <n>` — how many cached lights may be given shadow tiles a frame once the
+  tiles have opened (default 2, 0 no limit). At 1 a room with two lights takes two frames to be
+  shadowed, which makes a capture's wait for its lights visible.
+- `--capture-hide <node>` — leave a named node out of every GI and probe capture, surface and
+  shadow, as a skinned mesh always is. `--remove-node <node>` takes one out of the scene, the
+  reference a hidden one is compared against.
+- `--draw-distance <node> <m>` (spec 13.38, repeatable) — the camera draws nothing of the node, or
+  of what hangs under it, past m metres, while shadows and captures still take it. `root` names the
+  scene's root whatever the file called it.
+- `--cam-at <frame:ex,ey,ez,tx,ty,tz>` — a camera teleport on a frame; repeatable, up to 128, a
+  schedule that walks one run through several places or turns the camera a step a frame.
+- `--capture-budget-ms <f>` (spec 13.32; render and silent) — `Engine.capture_budget_ms`, the most
+  of a frame the GI probes and the reflection probes' faces may take before the rest wait. By
+  default 8 windowed and no limit headless, where a run must repeat to the bit; the flag pins it
+  either way, which is how a headless run reaches the paced path. 0 means no limit; render takes 0
+  to 1000. Each kind of capture takes at least one unit a frame, so 0.001 lets through exactly that,
+  the same on every run. silent's own default is 100 while its view is black and the engine's once
+  it comes up; the flag pins it there too.
+- `--capture-timing` (spec 13.42) — the GI world's `timing`: each volume prints a `gi-timing` row as
+  its sweep converges, each part's CPU and wall milliseconds as `cpu/wall` (the bursts' setup with
+  their shadow pass, the shaded faces, the classification's back faces, the projections) with the
+  faces' draws and triangles. Each part is bracketed by a `glFinish`, so a timed sweep is slower;
+  compare `cpu` with `wall` for how much of a part is submission.
+- `--gi-cull-pixels <f>` (spec 13.42; render and silent) — the GI world's `cull_pixels`: a probe
+  leaves out what spans fewer than f pixels across its 16-pixel faces, unless it gives off light
+  (with what flickers held at rest), holds the probe inside its bound, or hangs under a node set
+  `capture_always`. Decided once a probe, for its shaded faces and its wall test alike. 0, the
+  default, takes everything.
+- `--gi-cook` (spec 13.42) — the scene's `cook_lighting`: a volume's opening sweep and a probe's
+  column are loaded from the cook when a run of the same scene stored them, and stored when not.
+  The key is the scene at rest within the capture's reach, the engine's source and the driver, so
+  any change a capture would see misses. A scene that changes during a sweep is not stored and logs
+  `gi-cook volume=N result=unstable`. Off by default, since the suite shares one cook directory;
+  `--cook-dir` and `--no-cook` apply. silent turns it on.
+- `--capture-rest-unshadow <light>` (spec 13.44) — a capture rest hook under which the named
+  shadow-casting light casts nothing while a burst holds the scene at rest, as silent's rest does
+  with its flashlight. The headless way to give a burst fewer per-frame shadow layers than its
+  frame, which `capture-keeps-shadow-array` reads. A light that does not exist or does not cast is
+  refused, exiting 1, and the run prints `capture-rest-unshadow rests=N` at exit.
+
+A `.cscn` authors any number of GI volumes as `giVolumes: [{boxMin, boxMax, spacing, classify}]`,
+and up to 64 probes and 64 lights.
+
+### Layers, roads and materials mid-run
+
+- `--no-layers-vt`, `--layers-vt-res <n>`, `--layer-blend-at <frame:value>` (spec 11.66) — the
+  composite cache's bisect lever, its resolution override, and the one headless way to make its
+  by-value bake key go stale. The first two are in `forest` too.
+- `--no-layers-vt-pages`, `--no-layers-vt-feedback`, `--layers-vt-page-slots <n>`,
+  `--layers-vt-page-budget <n>`, `--layers-vt-probe <n>` (spec 11.67) — the paged near field's
+  bisect levers, its churn and bake-rate knobs, and the residency probe. All in `forest` too.
+- `--road-width-at <frame:value>` (spec 11.68) — set every road's width mid-run. It exercises both
+  halves of the road path: the segment block re-uploads and the composite cache's key goes stale. A
+  road is authored only in a `.cscn`, so this is the one headless way to change one after the first
+  bake.
+- `--material-at <frame> <material> <key> <value>` (spec 13.26; repeatable, up to 8) — set one
+  parameter of every material of that name on a frame, a number or an enum label, as a `.cscn` sets
+  it. Four words rather than `frame:value`, since a label may hold a space ("vegetation branch"). A
+  material field is a plain write the graph does not see, so this is the headless way to change one
+  after something kept what it decided. A bad frame, a value past an enum's labels or a material the
+  scene lacks is refused by name.
+
+### Textures, alpha and debug views
+
+- `--no-texture-compression`, `--texture-compress-colour`, `--texture-probe` (spec 11.85) — the
+  bisect lever, the opt-in for the lossy colour half, and the ledger. Texture memory is invisible
+  from outside the process, and a scene whose normals failed to compress renders exactly like one
+  whose normals compressed. The probe prints the internal format the driver holds, not the one asked
+  for, which catches a declined format, in the `<prefix> <kind> k=v` shape every probe uses. Each row
+  carries `distribute_from=`, the first mip level whose alpha is a binary dither, -1 where the chain
+  never enters one before its 1x1 tail. `apps/tree` has `--texture-probe` too, the only place a
+  purely procedural texture set can be priced.
+- `--no-alpha-jitter` (spec 11.101) — the diagnostic lever for the jittered alpha lookup, live only
+  while TAA accumulates at one sample and off under alpha-to-coverage. Without it a cutout's deep
+  mips churn and moire. It recovers none of the coverage one sample loses; four samples keep it, at
+  +296% of a dense cutout scene's frame for nothing the eye finds (spec 11.102), so this is the
+  shipped answer. It rides the config snapshot as `engine.alpha_jitter`.
+- `--clearcoat-debug` (spec 11.86) — the coat normal as bytes, `Nc * 0.5 + 0.5` where there is a
+  coat and exact black where there is not. A name for `--render-mode 13`: any non-PBR mode takes the
+  passthrough blit, so the bytes have no tonemap, encode or dither, and are read linearly. Black is
+  unambiguous, since the darkest a normal can encode is (-1,-1,-1)/sqrt(3) at 0.211, which makes an
+  uncoated surface an in-frame control.
+- `--render-mode 14` — the probe-coverage view: the albedo, magenta by the share of each pixel's
+  reflection no reflection probe covers and the sky answers instead. Indoors any magenta is a
+  surface outside every probe box; outdoors it is everything, and right. Also "Probe Coverage" in
+  the GUI's Render Mode list.
+
+### Culling, sorting and transparency
+
+- `--no-oit`, `--no-oit-moments`, `--oit`, `--oit-moments`. OIT and its moment weighting are on by
+  default, so `--oit` and `--oit-moments` only restate a default a `.cscn` or another flag turned
+  off. `--oit-moments` implies `--oit`: it is a better weight inside the same accumulate. It costs
+  two fp32 moment targets at the scene sample count plus a double-height resolve atlas, 156 MB at
+  640x400 on a Retina framebuffer, logged at allocation.
+- `--no-instancing`.
+- `--no-frustum-cull` (spec 11.53) — submit every item. 0 px by construction, since culling only
+  removes geometry that contributed nothing; the `cull` gate group compares against it.
+- `--no-occlusion-cull` (spec 11.98) — occlusion rejection off, held to the same 0 px bar: the cull
+  is conservative by four stated roundings, so a difference from the default is a defect, which the
+  `occlusion` group's identity arms report. It is camera-pass-only, so shadow layers and captures
+  are the same either way.
+- `--no-lod`, `--lod-bias <f>`.
+- `--no-sort-opaque` — front-to-back opaque ordering is on by default (spec 11.30), the larger of
+  the two overdraw levers (`apps/forest`'s opaque pass 306 to 169 ms). Not a 0 px flag: where two
+  surfaces lie at exactly equal depth, draw order decides which wins.
+- `--depth-prepass` — depth before shading, off by default because it loses everywhere in this
+  corpus at one sample (spec 11.31). Masked geometry is prepassed through its own program in a
+  depth-only mode. **It reverses sign under alpha-to-coverage** (spec 11.102): at `--msaa 4` on a
+  dense cutout scene it halves the opaque pass, because A2C stops the alpha test discarding and
+  leaves overdraw for a prepass to remove.
+
+### Diagnostics
+
+- `--negative-probe` (spec 13.21) — every frame, the float frame the tonemap is about to read, read
+  back, and a `negative-probe` row with the pixels below -0.0005 and below -0.005 and the most
+  negative value. Light below zero is a bug wherever it comes from, and the tonemap clamps it out of
+  sight. A whole-frame readback, so not for timing.
+- `--fog-miss-probe` (spec 13.45) — every fog frame, a `fog-miss-probe frame= armed= cells=` row:
+  whether any cell could take several samples (history existing and more than one asked for), and
+  how many did, from an occlusion query read at once, so not for timing.
+- `--shadows-off-at <frame>` (spec 11.56) — clear `shadow_system->enabled` mid-run, the state the
+  GUI checkbox produces and `--no-shadows` cannot. That flag clears the switch before frame 0, so no
+  punctual layer is ever assigned; turning it off after the pass has run leaves `Light.shadow_layer`
+  pointing at layers nothing draws. A defect reachable only through that transition is invisible to
+  every other headless run.
+- `--occlusion-probe` (spec 11.98) — the masked occlusion buffer against its brute-force twin, as
+  `occlusion-probe` k=v rows after the loop, with no GL and no frame. Two-sided: hierarchical-hidden
+  must imply reference-hidden with no exception over the scene's items and a seeded frustum sweep,
+  and the catch rate must clear a floor so the safety half cannot pass by hiding nothing. The twin
+  replays the recorded box set the frame accepted, not a re-gather, through the same raster path at
+  4x resolution, so what it checks is the hierarchy: the tile fold, the footprint rounding, the
+  mask. It also checks every material-flagged proxy's interior contract, box against its own
+  triangles, judged against the 3x3 neighbourhood because the conservative fill leaves a diagonal
+  seam a box face does not have. Read by `occl-probe`.
+- `--wind-bound-probe` (spec 11.54) — per wind-responsive mesh, the largest displacement `windOffset`
+  can be driven to beside the bound `wind_max_offset` claims, as `max_abs`, `max_l2`, `bound` and
+  their ratios. **It drives the real shader through transform feedback**, not a CPU port: the two
+  halves share coefficients through `wind_bounds.glsl` but not arithmetic, so a term added to the
+  shader makes the bound non-conservative and culling drops geometry that is on screen, which a CPU
+  port cannot see. The `cull-bound` arm asserts `measured <= bound` and a floor on the tightest
+  sweep, since a low reading means the grid stopped sweeping.
+- `--profiler` (specs 11.27 and 11.28) — per-pass GPU time, CPU time and submission counts; HUD
+  tables under "Profiler", and three on stdout at exit.
+  - **A sub-millisecond scope inside a heavy frame reads 0.000 ms**, not a failure: timer queries are
+    checked and never waited on (`PROFILER_RING` 4), since a blocking read would report its own stall
+    as the pass's cost. A zero row is not a free pass; price a small pass on a light scene at high
+    resolution.
+  - The GPU column drifts by about 3x between sessions on one build, every scope together, so only
+    samples adjacent in time may be differenced (A/B/A/B).
+
+### The orthographic camera
+
+`--ortho <height>` (spec 11.103) — an orthographic camera, the view volume's height in world units,
+applied after the auto-framing, which decides the projection along with the clip planes. Every
+site of the engine that assumed a perspective projection branches on `projection[2][3]` (spec
+11.104; `docs/architecture.md`, Render Pipeline), and the `ortho` gate group covers them.
+
+Not yet orthographic: the skybox cube (a ±1 cube covers about 1% of an orthographic frame), the sky
+background, the ocean's projected grid, the cloud march, the depth-sort key (performance only) and
+the gizmo's world-per-pixel. Water's shading is orthographic; the placement of its mesh is not. A
+branch for the grid was tried and refused: under a parallel view its far-capped rows spike (fp32 at
+a million units lands them pixels off), its uniform lattice moires against the wave field, and the
+water plane crosses the near plane under any tilted parallel view.
+
+### Scripted input and the camera trace
+
+`--input-script <path>` and `--trace-camera` (spec 12.19) replay a mouse and keyboard from a text
+file, and print the pose the frame draws from with its near and far planes at the line's end, which
+the `fit-clip` group reads. `apps/shapes` takes both and `apps/canvas` takes `--input-script`.
+
+The input script is `--pad-script`'s grammar through the same parser: one line per frame or
+`from-to` range, `#` comments, the last matching line winning.
+- **Pointer state:** `at=x,y` (framebuffer pixels, +Y up), `by=dx,dy`, `down`, `shift` and
+  `wheel=<f>`. A range states the pointer's state, so a press is `down` appearing and a release is
+  it going.
+- **Typing is events:** `type=TEXT` (UTF-8, `\s` a space and `\\` a backslash) and `key=NAME` with
+  modifiers joined before it by `+` (`shift`, `ctrl`, `alt`, `super`, and `mod`, the platform's
+  shortcut key: `key=mod+k`), delivered on every frame of their range in the line's order. A NAME is
+  a letter, a digit, `f1` to `f25`, or one of `left`, `right`, `up`, `down`, `home`, `end`, `pageup`,
+  `pagedown`, `backspace`, `delete`, `enter`, `tab`, `escape`, `space` and `slash`.
+- **`close`** (spec 14.7) asks to close the window as its close button would, through the app's
+  close hook: once, as the first frame of its range ends, so a close taken makes that frame the
+  run's last and its screenshot.
+
+It drives the engine's own pointer path, so a replayed drag reaches the drag state, the ray picking
+and the app's forwarded callback exactly as a hand does.
+
+### The config snapshot
+
+`--config-dump <path>` and `--config <path>` (spec 11.71) dump the whole tuned session to JSON on
+exit, and restore one; `docs/verification.md`, "Reproducing a session", says when to reach for it.
+- The apply lands after the block in `render.c` that derives lengths from the scene's radius, and
+  must stay there: `fog_far`, `fog_floor_y`, `fog_density` and `fog_height_falloff` are assigned
+  outright in that block and `ssao_radius`, `ssr_max_distance` and `ssr_thickness_min` are `fmaxf`
+  floors, so an apply above it loses the first four and silently raises the rest.
+- A restored sun does not re-capture a probe set: a set's cubes are released into the atlas, so it
+  cannot re-capture.
+
+### Rain
 
 **Rain** (spec 13.9). `--rain <mm/h>` sets the rate of a scene's authored rain, or brings one of
 its own, and re-settles it, so the frame shows that rate's soaked world rather than the file's;
@@ -658,7 +616,7 @@ and, with `--rain-probe-at x,y,z` (repeatable), whether the rain reaches each po
 point every frame and the probe prints its answer. `assets/scenes/rain_fixture.cscn` and
 `rain_water_fixture.cscn` are the fixtures, from `assets/generators/gen_rain_fixture.py`.
 
-**What spec 13.12 added**, all in the same block:
+**More of the rain block** (spec 13.12):
 - **The scene's wind:** `followSceneWind` (default true) lets a `.cscn` `wind` block that states
   `airSpeed` (m/s) carry the rain in place of the block's own `wind`.
 - **The mist:** `mistForwardG` (default 0.8) is the medium's own lobe, apart from the streaks'.
@@ -675,6 +633,8 @@ point every frame and the probe prints its answer. `assets/scenes/rain_fixture.c
 
 `rain_glass_fixture.cscn` and `rain_relief_fixture.cscn` are the glazed and relief twins.
 
+### Lights in the scene file, and cached shadows
+
 **A light's specular share** (spec 13.30). A `.cscn` light's `specular`, 0 to 1 and 1 by default, is
 the share of it the reflective lobes take: the base and clearcoat highlights, sheen, a panel's LTC
 specular and, on a sun, water's glint. 0 lights diffusely only, what the diffuse gives up for the
@@ -688,9 +648,10 @@ its fixture, and `source_radius` / `source_length` give a point light a body -- 
 length between its caps -- whose shadow is soft. A panel is cached from its centre and refuses a
 body by name. `shadow_follow` draws the kept faces again whenever the light moves at all, rather
 than once it is the system's tolerance (5 cm) from where they were drawn: for a light with no body
-that moves, whose shadow otherwise steps. A `light_overrides` entry takes `shadow_cache` and `range` too, which is how a
-DERIVED panel (`--emissive-lights`) is cached, and an override key the parser does not know is now
-named rather than dropped. A fire's flame writes its own body into its light each frame. Instruments:
+that moves, whose shadow otherwise steps. A `light_overrides` entry takes `shadow_cache` and
+`range` too, which is how a derived panel (`--emissive-lights`) is cached, and an override key the
+parser does not know is named rather than dropped. A fire's flame writes its own body into its
+light each frame. Instruments:
 - **`--tiles-probe`:** prints the tile region and every cached light's block at exit: its views,
   cells, faces kept, the body they were drawn over, and each view's origin and tiles.
 - **`--tile-map <light> <ppm>`:** the light's faces as a picture, two rows a view, grey by metres.
@@ -710,17 +671,19 @@ named rather than dropped. A fire's flame writes its own body into its light eac
   node.
 - **`--tile-stores <n>`:** how many store cells faces that see a mover may keep their still casters
   in (spec 13.26; default and at most 64, on top of the budget). 0 draws every such face whole
-  each frame, the path the pool replaced, and says so by name.
+  each frame, and says so by name.
 
 **A swaying material in a cached shadow** (spec 13.26). A material with a `windResponse` moves its
 kept faces only under a scene `wind` that can move it. `"cachedShadowWind": "rest"` keeps it at its
 rest pose in them -- Unreal's "Rigid" -- while the camera and the other shadow maps keep the sway;
-the default `"sway"` redraws every face its sway reaches every frame. `--material-at` (below) is how
+the default `"sway"` redraws every face its sway reaches every frame. `--material-at` (above) is how
 a run changes it mid-way.
 
 `tile_core_fixture.cscn` (from `gen_tile_core_fixture.py`) is a flame-sized light just past a
 candle-sized rim over a wall; render it with `--ortho 0.8 --tonemap linear` and the full shadow's
 radius reads off the wall in pixels. The `shadow-tiles` gate group traces its truth.
+
+### An app's own shaders
 
 **An app's own shaders, from a scene file** (spec 13.29; `docs/shader-subsystems.md`, Shader hooks). No flag sets
 any of them: they are scene content, each a `.glsl` resolved against the scene file as an IES
@@ -746,433 +709,413 @@ post marks were defocused.
 
 ## apps/tree
 
-**apps/tree's own flags**, which went unlisted anywhere for a long time. Capture: `-x/--headless`,
-`-f/--frames`,
-`-S/--screenshot`, `--screenshot-every`, `-W`/`-H`. Scene: `--seed`, `--no-shadows`, `--no-fog`,
-`--no-falling-leaves`. Debug: `--render-mode N` (10 = HDR hotspots, 12 = extrapolation),
-`--msaa N` -- **this app ran 4x MSAA *and* TAA until 11.88 and now runs ONE sample in every mode**,
-interactive and headless alike, which is how the MSAA-only grass specks came to surface here first
-(spec 11.38); `--msaa 4` is how to reach them now. The second reason for one sample is a look
-rather than a cost: above one sample masked geometry takes the alpha-to-coverage path, and against
-near-black leaves on a sunset that traces a bright fringe round the whole canopy. Sun: `--sun-elevation` (**default 0.8 degrees, not 14**),
-`--sun-azimuth` (**193, not 235**). Glare: **on here**, where the engine leaves it off -- the low sun's
-glints over the sea are what it is for; `--no-glare` drops it (spec 13.5).
-Water: `--no-water` (drops the sea AND the seabed together),
-`--water-level`, `--gerstner-waves` (the sea is FFT by default), `--no-water-surf` (no incident
-wave at the shore — removes the bore from the GEOMETRY too, since depth-limited breaking is gated
-on the surf existing, which is what makes it the bisect lever for anything shore-shaped), and the
-spectral sea state `--wind-speed` / `--fetch` / `--swell`. **The first two address the WIND SEA and
-`--swell` is the swell train's `scale`** (spec 11.48); this app authors both trains itself — 6 m/s
-over 15 km and 3.0 m/s over 40 km, against library defaults of 11.5/120 km and 8.4/310 km — because
-the library's are an ocean and this is a 28 m lagoon. Camera: `--cam-eye`,
-`--cam-target`, `--cam-up`, `--fov` -- added because a look bug in a scene this size arrives as a
-reported viewpoint and the orbit controller's state cannot be written on a command line. Walker:
-`--player`, `--walk-speed`, `--look-rate`, `--no-invert-arrows` (pitch is inverted by DEFAULT;
-yaw never is). WASD moves, arrows turn the head, shift sprints, space jumps; **the mouse does not
-touch the camera at all** and the cursor is never captured, so the ImGui sliders stay clickable.
-Night (spec 11.79): stars are **ON by default** here where the library defaults off —
-`--no-stars` is the way off, `--star-hour <deg>` turns the field about the celestial pole (what
-moves the Milky Way band; tree defaults it to 90, where the arc crosses this framing), and the
-fade-in runs +3° to −8°, so the default 0.8° sun shows the first few. `--day-cycle <seconds>`
-runs the clock (spec 11.81) — `--day-cycle 180 --time-of-day 16` is the sunset — and while it
-runs BOTH sun sliders grey out in both panels, since the tick owns them. The MOON is ON here
-too (spec 11.82) — `--no-moon` is the way off, and under a cycle its phase and position both
-follow the sun off one clock, so `--day-cycle 1` sweeps most of a lunar month in a 400-frame
-capture. **It is EXAGGERATED here** (spec 11.84): `moon_size` 6 against the library's life-size
-1, because a physical moon is a dozen pixels, and `moon_brightness` 2, because this app's sea is
-what the moon has to sell and at 1 the water away from the glitter track sits in the bottom few
-codes. `--moon-size` scales the disc and its halo alone; `--moon-brightness` drives the disc AND
-the light, so it is the one that lifts the sea -- and it keeps the sea PHYSICAL where a scatter
-glow would not. `-c/--config <path>`
-restores a config snapshot — the shared GUI panel's Dump Config button has written
-`cetra_config.json` since 11.71, and this app can finally take one back. Tree (spec 13.35):
-`--preset broadleaf|dead|spruce|fir|snag` grows one of tree_gen's named trees, broadleaf being this
-app's own; a conifer preset bakes the needle-spray atlas in place of the broadleaf sprigs.
-`--irregularity F` overrides a conifer's raggedness, 0 a tidy cone, which is the A/B for the
-branch pattern.
+A procedural tree on a domed island in a sea at sunset (`apps/tree/README.md`).
+
+- **Capture:** `-x/--headless`, `-f/--frames`, `-S/--screenshot`, `--screenshot-every`, `-W`/`-H`.
+- **Scene:** `--seed`, `--no-shadows`, `--fog` (the volumetric fog, off by default here),
+  `--no-falling-leaves`.
+- **Tree** (spec 13.35): `--preset broadleaf|dead|spruce|fir|snag` grows one of `tree_gen`'s named
+  trees, broadleaf being this app's own; a conifer preset bakes the needle-spray atlas in place of
+  the broadleaf sprigs. `--irregularity F` overrides a conifer's raggedness, 0 a tidy cone, the A/B
+  for the branch pattern.
+- **Debug:** `--render-mode N` (10 HDR hotspots, 12 extrapolation), `--texture-probe`.
+- **Samples:** `--msaa N`, default 1 in every mode, with TAA carrying the edges. Above one sample
+  masked geometry takes the alpha-to-coverage path, which traces a bright fringe round the canopy
+  against near-black leaves on a sunset. `--msaa 4` is how to reach the MSAA-only grass specks
+  (spec 11.38).
+- **`--headless-jitter`** keeps TAA's jitter and the 0.70 render scale headless: what the window
+  draws, but not deterministic.
+- **Sun:** `--sun-elevation` (**default 0.8 degrees**) and `--sun-azimuth` (**default 193**).
+- **Glare: on here**, where the engine leaves it off, for the low sun's glints over the sea;
+  `--no-glare` drops it (spec 13.5).
+- **Water:**
+  - `--no-water` drops the sea and the seabed together. `--water-level`.
+  - `--gerstner-waves`: the closed-form octaves; the sea is FFT by default.
+  - `--no-water-surf`: no incident wave at the shore, no run-up and no bore. Depth-limited breaking
+    is gated on the surf existing, so this removes the bore from the geometry too, which makes it
+    the bisect lever for anything shore-shaped.
+  - `--no-water-wetness` (the swash leaves the sand as it found it), `--no-water-film` (no swash
+    solver; the closed-form run-up drives), `--water-foam-debug N` (foam as a binary mask: 1 the
+    crest band after erosion, 2 before it, 3 breaking alone).
+  - The spectral sea state: `--wind-speed` and `--fetch` address the wind sea (default 6 m/s over
+    15 km), and `--swell` is the swell train's weight (default 1, 0 no swell). This app authors both
+    trains itself, the swell at 3 m/s over 40 km, because the library's defaults (11.5 m/s over
+    120 km, and 8.4 m/s over 310 km) are an ocean and this is a 28 m lagoon.
+- **Camera:** `--cam-eye`, `--cam-target`, `--cam-up`, `--fov` (degrees). A look bug in a scene this
+  size arrives as a reported viewpoint, and the orbit controller's state cannot be written on a
+  command line.
+- **Walker:** `--player`, `--walk-speed`, `--look-rate`, `--no-invert-arrows` (pitch is inverted by
+  default; yaw never is). WASD moves, the arrows turn the head, Shift sprints, Space jumps. **The
+  mouse does not touch the camera** and the cursor is never captured, so the ImGui sliders stay
+  clickable. With `--cam-eye`, the walker spawns at its x,z.
+- **Night** (spec 11.79):
+  - Stars are **on by default** here, where the library leaves them off; `--no-stars` turns them
+    off. `--star-hour <deg>` turns the field about the celestial pole, which moves the Milky Way
+    band; tree defaults it to 90, where the arc crosses this framing. The fade-in runs +3 to -8
+    degrees, so the default 0.8 degree sun shows the first few.
+  - `--no-night-floor` drops the night-sky floor, the airglow that lights the world after sunset.
+  - The moon is **on** here too (spec 11.82); `--no-moon` turns it off. It is exaggerated: size 6
+    against the library's life-size 1, since a physical moon is a dozen pixels, and brightness 2,
+    since at 1 the sea away from the glitter track sits in the bottom few codes. `--moon-size`
+    scales the disc and its halo alone; `--moon-brightness` drives the disc and the light, so it is
+    the one that lifts the sea, and keeps the sea physical where a scatter glow would not.
+- **The clock** (spec 11.81): `--day-cycle <seconds>` runs it, real seconds per day, and
+  `--time-of-day <h>` (0 to 24, noon at 12) wins over the sun flags; `--day-cycle 180
+  --time-of-day 16` is the sunset. While a cycle runs both sun sliders grey out in both panels,
+  since the tick owns them. Under a cycle the moon's phase and position follow the sun off one
+  clock, so `--day-cycle 1` sweeps most of a lunar month in a 400-frame capture.
+- `-c/--config <path>` restores a config snapshot, as the GUI's Dump Config button writes one.
 
 **Two things about tree's defaults that read as bugs if you meet them cold.** At a 0.8 degree sun
-the frame is lit mostly by sky and is DARK, and the shadow map cannot hold the span it needs --
-roughly 37,000 units against a 6,000 budget -- so **shadows run off the map rather than reaching
-across the island**. `--sun-elevation 8` is the framing that keeps both. And its island is now
-`GROUND_RADIUS` 620 / `GROUND_HEIGHT` 190 (was 900 / 20), so it reads as a hill rather than the
-sandbar 11.32 had.
+the frame is lit mostly by sky and is dark. And the shadow map cannot hold the span such a low sun
+needs, roughly 37,000 units against a 6,000 budget, so **shadows run off the map rather than
+reaching across the island**. `--sun-elevation 8` is the framing that keeps both.
 
 ## apps/forest
 
-**apps/forest is the scene where instancing, LOD and culling all matter at once**
-(spec 11.29). `--headless --frames --screenshot --profiler`, plus
-`--no-instancing`, `--no-lod`, `--lod-bias`, `--no-spatial-sort`,
-`--render-mode`, `--seed`, `--cam-eye`/`--cam-target`, and `--water`
-/ `--water-level <f>` (spec 11.32 — floods the terrain; `terrain_height_at`
-satisfies the water system's `WaterHeightFn` directly, so the surface shoals against
-real terrain with no heightmap stored and nothing copied. Costs 0.535 ms GPU against
-a 78.9 ms opaque pass at 800x450). Exposure is pinned in the
-app, so its frames are comparable without `--no-auto-exposure`.
+**apps/forest is the scene where instancing, LOD and culling all matter at once** (spec 11.29).
+- Capture: `--headless --frames --screenshot --profiler`.
+- Levers: `--no-instancing`, `--no-lod`, `--lod-bias`, `--no-spatial-sort`, `--render-mode`,
+  `--seed`, `--cam-eye`/`--cam-target`, `--glare` (the aperture's diffraction star, which the
+  engine leaves off; spec 13.5).
+- `--water` / `--water-level <f>` (spec 11.32) floods the terrain. `terrain_height_at` satisfies the
+  water system's `WaterHeightFn` directly, so the surface shoals against the real terrain with no
+  heightmap stored or copied, for about half a millisecond of GPU.
+- Exposure is pinned in the app, so its frames compare without `--no-auto-exposure`.
 
-**Since spec 11.63 it is an ISLAND on a quadtree with resident regions**, and the flags
-that reach that are the ones to know before comparing any forest capture. The ground
-falls to a shoreline past 0.72 of the half-extent and the sea is on by default, so
-`--water` is now a restatement rather than a request; `--no-island` takes both the falloff
-and the sea away and is the configuration every arm written before 11.63 measures.
-`--glare` turns on the aperture's diffraction star, which the engine leaves off (spec 13.5).
-`--terrain-extent <f>` is the domain half-width and the only way to ask what a bigger
-world costs — 16x the ground area takes the quadtree from 364 patches to 706 where the
-fixed grid goes 64 to 1024. `--no-quadtree` is the fixed tile grid, NOT an identity: a
-quadtree draws a different surface at a different density, which is the point of it.
-`--no-regions` is one always-resident region over everything. `--region-radius <f>` /
-`--region-span <f>` dial residency down far enough to churn, which the shipping radius
-deliberately does not — it is wider than a kilometre world's own diagonal, so this app's
-historical configuration keeps every region resident and nothing about it moved. `--walk
-<speed>` drives the character forward and turns about-face at the halfway frame, which is
-the ONLY way a headless run crosses a region boundary: residency follows the camera, the
-camera follows the player, and no key is ever pressed. Probes: `--terrain-quadtree-probe`
-(selection, morph windows, seams, and how much relief each level gave up),
-`--region-probe` (residency and a per-cell placement digest), `--cluster-probe`.
+**The island, the quadtree and the regions.** Forest is an island on a CDLOD quadtree with resident regions (spec 11.63), and these are the flags
+to know before comparing any forest capture.
+- The ground falls to a shoreline past 0.72 of the half-extent and the sea is on by default, so
+  `--water` restates a default. `--no-island` takes the falloff and the sea away: the flat domain
+  the arms written before the island measure.
+- `--terrain-extent <f>` is the domain's half-width and the way to ask what a bigger world costs:
+  16x the ground area takes the quadtree from 364 patches to 706, where the fixed grid goes from 64
+  to 1024.
+- `--no-quadtree` is the fixed tile grid, and not an identity: a quadtree draws a different surface
+  at a different density.
+- `--no-regions` is one always-resident region over everything. `--region-radius <f>` and
+  `--region-span <f>` dial residency down far enough to churn. The shipping radius is wider than the
+  world's own diagonal, so every region stays resident.
+- `--walk <speed>` drives the character forward and turns about-face at the halfway frame. It is
+  the only way a headless run crosses a region boundary: residency follows the camera, the camera
+  follows the player, and no key is pressed.
+- Probes: `--terrain-quadtree-probe` (selection, morph windows, seams, and how much relief each
+  level gave up), `--region-probe` (residency and a per-cell placement digest), `--cluster-probe`.
 
-**Since spec 11.68 it has a TRAIL**: a gravel path from the island's centre to a shore, as one
-road on the terrain material, and the scatter keeps props off its course. `--no-trail` is the
-ground before it. Two things worth knowing: the trail draws from its OWN generator rather than
-`rnd()`, so the scatter's stream is exactly where it has always been and the reject only turns
-candidates away (measured 165 rejections, 1936 trees to 1935); and it is SUBTLE at this scale —
-three units wide on a kilometre island, under a canopy — so read it through `--scatter-probe`'s
-`scatter-probe road` row rather than expecting to find it in a wide shot. The trail is held in
-terrain-LOCAL coordinates and handed to the material as local plus centre, the frame
-`splat_origin` is already in, so an origin shift moves the road and the scatter test together.
-**And a road makes the DOMINANT-INDEX read ulp-sensitive under an origin shift.** Two runs that
-shift the world by different amounts reconstruct `authoredPos` with different rounding; the
-dominant-layer index rides the atlas alpha and is read with an unfiltered `texelFetch`, so a
-road's hard discontinuity in that field flips one texel and switches the whole detail tap.
-Measured 106 px of 1.44M at an offset of 4,096, with the scatter rejecting an identical 168
-candidates on both legs — so it is the rendered frame, not the placement. **This is not about
-"analytic edges"**, which is what 11.68 first recorded and got wrong: forest arms the composite
-cache, so the road reaches those pixels through the baked atlas exactly as the splat does. The
-general property is that any splat feature sharp enough to flip the dominant index is
-ulp-sensitive under a shift. Only `origin-auto` passes `--no-trail` for it — it is the one arm
-demanding exactly 0 px between two runs that shifted by different amounts, where every other
-origin bar is 2% of frame, a 20% floor or a ratio. `origin-shift` deliberately keeps the trail:
-it is the suite's only render of a road under a shift, and a road that failed to follow
-`authoredPos` would land in the wrong place, which is full-size rather than sub-pixel.
+**Two things about the island that read as bugs if you meet them cold.** Sea level is **-35, not
+0**: the fbm is symmetric about zero, so a waterline there would flood half the interior. And the
+island reads as a low disc: the fbm's relief inside is about ±15 units over a kilometre against a
+140-unit rim, which is the terrain's own character, not the falloff. `--erode` is the cheapest way
+to give it structure.
 
-**Two things about the island that read as bugs if you meet them cold.** Sea level is
-**−35 and not 0**: the fbm is symmetric about zero, so a waterline there would flood half
-the interior. And the island reads as a LOW DISC — the fbm's realized relief inside is
-about ±15 units over a kilometre against a 140-unit rim, which is the terrain's own
-character and not the falloff. `--erode` is the cheapest thing that gives it structure.
+**The regions are a grid in the app, not a quadtree depth.** The scatter, the prototypes and the
+collider are `forest.c`'s, and the quadtree's patches live at many levels while residency wants one
+size.
+- A region is seeded from its own cell coordinates rather than drawn from one global stream, so it
+  can be freed and rebuilt identically. The clump field it rejects against is a function of
+  position, so groves still run across a border.
+- Its instance nodes go under the global per-prototype groups, not under a node of its own: a group
+  per region would put a foreign mesh between every pair of instances the batcher wants to join, and
+  every run would be length one. A region keeps the list of (group, node) pairs it added instead.
+- **An origin shift frees and rebuilds every resident region and resets those groups to identity.**
+  `scene_apply_origin_delta` translates every root child, which is right for instances placed before
+  the shift and wrong for any placed after.
 
-**The regions are a grid in the APP, not a quadtree depth**, and the two are deliberately
-uncoupled: the scatter, the prototypes and the collider are all `forest.c`'s, and the
-quadtree's patches live at many levels while residency wants one size. A region is seeded
-from its own CELL COORDINATES rather than drawn from one global stream, which is what lets
-it be freed and rebuilt identically — the clump field it rejects against is a function of
-position, so groves still run across a border. Its instance nodes go under the GLOBAL
-per-prototype groups and NOT under a node of its own: a group per region would put a
-foreign mesh between every pair of instances the batcher wants to join, and every run would
-be length one. What a region keeps instead is the list of (group, node) pairs it added.
-**An origin shift frees and rebuilds every resident region and resets those groups to
-identity** — `scene_apply_origin_delta` translates every root child, which is right for
-instances placed before the shift and wrong for any placed after.
+**The trail.** A gravel path runs from the island's centre to a shore as one road on the terrain material, and the
+scatter keeps props off its course (spec 11.68). `--no-trail` is the ground without it.
+- The trail draws from its own generator rather than `rnd()`, so the scatter's stream is unchanged
+  and the reject only turns candidates away.
+- It is subtle at this scale, three units wide under a canopy on a kilometre island, so read it
+  through `--scatter-probe`'s `scatter-probe road` row rather than looking for it in a wide shot.
+- It is held in terrain-local coordinates and handed to the material as local plus centre, the
+  frame `splat_origin` is in, so an origin shift moves the road and the scatter test together.
+- **A road makes the dominant-layer read ulp-sensitive under an origin shift**, as any splat feature
+  sharp enough to flip the dominant index does. Two runs shifted by different amounts reconstruct
+  `authoredPos` with different rounding, the dominant index rides the atlas alpha through an
+  unfiltered `texelFetch`, and one flipped texel switches the whole detail tap. So `origin-auto`,
+  the one arm demanding exactly 0 px between two different shifts, passes `--no-trail`, and
+  `origin-shift` keeps the trail as the suite's only render of a road under a shift.
 
-**And since spec 11.59 it can ERODE its terrain, or load one somebody else made.**
-`--erode` (`--erode-res <n>` default **513, not 512** — the grid is node-centred, so it has
-res−1 cells and a mip pyramid halves only while that is even; at 512 the field gets no
-levels at all and every coarse quadtree patch point-samples the full-resolution surface),
-`--erode-iterations <n>` default 220,
-`--erode-workers <n>` to pin the thread count, `--erode-save <p>` to write the result),
-`--heightmap <p>` + `--heightmap-range <lo> <hi>` to load one instead, and two probes:
-`--terrain-erosion-probe` and `--terrain-height-probe`. Since 11.60 there is a third,
-`--scatter-probe`: the drainage the scatter placed trees into, beside the terrain's own
-distribution and the FRACTION of the domain the rule rejects. That last number is the point of it —
-`erosion.c` normalises flow to its own peak, so a maximum near 1.0 is true of any sim that ran and
-says nothing about whether there were candidates to reject. It is also how `TREE_MAX_FLOW` was found
-rejecting **43.9%** of the terrain under a comment claiming a few per cent; derived from
-`TERRAIN_CHANNEL_FLOW_LO/HI` instead of stated beside them, it rejects 9.9%. All OFF by default — the bake costs
-**452 ms at 512² × 220 on eight threads, 1839 ms on one** (4.1×; taken at 512, while the default is
-now 513 — 0.4% more cells, so read them as the size rather than as the shipping default), and nothing about the app needs
-it. **Those are RELEASE figures**: `build.sh` defaults to the debug preset, which passes no `-O` at
-all, and the same bake there is 2.3 s / 14.8 s. A timing taken from `out/bin` rather than
-`out/release/bin` is measuring the absence of inlining, not the sim.
+**Erosion and heightmaps.** Forest can erode its terrain, or load one somebody else made (spec
+11.59). All off by default.
+- `--erode`, with `--erode-res <n>` (**default 513, not 512**: the grid is node-centred, so it has
+  res-1 cells and a mip pyramid halves only while that is even; at 512 the field gets no levels and
+  every coarse quadtree patch point-samples the full-resolution surface), `--erode-iterations <n>`
+  (default 220), `--erode-workers <n>` to pin the thread count, and `--erode-save <p>`.
+- `--heightmap <p>` with `--heightmap-range <lo> <hi>` loads one instead. **`--heightmap` wins over
+  `--erode`**: a file is a statement about what the terrain is, and re-eroding it would erode
+  someone's finished work.
+- Probes: `--terrain-erosion-probe`, `--terrain-height-probe`, and `--scatter-probe` (spec 11.60),
+  which prints the drainage the scatter placed trees into beside the terrain's own distribution and
+  the fraction of the domain the rule rejects. That fraction is the point: `erosion.c` normalises
+  flow to its own peak, so a maximum near 1 is true of any sim that ran and says nothing about
+  whether there were candidates to reject. `TREE_MAX_FLOW` is derived from
+  `TERRAIN_CHANNEL_FLOW_LO/HI` and rejects about 10%.
+- The bake costs 452 ms at 512² x 220 on eight threads and 1839 ms on one, in a release build. A
+  debug build (`build.sh`'s default, with no `-O`) takes 2.3 s and 14.8 s, so time a bake from
+  `out/release/bin`, not `out/bin`.
 
-**And since spec 11.69 it can STREAM a field rather than hold one.** `--terrain-stream <p.cts>`
-installs one (opt-in by naming a file, so there is no `--no-terrain-stream`: the off leg is the
-whole-file `--heightmap` path every terrain arm already covers, and a stream WINS over both
-`--heightmap` and `--erode`, said out loud like the pair below it).
-`--terrain-stream-save <p>` writes the installed field out and doubles as the `.r16`→`.cts`
-converter — it runs after the pyramid site, because the levels are what the file stores, and it
-**refuses a field with no coarse levels** (which is what 512, or the 256² committed fixture,
-produces). Then `--terrain-stream-budget <n>` (tiles read per update), `--terrain-stream-window
-<n>` (window edge in tiles), `--terrain-stream-resident-res <n>` (the diagnostic that lowers the
-whole-level threshold so a fixture-scale field streams at all) and `--terrain-stream-probe <n>`.
+**A debug profile re-orders costs, not just inflates them.** Forest's whole startup is 6.57 s debug
+against 1.40 s release, and Jolt's per-region BVH build is 24x slower in debug where the scatter is
+5.7x, so a debug profile makes cheap things look expensive in exactly the proportion that motivates
+work on them. In a release build the scatter and the colliders are 6% of startup. The largest
+region-load cost in either build is Jolt's BVH builder, 85% of collider time, inside a vendored
+library.
 
-**What it costs, and the scaling is not the one the word "streaming" suggests.** A 4097² eroded
-field is a 300 MB file against a 291 MB resident one; streamed over a 4 km domain the windows hold
-**86.5 MB**, and over an 8 km domain **36.5 MB** — LESS, because resident cost tracks the coverage
-the app asks for divided by the CELL rather than the size of the map, and doubling the world at a
-fixed node count doubles the cell. **Growing a world is free; refining it is not.** On forest's own
-1 km default it buys nothing and holds 274 MB, because the region radius asks for exact heights
-across the whole world — the system answering correctly, not failing to arm. This is a big-world
-feature and forest's shipping world is not one.
+**Streaming a field.** Forest can stream a field rather than hold it (spec 11.69).
+- `--terrain-stream <p.cts>` installs one. It is opt-in by naming a file, so there is no
+  `--no-terrain-stream`, and a stream wins over both `--heightmap` and `--erode`.
+- `--terrain-stream-save <p>` writes the installed field out and is also the `.r16` to `.cts`
+  converter. It runs after the pyramid is built, since the levels are what the file stores, and it
+  **refuses a field with no coarse levels**, which is what a 512 field or the 256² fixture gives.
+- `--terrain-stream-budget <n>` (tiles read per update), `--terrain-stream-window <n>` (window edge
+  in tiles), `--terrain-stream-resident-res <n>` (lowers the whole-level threshold so a
+  fixture-scale field streams at all) and `--terrain-stream-probe <n>`.
 
-**Two things about it that read as bugs if you meet them cold.** Level 0's window is sized by
-whichever is LARGER of `--terrain-stream-window` and the coverage a region load needs, and the
-latter comes from `--region-radius` — so at the shipping 1500 the finest window covers a
-kilometre domain outright and nothing about streaming is observable. **`--region-radius` is the
-lever that makes level 0 actually stream**, which is why every gate arm here passes it and why
-the walk arm inherits `REGION_CHURN`. And at forest's default 513 field, `RESIDENT_RES` 1025
-holds *every* level whole, so streaming quiesces into an exact identity with no special case —
-that is the identity configuration, not a failure to arm.
+**What it costs: resident memory tracks the coverage the app asks for divided by the cell, not the
+size of the map.** A 4097² eroded field is a 300 MB file against 291 MB held whole; streamed over a
+4 km domain the windows hold 86.5 MB, and over 8 km 36.5 MB, less, because doubling the world at a
+fixed node count doubles the cell. Growing a world is free; refining it is not. On forest's own 1 km
+world it buys nothing (274 MB), because the region radius asks for exact heights across the whole
+world. It is a big-world feature.
 
-**The `.cts` fixture is generated at gate time, not committed.** `terrain_fixture.r16` is 256
-nodes and 255 is odd, so it halves zero times, carries no coarse level, and the save refuses it;
-the streaming arms paint a 257-node twin from the same closed form `gates.py` already restates.
-No second asset, no second statement of what that terrain is.
+**Two things about it that read as bugs if you meet them cold.**
+- Level 0's window is sized by the larger of `--terrain-stream-window` and the coverage a region
+  load needs, which comes from `--region-radius`. At the shipping radius the finest window covers a
+  kilometre domain outright and nothing about streaming is observable, so **`--region-radius` is
+  the lever that makes level 0 stream**. Every streaming gate arm passes it, and the walk arm
+  inherits `REGION_CHURN`.
+- At forest's default 513 field, `RESIDENT_RES` 1025 holds every level whole, so streaming settles
+  into an exact identity: that is the identity configuration, not a failure to arm.
 
-**That warning did not stop it happening a second time, so here is the general form** (spec 11.64).
-Forest's whole startup is **6.57 s debug against 1.40 s release**, and the ratio is not uniform —
-Jolt's per-region BVH build is **24x** (0.981 s → 0.040 s) where the scatter is 5.7x
-(0.206 s → 0.036 s). So a debug profile does not merely inflate, it **re-orders**, and the danger
-is specific: it makes cheap things look expensive in exactly the proportion that motivates work on
-them. A whole perf backlog was written against `-O0` arithmetic and retired on one release run,
-where the scatter and the colliders together are 6% of startup rather than 26%. **The largest
-region-load cost in either build is Jolt's BVH builder at 85% of collider time** — inside a
-vendored library, which is why nothing reading cetra's own source found it.
+**The `.cts` fixture is generated at gate time, not committed.** `terrain_fixture.r16` is 256 nodes
+and 255 is odd, so it has no coarse level and the save refuses it; the streaming arms paint a
+257-node twin from the closed form `gates.py` already states.
 
-`--heightmap` WINS over `--erode`:
-a file is a statement about what the terrain is, and re-eroding it would be eroding someone's
-finished work.
+**The derived-data cook.** Forest and render take the same three flags (spec 11.99).
+- `--cook-dir <p>` points the cache somewhere other than the default, `cooked/` at the repo root or
+  `CETRA_COOK_DIR`.
+- `--no-cook` runs every bake live and touches no cache. **Any measurement of a bake must carry
+  it**, since a warm cache serves the artefact instead of running the work. The terrain gate group
+  forces it, because `terrain-threads` varies a worker count the cook key omits.
+- `--cook` is the pre-warm verb: a headless run whose deliverable is the per-artefact
+  `cook site=...` rows and the `cook-summary`. On render it exits when the async loader has drained,
+  so a texture-heavy model warms fully; since a headless run drains the loader before frame 1, that
+  is the second frame for what the start-up asked. A `--cook` against a warm directory exits 0 with
+  `cooked=0`, which is success.
+- `--terrain-erosion-probe` under a cook hit refuses by name rather than printing stats, since the
+  sim it describes never ran; pass `--no-cook` to measure it.
+- On the gate fixture (eroded 257 x 60) a cold start is about 6.7 s debug and a warm one about
+  2.7 s.
 
-**The derived-data cook** (spec 11.99) — forest and render both take the same three flags.
-`--cook-dir <p>` points the transparent cache somewhere other than the default (`cooked/` at the
-repo root, or `CETRA_COOK_DIR`); `--no-cook` runs every bake live and touches no cache — **the
-flag any measurement OF a bake must carry**, since a warm cache serves the artefact instead of
-running the work being measured (the terrain group forces it wholesale, because `terrain-threads`
-varies a worker count the cook key deliberately omits); `--cook` is the pre-warm verb, a headless
-run whose deliverable is the per-artefact `cook site=...` rows and the `cook-summary`; on render
-it exits when the async loader has drained, so a texture-heavy model warms fully rather than at
-five publishes per frame. Since spec 14.8 a headless run drains the loader before frame 1, so for
-what the start-up asked that is the second frame. A `--cook` against an already-warm directory exits 0 with `cooked=0`,
-which is success. Note `--terrain-erosion-probe` under a cook hit refuses by name rather than
-printing stats — the sim it describes never ran; pass `--no-cook` to measure it. Measured on the
-gate fixture (eroded 257×60, single samples off the suite's own runs): cold ~6.7 s debug, warm
-~2.7 s.
+**A world away from the origin** (spec 11.62):
+- **`--world-offset <units>`:** places the terrain, scatter, lights, camera and physics that far
+  from the origin, the offset carried in every coordinate. It is the instrument for fp32's
+  precision far out.
+- **`--origin-shift-at <frame>`:** re-centres the world on the camera at that frame, in the
+  `--shadows-off-at` idiom, since a shift is a transition no headless run reaches otherwise.
+- **`--origin-shift-distance <units>`:** re-centres automatically once the camera drifts that far.
+- **`--water` is skipped, with a warning, under any of the three.** Water's bed domain is a
+  half-size about the storage origin with no centre of its own, so a moved world would shoal
+  against terrain that is not under it.
+- The render app's **`--shadow-center <x,y,z|auto>`** sets `ShadowSystem.scene_center`, which
+  nothing else outside the process reaches.
 
-**And since spec 11.62 it can put its world anywhere, and move it while running.**
-`--world-offset <units>` places the terrain, scatter, lights, camera and physics that far from the
-origin with the offset MATERIALISED into every coordinate — the instrument fp32's relative precision
-was measured with. `--origin-shift-at <frame>` re-centres the world on the camera at a named frame,
-in the `--shadows-off-at` idiom, because a shift is a TRANSITION and no headless arm can reach one
-otherwise. `--origin-shift-distance <units>` does the same automatically once the camera drifts that
-far. **`--water` is refused with either**, and says so: water's bed domain is a half-size about the
-storage origin with no centre of its own, so an offset world would shoal against terrain kilometres
-away. `apps/render` gains `--shadow-center <x,y,z|auto>`, which is the only way to reach
-`ShadowSystem.scene_center` from outside the process.
+What moving a world costs is mostly not precision. Anything that reads a world position as an
+identity, such as forest's wind phase hash, changes completely a few units out, and stays changed
+however far the world goes, since a hash is discontinuous. Such reads take the authored position
+from `include/world_origin.glsl`'s `authoredPos()`. Precision itself degrades gradually: about
+0.1% of the frame at an offset of 12, 4% at 12,000 and 45% at 262,140.
 
-**What that measurement found is the thing to carry**, because it is not what anyone predicts: the
-dominant cost of moving a world is NOT precision. It is anything reading a world position as an
-IDENTITY. Forest's wind phase hash re-phased **43% of the frame from twelve units out, and was still
-43% at 12,000** — flat, because a hash is discontinuous. Underneath it the actual precision curve is
-orderly: 0.10% of the frame at offset 12, 0.73% at 1,200, 3.95% at 12,000, 45% at 262,140, and the
-terrain height function's own error quadruples as the offset quadruples. So `include/world_origin.glsl`
-and its `authoredPos()` are the larger half of the feature, not a footnote to the subtraction.
+**What the terrain flags reach.** `docs/terrain.md` describes the terrain; these are the contracts
+of `procedural/terrain.h` that the flags above expose:
+- **A field has two residencies.** `TerrainField.stream` non-NULL means its planes address a
+  resident window, not the whole level, so indexing it res by res is invalid: `heightmap_save`,
+  `terrain_field_measure` and erosion refuse a streamed field by name, and its height range comes
+  from the file's manifest. The sampler is the same either way.
+- **A height has levels.** `terrain_height_at_level(p, x, z, k)` is the surface with everything
+  finer than level k's cell removed: a filtered mip on the field path, dropped octaves on the fbm
+  path. Level 0 is `terrain_height_at` bit for bit. A consumer names a cell
+  (`terrain_level_for_cell`), not a level, which keeps a quadtree patch and its parent one level
+  apart without either knowing of the other. The pyramid filters under a separable `[1 2 1]` tent.
+  Taking every other node instead removes nothing whenever a patch cell is a whole multiple of a
+  field cell, since the coarse level then holds exactly the floats level 0 returns there.
+- **`island_start` / `island_depth` shape the analytic height alone** (spec 11.63), so
+  `terrain_field_seed` bakes the island in and erosion erodes it as an island, while a heightmap
+  loaded from a file is left as the file says. The radius is Euclidean against a square domain, so
+  the corners are open sea.
+- **A field samples bicubic, not bilinear**: `terrain_normal_at` central-differences over 1.30
+  units on a cell of about 2, and a piecewise-constant derivative would facet the normals and reach
+  the scatter's slope gate as rows of missing trees.
+- **Outside `[-extent, +extent]` a field clamps its coordinate, not its taps.** Clamping taps
+  alone interpolates with an out-of-range `t` and extrapolates the cubic past the edge, and callers
+  do ask out there: the third-person eye trails the player off the domain. The two differ only in
+  the first cell past the edge, which is where `terrain-clamp` samples.
+- **`terrain_height_at` is not thread-safe.** The analytic path memoizes a permutation table in
+  file statics, and the function's contract is the weaker of its two paths.
+- **`terrain_mask_at` returns flow, deposit and wear, all exactly 0 with no field**, so a caller
+  blending by them falls back to the un-eroded look with no special case. `flow` is drainage, not
+  depth (rain falls on every cell, so standing water says nothing), log1p-compressed because
+  drainage is heavy-tailed. Its mean is near 0.4: a channel is the top few per cent, and a
+  threshold near the mean paints the whole map as riverbed.
+- **Rain over evaporation is the equilibrium water depth** in `erosion.c`. Set it to ten units over
+  two-unit cells and the terrain is a lake with nothing draining.
+- **The sim is bit-identical at any worker count, within one build.** `--terrain-erosion-probe`
+  prints an FNV-1a `digest` over all four planes, which is the only thing that can show it; the
+  budget sums cannot, since addition hides compensating differences. An `-O0` and an `-O2` build of
+  the same source differ.
 
-**`terrain_height_at` now has two SOURCES and one contract** (`procedural/terrain.h`). NULL field =
-the fbm, which is byte-identical to every frame before 11.59 (measured 0 px on forest at
-`--render-mode 6`, against a 0 px floor). A `TerrainField` = a Catmull-Rom sample of a stored grid.
-Three things about it are contracts rather than details:
+`docs/terrain.md` is where these belong, and most of them are not yet there.
 
-**Since 11.69 a field has two RESIDENCIES, which is a different axis from its two sources.**
-`TerrainField.stream` non-NULL means the plane pointers address a resident WINDOW rather than the
-whole level, so the res-by-res indexing every other field admits is invalid on that one — the
-paths that would do it (`heightmap_save`, `terrain_field_measure`, erosion) refuse a streamed
-field by name and the range comes from the file's manifest. The SAMPLER is unchanged either way:
-`sample_plane` became a view over `(base, res, stride, origin)`, and at stride == res with origin
-zero the address reduces to what it always was, so the unstreamed path is bit-identical and stays
-a single untested branch rather than becoming a mode.
+**Wind on the trees.** Both prototypes come from `tree_gen`, which authors the UV1 branch phase and
+flex weight, so wind is a material field. A swaying mesh carries a cull bound, so the trees stay
+cullable. Wind is evaluated in object space from per-mesh uniforms, so without `phase_variation`
+every instance of a shared prototype sways on the same beat; the scene sets it.
+`wind.phaseVariation` is a `.cscn` key with no CLI flag, defaulting to 0 (lockstep). The phase is
+derived from the object's world origin rather than stored per instance: an `InstanceBlock` field
+would cost a kilobyte of std140 padding to restate the model matrix, and a phase keyed to batching
+would flip as LOD and culling reshuffle runs.
 
-**And since 11.63 it has LEVELS, on both sources.** `terrain_height_at_level(p, x, z, k)` is the same
-surface with everything below level k's own cell removed — a filtered mip on the field path, dropped
-octaves on the fbm path — and **level 0 is `terrain_height_at` bit for bit**. A consumer names a CELL
-rather than a level index (`terrain_level_for_cell`), which is what keeps a quadtree patch and its
-parent one level apart without either knowing the other exists. The pyramid **FILTERS** under a
-separable `[1 2 1]` tent, and the obvious alternative is worth knowing about because the spec
-originally mandated it: every other node, so a coarse node IS a fine node — which delivers **nothing**
-whenever a patch cell is a whole multiple of a field cell, because reading level 0 at every other node
-returns exactly the floats level 1 stores. Measured 0.000000 units dropped at every level; the tent
-drops 1.87 at one quadtree level and 4.02 at the next. What a coarse mesh needs is the detail REMOVED,
-not addressed more cheaply.
+**Scatter order decides whether batching works at all.** The batcher joins only consecutive
+survivors, so with most props frustum-culled a randomly ordered scatter collapses to runs of one.
+The instances are Morton-ordered within each prototype, which takes the same 2,979 instances from
+2,368 draws to 1,287; `--no-spatial-sort` scatters in draw order instead, and `forest-order`
+asserts the difference. **LOD fights instancing**: the batch key is `(mesh, lod)`, so one prototype
+spanning a range of distances splits into separate runs, a CPU-for-GPU trade whose direction
+depends on the framing.
 
-**`island_start` / `island_depth` shape a domain into an island** (11.63), applied to the ANALYTIC
-height alone — so `terrain_field_seed` bakes it in and an eroded island is eroded AS an island, while
-a heightmap loaded from a file is left alone because a file is a statement about what the terrain is.
-The radius is Euclidean against a square domain: it passes 1 at the edge midpoints and reaches √2 at
-the corners, so the corners are open sea.
-
-- **Bicubic, not bilinear**, because `terrain_normal_at` central-differences over 1.30 units on a
-  ~2-unit cell and a piecewise-constant derivative would facet the normals — reaching the scatter's
-  slope gate as rows of missing trees, not just the shading.
-- **Outside `[-extent, +extent]` a field CLAMPS its coordinate**, not its taps. Clamping taps alone
-  still interpolates with an out-of-range `t`, which extrapolates the cubic past the edge. Callers
-  really do query out there: the third-person camera eye trails the player and leaves the domain.
-  Note this is nearly untestable far out — Catmull-Rom over four EQUAL taps returns that value, so
-  an unclamped sampler also returns the edge once every tap has clamped to one column. The
-  difference lives in the first cell beyond the boundary, which is where `terrain-clamp` samples.
-- **Thread-safety is unchanged, not improved.** The analytic path still memoizes a permutation table
-  in file statics. The field path happens to touch no statics, but the function's contract is the
-  weaker of the two.
-
-**The masks are why the sim exists, more than the silhouette is.** `terrain_mask_at` returns flow /
-deposit / wear, all exactly 0 with no field — so a caller blending by them degrades to the
-un-eroded look rather than to a special case, which is what keeps the analytic path an exact
-identity. `flow` is **drainage, not depth**: rain falls on every cell so standing water is high
-everywhere and says nothing, and it is log1p-compressed before scaling because drainage is
-heavy-tailed where erosion and deposition are not. Its mean sits near 0.4, so **a channel is the
-top few per cent and a threshold near that mean paints the whole map as riverbed.**
-
-**Two numbers to know before touching `erosion.c`.** Rain over evaporation IS the equilibrium water
-depth — the first defaults put ten units of standing water over two-unit cells and the whole terrain
-was a lake with nothing draining. And the sim is **bit-identical at any worker count** by
-construction (double-buffered Eulerian, disjoint row bands, no synchronisation past the joins, the
-cloud bake's shape); `--terrain-erosion-probe` prints an FNV-1a `digest` over all four planes, which
-is the only thing that can make that claim — the budget sums cannot, because addition hides
-compensating differences. **Droplet/Lagrangian erosion is refused on exactly that test.**
-**The claim is WITHIN one build**: the digest is identical across worker counts and differs between
-an `-O0` and an `-O2` build of the same source, which is the same "two runs of one build is not two
-builds" rule the render side already lives under.
-
-**It has wind on its 2,000 trees since spec 11.53**, and the header comment saying it deliberately
-had none is gone with it. A wind material used to be exempt from every frustum test, so 2,000
-uncullable trees would have defeated the app's whole purpose; with the bound in place the wind costs
-**5 meshes of cull out of 28,256** and nothing in the opaque pass. Both prototypes come from
-`tree_gen`, which already authors the UV1 branch phase and flex weight, so this is a material field
-and not new geometry. The scene sets `phase_variation`, without which every instance of a shared
-prototype sways on the same beat -- wind is evaluated in object space from per-mesh uniforms, so
-making the trees cullable is necessary and *not sufficient* for a forest to look like one.
-**`wind.phaseVariation` is a `.cscn` key with no CLI flag**, in turns, and it **defaults to 0** --
-which is the lockstep every scene authored before 11.53 had, and an exact identity rather than a
-close one, so no existing wind frame moved. It is derived from the object's world origin rather than
-stored per instance: an InstanceBlock field would cost a kilobyte of std140 padding to restate what
-the model matrix already says, and a phase keyed to batching would flip as LOD and culling reshuffle
-runs and would break the instanced-against-non-instanced identity.
-
-Two things it establishes that no fixture could. **Scatter ORDER decides whether
-batching works at all**: the batcher joins only consecutive survivors, so with
-most props frustum-culled a randomly-ordered scatter collapses to runs of one.
-Morton-ordering the instances within each prototype takes the same 2979
-instances from 2368 draws to 1287 — identical instances and identical triangles,
-only the draw count moves, which is what `forest-order` asserts. And **LOD fights
-instancing**, inherently: the batch key is `(mesh, lod)`, so one prototype
-spanning a range of distances splits into separate runs. It is a CPU-for-GPU
-trade whose direction depends on the framing.
-
-**apps/tree is not 0 px headless across two runs** on its orbit path -- measured 31,034 px between
-two runs of one unmodified build, and 5,655
-px at frame 1, so it is not accumulation. `camera_drag_update` at `tree.c:761`
-takes `glfwGetTime()`, deliberately, for drag damping. Anything comparing tree
-frames has to measure that floor first.
-
-**Instancing and LOD are both ON by default and both are escape-hatch flags.**
-`--no-instancing` gives one draw per mesh; the batched and unbatched paths carry
-the same floats into the same arithmetic, so it compares at 0 px and exists for
-bisecting rather than for looking different. `--no-lod` pins every draw to LOD
-level 0. Neither moves a golden today: LOD chains are built at import by
-meshoptimizer, which weights boundary and seam edges heavily, so the leaf cards
-and grass blades that dominate this corpus barely simplify, and every skinned
-mesh is refused outright (weights do not transfer to surviving vertices). raiden
-builds 0 chains, `abandoned_window` builds 23 of 71. Note **weighted, not
-locked** -- `lod.c` passes options 0, and only `meshopt_SimplifyLockBorder` makes
-a border uncollapsible. The distinction matters the moment anything tiles
-(`apps/forest`): without that flag two neighbours at different levels can
-T-junction, so a crack is a possibility the code does not currently exclude. The `triangles` column in the
-SUBMISSION table is the only counter a level change moves -- `draws` and
-`instances` are blind to it.
+**Instancing and LOD are on by default, and both flags are escape hatches.**
+- **`--no-instancing`:** one draw per mesh. The batched and unbatched paths carry the same floats
+  into the same arithmetic, so it compares at 0 px; it is for bisecting.
+- **`--no-lod`:** every draw at LOD level 0. LOD chains are built at import by meshoptimizer,
+  which weights boundary and seam edges heavily, so leaf cards and grass blades barely simplify,
+  and a skinned mesh is refused, since weights do not transfer to surviving vertices.
+- **Borders are weighted, not locked**: `lod.c` passes options 0, and only
+  `meshopt_SimplifyLockBorder` makes a border uncollapsible. Anything that tiles can therefore
+  T-junction between two neighbours at different levels.
+- **Only the `triangles` column** of the submission table moves with a level change; `draws` and
+  `instances` are blind to it.
 
 ---
 
 ## apps/silent
 
-A grimy kitchen in a house on a foggy night street, walked in first person (spec 13.6). Since spec
-13.25 the house is a plain two-storey clapboard one with a long P.T. hall, and the Gothic house
-stands at the end of the street, up a drive through dead trees. Its kitchen is a dining room, and
-the cat lives there. Everything of the Gothic house below is at the mansion's origin, (115, 8,
-40) added to its old coordinates. In the window: click to capture the mouse, and **Escape** (or pad
-Start) pauses, which frees it; WASD walks, Shift hurries, and the mouse or the arrow keys look.
-**F** (or pad Y) toggles the flashlight once it is found, **E** (or pad X) opens a door or takes
-what is in reach, **Tab** (or pad Back) opens the backpack, **M** (or pad RB) opens the town map
-once it is had, **K** (or a pad's right-stick click) begins and ends the haunting anywhere, and
-**G** or backtick shows the debug GUI.
+What the game is, its controls and how its world is built are in `apps/silent/README.md`. These
+are its flags. The pinned views are in world coordinates, at `-W 960 -H 540`.
 
-**The title, the saves and the pause menu** (specs 13.49 and 13.50).
-- **The title.** A windowed run comes up on it, over the street, with Continue (the newest game),
-  New Game, Load Game, Settings and Exit to Desktop. Load Game lists the games kept, newest first;
-  Delete asks about the one the list is on.
-- **The saves.** There are no manual saves: a game saves itself into its own slot, `silent-1` to
-  `silent-8`, when something is taken, a place is found, the player goes into another room (at most
-  every 10 s) and on quitting. The slots are JSON files in the per-user directory
-  (`~/Library/Application Support/cetra` on macOS); `CETRA_SETTINGS_DIR` puts them elsewhere.
-- **The pause menu.** Escape or pad Start opens it over the game, and everything stops under it,
-  the rain in the air included. It holds Resume, Settings, Quit to Title and Exit to Desktop;
-  Escape or pad B goes back.
-- **Quit to Title** saves the game, goes black, puts the world back as it was built and comes up on
-  the title. The world's start is kept at load in `silent-start.json` beside the slots, which no
-  list shows.
-- **Settings,** from either menu, holds Volume, Display (windowed, fullscreen, borderless), VSync,
-  Look speed, Invert look and Field of view. Each applies as it is changed, and they are kept in
-  `silent-settings.json` beside the slots. `--mute` and `--fov` win over the file.
-- **The cursor.** In play the mouse looks: in fullscreen at once, and in a window or borderless
-  once a click takes it. The title and every menu show the cursor only while the mouse is in use,
-  hiding it from the moment a menu key or a pad is. The loading screen shows none.
-- **A run that starts somewhere of its own skips the title,** and saves nowhere unless `--slot`
-  says where. That is a headless run, or one started from a state on the command line: the flags
-  below, or the player, the bag, the map, the key, the finds, the crouch, the story, the haunting,
-  the cat's place or a pinned camera. Such a run has no Quit to Title.
+### Capture, framing and playing headless
 
-The flags:
+- **`-x`, `-f <n>`, `-S <path>`, `--screenshot-every <n>`, `-W`/`-H`** (default 1600x900).
+- **`--cam-eye x,y,z` with `--cam-target x,y,z`:** pins the camera, so a view can be photographed
+  twice and a change A/B'd. The two go together; one alone is ignored with a warning.
+- **`--fov <deg>`:** the vertical field of view (default 68). It wins over the settings file.
+- **`--player-at X,Z[,YAW]`:** starts the player there, standing on whatever is under them (the
+  ground, a floor, the dock), facing YAW degrees from +z. `-52,30` is the south barricade's gap,
+  `-65,113` the track's foot at the cabin, `-78,118,90` the dock looking at the cabin. Over open
+  water it stands the player on the bed, under the surface, so look at the lake from a pinned view.
+- **`--seed <n>`:** reseeds the clutter on the counters and shelves, and the street: which windows
+  are lit, blinded or boarded.
+- **`--pad-script <file>`:** replays a scripted gamepad on slot 0, in the format
+  `cetra/src/game/input.h` gives. **`--trace-player`** prints the player's position every 30
+  steps. That is gametest's pair, so a walk can be driven and read back with no controller.
+- **`--profiler`:** per-pass timing and submission counts, at exit.
+
+Some pinned views:
+- the kitchen towards its window: `--fov 72 --cam-eye 2.2,1.95,13.55 --cam-target 2.2,1.25,10.1`;
+- the street past the nearest lamp: `--fov 70 --cam-eye -0.8,1.7,5.0 --cam-target -16,1.6,-1.5`;
+- the house from the street: `--cam-eye 4,1.7,-2 --cam-target 0,4,14`;
+- the hall, from the front door and back: `--cam-eye -0.75,1.9,10.5 --cam-target -0.75,1.5,19`
+  and `--cam-eye -0.75,1.9,18.9 --cam-target -0.75,1.5,10`;
+- the living room and the bathroom: `--cam-eye -1.9,1.9,11.0 --cam-target -3.6,1.0,15.5` and
+  `--cam-eye 0.3,1.9,14.1 --cam-target 2.1,1.0,15.9`;
+- the street's end, where the drive leaves it: `--cam-eye 30,1.7,1.5 --cam-target 60,2,0`;
+- the mansion from the drive: `--cam-eye 115,11,24 --cam-target 115,12,45`;
+- the dining room: `--cam-eye 115.6,9.9,53.3 --cam-target 118.5,9.0,51.2`;
+- the armour in the mansion's hall: `--flashlight --cam-eye 114.75,9.6,52.3 --cam-target
+  113.7,9.2,53.15`;
+- the layout from above: `--day --no-rain --no-fog --cam-eye 70,160,25 --cam-target
+  70.01,0,25.2`.
+
+### The title, saves and pause menu
+
+A windowed run comes up on the title, where Load Game lists the games kept, newest first, and
+Delete asks about the one the list is on. A game saves itself into its slot, `silent-1` to
+`silent-8`, when something is taken, a place is found, the player goes into another room (at most
+every 10 s) and on quitting. The slots are JSON files in the per-user directory (`~/Library/Application Support/cetra` on macOS), which
+`CETRA_SETTINGS_DIR` moves. `silent-settings.json` (the settings) and `silent-start.json` (the
+world as built, which Quit to Title puts back) sit beside them.
+
+**A run that starts somewhere of its own skips the title, saves nowhere unless `--slot` says where,
+and has no Quit to Title.** That is a headless run, or one started from a state on the command
+line: any of the flags below, or the player, the bag, the map, the key, the finds, the crouch, the
+story, the haunting, the cat's place or a pinned camera.
 - **`--load <slot>`:** starts from the game saved in `<slot>`.
 - **`--new-game`:** starts a new game, without the title.
 - **`--slot <slot>`:** saves this run into `<slot>` as it goes.
 - **`--no-autosave`:** a game from the title that never saves itself.
 - **`--title`:** the title headless too, for pictures and pad scripts.
 - **`--title-screen <s>`:** the title with `games` (the list) or `delete` (asking about the newest)
-  over it; it implies `--title`.
+  over it; implies `--title`.
 - **`--pause-screen <s>`:** the pause menu (`menu`), or the settings over it (`settings`), up once
-  the game is played, for a headless picture of them.
+  the game is played, for a headless picture.
 
-**The backpack** (spec 13.40). It lies on the bed in the home's back bedroom, the flashlight in it;
-until it is taken F finds nothing and the cellar flight's foot is as far as the player goes. The
-flashlight is an army lamp clipped high on the jacket's chest, a little to the left (spec 13.55),
-its beam aimed at what the player looks at. Its
-screen lists what it holds in a grid and turns the chosen one: the arrows, WASD or the D-pad walk
-the grid, and Enter, E, pad A or a click chooses; Tab or Escape (pad B) shuts it.
-- **`--backpack`:** starts with the backpack, the flashlight in it.
-- **`--open-backpack <item>`:** starts with its screen open on `<item>` (`flashlight`, `map` or
-  `key`), for a headless picture of it; it implies `--backpack`, `map` implies `--map` and `key`
-  implies `--key`.
+### The frame
 
-**The town map** (spec 13.43). It hangs half open on the kitchen fridge's freezer door. E takes it
-into the backpack once the backpack is had, and M or pad RB opens it, from the game or from the
-backpack's screen. On the map: a drag, WASD, the arrows or the left stick move the view, and the
-wheel, `=` and `-`, or the triggers zoom it. M, Tab or Escape (pad B) shuts it; Tab from the game's
-map goes on to the backpack, and the map opened from the backpack goes back to it. Each place found
--- the barricaded north arm, the road's end at the gorge, the cabin by the lake -- is written on in
-ink the next time the map opens, after the player's own house, which is circled the first time.
-- **`--map`:** starts with the map in the backpack, the fridge bare; it implies `--backpack`.
-- **`--open-map`:** starts with the map's screen open, over the backpack's under
-  `--open-backpack`; it implies `--map`.
-- **`--found <list>`:** starts with places found, written on the map when it next opens:
-  `barricade`, `road-end` and `cabin`, comma-separated, or `all`. The house is found with the map.
-- **`--map-export <path>`:** writes the town's plan, every shape the map prints, for
-  `tools/make_map.py`, and stops. It is headless with no cat and no loading screen. The committed
-  plan is `apps/silent/tools/town_plan.txt`; re-export it and rerun the tool when the street, the
-  lake, the hill or the land changes.
+**One sample with jittered TAA, headless as well as windowed**, which is not the engine's usual
+headless setup:
+- **MSAA outlines the street.** The fog composite takes one depth for an edge pixel, and where half
+  its samples are sky that depth is too near, so every silhouette comes out traced in a dark,
+  unfogged line.
+- **Headless TAA without jitter does nothing useful**: it integrates one sample position forever,
+  and the engine refuses a render scale under it.
 
-**Walking** (spec 13.47). The body moves in 60 Hz physics steps and is drawn between the last two,
-so the eye moves every frame; it gets going in a third of a second and stops in a fifth. A flight
-of stairs collides as a ramp along its nosings and is climbed at the pace a person keeps on it,
-2.4 treads a second walking up the mansion's. The engine's gait (`gait.h`) times the steps from the
-ground covered, eases the eye up and down kerbs and steps, bobs the head 2 cm walking and 3.5
-jogging with a centimetre of sway, and lets each foot fall, which is heard on what it lands on:
-the material of what the feet stand on, a rug, the lake, or the open ground's drive, track, yard,
-woods, shore or rock.
+So a screenshot is what a player sees, and it still repeats exactly, because the jitter follows the
+frame index.
+- **`--no-taa`:** no temporal filter and so no upscale: full resolution, raw edges.
+- **`--msaa <n>`:** puts multisampling back, outlines and all.
+- **`--render-scale <f>`** (0.5-1, default 0.5): the upscale. It rides on TAA, so `--no-taa`
+  ignores it. At 0.5 fine texture turns to mush in a 1:1 crop and changes little at viewing size,
+  since 0.5 of a Retina window is still about 960x540.
+
+### Loading and the cooked light
+
+In a window it loads under the engine's loading screen (spec 13.34). A headless run has no screen,
+so its frames are the game's from the first.
+- **`--no-loading-screen`:** loads under a black window instead.
+- **`--no-play-prompt`:** the screen switches off by itself once the game is ready, with no PLAY to
+  press.
+- **`--loading-screen`:** the screen headless too. Its clock is then a frame's fixed step, so it
+  lifts later in frames than it does windowed on the wall clock.
+- **`--capture-budget-ms F`:** the most of a frame the light captures may take, headless too. By
+  default it is `LOADING_CAPTURE_MS` (100) behind the loading screen and the black, the engine's
+  budget after it, and no limit headless.
+- **`--startup-ms`:** prints a `startup-ms` row for each loading step and held frame, how long it
+  took, and rows for when the lighting is in (`lit`) and the view comes up (`up`).
+  - Each row's `still=` is the longest the loading screen stood without a chance to draw in it, and
+    the `lit` row's `worst-still=` the longest of the held frames after the first three (spec
+    13.39, `engine_loading_screen_take_longest_wait`).
+  - `frame0` holds the sounds' last decoding, which `game_run` waits for before the first frame,
+    and headless any texture still loading, which `engine_run` waits for (spec 14.8).
+  - It is counted headless too, so `-x --loading-screen --capture-budget-ms 100` measures what a
+    window would freeze for.
+  - The `lit` row is followed by each GI volume's `stream gi` line with a digest of its tiles, so
+    two runs that captured the rooms alike can be told from two that did not (spec 13.42).
+    Headless, the view comes up the frame the lighting is in, and that frame prints both rows.
+- **`--capture-timing`:** each GI volume prints its `gi-timing` row as it converges, as the render
+  app's flag does. It slows the sweep, so time `lit` without it.
+- **`--gi-cell M`:** the home's GI cell in metres (default 1.25), laid over the house's bounds.
+- **`--gi-cull-pixels F`:** a GI probe leaves out what spans fewer pixels than F across its faces;
+  0, the default, takes everything.
+
+**The light is cooked** (spec 13.42): the GI volumes' opening sweeps and the reflection probes'
+columns go into the cook (`cooked/`, or `CETRA_COOK_DIR`) the first time, and a later launch whose
+scene is the same loads them, `lit` at about 2 s rather than 13. Any change to the engine's
+source, the driver or what the captures see misses and captures again. `CETRA_NO_COOK=1` captures
+live.
+
+### Walking and crouching
+
+The gait and the crouch are described in the README's "The player" (specs 13.47 and 13.48).
 - **`--no-interp`:** draws the body where the last step left it, for the A/B.
 - **`--no-gait`:** the eye rides the body rigidly, with no bob, and a climb is not paced.
 - **`--bob <x>`:** the head's bob as a share of the gait's own (default 1; 0 is none).
@@ -1180,706 +1123,440 @@ woods, shore or rock.
 - **`--no-footsteps`:** walks without a sound.
 - **`--footstep-say`:** plays every footstep take in turn, two a second, for an audio dump.
 - **`--trace-gait`:** prints every fixed step's move (feet, rise, run, ground state and normal,
-  speed, grade, how much of it is a flight, pace, whether the capsule is crouched), every frame's
-  feet, eye, phase, speed and how far the eye has gone down to a crouch, and every footfall and
-  the surface it fell on. A surface with no recordings yet says so at startup and in this trace.
+  speed, grade, how much is a flight, pace, whether crouched), every frame's feet, eye, phase,
+  speed and how far the eye has gone down to a crouch, and every footfall with its surface. A
+  surface with no recordings says so at startup and in this trace.
+- **`--crouch`:** starts crouched, as though C had been pressed.
 
-**Crouching** (spec 13.48). C or pad B crouches and stands, and Ctrl crouches while it is held;
-Shift asks to stand. The capsule is 1.15 m tall crouched, the eye 1.05 m up, the pace half a walk,
-the bob half and the footsteps 6 dB softer. Standing waits until there is room over the head.
-- **`--crouch`:** starts crouched, as though C had been pressed, so a headless run can show the
-  crouched eye.
+### The backpack, the map and the story
 
-**The locked house** (specs 13.53, 13.54 and 13.55). The front door is locked from the inside, and
-the key hangs in a birdcage on the basement's workbench, down the cellar stair the backpack's
-flashlight gets the player down. The player takes it out of the cage in their own hands (below)
-into the backpack, and the haunting begins as it does: the cellar door slams shut over the
-player's head, the haunting tries it as they climb back up, and they open it themselves at the top
-of the flight. E at the front door:
-- without the key, tries it, the knob turned and the door rattled in its frame, and the player
-  thinks it locked;
-- with the key and no map, the player thinks of the map in the kitchen and the door stays shut;
-- with the key and the map, it opens, the haunting ends, and it is an ordinary door from then on.
-
-How far the story has gone is saved: a game saved haunted loads haunted again, and a player saved
-anywhere but in the house finds the front door open.
+Until the backpack is taken, F finds no flashlight and the cellar flight's foot is as far as the
+player goes. On the backpack's screen the arrows, WASD or the D-pad walk the grid, Enter, E, pad A
+or a click chooses, and Tab or Escape (pad B) shuts it. On the map a drag, WASD, the arrows or the
+left stick move the view, and the wheel, `=` and `-`, or the triggers zoom it; M, Tab or Escape
+(pad B) shuts it. Tab from the game's map goes on to the backpack, and the map opened from the
+backpack goes back to it.
+- **`--backpack`:** starts with the backpack, the flashlight in it.
+- **`--flashlight`:** starts with the torch on, and so with the backpack.
+- **`--open-backpack <item>`:** starts with its screen open on `flashlight`, `map` or `key`, for a
+  headless picture. It implies `--backpack`; `map` implies `--map` and `key` implies `--key`.
+- **`--map`:** starts with the map in the backpack, the fridge bare; implies `--backpack`.
+- **`--open-map`:** starts with the map's screen open, over the backpack's under
+  `--open-backpack`; implies `--map`.
+- **`--found <list>`:** starts with places found, written on the map when it next opens:
+  `barricade`, `road-end` and `cabin`, comma-separated, or `all`. The house is found with the map.
+- **`--map-export <path>`:** writes the town's plan, every shape the map prints, for
+  `tools/make_map.py`, and stops, headless with no cat and no loading screen. The committed plan is
+  `apps/silent/tools/town_plan.txt`; re-export it and rerun the tool when the street, the lake, the
+  hill or the land changes.
 - **`--key`:** starts with the front door's key in the backpack, its birdcage open and empty on
-  the workbench, and nothing begun; it implies `--backpack`.
-- **`--story <stage>`:** starts with the story at `locked`, `haunted` (the key taken: the haunting
+  the workbench, and nothing begun; implies `--backpack`.
+- **`--story <stage>`:** starts the story at `locked`, `haunted` (the key taken: the haunting
   begins as the game is played) or `open` (the front door unlocked). A player started anywhere but
   in the house starts it `open` whatever this says.
 
-**The birdcage** (spec 13.55). E at the cage on the workbench picks it up:
-- The view glides to a framing set from the cage, and the player's arms, in an olive field
-  jacket's sleeves, lift it. The body stays where it stood.
-- The flashlight clipped to the jacket comes on and is held on the cage whatever its switch says,
-  and at night the exposure stops down four stops while it is.
-- The player thinks "What is this thing...?", then "The face... I think it opens.", and from then
-  on the mouse, the right stick or the arrows spin the cage on the palm.
-- E opens its face, and E again takes the key into the backpack as it goes out of sight. The hands
-  set the cage down, open and empty, and the view glides back.
-- Q (or a right click, or pad B), before it is opened, sets it back down shut.
+### The birdcage and the haunting
 
-Neither the hold nor the player's place in it is saved: a load or a return to the title puts the
-cage back on the bench at once, open exactly when the key is had.
+Neither the hold of the birdcage nor the player's place in it is saved: a load or a return to the
+title puts the cage back on the bench, open exactly when the key is had.
 - **`--inspect pickup|closed|open`:** the cage in the hands once the game is played, wherever the
-  player stands: picked up from the bench, already held shut, or held open with the hand waiting
-  before it. It skips the title.
+  player stands: picked up from the bench, already held shut, or held open with the hand waiting.
+  It skips the title.
 - **`--trace-hold`:** prints each of the hold's states and its clips' events, with the frame each
   came on.
-- **Headless:** with `--pad-script`, `x` on a frame is E, and `b` puts it down.
-- **Pinned view:** the cage on the bench, with `--backpack --flashlight`: `--cam-eye
+- **Headless:** with `--pad-script`, `x` on a frame is E, and `b` puts the cage down.
+- **Pinned view** of the cage on the bench, with `--backpack --flashlight`: `--cam-eye
   3.95,-0.75,16.35 --cam-target 4.61,-1.38,16.45`.
 
-**The haunting** (spec 13.52). The story begins it, and K (or a pad's right-stick click) begins and
-ends it anywhere without moving the story. The power goes, every light in the house with it, and
-after a second and a half the hall, the floor lamp and the TV come back red. Then the doors:
-- from 4 s, as soon as it stands shut, the cellar door is tried from its other side -- from the
-  hall, when the key began it, as the player comes back up the stair -- on and on, until the player
-  opens it on nobody, which stops the tries for good;
-- a second after the player first stands in the hall, the bathroom door creaks ajar, or shut if
-  it stood open;
-- the first time the player stands in the front of the hall looking back down it, an open cellar
-  door slams.
-
-Ending it puts the house back as it was; the doors stay where it moved them.
+The haunting (spec 13.52) ends with the house put back as it was; the doors stay where it moved
+them.
 - **`--haunt`:** begins it as the game is first played, and skips the title.
-- **`--haunt-at S`:** begins it S seconds in, the slam and the creak past, the bathroom door where
-  the creak left it; past 4 the tries are under way.
-- **`--trace-haunt`:** prints each beat as it comes: when it was watched for, the slam, the creak,
-  each try with its turns of the knob and its shakes, and the tries over. And each turn of the
-  story: a door tried, the key taken and the haunting begun, the front door unlocked, a load
-  haunted again.
+- **`--haunt-at S`:** begins it S seconds in, the slam and the creak past and the bathroom door
+  where the creak left it; past 4 s the tries on the cellar door are under way.
+- **`--trace-haunt`:** prints each beat as it comes (when it was watched for, the slam, the creak,
+  each try with its turns of the knob and its shakes, the tries over) and each turn of the story (a
+  door tried, the key taken and the haunting begun, the front door unlocked, a load haunted again).
 - **Headless:** with `--pad-script`, `rstick` on a frame presses K.
 
-**Capture:** `-x`, `-f <n>`, `-S <path>`, `--screenshot-every <n>`, and `-W`/`-H` for the window
-(default 1600x900).
+### Lighting and shadows
 
-**Loading** (spec 13.34). In a window it loads under the engine's loading screen. Once the
-lighting round the eye is in and its ident has played, the screen's LOADING sign becomes PLAY, and
-Enter, Space, E, a click, or pad A or Start switches the set off; the frame fades in after it, and
-the player's input waits for it. A headless run has no screen, so its frames are the game's from
-the first.
-- **`--no-loading-screen`:** loads under a black window instead, as before.
-- **`--no-play-prompt`:** the screen switches off by itself once the game is ready, with no PLAY
-  to press.
-- **`--loading-screen`:** the screen headless too. Its clock is then a frame's fixed step, so it
-  lifts later in frames than it would windowed, where it runs on the wall clock.
-- **`--startup-ms`:** prints a `startup-ms` row for each loading step and held frame -- how long
-  it took -- and for when the lighting is in (`lit`) and the view comes up (`up`). Each row's
-  `still=` is the longest the loading screen stood without a chance to draw in it, and the `lit`
-  row's `worst-still=` the longest of the held frames after the first three (spec 13.39, the
-  engine's `engine_loading_screen_take_longest_wait`). `frame0` holds the sounds' last decoding,
-  which `game_run` waits for before the first frame, and headless any texture still loading, which
-  `engine_run` waits for after it (spec 14.8). It is counted headless too, so
-  `-x --loading-screen --capture-budget-ms 100` measures what a window would freeze for:
-  `--loading-screen` keeps the screen up headless, and the budget paces the captures as a window
-  does while loading. The `lit` row is followed by the GI volumes' `stream gi` lines, each with a
-  digest of the volume's tiles, so two runs that captured the rooms alike can be told apart from
-  two that did not (spec 13.42). Headless the view comes up the frame the lighting is in, and that
-  frame prints both rows.
-- **`--capture-timing`:** each GI volume prints its `gi-timing` row as it converges (spec 13.42;
-  the render app's flag of the same name). It slows the sweep, so time `lit` without it.
-- **`--gi-cell M`:** the home's GI cell in metres, laid over the house's bounds as by default.
-
-**The house's light is cooked** (spec 13.42): the GI volumes' opening sweeps and the reflection
-probes' columns go into the cook (`cooked/`, or `CETRA_COOK_DIR`) the first time, and a later
-launch whose scene is the same loads them instead of capturing -- `lit` at about 2 s rather than
-13. Any change to the engine's source, the driver or what the captures see misses and captures
-again. `CETRA_NO_COOK=1` captures live.
-
-**The frame is one sample with jittered TAA, headless as well as windowed.** Two reasons it is not
-the engine's usual headless setup:
-- **MSAA outlines the street.** With multisampling, the fog composite takes one depth for an edge
-  pixel, and where half its samples are sky that depth is too near. Every silhouette in the street
-  comes out traced in a dark, unfogged line.
-- **Headless TAA without jitter does nothing useful.** It integrates one sample position forever,
-  so there is no antialiasing, and the engine refuses any render scale under it.
-
-So a screenshot is what a player sees. It is still exactly repeatable, because the jitter follows
-the frame index: two headless runs of the kitchen view came out 0 px apart, both with TAA and with
-`--no-taa`. The switches:
-- **`--no-taa`:** no temporal filter, and so no upscale either: full resolution, raw edges.
-- **`--msaa <n>`:** puts multisampling back, outlines and all.
-- **`--render-scale <f>`** (0.5-1, default 0.5): the upscale. It rides on TAA, so it is ignored
-  under `--no-taa`. At 0.5 the frame is softer and fine texture turns to mush in a 1:1 crop. At
-  viewing size it changes little, because 0.5 of a Retina window is still about 960x540.
-
-**Framing:** `--cam-eye x,y,z` with `--cam-target x,y,z` pins the camera, so a view can be
-photographed twice and a change A/B'd. The two go together, and one alone is ignored with a
-warning. `--fov <deg>` is the vertical field of view (default 68).
-
-**Some pinned views that have been useful** (with `-W 960 -H 540`):
-- **The kitchen towards its window:** `--fov 72 --cam-eye 2.2,1.95,13.55 --cam-target 2.2,1.25,10.1`.
-- **The street past the nearest lamp:** `--fov 70 --cam-eye -0.8,1.7,5.0 --cam-target -16,1.6,-1.5`.
-- **The house from the street:** `--cam-eye 4,1.7,-2 --cam-target 0,4,14`.
-- **The hall, from the front door and back:** `--cam-eye -0.75,1.9,10.5 --cam-target
-  -0.75,1.5,19` and `--cam-eye -0.75,1.9,18.9 --cam-target -0.75,1.5,10`.
-- **The living room and the bathroom:** `--cam-eye -1.9,1.9,11.0 --cam-target -3.6,1.0,15.5` and
-  `--cam-eye 0.3,1.9,14.1 --cam-target 2.1,1.0,15.9`.
-- **The street's end, where the drive leaves it:** `--cam-eye 30,1.7,1.5 --cam-target 60,2,0`.
-- **The mansion from the drive:** `--cam-eye 115,11,24 --cam-target 115,12,45`.
-- **The dining room:** `--cam-eye 115.6,9.9,53.3 --cam-target 118.5,9.0,51.2`.
-- **The armour in the mansion's hall:** `--flashlight --cam-eye 114.75,9.6,52.3 --cam-target
-  113.7,9.2,53.15`.
-
-**`--no-fog`** drops the fog volumes and the haze: the layout from above, with `--day --no-rain`,
-is `--cam-eye 70,160,25 --cam-target 70.01,0,25.2`.
-
-**The town's edges** (spec 13.35): the far side's terrace, the yards' fences, the woods, and the
-crossroads at the street's west end.
-- **`--no-woods`:** without the woods behind the yards and round the crossroads, or anything lying
-  under them. This is the A/B for their cost: about 6.6 ms of a frame from a yard, 4.7 of it on
-  the GPU, and 1.6 from the street, at 1600x900 by night (spec 13.38; 7 and 3 before it). The
-  camera draws a tree only within the fog's reach -- 45 m by night, 30 by day, however far under
-  `--no-fog` -- the far ones through their levels of detail. The shadows still take every tree,
-  which is most of what is left from a yard, whose woods stand inside that reach.
-- **Pinned views:**
-  - the terrace's stairs: `--cam-eye -9,1.7,-1.5 --cam-target -7,2.6,-9`;
-  - our back yard and the dead tree through its fallen fence: `--cam-eye 0,1.7,23 --cam-target
-    2,3.0,40`;
-  - the crossroads, toward the chasm: `--cam-eye -50,1.7,0 --cam-target -66,1.0,0`;
-  - the north barricade: `--cam-eye -51,1.7,-6 --cam-target -52,1.2,-20`;
-  - the lip's face and the leaning pole from inside the chasm, with `--no-fog`: `--cam-eye
-    -75,-6,14 --cam-target -67,-2,0`.
-
-**The lake and the cabin** (spec 13.41): through the gap in the south barricade, a gravel track
-down a valley to a lake, with a dock, two rowboats, reeds and drowned trees, and a log cabin on
-its east bank with a fire burning inside and its door left open.
-- **`--player-at X,Z[,YAW]`:** starts the player there, standing on whatever is under them --
-  the ground, the cabin's floor, the dock -- facing YAW degrees from +z, so the valley can be
-  walked without the walk to it: `-52,30` is the barricade's gap, `-65,113` the track's foot at
-  the cabin, `-78,118,90` the dock looking at the cabin. Over open water it stands the player on
-  the bed, under the surface, so take a pinned view to look at the lake.
-- **The lake's water is on only within the fog's reach of it plus 15 m**, as the lake's and the
-  cabin's things are drawn; `--no-fog` keeps it on everywhere. The chasm at the same depth stays
-  dry either way: the water stops at its bounds.
-- **Pinned views:**
-  - the cabin from the dock, the fire through its door: `--cam-eye -78,-9.45,118 --cam-target
-    -64,-9.6,118`;
-  - out over the lake from the dock: `--cam-eye -80,-9.45,118 --cam-target -102,-11.6,127`;
-  - inside, toward the fireplace: `--cam-eye -66.4,-8.75,116.2 --cam-target -62.6,-9.5,118.6`;
-  - inside, toward the table and the door: `--cam-eye -62.9,-8.8,116.0 --cam-target
-    -66.0,-9.5,120.4`;
-  - the valley from over the south wall, with `--day --no-rain --no-fog`: `--cam-eye -80,95,170
-    --cam-target -80,-10,100`;
-  - the dock lamp and the moored boat under it from the dock's foot: `--cam-eye -77.5,-9.45,118.3
-    --cam-target -84,-10.3,116.8`; the lantern close: `--cam-eye -82.3,-9.5,118.0 --cam-target
-    -83.5,-9.15,116.7`.
-
-**The lake's waves and the motorboat** (spec 13.56):
-- **`--lake-waves fft|gerstner`:** the lake's wave model. FFT is the default: a breeze of 5 m/s
-  over 150 m, no swell, about 1.2 ms more CPU at the dock than Gerstner's, and only within the
-  lake's reach.
-- **The boat:** E from the dock's end gets in, E starts the motor by its pull cord, W S A D drive
-  it, E stops it, and Q (or a right click) gets out alongside the dock. The motor dies the first time on a trip that
-  the boat reaches the spot circled on the cabin's lake map.
-- **`--in-boat`:** starts sat in the boat at its mooring. **`--boat-at X,Z[,H]`:** sat in it out on
-  the lake, heading H degrees from +z (-90 by default, the way it moors); `-100,120,-60` is near
-  the middle. **`--boat-running`:** with its motor running. **`--pull-cord`:** with its pull
-  cord's bar up. Each implies `--in-boat`.
-- **`--trace-boat`:** its place, speed, slip, turn, throttle, tiller, motor and how far it is into
-  the open water, every half second of steps. With `--pad-script` it is how its handling is read
-  headless.
-
-**Look switches**, each an A/B for one part of the picture:
-- **`--no-grade`:** the frame without the green-grey LUT (`assets/lut/silent_grade.cube`, written
-  by `apps/silent/tools/make_grade.py`).
-- **`--crt`:** the game on a consumer CRT television (spec 13.28), the door prompt and menus on it
-  too and the debug GUI over it. Off by default, the user's call after seeing it on. Silent has no
-  film grain either way. At the default window the 480 lines are 3.75 framebuffer pixels apart and
-  show fully; at `-W 960 -H 540` they are 2.25 apart and a little fainter, and below 1.5 apart they
-  fuse.
-- **`--no-flicker`:** keeps the failing ceiling tube steady. The flicker is a pure function of the
-  sim clock, so a headless frame catches the same instant of it every run. A frame that lands in a
-  stutter burst shows that tube dark, which reads as the room being underlit when it is not; use
-  this when comparing lighting.
-- **`--flashlight`:** starts with the torch on, and so with the backpack it came in.
-- **`--no-static`:** the living room's television showing nothing (spec 13.30): its glass a faint
-  blue-grey, no snow and no hiss. By default it shows snow, drawn past TAA, the room lit by a panel
-  on its glass as bright as the picture averages.
-- **`--seed <n>`:** reseeds the clutter on the counters and shelves, and the street: which windows
-  are lit, blinded or boarded.
-
-**Playing it headless:** `--pad-script <file>` replays a scripted gamepad on slot 0, in the format
-`cetra/src/game/input.h` gives, and `--trace-player` prints the player's position every 30 steps.
-That is gametest's pair, so a walk can be driven and read back with no controller.
-
-**Sound** (specs 13.10, 13.11 and 13.30): the hall clock's tick, the tubes' buzz, the fridge's hum,
-the wind and the television's hiss, each heard from where it is.
-- **`--mute`:** silences all of it.
-- **`--audio-dump <path>`:** with `-x`, writes what the listener hears as a 48 kHz stereo WAV,
-  pulled a frame at a time so it keeps step with the picture, from the first frame through the
-  title and the pause menu as a device plays; the run prints how far into it play began. Pinned
-  with `--cam-eye` and `--cam-target`, it is how a spot sounds without a window. Without `-x` it is ignored, since a
-  windowed run plays to the device and leaves nothing to pull.
-
-**`--day` is an overcast day** (spec 13.7).
-- **The light:** the sky is photometric in both modes, like the tubes, and by day it is fully
-  overcast. No sun gets through and nothing casts, and the fog takes the dome's light.
-- **The exposure is metered by day, within a bound:** a room never opens past the night's pinned
-  exposure. So the kitchen by day is exposed as at night, plus its window's daylight, and the street
-  closes down to a light-grey fog world.
-- **The night is pinned exactly as before,** and moves by at most 1 LSB.
-- **By day there is a local exposure** (spec 13.19): highlights 0.2, shadows 0.6, blend 0, so the
-  kitchen window onto the street reads and the room is lifted. It is off at night.
-  - `--no-local-exposure` drops it and `--local-exposure` forces it on.
-  - `--le-highlights`, `--le-shadows` and `--le-blend` override the day's values.
-  - `--le-probe` prints the luminance range it is asked to fit; `--exposure-probe` prints what the
-    meter decided.
-  - The same knobs are sliders under G, in the Cetra window's Post section, and G frees the mouse
-    while the GUI is open.
-- **Stepping outdoors settles at once** (spec 13.20): the fog and the temporal histories follow
-  the exposure as it adapts. `--no-history-rescale` gives back the old lag, the expanding sphere,
-  for comparison.
-- `--negative-probe` prints, each frame, how much of the frame reaches the tonemap below zero, as
-  the render app's does (spec 13.21).
-- `--fog-history-miss-samples N` sets how many samples a fog cell entering the view takes, 1..8,
-  as the render app's does (spec 13.45). 1 shows the band a turn used to draw at the screen's
-  leading edge; it is History Miss Samples under G, in the Volumetric Fog section.
-- **Probe Coverage**, in the Render Mode list under G (spec 13.23), shows which surfaces fall
-  outside the reflection probes and reflect the sky: they turn magenta. There are nine since
-  13.25: four in the home, five in the mansion, which are captured as the drive brings them near.
-  Indoors only the gap round a front door should, since it looks outdoors.
-
-**It rains, by default, at 6 mm/h** (spec 13.9), a moderate rain, and the world opens already
-soaked. `--rain <mm/h>` sets another rate and `--no-rain` gives the dry street back. What silent
-changes from the engine's physical rain is a look, and each is a constant in `silent.c`:
-- **Streaks** three times as bright as the drops they stand for, packed closer (a 2.5 m inner
-  box, 6144 a box), falling at half speed, with half the engine's sheen: a drizzle to walk
-  through. In fog this dense a drop refracts glowing air about as bright as itself, so at its
-  physical opacity rain shows only under a lamp.
-- **Wet ground at half the physical darkening,** so the lamps still pool on it.
-- **Splashes at twice their size:** at their own a splash on dark asphalt lifts its pixels by a
-  tenth.
-- **Reflections see the fog** (`IBLResources.reflect_fog`), and SSR reaches 40 m, so a puddle can
-  mirror a lamp head or a window across the street.
-- **Drips sixteen times as bright** as one drop's physical share of its pixels, which is a few
-  hundredths: a single drop smeared over the shutter does not otherwise read.
-
-Since spec 13.12, two switches and the drips:
-- **`--no-wind`:** still air. By default a gusting breeze off the street drives the rain onto the
-  house, which is what wets the facade and beads the kitchen window under its eave.
-- **`--no-relief`:** puddles where the noise puts them, not in the lows of the road's, the
-  pavement's and the yard's own scans.
-- **The drips** (no switch of their own): the gutter's leaks, the downpipe's shoe and the
-  neighbours' eaves. Pinned views of them, with `-W 960 -H 540`:
-  - **Through the kitchen window:** `--cam-eye 2.6,1.75,11.0 --cam-target 2.6,1.6,8.0`.
-  - **Outside, the overflow past that window:** `--cam-eye 2.0,1.7,7.9 --cam-target 2.6,2.0,9.6`.
-  - **The downpipe's shoe:** `--cam-eye 3.6,0.9,8.3 --cam-target 4.8,0.5,9.7`.
-  - **A neighbour's eaves:** `--cam-eye 9.0,1.7,6.5 --cam-target 14.0,2.5,10.0`.
-
-**Sound:** the rain is two noise beds, pink for the patter and brown for the rumble, as loud as the
-log of the rate. Under a roof -- read from the rain's own occlusion map at the player's head -- the
-patter falls away over a doorway's walk and the rumble stays. `--mute` silences everything.
-
-**The candles and the lamps cast shadows** (spec 13.16), kept in tiles rather than drawn every
-frame, so a candle lights only what it can see. The tiles go to the nearest lights (spec 13.24), so
-at home the mansion's candles do not cast, and up the drive the home's lamps do not. Switches:
-- **`--no-candle-shadows`:** the candles light through walls again; the home's hall lantern keeps its shadow.
-- **`--no-gi`:** no bounce light: no GI volume, and no reflection probes, which are captured
-  from its light. What separates a change in the direct light from one in what the captures saw.
+- **`--no-gi`:** no bounce light: no GI volume, and no reflection probes, which are captured from
+  its light. It separates a change in the direct light from one in what the captures saw.
+- **`--no-candles`:** the candles stand unlit.
+- **`--no-candle-shadows`:** the candles light through walls; the home's hall lantern keeps its
+  shadow.
 - **`--tile-views <n>`:** every cached light from n views over its body rather than eight. At 1,
   harder, darker pools under the candlesticks.
 - **`--tiles-probe`:** the tiles and each light's block, at exit.
 - **`--tile-stores <n>`:** store cells for faces that see a mover (default and at most 64); 0 draws
-  each such face whole, every frame. The dead trees on the drive are held at rest in these shadows
-  (spec 13.26), so only casters that move under their nodes or pose are drawn over a copy.
-- **`--profiler`:** per-pass timing and submission counts, at exit.
+  each such face whole, every frame.
+- **`--no-flicker`:** keeps the failing ceiling tube steady. The flicker is a pure function of the
+  sim clock, so a headless frame catches the same instant every run, and one that lands in a
+  stutter shows the tube dark and reads as an underlit room. Use it when comparing lighting.
+- **Probe Coverage**, in the Render Mode list under G (spec 13.23), turns magenta whatever falls
+  outside the thirteen reflection probes and reflects the sky. Indoors only the gap round a front
+  door should, since it looks outdoors.
 
-Pinned views of them, with `-W 960 -H 540`:
-- **The study desk's candlesticks:** `--cam-eye 111.0,12.7,51.0 --cam-target 110.55,11.92,50.1`.
-- **A great hall floor stand against the panelling:** `--cam-eye 112.7,9.75,57.5 --cam-target
-  112.1,9.5,59.3`.
-- **The candelabra on the dining table:** `--cam-eye 119.6,10.2,50.6 --cam-target 117.0,8.9,52.3`.
-- **The home's clock under the lantern, through the cased opening:** `--cam-eye -0.2,1.5,14.6
+Pinned views of the cached shadows:
+- the study desk's candlesticks: `--cam-eye 111.0,12.7,51.0 --cam-target 110.55,11.92,50.1`;
+- a great hall floor stand against the panelling: `--cam-eye 112.7,9.75,57.5 --cam-target
+  112.1,9.5,59.3`;
+- the candelabra on the dining table: `--cam-eye 119.6,10.2,50.6 --cam-target 117.0,8.9,52.3`;
+- the home's clock under the lantern, through the cased opening: `--cam-eye -0.2,1.5,14.6
   --cam-target -1.45,1.0,12.9`.
 
-**The cat** (spec 13.17): black with yellow eyes, asleep on the study chair, minding its own
-business round the mansion from there. **G** shows its panel -- what it is doing and every
-activity's score, its needs, what it senses, an activity or a place to send it to, and its
-colours -- and draws the place graph over the frame: links by kind, its route ahead, its sight
-line green or red, and what it is watching.
+### The look, the day and exposure
+
+- **`--no-grade`:** the frame without the green-grey LUT (`assets/lut/silent_grade.cube`, written
+  by `apps/silent/tools/make_grade.py`).
+- **`--crt`:** the game on a consumer CRT television (spec 13.28), the door prompt and menus on it
+  and the debug GUI over it; off by default. Silent has no film grain either way. At the default
+  window the 480 lines are 3.75 framebuffer pixels apart and show fully; at `-W 960 -H 540` they are
+  2.25 apart and a little fainter, and below 1.5 apart they fuse.
+- **`--no-static`:** the living room's television showing nothing (spec 13.30): its glass a faint
+  blue-grey, no snow and no hiss.
+- **`--no-fog`:** drops the fog volumes and the haze. The trees and the lake's water are then
+  drawn at any distance.
+- **`--day`:** an overcast day (spec 13.7). The sky is photometric by night and day; by day it is
+  fully overcast, so nothing casts and the fog takes the dome's light. The exposure is metered by
+  day but never opens a room past the night's pinned exposure, so the kitchen by day is exposed as
+  at night plus its window's daylight, and the street closes down to a light-grey fog world.
+- **Local exposure, by day only** (spec 13.19): highlights 0.2, shadows 0.6, blend 0, so the
+  kitchen window onto the street reads and the room is lifted.
+  - `--no-local-exposure` drops it and `--local-exposure` forces it on.
+  - `--le-highlights`, `--le-shadows` and `--le-blend` override the day's values.
+  - `--le-probe` prints the luminance range it is asked to fit; `--exposure-probe` prints what the
+    meter decided.
+  - The same knobs are sliders under G, in the Post section; G frees the mouse while the GUI is
+    open.
+- **`--no-history-rescale`:** the fog and the temporal histories no longer follow the exposure as
+  it adapts (spec 13.20), so stepping outdoors settles slowly, as an expanding sphere. For
+  comparison.
+- **`--negative-probe`:** prints, each frame, how much of the frame reaches the tonemap below zero,
+  as the render app's does (spec 13.21).
+- **`--fog-history-miss-samples N`:** how many samples a fog cell entering the view takes, 1..8
+  (spec 13.45). At 1 a turn draws a band at the screen's leading edge. It is History Miss Samples
+  under G, in the Volumetric Fog section.
+
+### Rain and wind
+
+It rains by default at 6 mm/h (spec 13.9), already soaked. What silent changes from the engine's
+physical rain is a look, each a constant in `silent.c` (the README's "Rain and weather").
+- **`--rain <mm/h>`:** another rate. **`--no-rain`:** the dry street.
+- **`--no-wind`:** still air. By default a gusting breeze drives the rain onto the house, which is
+  what wets the facade and beads the kitchen window under its eave.
+- **`--no-relief`:** puddles where the noise puts them, not in the lows of the road's, the
+  pavement's and the yard's own scans.
+
+The drips (the gutter's leaks, the downpipe's shoe, the neighbours' eaves) have no switch. Pinned
+views of them:
+- through the kitchen window: `--cam-eye 2.6,1.75,11.0 --cam-target 2.6,1.6,8.0`;
+- outside, the overflow past that window: `--cam-eye 2.0,1.7,7.9 --cam-target 2.6,2.0,9.6`;
+- the downpipe's shoe: `--cam-eye 3.6,0.9,8.3 --cam-target 4.8,0.5,9.7`;
+- a neighbour's eaves: `--cam-eye 9.0,1.7,6.5 --cam-target 14.0,2.5,10.0`.
+
+### Sound
+
+- **`--mute`:** silences everything. It wins over the settings file.
+- **`--audio-dump <path>`:** with `-x`, writes what the listener hears as a 48 kHz stereo WAV,
+  pulled a frame at a time so it keeps step with the picture, from the first frame through the
+  title and the pause menu as a device plays; the run prints how far into it play began. With
+  `--cam-eye` and `--cam-target` it is how a spot sounds without a window. Without `-x` it is
+  ignored, since a windowed run plays to the device and leaves nothing to pull.
+
+### The town's edges, the lake and the boat
+
+- **`--no-woods`:** without the woods behind the yards and round the crossroads, or anything lying
+  under them: the A/B for their cost, about 6.6 ms of a frame from a yard (4.7 of it on the GPU)
+  and 1.6 from the street, at 1600x900 by night. The camera draws a tree only within the fog's
+  reach, 45 m by night and 30 by day; the shadows still take every tree, which is most of what is
+  left from a yard.
+- **The lake's water is on only within the fog's reach of it plus 15 m.** `--no-fog` keeps it on
+  everywhere. The chasm at the same depth stays dry either way.
+- **`--lake-waves fft|gerstner`:** the lake's wave model (spec 13.56). FFT is the default: a breeze
+  of 5 m/s over 150 m and no swell, about 1.2 ms more CPU at the dock than Gerstner, and only
+  within the lake's reach.
+- **`--in-boat`:** starts sat in the boat at its mooring.
+- **`--boat-at X,Z[,H]`:** sat in it out on the lake, heading H degrees from +z (default -90, the
+  way it moors); `-100,120,-60` is near the middle.
+- **`--boat-running`:** with its motor running. **`--pull-cord`:** with its pull cord's bar up.
+  Each of the boat flags implies `--in-boat`.
+- **`--trace-boat`:** its place, speed, slip, turn, throttle, tiller, motor and how far it is into
+  the open water, every half second of steps. With `--pad-script` it is how its handling is read
+  headless.
+
+Pinned views:
+- the terrace's stairs: `--cam-eye -9,1.7,-1.5 --cam-target -7,2.6,-9`;
+- our back yard and the dead tree through its fallen fence: `--cam-eye 0,1.7,23 --cam-target
+  2,3.0,40`;
+- the crossroads, toward the chasm: `--cam-eye -50,1.7,0 --cam-target -66,1.0,0`;
+- the north barricade: `--cam-eye -51,1.7,-6 --cam-target -52,1.2,-20`;
+- the lip's face and the leaning pole from inside the chasm, with `--no-fog`: `--cam-eye
+  -75,-6,14 --cam-target -67,-2,0`;
+- the cabin from the dock, the fire through its door: `--cam-eye -78,-9.45,118 --cam-target
+  -64,-9.6,118`;
+- out over the lake from the dock: `--cam-eye -80,-9.45,118 --cam-target -102,-11.6,127`;
+- inside the cabin, toward the fireplace: `--cam-eye -66.4,-8.75,116.2 --cam-target
+  -62.6,-9.5,118.6`; toward the table and the door: `--cam-eye -62.9,-8.8,116.0 --cam-target
+  -66.0,-9.5,120.4`;
+- the valley from over the south wall, with `--day --no-rain --no-fog`: `--cam-eye -80,95,170
+  --cam-target -80,-10,100`;
+- the dock lamp and the moored boat from the dock's foot: `--cam-eye -77.5,-9.45,118.3
+  --cam-target -84,-10.3,116.8`; the lantern close: `--cam-eye -82.3,-9.5,118.0 --cam-target
+  -83.5,-9.15,116.7`.
+
+### The cat
+
+G shows the cat's panel (what it is doing and every activity's score, its needs, what it senses,
+an activity or a place to send it to, its colours) and draws its place graph over the frame: links
+by kind, its route, its sight line green or red, and what it watches.
 - **`--no-cat`:** without it.
 - **`--cat-fur RRGGBB`**, **`--cat-eyes RRGGBB`:** its coat (default 262424) and eyes (E8B923),
   sRGB hex. A light coat takes pink ears and nose.
 - **`--cat-at <place>`:** where it starts; the usage line lists the places it rests at.
-- **`--cat-clip <name>[@s]`:** hold one clip there, playing or `s` seconds in. Nothing moves it
+- **`--cat-clip <name>[@s]`:** holds one clip there, playing or `s` seconds in. Nothing moves it
   and it has no mind.
-- **`--cat-goto <place>[:trot|:run]`:** send it there once it is in the house, by the rail if that
+- **`--cat-goto <place>[:trot|:run]`:** sends it there once it is in the house, by the rail if that
   is the way. Scripted, so it has no mind.
-- **`--cat-activity <name>`:** start its mind on one activity -- sleep, stretch, loaf, explore,
+- **`--cat-activity <name>`:** starts its mind on one activity: sleep, stretch, loaf, explore,
   watch_flame, window, avoid, startle, follow or rail.
 - **`--cat-seed <n>`:** its mind's seed (default 1). Two runs on one seed trace identically.
 - **`--cat-blind`:** it neither sees nor hears the player.
-- **`--cat-cam`:** the camera rides behind it. A fixed offset, so it goes into walls.
-- **`--cat-say`:** it makes every sound it has, one every 1.5 s, and purrs -- with `-x` and
-  `--audio-dump`, how its sounds are heard without a window. The dump less the same with
+- **`--cat-cam`:** the camera rides behind it, at a fixed offset, so it goes into walls.
+- **`--cat-say`:** it makes every sound it has, one every 1.5 s, and purrs. With `-x` and
+  `--audio-dump` that is how its sounds are heard without a window; the dump less the same with
   `--no-cat` is the cat alone.
 - **`--trace-cat`:** every 30 steps, where it is, what it plays, the link it is on, and what it
   wants.
 - **`--no-eyeshine`:** its eyes do not throw the flashlight back.
 
-The cat senses the player's BODY and not the camera, so a pinned camera, or `--cat-cam`, is only a
-view: the cat never turns its head to one, and what it watches for is the player wherever the body
-stands -- at the spawn point in a headless run. Pinned views that have been useful, with `-W 960
--H 540`:
-- **Asleep on the chair:** `--cam-eye 111.30,12.05,48.70 --cam-target 109.98,11.72,49.02`.
-- **On the dining chair, watching the candelabra:** `--cat-at head_chair --cat-activity
-  watch_flame --cam-eye 116.6,9.4,50.9 --cam-target 116.0,8.9,52.05 -f 80`.
-- **On the window seat, watching the rain:** `--cat-at window_seat --cam-eye 117.7,9.4,52.6
-  --cam-target 117.7,8.9,50.2`.
-- **Its eyes in the flashlight, lying on the great hall's rug:** `--flashlight --cat-at rug
-  --cat-clip lie --cam-eye 114.83,9.2,57.78 --cam-target 114.25,8.42,56.4`.
-- **On the rail, from the great hall:** `--cat-at gal_w --cat-goto newel_cap --fov 60 --cam-eye
+The cat senses the player's body, never the camera, so a pinned camera or `--cat-cam` is only a
+view: it watches for the player where the body stands, at the spawn point in a headless run.
+Pinned views:
+- asleep on the study chair: `--cam-eye 111.30,12.05,48.70 --cam-target 109.98,11.72,49.02`;
+- on the dining chair, watching the candelabra: `--cat-at head_chair --cat-activity watch_flame
+  --cam-eye 116.6,9.4,50.9 --cam-target 116.0,8.9,52.05 -f 80`;
+- on the window seat, watching the rain: `--cat-at window_seat --cam-eye 117.7,9.4,52.6
+  --cam-target 117.7,8.9,50.2`;
+- its eyes in the flashlight, lying on the great hall's rug: `--flashlight --cat-at rug --cat-clip
+  lie --cam-eye 114.83,9.2,57.78 --cam-target 114.25,8.42,56.4`;
+- on the rail, from the great hall: `--cat-at gal_w --cat-goto newel_cap --fov 60 --cam-eye
   115.40,9.70,58.00 --cam-target 115.40,12.10,55.00 -f 900`.
 
 ## The other apps, and the AA mode each one chose
 
-Spec 11.103 asked what anti-aliasing every app should run and got a different answer four times,
-which is why this section exists rather than one line saying "they inherit the default".
+Each app's anti-aliasing is a decision of its own, stated in its entry; none simply inherits the
+default.
 
-**`apps/gametest`** gained a CLI in 11.103 and had none before it: `-x/--headless`, `-f/--frames`,
-`-S/--screenshot`, `--screenshot-every`, `--taa`, `--msaa <n>`. The HDR environment stays
-POSITIONAL — an unrecognised token is still taken as the path, which is the whole interface the app
-had. It runs **one sample plus TAA windowed**, the render-app policy, because every surface in it is
-a rigid mesh on the `pbr` program and so writes a motion vector. **Spec 11.109 added five**, which
-made it the first app a headless run can play (`apps/silent` is the second): `--pad-script <file>` replays a scripted gamepad on
-slot 0 (the format is in `cetra/src/game/input.h`; a file that is missing or will not parse exits
-1, so a gate never mistakes an idle pad for a passing layer), `--gamepad-db <file>` adds an SDL
-controller mapping file to GLFW's bundled table (same refusal), `--trace-player` prints the
-player's pose, velocity, ground state and the move and jump the step acted on, every
-`--trace-every <steps>` (default 30), and `--print-bindings` lists the action table and exits.
+### apps/gametest
 
-**Spec 12.0 added audio** — a beep on jump and spawn and a looping tone carried by the door as an
-`AUDIO_SOURCE` component, all procedural (no committed audio). `--mute` silences the master bus.
-`--glare` turns on the aperture's diffraction star, which the engine leaves off (spec 13.5).
-`--audio-probe <case>` is a headless, self-contained offline render (miniaudio's `noDevice` engine)
-that plays a fixed geometry, measures the mixed PCM and prints it, then exits — the cases are
-`onset`, `pan`, `distance`, `master`, `decode`, `noise` (spec 13.9), and `zone`, `zone_path`,
-`zone_start` and `zone_fade` (spec 13.33), which the `audio` gate group reads; `decode`, `zone` and
-`zone_fade` take the WAV to load from `--audio-file <path>`. Because it opens no device, it runs anywhere the gate suite
-does.
+What it is, its controls and how its player animates are in `apps/gametest/README.md`.
 
-**Spec 12.1 made the player a rig.** `apps/gametest` loads `assets/models/puppet.gltf` and drives it from
-an `ANIMATOR` component: idle, walk and run blended from the character controller's POST-SOLVE
-speed (so walking into a wall stops the walk rather than running on the spot), a jump one-shot
-crossfaded onto the base layer that returns to the locomotion space by itself, a wave on the right
-arm's subtree bound to **E / left bumper**, and footsteps fired from the clips' own timeline events
-through 12.0's audio. `--no-puppet` keeps the original red box (and the all-rigid frame);
-`--puppet <path>` swaps the rig; `--twin <clip>` stands a second rig beside the player playing its
-own clip, which is what two independent poses in one frame look like. `--anim-probe <case>` is the
-headless probe the `anim` gate group reads -- `locomotion`, `crossfade`, `layer`, `two-rigs`,
-`phase`, `events`, `import`, `stride`, `rate`, and since 12.18 `root` and `rootmotion` -- built
-like `--audio-probe`: a self-contained headless game with
-no window that ticks ANIMATOR components through the loop's own `update_all_animators` at a fixed
-1/60, prints `anim <case> <label> <key> <numbers>` and exits. `--trace-player` gains a tail after
-`jump`: `anim <knob> <w_idle> <w_walk> <w_run> <fade> <layer> <source>`, APPENDED rather than
-inserted so the `gamepad` group's regex still matches the same line -- and since 12.18 a
-`yaw <radians>` column after the camera's, appended for the same reason.
+**Anti-aliasing:** one sample plus TAA windowed, the render app's policy, because every surface is
+a rigid mesh on the `pbr` program and so writes a motion vector. `--taa` and `--msaa <n>` override
+it.
 
-**Since 12.20 the rig plays what a TABLE says.** `cetra/src/anim_graph.h` carries the states and
-the transitions; what the app writes each frame is what is true (a ground knob, a rate, a depth in
-metres, grounded, vertical speed, ragdolled) and the graph decides the rest. Three consequences a
-driver of this app will meet. **`--graph-probe <case>`** is the headless probe the `graph` gate
-group reads -- `order`, `any`, `and`, `trigger`, `elapsed`, `hysteresis`, `reenter`, `disabled`,
-`instances`, `unreachable`, `authoring`, and the five that need a rig: `finished`, `fade`, `guard`,
-`return`, `identity`. Most create **no engine at all**, because a graph binds to a NULL animator
-and a state may name no source, so the table is exercisable as the pure function over named values
-it is. **`--trace-player` gains a third tail**, `graph <state> <seconds>`, after `yaw` and by the
-same append-never-insert rule -- and no state may be named containing `" yaw "`, since that
-regex is greedy. The source column above says what is PLAYING, which a state and its resume can
-share; this says which state chose it. **`--print-graph`** prints the table and what bind made of
-it -- the states, the rows in evaluation order, and an `x` against everything this rig cannot reach
--- then carries on, the counterpart of `--print-bindings`. **`--no-swim`** withholds the stroke clips, which makes the
-water state unreachable: the run says so once by name at startup and prunes every row into it.
-It exists because no committed rig reaches that configuration -- the generated puppet carries a
-stroke and a rig with no locomotion of its own is given the shared set, which carries one too --
-while a downloaded humanoid with its own walk and no swim is the ordinary case `--puppet` is for.
-Before the graph, that character was labelled as swimming while its walk cycle played, had its
-playback rate pinned and its root-motion branch skipped, and decayed to a standstill.
+**Capture:** `-x`, `-f`, `-S`, `--screenshot-every`, `-W <n>` and `-H <n>`. The HDR environment is
+positional: an unrecognised token is taken as its path.
 
-Two states on the committed default are **unreachable and say so**: it carries no `fall_cycle` and
-no `touch_down`, so `air` and `land` are pruned and a jump is the rise alone. The full airborne
-path needs a rig with no locomotion of its own -- `--puppet assets/models/t_pose.fbx`, which takes
-the shared set -- and that is what `graph-parity-air` runs on.
+**It is frame-deterministic headless**: the engine hands the loop its fixed frame dt, the seed is
+`srand(42)` and Jolt steps a fixed dt, so two runs of one script trace byte-identically and render
+0 px apart. Keep the FPS overlay off when comparing frames, since it draws the wall clock. Runs at
+different sample counts are not comparable.
 
-**It is frame-deterministic headless, and this paragraph said otherwise for six specs.** Two runs
-of one script trace byte-identically and their frames differ by **0 px** (measured, spec 11.109),
-because headless the engine hands the loop its FIXED frame dt, the seed is `srand(42)` and Jolt
-steps a fixed dt. The 48 px this entry used to report between two identical runs, and its
-explanation that wall-clock frame time fed the accumulator, were the FPS overlay: drawn headless
-from the wall clock, and off since 11.109 (108 px with it on, 0 without, same build). Two runs at
-different sample counts are still not comparable, for the ordinary reason that they resolve
-differently.
+**Playing it headless:**
+- **`--pad-script <file>`:** replays a scripted gamepad on slot 0 (the format is in
+  `cetra/src/game/input.h`). A file that is missing or will not parse exits 1, so a gate never
+  mistakes an idle pad for a passing layer.
+- **`--gamepad-db <file>`:** adds an SDL controller mapping file to GLFW's bundled table, with the
+  same refusal.
+- **`--trace-player`:** prints the player's pose, velocity, ground state and the move and jump the
+  step acted on, every `--trace-every <steps>` (default 30). Three tails follow the columns the
+  `gamepad` group reads: `anim <knob> <w_idle> <w_walk> <w_run> <fade> <layer> <source>` after
+  `jump`, `yaw <radians>` after the camera's columns, and `graph <state> <seconds>` after `yaw`.
+  New columns are appended, never inserted, so that regex keeps matching; and no graph state may be
+  named with `" yaw "` in it, since the regex is greedy. The `source` column says what is playing,
+  which a state and its resume can share; `graph` says which state chose it.
+- **`--print-bindings`:** lists the action table and exits.
+- **`--no-crates`:** no falling crates at startup. They fall at `rand()` positions, which differ
+  per platform's libc, so an arm that reads where the player ended up passes it.
 
-**Spec 12.2 gave it menus.** `apps/gametest` carries four screens — a main menu, a pause menu, a
-settings screen and a non-modal HUD — built on the game UI layer (`cetra/src/ui.h`). They are on
-by default and all closed: **Escape** opens the pause menu, and quitting is an item inside it
-rather than a key, which is the change every app in the tree took. `--no-ui` runs without any of
-it. `--ui-screen <name>` opens one at startup (`main`, `pause` or `settings`), because a headless
-run has no Escape key to press and a menu otherwise never appears in a capture; `--ui-focus <n>`
-then presses "down" n times through the real navigation path, which is how a capture shows the
-focus somewhere other than where it lands — and because nothing is focused to begin with, the
-first press only ACQUIRES, so `2` is what reaches the second button. `-W <n>` and `-H <n>` set the
-window size, which this app had no way to state before and a golden recipe needs. Both menu
-goldens, `menu` and `menu_focus`, were dropped in spec 13.6 for not being reliably 0 px.
+**The player:**
+- **`--no-puppet`:** the red box in place of the rig, and the all-rigid frame.
+- **`--puppet <path>`:** any rigged humanoid; also selects the skeleton for `--ragdoll-probe`.
+- **`--twin <clip>`:** a second rig beside the player playing its own clip.
+- **`--no-chaser`:** without the second puppet that chases the player.
+- **`--no-ik`:** no foot planting, the quickest way to tell a planting artefact from an animation
+  one. The walk clip bends no knee of its own, so on flat ground the two look the same.
+- **`--no-lock`** (spec 12.9): keeps planting and drops the locking above it: contacts are still
+  found and feet still meet the ground, but no world-space point is held. On the generated puppet
+  it changes nothing, since its walk is a straight-leg pendulum with no stance to lock; on a rig
+  whose clips imply a stride, `--puppet assets/models/t_pose.fbx`, it does.
+- **`--no-root-motion`** (spec 12.18): puts the in-place locomotion pair back on the generated
+  puppet, whose default `travel_walk` and `travel_run` state their own travel (full stick 6.40 m/s
+  on its node scaled 2). Without either root motion or a stride, travel is a fraction of
+  `PLAYER_SPEED`. The startup line says which: "Locomotion travels 0 to 6.40 m/s, stated by the
+  clips" or "Locomotion clips imply no stride". An imported rig never enters root motion, since no
+  committed FBX clip states a travel.
+- **`--speed <m/s>`:** caps travel, and overrides the speed derived from the clips.
+- **`--no-swim`:** withholds the stroke clips, which makes the water state unreachable; the run
+  says so once by name and prunes every row into it. It is how a rig with its own walk and no swim,
+  the ordinary downloaded humanoid, is reached on a committed asset.
+- **`--print-graph`:** prints the animation graph's table and what bind made of it (the states, the
+  rows in evaluation order, and an `x` against everything this rig cannot reach), then carries on.
+  On the committed default `air` and `land` are pruned, since it carries no `fall_cycle` and no
+  `touch_down`, so a jump is the rise alone. The full airborne path needs a rig with no locomotion
+  of its own, such as `--puppet assets/models/t_pose.fbx`, which is what `graph-parity-air` runs
+  on.
 
-`--ui-probe <case>` is the headless probe the `ui` gate group reads, in the shape `--audio-probe`
-and `--anim-probe` established: it prints `ui <case> <label> <key> <numbers>` and exits. The cases
-are `layout`, `layout-resize`, `wrap`, `nav`, `hit`, `capture`, `stack`, `theme-identity` and
-`settings`. **It draws no frame**, which is the claim worth making precisely, because this line
-used to say "no window and no GPU" and that is true of exactly one case: `settings` needs no
-engine at all and runs before one is created, while every other case needs a font — FIT sizing is
-made of measurement — so it takes a headless game and therefore a hidden GLFW window and a live
-GL context, exactly like `--save-probe` below. What is true of all of them is that layout is a
-pure function of (tree, width, height) and the input pass takes a struct of values rather than a
-device. `CETRA_SETTINGS_DIR` points the settings case, and any gametest run, at a directory of
-its own rather than the player's real one; the gate and the golden bake both set it.
+The ground for planting is always in the scene: a ramp rising 1 in 4 from x = 14 (walk +X) and
+three half-metre steps at x = -15, -17 and -19 (walk -X). On flat ground planting is correctly an
+identity.
 
-`--ui-bench` (spec 14.3) prints the UI's timings as `ui-bench <what> <how> <ms> spread <ms>`, each
-the median of five runs and the spread between the fastest and the slowest, and exits:
-- a frame's UI work and its two layouts on four screens the size pcb's will be: the chat's column
-  at 200 and at 4,000 messages, the jump over 5,000 names, and a settings screen of 40 elements;
-- a 13.7 KB text walked, and the share of it spent kerning;
-- one keystroke in a multi-line field of 1, 20 and 1,000 KB;
-- `load_font` from an empty pool;
-- the code editor (spec 14.4) on texts of pcb's lines at 80 KB, 10 MB and 64 MB, in a 900 by 700
-  editor: opening the text (`open_ms`), the first frame, the budget's walk until every row is
-  wrapped (`settle_frames`, its total and its longest frame), then a keystroke and Enter at one
-  caret and at 100 spread through the text, a jump far down, and a resize.
+**The camera:**
+- The follow camera is on by default; the arrow keys and the right stick turn it, orbiting the
+  player at a fixed distance with the pitch clamped above the floor. **`--no-follow-cam`** gives a
+  mouse-drag orbit about the world origin instead; the two both own the camera, so they exclude
+  each other.
+- **`--cam-eye x,y,z`, `--cam-target x,y,z`, `--cam-up x,y,z`, `--fov <deg>`** state a pose, the
+  render app's spelling. Eye and target come together or not at all: half a pose is refused by
+  name. A stated pose stands the follower down, and overrides `--no-follow-cam`'s orbit too.
+- **Movement is camera-relative under the follow camera and world-aligned otherwise.** The follow
+  rig sets `steers_controls`; the drag orbit and a stated pose leave it false, since pinning a
+  camera states a pose and must not rotate the controls. `pad-camera-relative` says which is live.
+- The arrows are shared with menu navigation, safely: `ui_up` and `ui_down` carry the `ui` flag, so
+  a menu suppresses the camera's actions while it is open, and with none open the UI ignores the
+  arrows.
 
-Run it from a release build (`./build.sh --release`, then `out/release/bin/gametest -x
---ui-bench`): a debug build's numbers say little. No gate reads it, since timing does not travel;
-the spec it was written for records its numbers and what they decided.
+**Audio:**
+- **`--mute`:** silences the master bus.
+- **`--glare`:** turns on the aperture's diffraction star, which the engine leaves off (spec 13.5).
+- **`--audio-probe <case>`:** a headless offline render with no device (miniaudio's `noDevice`
+  engine), so it runs anywhere the gate suite does. It plays a fixed geometry, measures the mixed
+  PCM, prints it and exits. Cases: `onset`, `pan`, `distance`, `master`, `decode`, `noise`, `zone`,
+  `zone_path`, `zone_start` and `zone_fade`, which the `audio` group reads. `decode`, `zone` and
+  `zone_fade` take the WAV to load from `--audio-file <path>`.
 
-**Display modes (spec 12.15).** `--fullscreen` and `--borderless` start the run in that mode
-rather than switching into it after a windowed frame, and `--monitor <name>` says which display —
-`--list-monitors` prints the names this build can see and exits. Both non-windowed modes take the
-monitor at its CURRENT video mode: nothing here ever changes a display's resolution, so there is
-no mode to restore after a crash, and `--render-scale` remains the performance lever it already
-was. The same three modes are on the settings screen, where a Monitor row appears only when there
-is more than one display to choose between.
+**Menus** (spec 12.2):
+- **`--no-ui`:** runs without the menus and the HUD.
+- **`--ui-screen <name>`:** opens `main`, `pause` or `settings` at startup, since a headless run has
+  no Escape to press.
+- **`--ui-focus <n>`:** then presses "down" n times through the real navigation path. Nothing is
+  focused to begin with, so the first press only takes the focus: `2` reaches the second button.
+- **`--ui-probe <case>`:** the `ui` group's probe, printing `ui <case> <label> <key> <numbers>`.
+  Cases: `layout`, `layout-resize`, `wrap`, `nav`, `hit`, `capture`, `stack`, `theme-identity` and
+  `settings`. It draws no frame. `settings` needs no engine and runs before one is created; every
+  other case needs a font, since FIT sizing is measurement, so it takes a headless game, a hidden
+  GLFW window and a live GL context.
+- **`CETRA_SETTINGS_DIR`** points the settings, the quicksave and every probe at a directory of
+  their own rather than the player's; the gates and the golden bake set it.
+- **`--ui-bench`** (spec 14.3): prints the UI's timings as `ui-bench <what> <how> <ms> spread <ms>`,
+  each the median of five runs and the spread between the fastest and the slowest, and exits:
+  - a frame's UI work and its two layouts on four screens of pcb's size: the chat's column at 200
+    and at 4,000 messages, the jump over 5,000 names, and a settings screen of 40 elements;
+  - a 13.7 KB text walked, and the share of it spent kerning;
+  - one keystroke in a multi-line field of 1, 20 and 1,000 KB;
+  - `load_font` from an empty pool;
+  - the code editor (spec 14.4) on texts of pcb's lines at 80 KB, 10 MB and 64 MB in a 900 by 700
+    editor: opening the text (`open_ms`), the first frame, the budget's walk until every row is
+    wrapped (`settle_frames`, its total and its longest frame), a keystroke and Enter at one caret
+    and at 100, a jump far down, and a resize.
 
-**Ragdoll (spec 12.16).** `K` or the left stick click drops the player into a physically
-simulated heap: the controller stops steering, the bodies take over, and the camera keeps
-following because the entity tracks the hips. There is no way back up — getting up is a
-different problem and a different spec. A key rather than a consequence because this app has no
-damage, no health and no death to hang it on.
+  Run it from a release build (`./build.sh --release`, then `out/release/bin/gametest -x
+  --ui-bench`). No gate reads it, since timing does not travel.
 
-`--ragdoll-probe <case>` is the headless probe the `ragdoll` gate group reads, in the same shape
-as the four above: cases `build`, `shapes`, `scale`, `settles`, `pose`, `frees`, or `all`.
-Unlike `--display-probe` the SIMULATION is reachable — a headless game carries a real physics
-world — so the last three step Jolt and read the bodies back. `--puppet <rig>` selects the
-skeleton, which is how the build cases run against both the generated puppet and `t_pose.fbx`.
+**Display modes** (spec 12.15):
+- **`--fullscreen`**, **`--borderless`:** start the run in that mode, at the monitor's current
+  video mode; nothing ever changes a display's resolution, so `--render-scale` stays the
+  performance lever. The settings screen has the same three modes, and a Monitor row when there is
+  more than one display.
+- **`--monitor <name>`:** which display. **`--list-monitors`** prints the names and exits.
+- **`--display-probe <case>`:** the `display` group's probe, printing `display <case> <label> <key>
+  <numbers>`. Cases: `placement`, `monitors`, `apply` or `all`; an unrecognised case fails the run.
+  It reads what a mode decides, not what it does: the switch is refused headless, so a suite never
+  seizes a display and a golden's size never comes from the machine's monitor.
 
-**A case is not one arm, and that is what keeps the group to four processes for eight arms**:
-`build` prints the shapes rows too, and `settles` prints pose, roundtrip, rigid and frees, since
-all five read the same stepped world. Asking for a case you did not name costs nothing; the
-group's reader keeps every row the process produced rather than filtering to what it asked for.
+**Ragdoll** (spec 12.16): K or the left stick click drops the player into a simulated heap, and
+there is no way back up.
+- **`--ragdoll-probe <case>`:** the `ragdoll` group's probe. Cases: `build`, `shapes`, `scale`,
+  `settles`, `pose`, `frees` or `all`. A headless game carries a real physics world, so the last
+  three step Jolt and read the bodies back. A case prints every row its world can give, not only
+  the one it names: `build` prints the shapes rows, and `settles` prints pose, roundtrip, rigid and
+  frees. That keeps the group at four processes for eight arms, and its reader keeps every row.
 
-`--display-probe <case>` is the headless probe the `display` gate group reads, in the same shape:
-it prints `display <case> <label> <key> <numbers>` and exits, with cases `placement`, `monitors`,
-`apply`, or `all`. An unrecognised case is a failed run rather than a silent one. It reads what a
-mode DECIDES rather than what it does — the switch is refused under headless, so that a suite can
-never seize a display and a golden's frame size can never come from the machine's monitor.
+**Saving** (spec 12.3): F5 or the right bumper quicksaves and F9 or the right stick click
+quickloads. They are not `ui` actions, so a menu suppresses them and a save never holds the menu's
+state. The file goes beside the settings in the per-user directory.
+- **`--save-probe <case>`:** the `save` group's probe. Cases: `roundtrip`, `entities`, `spawned`,
+  `drops`, `floor` and `migrate`. It builds its own scene, physics world and entities, with no
+  window and no frame, but it does create a GL context, since the crates it spawns upload their
+  meshes. Give each case its own `CETRA_SETTINGS_DIR`: they share one slot name.
 
-**Saving (spec 12.3).** `F5` / right bumper quicksaves and `F9` / right stick click quickloads,
-both ordinary rows in the action table so they rebind like anything else. They are deliberately
-NOT flagged `ui`, so a menu suppresses them — saving from inside a pause screen would fold the
-menu's own state into what the world looks like. The file goes beside `settings.json` in the
-platform's per-user location, so `CETRA_SETTINGS_DIR` points it somewhere hermetic too.
+**The animation probes**, each a self-contained headless game ticked at a fixed 1/60 that prints
+`<group> <case> <label> <key> <numbers>` and exits:
+- **`--anim-probe <case>`** (`anim`): `locomotion`, `crossfade`, `layer`, `two-rigs`, `phase`,
+  `events`, `import`, `stride`, `rate`, `root` and `rootmotion`, ticking `ANIMATOR` components
+  through the loop's own `update_all_animators`.
+- **`--graph-probe <case>`** (`graph`): `order`, `any`, `and`, `trigger`, `elapsed`, `hysteresis`,
+  `reenter`, `disabled`, `instances`, `unreachable`, `authoring`, and the five that need a rig:
+  `finished`, `fade`, `guard`, `return`, `identity`. Most create no engine at all, since a graph
+  binds to a NULL animator and a state may name no source.
+- **`--ik-probe <case>`** (`ik`):
+  - `reach`, `clamp`, `singular`, `identity`, `pole` and `analytic` build a rig and nothing else: a
+    two-bone solve is a pure function of a hip, a target and two lengths.
+  - `ground`, `slope` and `step` add a physics world and the ramp and steps, because planting's
+    input is a raycast and three bugs live only there: the ray hitting the character's own capsule,
+    the ray missing the ramp for the floor beneath, and a right hit point on a wrong plane. They run
+    with release disabled: they ask whether the solve reaches the ground it was handed.
+  - `swing` ticks a walk cycle with planting on and off and measures each ankle's vertical travel.
+    Every other case poses the rig once, and a solve that overwrites a stride looks perfect in one
+    pose, so it is the only case that sees feet welded to the floor. It runs planting only.
+  - `drop` puts a foot half a metre past full extension, so only the pelvis cap can answer.
+  - `lock` runs one walk clip four times: at weight 0 as a clip-only reference, then planting, then
+    locking, then locking with the body walked at three times the speed its feet imply, where the
+    feature must let go rather than strain. The reference comes from the clip, not a solved pass,
+    so it does not move when the solver does.
+  - `CETRA_IK_TRACE=1` dumps `lock`'s per-tick heights, contact label and lock state to stderr.
+- **`--cam-probe <case>`** (`camera`), **`--gait-probe <case>`** (`gait`) and
+  **`--character-probe <case>`** (`character`): the camera rig and the gait with no window, and
+  real character controllers at a beam and on open floor. An unknown case is refused by name.
 
-`--save-probe <case>` is the headless probe the `save` gate group reads, in the same shape as
-the three above: it prints `save <case> <label> <key> <numbers>` and exits. The cases are
-`roundtrip`, `entities`, `spawned`, `drops`, `floor` and `migrate`. It builds its own scene,
-physics world and entities rather than using `on_init`'s, since a probe game has no init
-callback — **no window and no frame**, though unlike `--ui-probe` it does create a GL context,
-because the crates it spawns upload their meshes. Each case wants its own `CETRA_SETTINGS_DIR`:
-they share one slot name, so they would otherwise read each other's file.
+### apps/spores
 
-The ground spec 12.4 needs to plant a foot on is **always in the scene**: a ramp rising 1 in 4
-from x = 14, and three steps of half a metre at x = −15/−17/−19. Walk **+X** for the ramp, **−X**
-for the stairs; that is where the knee actually bends, since on the flat floor the solve is
-correctly an identity and there is nothing to see.
+It keeps four MSAA samples and no TAA: `particle_frag` writes no motion vector, so under TAA a mote
+reprojects through the geometry behind it and becomes a dash. `--taa`, `--headless-jitter` and
+`--msaa <n>` stay for whoever gives the particle pass one. Its other flags are in
+`apps/spores/README.md`.
 
-It stood behind an `--ik-ground` flag at first, to keep it out of the two menu goldens — the
-menu is drawn over the live scene through a backdrop only 77% opaque, so the floor reads
-through it and anything in frame moves them. That traded the only demonstration of the feature
-for two unchanged reference images, which is the wrong way round: the goldens carried the fixture
-from then until they were dropped in spec 13.6.
+### apps/shapes
 
-The follow camera is **on by default**; `--no-follow-cam` gives back the fixed orbit about the
-world origin. It shipped behind `--follow-cam` while the camera was being settled and was turned
-around once it was: a demo whose subject is a drop into a cavern should not open with the camera
-pinned to a point the player walks away from. The opt-out spelling matches `--no-puppet`,
-`--no-chaser` and `--no-ik`.
+It keeps 4x MSAA with no temporal filter: multisampling is the natural AA for 2D line art, and
+nothing in the scene moves, so an accumulator would integrate only its own jitter while switching
+on the aux G-buffer, the resolve and the passes that key off `taa_resolving`. The rest of its look
+is `engine_set_2d_preset` (`docs/architecture.md`). It takes `-x` and `-f <n>`, and
+`--input-script` and `--trace-camera` for the camera gate, but no screenshot flag.
 
-That makes the whole of spec 12.6 default-on, which is the 12.4 reasoning carried to its end —
-a flag that hides a feature from the only two pictures showing the world trades the
-demonstration for two unchanged reference images. Both menu goldens photographed this camera, so
-both were re-baked for it.
+### apps/pcb
 
-**The arrow keys turn it and nothing else does**, `apps/forest`'s bindings and rates — the right
-stick too, on a pad. It orbits the player's position at a fixed distance, pitch clamped so the
-eye cannot roll under the floor. Movement under the flag is camera-relative: W into the screen,
-S back toward the lens, whichever way you have aimed it.
+pcb is a repository of its own (`../apps/pcb`, with cetra as a submodule). Beside the 2D reasons,
+most of it draws through the `shape` program, which writes no motion vector, while its filled
+primitives draw through `pbr`, which does, so under TAA a dragged shape would reproject two halves
+of one frame differently.
 
-**That sentence was false for four specs and is worth keeping as a warning rather than quietly
-repairing.** Spec 12.13 made movement WORLD-ALIGNED — W a fixed world direction, so turning the
-camera left the character walking across the frame — and updated its own code comment and
-neither document. 12.17 put it back, and the reason it went back is as much that the code and
-the docs disagreed as that the scheme was wrong: the behaviour a player meets should be the one
-written down. **Since spec 12.19 that is a FIELD with a name rather than a
-file static somebody read**: a camera rig publishes `steers_controls`, defaulting to false, and
-the game asks the camera what its input means. The follow rig sets it; `--no-follow-cam`'s drag
-orbit and a `--cam-eye` pinned framing leave it false and movement world-aligned, deliberately,
-since pinning a camera states a POSE and should not silently rotate the controls. Turning it off
-on the follow rig reddens `pad-camera-relative` by 104.85 degrees -- to the second decimal the
-error 12.17 measured for the scheme it was reverting -- so a third silent flip is not available.
+### apps/splash
 
-It shipped first as a camera that trailed the player's facing automatically, which was wrong in
-a way worth recording because two sign changes failed to fix it. `player_yaw` follows the
-velocity, so a camera chasing it can never be in front of you: pressing back turned the
-character round and the camera swung in behind, both directions read as forward, and there was
-no backward left to invert. A heading the player controls has none of that.
+It takes no part in any of this. It never calls `engine_run`: it clears and swaps the default
+framebuffer in its own loop and draws SDF text straight to it, so the engine's framebuffer is built
+and never bound, its anti-aliasing is the GLFW window hint, and the screenshot path is never
+reached.
 
-It is mutually exclusive with mouse-drag orbit, the way `apps/tree`'s walker is: both own the
-camera, and the camera rig rewrites the eye from its anchor, arm and aim every frame. The
-arrows are shared with menu navigation, which is safe rather than the collision the action
-table warns about — `ui_up`/`ui_down` carry the `ui` flag, so a menu suppresses the camera
-actions and the arrows navigate it, while with no menu open the UI ignores them.
+### apps/canvas
 
-**And since 12.7 the camera can be STATED rather than followed**: `--cam-eye x,y,z`,
-`--cam-target x,y,z`, `--cam-up x,y,z` and `--fov <degrees>`, the render app's spelling. Both
-eye and target or neither — half a pose is a direction nobody gave, and it is refused by name
-rather than half-applied. A stated pose stands the follower down, so it also overrides
-`--no-follow-cam`'s orbit.
-
-It exists because a followed camera cannot be re-photographed. The eye is derived from the
-player every frame, so a framing seen once is gone, and *every* question of the form "what
-does this look like, and did that change it" needs the same pixels twice. Diagnosing the
-cluster-overflow wedge took four A/B comparisons against a pinned pose; without one there is
-nothing to compare, and the frame moves for reasons that have nothing to do with the change
-under test. The same reason apps/render grew these first.
-
-`--no-ik` runs the player without foot planting at all, which is the quickest way to tell a
-planting artefact from an animation one — worth knowing that the walk clip bends no knee of its
-own, so on flat ground the two look identical by design.
-
-`--no-lock` (spec 12.9) keeps planting and drops the LOCKING above it: contacts are still found
-and feet still meet the ground, but no world-space point is held — planting's behaviour, though
-not bit-identical to 12.4's, since the transition blend and the pelvis cap both changed under it.
-**On the generated puppet the two are 0 px apart at any speed**, and that is the mechanism
-working: its walk is a straight-leg pendulum with no stance, so the contact label never fires and
-there is nothing to hold. The run says so at startup — *"Locomotion clips imply no stride"* — and
-travel stays a fraction of `PLAYER_SPEED` 10.
-
-**On a rig whose clips DO imply a stride, travel comes from them** (spec 12.10) and the
-comparison needs no flag at all:
-
-```bash
-./out/bin/gametest --puppet assets/models/t_pose.fbx            # full stick is 2.67 m/s
-./out/bin/gametest --puppet assets/models/t_pose.fbx --no-lock  # the same, planting only
-```
-
-measures **2217 px** apart at full stick. The axis is metres per second there: each locomotion
-entry sits at the speed its clip implies, and the clip is played between 0.6x and 1.6x to cover
-what sits between and beyond them.
-
-`--speed <m/s>` still caps travel, and since 12.10 it also **overrides the derived figure** — so
-it is now a way to walk slower than full stick rather than the only way to see the feature. It no
-longer carries the old caveat about which constant the knob divides by: an absolute axis has no
-gear to re-normalise.
-
-**`--no-root-motion` (spec 12.18) is the other half of that story, from the opposite side.** On
-the generated puppet the locomotion pair is `travel_walk` and `travel_run` — clips that state how
-far they travel — so the character goes exactly as far as the animation says and full stick is
-**6.40 m/s**: the run clip carries 1.60 m per half second, which is 3.20 in the rig's own
-units, and the demo stands its player on a node scaled 2. The flag puts the in-place pair
-back, and the startup line tells you which way round you are:
-
-```bash
-./out/bin/gametest                    # "Locomotion travels 0 to 6.40 m/s, stated by the clips"
-./out/bin/gametest --no-root-motion   # "Locomotion clips imply no stride"; travel is the constant
-```
-
-**Two keys come with it**, and they are the thing stride matching cannot express: **Q** (or the
-right trigger) lunges a stated 1.20 m -- 2.40 on the ground, the rig being scaled 2 -- and **C**
-(or the left trigger) spins half a turn on the spot. Both are distances an animator chose, so rate-scaling one is exactly wrong. The triggers
-rather than buttons because every one of GLFW's fifteen is already bound.
-
-Two behaviours invert with the ownership and are worth expecting before you meet them. Walking
-into a wall plays the walk ON THE SPOT, where the stride-matched path stops it — the blend knob
-has to come from the stick, since the travel comes from the clip the knob selects. And the
-character turns toward where you point and then travels forward, rather than travelling in the
-direction you point: the facing is what the stick sets.
-
-`--puppet` never enters any of this. No committed FBX clip carries a root curve — `strut_walk`
-states 0.000071 m of travel over its whole loop — so an imported rig measures its stride exactly
-as it did before.
-
-`--ik-probe <case>` is the headless probe the `ik` gate group reads, in the same shape as the
-four above. The cases split on whether physics is the point. `reach`, `clamp`, `singular`,
-`identity`, `pole` and `analytic` build a rig and nothing else — a two-bone solve is a pure
-function of a hip, a target and two segment lengths, and giving those a world would only make
-exact arithmetic depend on contact slop. **`swing` is a seventh rig-only case and the one the
-group leans on hardest**: it ticks an actual walk cycle and measures each ankle's vertical
-travel with planting on and off. Every other case poses the rig ONCE and solves once, which is
-how eleven arms came to pass while the player's feet were welded to the floor — a solve that
-overwrites a stride looks perfect in a single pose. `ground`, `slope` and `step` add a physics world and
-the ramp-and-steps fixture, because planting's input is a RAYCAST and three bug classes live only
-there: the ray hitting the character's own capsule, the ray missing the ramp and finding the
-floor beneath it, and a hit point that is right while the plane is wrong. Those three run with
-release disabled — they ask whether the solve reaches the ground it was handed, not whether a
-foot should be planted at all. `swing` is the one that asks the second question: it ticks a walk
-cycle and measures the ankle's vertical travel, and it is the only case that would notice the
-feet welding to the floor, which every other arm passed straight through. It runs PLANTING only,
-said rather than inherited, since its bar is argued in terms of the release fade.
-
-Spec 12.9 added two more rig-only cases, taking the tally to nine: `drop` puts a foot half a
-metre past full extension so the pelvis cap is the only thing that can answer (nothing had ever
-exercised it), and `lock` runs the same walk clip FOUR times — at weight 0 for a clip-only
-reference, then planting, then locking, then locking with the body walked at three times the
-speed its own feet imply. The first exists because a reference read off a solved pass moves
-whenever the solver does, which makes every A/B incomparable with the one before it; the last is
-the refusal, asserting the feature lets go rather than straining. `CETRA_IK_TRACE=1` dumps that
-case's per-tick heights, contact label and lock state to stderr, where the probe's numeric
-grammar cannot reach them — it is what found a retargeted clip's toe joint passing back through
-its own bind clearance in mid-swing, which no aggregate would have named.
-
-**`apps/spores`** gained `--taa`, `--headless-jitter` and `--msaa <n>` in 11.103 and **kept its four
-samples**, which is the one refusal in that spec. `particle_frag` declares a single output, so a
-mote writes no motion vector and reprojects through whatever geometry sits behind it — zero on a
-static camera. Under TAA its 32,000 motes stop being dots and become dashes. The flags are the
-instrument that measured that and stay for whoever gives the particle pass a motion vector.
-
-**`apps/shapes`** keeps 4x MSAA with no temporal filter, and since 11.103 says so in a comment rather
-than leaving it to look like an omission. Multisampling is the natural AA for 2D line art; nothing in
-the scene moves, so an accumulator would integrate only its own jitter while switching on the aux
-G-buffer, the resolve and the eight passes that key off `taa_resolving`.
-The rest of its look is `engine_set_2d_preset`: bloom, GTAO, SSR, vignette, dither and shadows
-off, exposure pinned at unity, the `linear` tone curve, and a white ambient radiance on a scene
-with no light in it -- under which a material's albedo is the colour on screen. Its filled
-primitives carry a +Z normal since the flat generators started writing one; before that they had
-none, no light could reach them, and what read as red for years was the 3% ambient floor that
-spec 10.1 removed.
-
-**`apps/pcb` is a repository of its own** (`../apps/pcb`, with cetra as a submodule), not part of
-this one. The same reasoning applies to it, plus one more: most of it draws through the `shape`
-program, which writes no motion vector, while its filled primitives draw through `pbr`, which does,
-so a dragged shape would reproject two halves of one frame differently.
-
-**`apps/splash` takes no part in any of this**, and it is worth knowing before reaching for a flag.
-It never calls `engine_run` — it clears and swaps the DEFAULT framebuffer in its own loop and draws
-SDF text straight to it, so `engine->framebuffer` is built and never bound. Its anti-aliasing is the
-GLFW window hint, no app-side sample count reaches it, and the engine's screenshot path lives inside
-the loop it does not use.
-
-**`apps/canvas`** (spec 14.0) is the 2D canvas's own app, and takes no part in the AA question
-either: the canvas draws after tone mapping into a single-sample target of its own, with every edge
-antialiased by its exact distance, and leaves the window's multisampling switched off while it does.
-It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
+The 2D canvas's own app (spec 14.0); what it is, and its keys in a window, are in
+`apps/canvas/README.md`. It takes no part in the AA question either: the canvas draws after tone
+mapping into a single-sample target of its own, every edge antialiased by its exact distance, and
+leaves the window's multisampling off. It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`,
+and:
 - `--sheet NAME` picks what is drawn: `shapes` (the default), `areas`, `polygons`, `ramp`, `thin`,
   `long`, `long-short`, `glyphs`, `tags`, `overlap`, `symbol` or `board`. Each is laid out in
   millimetres and drawn in nanometres, pcb's units.
@@ -1894,6 +1571,8 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
 - `--ui` puts a panel of the game UI over the canvas, at `UI_OVERLAY_ORDER`. `--picture` adds an
   after-tonemap pass that changes nothing, so the overlays draw into PostFX's picture rather than
   the window.
+- `--ui-borders` (spec 14.12) draws boxes of one size and radius whose borders lie over clear,
+  half-alpha and opaque fills on one backdrop, which `canvas-ui-borders` holds to Porter-Duff over.
 - `--edit-thread` fills the board's edit on a thread of its own.
 - `--canvas-probe` prints where each shape of a sheet landed and its measures, in framebuffer pixels
   with rows from the top; on the board it also runs a script, a step a frame, printing what each
@@ -1917,22 +1596,22 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
 
   Headless, the run ends at the first frame after which nothing asks for another. It prints each
   frame's `delta_time`, the frames drawn and the seconds waited, which the `idle` gate group reads.
-- `--input-script PATH` replays a scripted pointer and typing (the render app's entry above has
-  the grammar) in place of the mouse. Its `close` asks to close the window as the close button
-  would, once, as the first frame of its line's range ends.
-- `--refuse-close` (spec 14.7) refuses the first close the window is asked for -- its close button,
-  Alt+F4, the macOS menu's Quit and Cmd+Q, or a script's `close` -- says so on stdout, and takes the
+- `--input-script PATH` replays a scripted pointer and typing (the grammar is under the render
+  app's `--input-script`) in place of the mouse. Its `close` asks to close the window as the close
+  button would, once, as the first frame of its line's range ends.
+- `--refuse-close` (spec 14.7) refuses the first close the window is asked for (its close button,
+  Alt+F4, the macOS menu's Quit and Cmd+Q, or a script's `close`), says so on stdout, and takes the
   next. Under `--canvas-probe` the run prints `canvas close asked N refused M frames K`, which
   `engine-close-hook` reads.
-- `--palette` (spec 14.2) gives the app a command palette, modal, over its own commands with
-  their keys. **Cmd+K** opens it (Ctrl+K off macOS), and typing filters and orders the commands by
+- `--palette` (spec 14.2) gives the app a modal command palette over its own commands with their
+  keys. Cmd+K opens it (Ctrl+K off macOS), and typing filters and orders the commands by
   `fuzzy_match`, with the matched letters lit. Up and Down move the highlight, Enter or a click
-  runs it, and Esc closes. **`/`** opens the jump over 5,000 generated part and net names, and a
-  name chosen there is printed, since there is nothing to jump to. Both lists are virtual rows
-  over every match, twelve shown at a time. The key that opens one isn't typed into its field: a
-  field the app focuses takes none of that pass's keys. Under `--canvas-probe` the run prints the palette as it left it
-  (`canvas palette state`: open, the text's length, the matches, the first one's item and its lit
-  bytes), the rows built (`canvas palette list`), and the field's box.
+  runs it, and Esc closes. `/` opens the jump over 5,000 generated part and net names, and a name
+  chosen there is printed, since there is nothing to jump to. Both lists are virtual rows over
+  every match, twelve shown at a time. The key that opens one is not typed into its field: a field
+  the app focuses takes none of that pass's keys. Under `--canvas-probe` the run prints the palette
+  as it left it (`canvas palette state`: open, the text's length, the matches, the first one's item
+  and its lit bytes), the rows built (`canvas palette list`), and the field's box.
 - `--history` (spec 14.2) adds a 360-point column at the window's right, and the views share what
   is left:
   - 200 messages as virtual rows of read-only fields, which follow the end, each speaker in a
@@ -1951,31 +1630,30 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
   `--ui`), as a pane an app draws would have: a click focuses it, and its label says the last two
   things it was handed, a key by its code and modifiers and a character as itself. It takes every
   character and no key, so Tab moves the focus on and Esc lets go. A text field under it is there to
-  move the pointer across: the panel keeps the focus until a press moves it. The app's own keys --
-  = and - to zoom -- stand down while it holds the focus.
+  move the pointer across: the panel keeps the focus until a press moves it. The app's own keys
+  (= and - to zoom) stand down while it holds the focus.
 - `--font-sheet` (spec 14.4) draws one line of code in JetBrains Mono at 11, 13 and 16 points, each
   first from the code editor's bitmaps made at the size shown and then as the UI's distance field
   of the same face. The app's fonts are built into it (spec 14.6); under `--canvas-probe`, run from
-  the source root, it holds each to the file it was built from -- the bytes, the font and the
-  editor face made from them -- and prints `canvas fonts`, which `canvas-font-memory` reads.
+  the source root, it holds each to the file it was built from (the bytes, the font and the editor
+  face made from them) and prints `canvas fonts`, which `canvas-font-memory` reads.
 - `--editor FILE` (spec 14.4) opens FILE in the code editor over the whole window, focused, and
   stands in for pcb round it:
   - an S-expression highlighter on pcb's lexical rules (comments, strings, `:keywords`, numbers,
     brackets, a form's head);
-  - a parse on a thread of its own after each change, whose errors -- a bracket left open or
-    closing nothing, a string its line ends inside -- come back at the version it read and are
-    underlined where the typing since moved them;
+  - a parse on a thread of its own after each change, whose errors (a bracket left open or closing
+    nothing, a string its line ends inside) come back at the version it read and are underlined
+    where the typing since moved them;
   - F6 lands `(note landed)` at the text's start, as an edit from another view, and marks it;
   - F7 reads the file again, through the text's whole new text.
 
   A parse's result is taken on the frame its thread's end wakes, as the board thread's is.
   `--editor-lag N` takes it N frames after it began instead, joining its thread if it has not
-  finished, so a headless run repeats without idle mode too, whose frames do not wait for work as
-  an idle run's do (spec 14.7). Under `--canvas-probe` the run prints
-  the text as hex (`canvas editor hex`), the selections, the errors as they stand and where the
-  first is drawn, whether every row is wrapped (`canvas editor settled`), how many changes the
-  texts refused (`canvas editor refused`) and the clipboard as hex (`canvas editor clip`), which
-  the `ui-editor-*`, `ui-vim-*` and `idle-editor` arms read -- of the focused pane, below.
+  finished, so a headless run without idle mode repeats too (spec 14.7). Under `--canvas-probe` the
+  run prints the text as hex (`canvas editor hex`), the selections, the errors as they stand and
+  where the first is drawn, whether every row is wrapped (`canvas editor settled`), how many changes
+  the texts refused (`canvas editor refused`) and the clipboard as hex (`canvas editor clip`), which
+  the `ui-editor-*`, `ui-vim-*` and `idle-editor` arms read, of the focused pane.
 
   `--read-only` (spec 14.7) makes every file's text read-only: nothing typed in the editor changes
   it, in the standard mode or the vim mode, and each refusal is counted and, with `--vim`, said on
@@ -2007,16 +1685,9 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
   run also prints `canvas editor vim` with the state and that message, which `ui-vim-script`
   reads.
   - `--vim-lookup` (spec 14.9) answers `gd`, `gD`, Ctrl+] and `K` as a host would: it says on the
-    line what it was asked and the name -- the atom at the caret on pcb's rules, or a one-line
-    visual area's text -- as `gd memory-bank`, and answers that it went. Without it no host is
-    set, and `gd` and `gD` are vim's own search.
+    line what it was asked and the name (the atom at the caret on pcb's rules, or a one-line
+    visual area's text), as `gd memory-bank`, and answers that it went. Without it no host is set,
+    and `gd` and `gD` are vim's own search.
   - `--vim-layout` (spec 14.9) answers `=`, `gq` and a new line's indent: two spaces for every
     bracket still open where a line starts, one fewer for a line opening with `)`; and `gq`
     joining the lines' words on one line at the first line's indent.
-
-The app's own keys stand down while the UI wants the keyboard (`ui_wants_keyboard`): a field or the
-editor holds the focus, or the palette is up.
-
-In a window a drag pans and the wheel zooms the view under the cursor. G opens the debug GUI, and F
-the FPS readout, which under `--idle` counts the frames drawn; = and - zoom, 0 resets the view and
-P prints its centre.
