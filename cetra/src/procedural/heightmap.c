@@ -210,6 +210,12 @@ bool heightmap_load(TerrainField* field, const char* path, float min_y, float ma
 bool heightmap_save(const TerrainField* field, const char* path, float min_y, float max_y) {
     if (!field || !field->height || field->res < 2 || !path)
         return false;
+    if (field->stream) {
+        log_warn("heightmap: refusing to write %s from a streamed field, whose planes hold a "
+                 "resident window and not the level",
+                 path);
+        return false;
+    }
     if (!(max_y > min_y)) {
         log_warn("heightmap: refusing to write %s over range %.3f..%.3f", path, (double)min_y,
                  (double)max_y);
