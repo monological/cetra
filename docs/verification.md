@@ -7,35 +7,27 @@ Three instruments, answering different questions:
 
 | instrument | asserts | blind to |
 |---|---|---|
-| `scripts/gates.py` | analytic properties — a ratio, a count, a penumbra width, whether two runs agree | anything nobody wrote an arm for; a bar too slack to fail |
-| `scripts/goldens.py` | 33 committed PNGs, pixel for pixel | whether the image is RIGHT — only whether it changed |
+| `scripts/gates.py` | analytic properties: a ratio, a count, a penumbra width, whether two runs agree | anything nobody wrote an arm for; a bar too slack to fail |
+| `scripts/goldens.py` | 33 committed PNGs, pixel for pixel | whether the image is right, only whether it changed |
 | a hand A/B | everything else | nothing, and that is the problem: it has no bar unless you measure one |
 
-**The one rule that governs all three: a pixel count quoted without its noise floor is not a
-measurement.** Every verdict below was taken at one resolution, one frame count and one flag set,
-and all three move it.
+**A pixel count quoted without its noise floor is not a measurement.** That rule governs all three.
+Every verdict below was taken at one resolution, one frame count and one flag set, and all three
+move it.
 
-**Both suites run on all three platforms** (`./build.sh --target linux|windows`, see
-`docs/build-vms.md`), and most gate arms pass on Linux and Windows — they assert an analytic
-property rather than a stored image, so they are renderer-independent by construction. Two things
-do not travel and should not be read as regressions: **timing arms** are meaningless under a
-software rasterizer, and **goldens** compare real pixels, so a genuine rasterizer difference shows
-up as a difference. The corpus must not be re-baked off macOS.
+**Both suites run on macOS, Linux and Windows** (`./build.sh --target linux|windows`, see
+`docs/build-vms.md`). Most gate arms pass everywhere, since they assert an analytic property rather
+than a stored image. Two things do not travel and are not regressions: timing arms mean nothing
+under a software rasterizer, and goldens compare real pixels, so a real rasterizer difference
+shows. Never re-bake the corpus off macOS.
 
-**A macOS update moves goldens too, and no flag reaches it.** macOS 27.2 (installed 2026-10-28)
-moved ten, every moved pixel by one code (12 of `cornell_rooms`' by two), in bands where a smooth
-gradient crosses a code: `aerial_fixture` 588 px, `ao_fixture` 1,450, `cloud_fixture` 3,316,
-`cloud_fixture_lowsun` 14,842, `cornell_rooms` 20,465, `froxel_fog` 2,246, `layer_vt_fixture` 100,
-`local_exposure` 3,181, `water_fixture` 3,381, `water_submerged` 100. **To tell an update from a
-change, build the commit that last baked the corpus clean and check it.** 13.58's bake commit,
-08edbd32, built after the update, failed the same ten by the same counts and drew all 33 exactly
-as master did. Build it from an export, so `out/` keeps master's: `git archive` into a scratch
-directory, the seven submodules linked in, a `VERSION` file, and `cmake -S <export> -B
-<export>/out -G Ninja -DCMAKE_BUILD_TYPE=Debug`. Nine were re-baked at once. **`local_exposure` had
-to wait for spec 14.8**: its recipe takes frame 30, and until then a headless run did not wait for
-its textures, so on a machine under load the frame was a room half loaded, 614,671 px from the
-golden, and the re-bake's two renders disagreed. On an idle machine it read 3,181 px, which is what
-its re-bake moved once the textures were in before frame 1.
+**A macOS update moves goldens too, and no flag reaches it.** An update moves pixels by one code
+(rarely two), in bands where a smooth gradient crosses a code, so the sky, fog, cloud, water and
+large-gradient fixtures are the ones that move. To tell an update from a change, build the commit
+that last baked the corpus clean and check it on the updated system: if it fails the same goldens
+by the same counts, the update moved them. Build it from an export, so `out/` keeps the current
+tree's binaries: `git archive` into a scratch directory, the seven submodules linked in, a
+`VERSION` file, and `cmake -S <export> -B <export>/out -G Ninja -DCMAKE_BUILD_TYPE=Debug`.
 
 ## Contents
 
@@ -47,7 +39,7 @@ its re-bake moved once the textures were in before frame 1.
 - [What breaks determinism](#what-breaks-determinism) — the per-source table, and the trap that
   two runs of one build are not two builds
 - [Assets, and which are safe](#assets-and-which-are-safe) — the per-asset ledger
-- [The recipe](#the-recipe) — the cross-build baseline, and the six times it has moved
+- [The recipe](#the-recipe) — the cross-build baseline
 - [Capturing a before](#capturing-a-before)
 - [The gamepad device path](#the-gamepad-device-path) — what the `gamepad` group does not
   cover, and the two recipes (a pad on this Mac; Linux uinput) that would
@@ -57,15 +49,14 @@ its re-bake moved once the textures were in before frame 1.
   cover, the early wake a hidden window gets, and how to look at a still window not drawing
 - [The real-character path](#the-real-character-path) — what the `anim` group asserts about
   the math, and what only watching a real rig can settle
-- [The root-motion path](#the-root-motion-path) — what the nine 12.18 arms assert, and why the
+- [The root-motion path](#the-root-motion-path) — what the root-motion arms assert, and why the
   benefit root motion exists for cannot be measured on any asset in this tree
 - [The UI paths](#the-ui-paths) — what the `ui` group does not cover: the layer's pixels,
   another display, a real pad through a menu, and the other two settings locations
 - [The save paths](#the-save-paths) — what the `save` group asserts, why a restored world is
   deliberately not bit-exact, and the migration nobody can test until time passes
 - [The foot-planting path](#the-foot-planting-path) — what the `ik` group asserts about the
-  solve, why eleven arms passed while the feet were welded to the floor, and why planting is
-  not locking
+  solve, what it cannot see, and why planting is not locking
 - [Reproducing a session: the config snapshot](#reproducing-a-session-the-config-snapshot-spec-1171)
   — handing over a tuned session as one JSON file, what it carries, and what it cannot
 - [Debugging an animation](#debugging-an-animation) — the puppet, the retarget A/B, and the real
@@ -77,94 +68,83 @@ its re-bake moved once the textures were in before frame 1.
 
 ## Running the gates
 
-`gates.py` needs Python 3 with **numpy** (since spec 13.28, whose grain and CRT arms read whole
-fields), and ImageMagick's `magick` on the path for `compare`. A machine without numpy fails at the
-import, before any group runs: `python3 -m pip install numpy`.
+`gates.py` needs Python 3 with numpy (`python3 -m pip install numpy`; without it the script fails
+at the import, before any group runs) and ImageMagick's `magick` on the path for `compare`.
 
 ### Which binaries a number describes
 
-`scripts/gates.py` and `scripts/goldens.py` both take `--bin-dir` (or `CETRA_BIN_DIR`), default
-`out/bin`. gates prints the resolved directory on every run, because which binaries a number
-describes is part of the result.
+`scripts/gates.py` and `scripts/goldens.py` both take `--bin-dir` (or `CETRA_BIN_DIR`). Which
+binaries a number describes is part of the result, so gates prints the resolved directory on every
+run.
 
-**`--bin-dir out/release/bin` is the fast path, and it is fast for exactly one reason** (spec
-11.65, measured): `forest` starts in **6.58 s debug against 1.36 s release**, a 4.8x saving on
-~55 launches, because its startup is CPU work `-O2` reaches — procedural 1K texture bakes, 20
-cluster-DAG builds, the scatter, erosion. `render` goes 0.41 s to 0.36 s over ~284 launches,
-because ITS startup is a GL context plus ~37 driver-side shader compiles that no optimiser
-touches. So the release win is forest's, almost entirely. Requires `./build.sh --release` first,
-and it is deliberately not auto-selected: a release tree older than the source would let the
-suite pass on a binary nobody just built.
+- **goldens.py defaults to `out/bin`**, the debug build.
+- **gates.py picks by freshness**: `out/release/bin` (from `./build.sh --release`) when its
+  `forest` is at least as new as the debug tree's, `out/bin` otherwise. A release tree older than
+  the source is therefore never used.
+- **Falsify a mutation with an explicit `--bin-dir`.** A rebuild confined to `apps/render` never
+  re-links `forest`, so a debug-only rebuild can leave the selector on a stale release binary,
+  and the arm comes back green against code that was never built.
+
+The release win is almost entirely forest's (spec 11.65): forest starts in 6.58 s debug against
+1.36 s release, because its startup is CPU work `-O2` reaches (procedural texture bakes,
+cluster-DAG builds, the scatter, erosion). `render` goes from 0.41 s to 0.36 s, since its startup
+is a GL context and driver-side shader compiles.
 
 ### What a release run moves
 
-**Measured end to end: 14:51 debug, 10:17 release** for the same 265 arms — 241 identical, 13
-moved, 0 verdict flips. Ten of the movers read milliseconds or forest pixel counts. The other
-three matter: `forest-lod`, `cluster-bands` and `cluster-parity` move because **meshoptimizer
-makes marginally different collapse decisions under `-O2`, so a LOD chain and a cluster DAG are
-build-type-dependent**. The control is exact — `--no-lod`'s raw 65,098,553 triangles is identical
-in both, so the simplifier's arithmetic moved and the geometry did not. **Forest triangle counts
-are therefore not comparable across build types**, which is why gates prints the directory it used.
+A release run moves no verdict, but it moves numbers. Besides milliseconds and forest pixel counts,
+`forest-lod`, `cluster-bands` and `cluster-parity` move, because **meshoptimizer makes slightly
+different collapse decisions under `-O2`, so a LOD chain and a cluster DAG depend on the build
+type**. The raw triangle count with `--no-lod` is identical in both: the simplifier's decisions
+moved, not the geometry. **Forest triangle counts do not compare across build types.**
 
-The cook (spec 11.99) narrows that where the key allows sharing: two builds reading one cook dir
-draw whichever build cooked first, so the counts agree by serving one artefact rather than by
-agreeing arithmetic. It does NOT collapse the forest movers in practice — the tree prototypes'
-vertex bytes themselves differ across builds (Phase 0 measured 12 of 20 input digests moving), so
-their DAG entries split by content and each build still cooks its own. The suite is unaffected
-either way: gates runs against a per-invocation cache dir, so everything an arm reads was cooked
-by the binary under test.
+The cook (spec 11.99) does not hide that. Two builds reading one cook dir draw whichever build
+cooked first, but the tree prototypes' vertex bytes themselves differ across builds, so their DAG
+entries split by content and each build cooks its own. The suite is unaffected either way: gates
+runs against a per-invocation cache dir, so everything an arm reads was cooked by the binary under
+test.
 
 ### Goldens must not follow the gates onto release
 
-**Goldens are a different matter and must not follow blindly.** They are committed PNGs, `-O2`
-changes CPU float results, and checking release-built frames against debug-baked goldens is a
-comparison across two builds — which this file's own rule says does not hold. Move them only
-together with `--rebake`.
+Goldens are committed PNGs, and `-O2` changes CPU float results, so checking release frames against
+debug-baked goldens is a comparison across two builds, which does not hold (see What breaks
+determinism). Move goldens to release only together with `--rebake`.
 
 ### Frame counts are a correctness question, not a performance one
 
-**And frames are nearly free, which is the counter-intuitive part.** A frame at the suite's
-shared 400x300 costs ~0.0013 s: thirty frames cost **0.04 s** more than one. The suite's cost is
-~339 process STARTUPS, not pixels, so lowering a frame count saves ~5 s across the whole suite
-while risking an arm that reads a pose silently reading a different one. Frame counts are a
-correctness question here, not a performance one — `render()`'s docstring records what the engine
-actually forces, which is one frame for a static pinned capture since spec 14.8 put its textures
-in before frame 1, and 60 / 150 / 240 / 400
-where the accumulators, the meter, the trace cadence and the walk geometry genuinely demand them.
+A frame at the suite's shared 400x300 costs about 0.0013 s, so thirty frames cost 0.04 s more than
+one. The suite's cost is its process startups, not its pixels. Lowering a frame count saves almost
+nothing and risks an arm that reads a pose silently reading a different one. `render()`'s
+docstring in `gates.py` records what the engine actually forces: one frame for a static, pinned,
+fog-free capture (a headless run's start-up textures are in before frame 1), and 60, 150, 240 or
+400 where the accumulators, the meter, the trace cadence and the walk geometry need them.
 
 ### Reading a `--profiler` table
 
-Three things about the numbers, all of which have been got wrong at least once.
+**Every row is per frame**, not per call (spec 11.97). A pass entered once in the window and a pass
+entered every frame both publish what they cost the average frame, which is what makes the rows
+addable and `TIMED` meaningful.
 
-**Every row is per FRAME, not per call or per occurrence** (spec 11.97). A pass entered once in the
-window and a pass entered every frame both publish what they cost the AVERAGE frame, which is what
-makes the rows addable and `TIMED` meaningful. Before 11.97 each column divided by its own count and
-a gated scope published a per-occurrence cost in a column of per-frame means — `dir_shadow_fixture
---gi-volume` printed a CPU `TIMED` 21x its `FRAME`, with nothing wrong in the clock.
+**`FRAME (wall)` and `PERIOD` are different quantities.** FRAME is the frame's own bracket, begin to
+end; PERIOD is begin to begin, so it also carries the swap, the vsync wait and the poll.
+- For the CPU column `TIMED <= FRAME` is an identity (flat scopes, all closing inside the bracket),
+  so a violation is a bug in `profiler.c`, never a slow frame.
+- For the GPU column it is a loose bound both ways, because the driver runs behind and a pass's
+  time can land outside the bracket that submitted it.
+- PERIOD is what matches an fps counter and what a budget is read against. Headless has vsync off,
+  so the two nearly agree there and diverge in a window.
 
-**`FRAME (wall)` and `PERIOD` are different quantities and neither substitutes for the other.**
-FRAME is the frame's own bracket, begin to end; PERIOD is begin to begin, so it also carries the
-swap, the vsync wait and the poll. For the CPU column `TIMED <= FRAME` is an IDENTITY — flat scopes,
-all closing inside the bracket — so a violation is a bug in `profiler.c` and never a slow frame. For
-the GPU column it is a loose bound both ways, because the driver runs behind and a pass's time can
-land outside the bracket that submitted it. PERIOD is the one that matches an fps counter and the
-one a budget is read against; headless has vsync off, so the two nearly agree there and diverge in a
-window.
-
-**A 0.000 GPU row is not a free pass.** It is either a free pass, a driver that accepts timer
-queries without measuring (which is what `gpu-nonzero` watches for), or — before 11.97 — a result
-that was never collected, since an unready query was dropped rather than waited for. Five forest
-rows read exactly 0.000 that way while running every frame. The ring is drained at each latch now
-and a give-up is reported by name, but **any 0.000 GPU row quoted from a spec before 11.97 should be
-read as unmeasured rather than as free.**
+**A 0.000 GPU row is not necessarily a free pass.** It may also be a driver that accepts timer
+queries without measuring, which `gpu-nonzero` watches for. The query ring is drained at each
+latch and a query given up on is reported by name.
 
 ## Deterministic renders
 
 ### The bar, and the noise floor
 
-The bar for "this refactor changed nothing" is **0 differing pixels**, and you can
-only claim that from a scene that renders identically across two runs of the SAME
-build. Always measure the noise floor first:
+The bar for "this refactor changed nothing" is **0 differing pixels**, and you can only claim that
+from a scene that renders identically across two runs of the same build. Measure the noise floor
+first:
 
 ```bash
 # same build, twice -- must print "0 (0)" before the comparison means anything
@@ -172,17 +152,14 @@ magick compare -metric AE run_a.ppm run_b.ppm null:
 ```
 
 **Measure the floor even when this file says the asset is safe.** Every verdict in the table below
-was taken at one resolution, frame count and flag set, and all three move it -- `apps/forest` reads
-7,134 px at 20 frames and 34,991 at 60. A pixel count quoted without its floor is not a measurement.
-The floor run costs one extra render; skipping it has already produced one confidently-stated number
-that had no basis (spec 11.30's ordering comparison, caught by "is forest even deterministic?").
+was taken at one resolution, frame count and flag set, and all three move it: `apps/forest` reads
+7,134 px at 20 frames and 34,991 at 60. The floor costs one extra render.
 
 ### Reading a diff
 
-`-metric AE` counts differing pixels (the useful bar). `-metric RMSE` gives
-magnitude, `-metric PAE` the worst single-channel delta -- `PAE` of `1/255`
-(0.00392) is last-bit rounding, i.e. the compiler scheduled the same math
-differently, not a behaviour change. To see WHERE two renders differ:
+`-metric AE` counts differing pixels (the useful bar). `-metric RMSE` gives magnitude, `-metric PAE`
+the worst single-channel delta. A `PAE` of `1/255` (0.00392) is last-bit rounding: the compiler
+scheduled the same math differently, not a behaviour change. To see where two renders differ:
 
 ```bash
 magick compare -metric AE -compose src before.ppm after.ppm diff.png
@@ -194,23 +171,22 @@ magick diff.png -negate -morphology Dilate disk:4 -negate -resize 1000x big.png
 
 **`scale-twin` (spec 13.57) renders each of its scenes twice, as it is and shrunk 1024 times,
 and passes only at 0 px.**
-- **What the twin scales:** it multiplies by K = 2^-10 every length the scene states — positions,
+- **What the twin scales:** it multiplies by K = 2^-10 every length the scene states (positions,
   ranges, sizes, a light's body, the camera's eye and target, an SSS radius, a material's
-  thickness, the fog's near and far — and the typical size.
+  thickness, the fog's near and far) and the typical size.
 - **What follows from it:** point and spot candela go as K², so illuminance is unchanged, and fog
   density per metre goes as 1/K. Directional lux, a panel's nits, exposure and the environment
   stay.
-- **So a twin differs only where the ENGINE holds a length of its own:** a tuning length that does
+- **So a twin differs only where the engine holds a length of its own:** a tuning length that does
   not follow `Engine.typical_size`.
 
 **0 px is exact, not a tolerance.** Multiplying by a power of two is exact in floating point, and
 so is every sum, difference, product, quotient and square root of numbers it has scaled: the twin
 does the original's arithmetic with the exponent moved. A moved pixel names a missed length.
 - **The one exception is fp16's subnormals**: a length stored under fp16's normal range, 6.1e-5 m.
-- **A scene already measured in millimetres is twinned by GROWING it** (K = 1024), and the argument
+- **A scene already measured in millimetres is twinned by growing it** (K = 1024), and the argument
   holds unchanged that way. The board's view depths run from a millimetre to a few centimetres;
-  shrunk, they fall under that floor, and a bisect run in that direction returned noise before
-  this was understood.
+  shrunk, they fall under that floor and the twin reads noise.
 
 **A key the twin cannot classify is refused by name, never copied.** Copied unscaled, it would
 render a twin that differs, and the difference would read as a length the engine holds.
@@ -225,131 +201,112 @@ render a twin that differs, and the difference would read as a length the engine
   reason.
 - **The classification itself.** The twin proves that every length scales with the scene, not that
   each follows the right thing: a physical length wrongly multiplied by the typical size scales
-  with the scene too, and twins to 0 px. That is how an SSS profile's radius came to be rewritten
-  by the size until a review read it.
+  with the scene too, and twins to 0 px. Only reading the classification catches that.
 
 **`fit-clip` holds a fitted camera's planes to the fit** worked out in the gate from the board's
 glTF in double precision, at the board's three views and from inside the table, within 1e-4.
 
 ### What breaks determinism
 
-**"Two runs of one build match" does NOT mean "two builds match."** This is the
-trap, and it is worth internalising before trusting any comparison.
-Auto-exposure adapts per FRAME (a fixed 0.04 blend plus a snap deadband, not a
-delta-scaled rate -- see exposure.c), so two equal-length headless runs of one
-build adapt identically and compare at exactly 0 -- which looks like proof and
-is not. Across two builds the approach path can differ (async texture arrival
-order perturbed the frames the meter reads; since spec 14.8 a headless run's
-start-up textures are all in before frame 1, which takes that cause away for
-them but not for a texture asked for later), exposure lands somewhere slightly
-different, and since it multiplies the whole frame, **every pixel in the image
-changes**.
+**Two runs of one build matching does not mean two builds match.** Auto-exposure adapts per frame
+(a fixed 0.04 blend plus a snap deadband, not a delta-scaled rate; see `exposure.c`), so two
+equal-length headless runs of one build adapt identically and compare at exactly 0, which looks
+like proof and is not. Across two builds the approach path can differ (a texture asked for after
+the run began arrives in a different order and perturbs the frames the meter reads), exposure
+lands slightly elsewhere, and since it multiplies the whole frame, every pixel changes. On a change
+that was provably a no-op, 99.77% of a 4K frame differed with auto-exposure on; with
+`--no-auto-exposure -E 1.0`, 9 pixels at PAE 1/255.
 
-Measured on a change that was provably a no-op (a uniform hoisted out of a
-vertex shader, identity matrix, mathematically identical): **8,275,230 of
-8,294,400 pixels differed (99.77%)** with auto-exposure on. The same comparison
-with `--no-auto-exposure -E 1.0`: **9 pixels, PAE 1/255.** The 99.77% was
-entirely exposure.
+So:
+- **Always pin exposure for a cross-build comparison.**
+- **A whole-image diff with no recognisable structure**, backdrop and subject shifted alike, is the
+  signature of an exposure difference, not a shading bug. Render the diff map (`-compose src`)
+  before diagnosing; if everything is lit up uniformly, suspect exposure first.
 
-So: always pin exposure for a cross-build comparison. A whole-image diff with no
-recognisable structure -- backdrop and subject shifted alike -- is the signature
-of an exposure difference, not a shading bug. Render the diff map (`-compose
-src`) before diagnosing; if everything is lit up uniformly, suspect exposure
-first.
-
-| source | deterministic across BUILDS? | how to pin |
+| source | deterministic across builds? | how to pin |
 |---|---|---|
-| **Auto-exposure** | **Converged: YES.** The snap makes steady state a pure function of the scene, then bit-identical across runs. BEFORE convergence, no -- the approach path shifts with async-load arrival order (headless, only for a texture asked for after the run began: start-up's are in before frame 1 since spec 14.8), and exposure scales every pixel. WHEN it converges is scene-dependent: frame 91 on `postfx_convergence_fixture`, not the deadband's first touch around 18 | **`--no-auto-exposure -E 1.0` (still the rule for before/after)** -- cheaper than reasoning about whether your frame count cleared it. `--exposure-probe` prints `target_log2` and `adapted_log2`; equal means converged |
-| **Wind** (`wind_response` materials) | YES in headless (spec 11.2) -- rides the fixed-step frame clock, frame N is phase N | (automatic) |
-| **Spring bones** (`springbone.c`) | YES in headless -- stepped by the animation clock, which is the frame clock | `--no-springs` only to isolate spring motion in an A/B |
-| **Particles** (falling leaves, spores) | YES in headless (spec 11.2) -- ticked from the frame clock; game-loop step count is exactly one per frame | (automatic) |
-| **Skeletal animation** | YES in headless -- the frame clock steps a fixed 1/60 per frame so frame N is always pose N | (automatic) |
-| **Animation blending** (`animator.c`, spec 12.1) | YES in headless -- every clock in it (the blend space's, the crossfade's envelope, the override layer's) advances by the same fixed dt, so frame N is blend state N. In the game framework the dt is the SIM clock's, a whole number of fixed steps, so a paused sim holds the pose and reads zero deformation velocity | (automatic); `--anim-probe` prints the weights and every bone's pose, `%.9g`, so a textual diff is a bit diff |
-| **The animation state machine** (`anim_graph.c`, spec 12.20) | YES in headless, and for a reason worth stating rather than inheriting: the graph ticks ONCE PER RENDERED FRAME, immediately before the animator it drives, and headless a frame is exactly one fixed step -- so state N is state N. **Windowed it is not**, and that is the one place this differs from the rows above: a frame that runs three steps or none still decides once, where the machine it replaced decided three times or zero. The time-in-state a row compares against is in seconds off the sim clock, which is a whole number of fixed steps headless and is not, windowed | (automatic); `--graph-probe` prints states and clocks at `%.9g`, and most of its cases create no engine at all; `--trace-player` appends the live state and its clock as the LAST two columns |
-| **The game UI** (`ui.c`, spec 12.2) | YES in headless -- every clock it has (hover, focus, a toggle's travel, a screen's entrance) advances by the FIXED frame dt rather than the wall clock, so frame N is transition state N. It draws AFTER tone mapping, so no post pass can move it and nothing in the chain needs pinning for it | (automatic); `--ui-probe` prints layout, navigation, capture and settings as numbers, and is the one probe that needs no window at all |
-| **The place graph** (`nav_graph.c`, spec 13.17) | YES -- routes break ties by node index, a follower advances by the root motion a clip states and a jump by its clip's clock, so a headless trip is the same trip every run | (automatic); silent's `--trace-cat` prints the link and how far along it every 30 steps |
-| **A brain** (`game/brain.c`, spec 13.17) | YES in headless, ticked once per fixed step: its only randomness is its own xorshift32 from the seed it was made with, and a sense is a ray against the physics world, which is exact. **Windowed it is not**: what it senses depends on where the player happens to be | (automatic); silent's `--cat-seed` picks the seed, and two `--trace-cat` runs on one seed diff byte-identical (measured over a minute, 240 lines) |
-| **Voices** (`audio_play_voice`, spec 13.17) | YES in an offline render: a voice is decoded on the calling thread, never by an async load, and reaped from the mix pulled, so a dump is a function of the frames. **A headless run that pulls no PCM never ends a voice** -- the pool steals the oldest instead, which changes nothing a picture can see | `--audio-dump`, pulled a frame at a time |
-| **Audio zones** (`audio.c`, spec 13.33) | YES -- the best paths are a closure over the links, recomputed when one changes, and the fade eases by the sim clock's delta, so a headless frame N is fade state N. The gain changes once a frame, between the frames an offline render pulls, and the first update -- before frame 1, from `game_run` -- lands every gain | (automatic); the `audio-zone*` arms |
-| **The head look-at** (`look_at.c`, spec 13.17) | YES -- it eases by the animator's dt, and does nothing at all at weight zero, which kept every golden 0 px with it installed | (automatic) |
-| **TAA jitter** | YES -- disabled in headless unless `--headless-jitter` | (automatic) |
-| **Orbit camera** | YES -- auto-rotation disabled in headless | `--cam-eye`/`--cam-target` for exact repro |
-| GTAO / SSR temporal accumulation | frame-count driven, not wall-clock; no drift observed across builds | `--no-ssr --no-ssao` if isolating |
-| **A config snapshot** (spec 11.71) | **It pins the LOOK, not the frame index.** Everything above still applies underneath it: `--config` restores ~230 settings including the adaptation state, so exposure continues rather than re-approaching, but it does not restore the frame counter, the temporal histories or the async-load order. A snapshot plus the same `-f` is reproducible; a snapshot at a different frame count is a different frame | it IS the pin -- and dump `--config-dump` from the run you want to reproduce, rather than transcribing flags |
-| **Cooked artefacts** (spec 11.99) | **Deterministic by construction, and the one SANCTIONED crossing of this table's rule**: the cook key carries content and recipe/library versions, never the build type, so an artefact cooked by one build may serve another. Where a producer's bytes differ across builds (the tree meshes under -O2) the content fold splits the entries with no policy; where they agree (the rocks) sharing is what happens. Bounded by the container's version-and-checksum refusal | `--no-cook` (or a fresh `--cook-dir`) whenever the measurement is OF a bake; `CETRA_COOK_DIR` to pin where a comparison reads from. gates.py and goldens.py isolate onto their workdirs automatically |
+| **Auto-exposure** | **Converged: yes.** The snap makes steady state a pure function of the scene. Before convergence, no: the approach path shifts with the arrival order of textures asked for after the run began (start-up's are in before frame 1), and exposure scales every pixel. When it converges is scene-dependent: frame 91 on `postfx_convergence_fixture`, not the deadband's first touch around 18 | **`--no-auto-exposure -E 1.0`** for any before/after; cheaper than reasoning about whether your frame count cleared convergence. `--exposure-probe` prints `target_log2` and `adapted_log2`; equal means converged |
+| **Wind** (`wind_response` materials) | Yes headless: rides the fixed-step frame clock, frame N is phase N | (automatic) |
+| **Spring bones** (`springbone.c`) | Yes headless: stepped by the animation clock, which is the frame clock | `--no-springs` only to isolate spring motion in an A/B |
+| **Particles** (falling leaves, spores) | Yes headless: ticked from the frame clock; the game loop runs exactly one step per frame | (automatic) |
+| **Skeletal animation** | Yes headless: the frame clock steps a fixed 1/60 per frame, so frame N is pose N | (automatic) |
+| **Animation blending** (`animator.c`) | Yes headless: every clock in it (the blend space's, the crossfade's envelope, the override layer's) advances by the same fixed dt, so frame N is blend state N. In the game framework the dt is the sim clock's, a whole number of fixed steps, so a paused sim holds the pose and reads zero deformation velocity | (automatic); `--anim-probe` prints the weights and every bone's pose at `%.9g`, so a textual diff is a bit diff |
+| **The animation state machine** (`anim_graph.c`) | Yes headless: the graph ticks once per rendered frame, right before the animator it drives, and headless a frame is exactly one fixed step. **Windowed it is not**: a frame that runs three steps or none still decides once, and the time-in-state a row compares against is in seconds off the sim clock | (automatic); `--graph-probe` prints states and clocks at `%.9g`, and most of its cases create no engine; `--trace-player` appends the live state and its clock as its last two columns |
+| **The game UI** (`ui.c`) | Yes headless: every clock it has (hover, focus, a toggle's travel, a screen's entrance) advances by the fixed frame dt, not the wall clock. It draws after tone mapping, so no post pass can move it | (automatic); `--ui-probe` prints layout, navigation, capture and settings as numbers, and needs no window |
+| **The place graph** (`nav_graph.c`) | Yes: routes break ties by node index, a follower advances by the root motion a clip states and a jump by its clip's clock | (automatic); silent's `--trace-cat` prints the link and the distance along it every 30 steps |
+| **A brain** (`game/brain.c`) | Yes headless, ticked once per fixed step: its only randomness is its own xorshift32 from its seed, and a sense is a ray against the physics world, which is exact. **Windowed it is not**: what it senses depends on where the player happens to be | (automatic); silent's `--cat-seed` picks the seed, and two `--trace-cat` runs on one seed are byte-identical |
+| **Voices** (`audio_play_voice`) | Yes in an offline render: a voice is decoded on the calling thread, never by an async load, and reaped from the mix pulled, so a dump is a function of the frames. **A headless run that pulls no PCM never ends a voice**; the pool steals the oldest instead, which no picture can see | `--audio-dump`, pulled a frame at a time |
+| **Audio zones** (`audio.c`) | Yes: the best paths are a closure over the links, recomputed when one changes, and the fade eases by the sim clock's delta. The gain changes once a frame, between the frames an offline render pulls, and the first update, before frame 1, lands every gain | (automatic); the `audio-zone*` arms |
+| **The head look-at** (`look_at.c`) | Yes: it eases by the animator's dt, and does nothing at weight zero | (automatic) |
+| **TAA jitter** | Yes: off headless unless `--headless-jitter` | (automatic) |
+| **Orbit camera** | Yes: auto-rotation is off headless | `--cam-eye`/`--cam-target` for exact repro |
+| GTAO / SSR temporal accumulation | Frame-count driven, not wall-clock; no drift observed across builds | `--no-ssr --no-ssao` if isolating |
+| **A config snapshot** (spec 11.71) | **It pins the look, not the frame index.** `--config` restores about 230 settings including the adaptation state, so exposure continues rather than re-approaching, but not the frame counter, the temporal histories or the async-load order. A snapshot plus the same `-f` is reproducible; at a different frame count it is a different frame | It is the pin. Dump `--config-dump` from the run you want to reproduce rather than transcribing flags |
+| **Cooked artefacts** (spec 11.99) | **Deterministic by construction, and the one allowed crossing of the across-builds rule**: the cook key carries content and recipe and library versions, never the build type, so an artefact cooked by one build may serve another. Where a producer's bytes differ across builds (the tree meshes under `-O2`) the content fold splits the entries; where they agree (the rocks) they are shared. A container failing its version or checksum is refused | `--no-cook` (or a fresh `--cook-dir`) whenever the measurement is of a bake; `CETRA_COOK_DIR` to pin where a comparison reads from. `gates.py` and `goldens.py` isolate onto their workdirs automatically |
 
 ### Assets, and which are safe
 
-**The corpus is split by KIND since spec 12.8** — `scenes/`, `models/`, `textures/`,
-`goldens/`, `generators/`, `lut/`, `ies/`, `data/` — with `abandoned_window/`, `ivy_arcade/`
-and `raiden/` left whole, because each carries its own scenes and its own producers. Two
-consequences are worth knowing before reading a path here:
+Where the corpus lives and how to name an asset is in [Where assets live](#where-assets-live). One
+consequence matters before reading a path here: **a model and its `.cscn` do not share a
+directory**, so `-m foo.glb` auto-loading a sibling `foo.cscn` (`cscene_apply.c`) reaches only the
+self-contained bundles (`abandoned_window/`, `ivy_arcade/`). Every gate and golden names its scene
+explicitly; an interactive run wanting a scene's settings passes the `.cscn`, not the model.
 
-- **A model and its `.cscn` no longer share a directory**, so `-m foo.glb` auto-loading a
-  sibling `foo.cscn` (`cscene_apply.c`) reaches only the bundles now. Every gate and golden
-  names its scene explicitly, so this costs the suites nothing; an interactive run wanting
-  the scene's settings passes the `.cscn` rather than the model.
-- **A `.cscn` names its model as `../models/<name>`** and an image `uri` inside a `.gltf` as
-  `../textures/<name>`. Both resolve where a bare sibling name no longer can: the first
-  against the scene file's own directory, the second through the texture pool, which strips
-  `base + subpath` verbatim before it starts stripping leading segments — and stripping only
-  ever shortens a name, so a bare sibling filename cannot reach a sibling directory while an
-  explicit `../` can.
+**`assets/ivy_arcade/` has no coverage.** The `fixture-gen` gate prunes the self-contained bundles,
+and its generator (`gen_ivy_mat.py`) would need Blender's sibling (`build_arcade.py`) to mean
+anything. It is also not pixel-comparable: two pinned runs differ by about 8,700 px.
 
-**One generator has never had drift coverage**: `assets/ivy_arcade/gen_ivy_mat.py`. The
-`fixture-gen` gate walks for generators but prunes the self-contained bundles, and this one
-would need Blender's sibling (`build_arcade.py`) to mean anything anyway. `ivy_arcade` is
-also not pixel-comparable (measured 8,674 px between two pinned runs), so nothing else
-covers it either.
+**A `.cscn` key in the wrong place parses and is ignored**, which recurs below (`sun` keys flat
+instead of nested, `position` for `eye`, `"sky": true` for `"mode": "sky"`). `parse_env` and
+`parse_water` report a key nothing read; check the log.
 
 | asset | wind | springs | verdict |
 |---|---|---|---|
-| `my_models/raiden/source/raiden_textured_rigged.glb` | no | **yes** | **best baseline.** Rigged + animated + normal-mapped; 0-identical headless with or without springs (spec 11.2 measured both). Exercises the skinned tangent path nothing else does. |
-| `assets/models/parallax_fixture.gltf` | no | no | deterministic, but 4 vertices and no mirrored UVs -- only proves the `w = +1` path |
-| `assets/abandoned_window/abandoned_window.glb` (+ sibling `.cscn`) | **yes** (curtains) | no | **usable since spec 11.2**: x3 pairwise 0 px headless with pinned exposure. The previously recorded "bistability" (269009 px between runs) did not reproduce once wind rode the frame clock -- it was wall-clock wind phase. `-m foo.glb` auto-loads the sibling `foo.cscn`; `--no-scene-file` escapes it. |
-| `assets/models/room.fbx`, `assets/models/c64.fbx` | no | no | room's textures point at a dead path; c64 renders fully (textured, lit) since specs 11.1 |
-| `apps/tree` | **yes** + particles | no | **NOT pixel-deterministic on the orbit path** -- measured 8,925 px run-to-run at 40 frames / 2800x1800, and 31,034 at the framing recorded above, so **measure the floor at YOUR framing before comparing anything**: it moves by a factor of three with resolution and frame count. The cause is `camera_drag_update(drag_controller, glfwGetTime())` at **`tree.c:761`** (`mouse_drag_update` until spec 12.19 renamed it) -- and that call sits in an `else if` behind `if (player)`, so **`--player` never reaches it**, never creates the drag controller (`tree.c:1200`), and takes `engine->render_delta` instead. **`--player --headless` IS 0 px** -- measured x2 at 30 frames / 400x300 (spec 11.86), which makes it tree's first pixel-comparable framing and the one to use for any A/B in this app. It is what 11.86's normal-compression numbers were taken at. Wind, grass sway and falling leaves ARE frame-index-pure (spec 11.2); the ORBIT camera is what is not. **Spec 11.32 put a sea around it, ON by default**, and 11.35 put a seabed under the sea -- both under one `--no-water` guard, because a bed with no sea over it is a plate around a dome. **Its water is SPECTRAL by default since 11.35, not Gerstner** (`tree.c:1589`; `--gerstner-waves` switches back, and the four wave params it authors are DEAD unless you pass it). So the 64-pass FFT cost (45 until spec 13.3 added the ripple band) and the FFT-only crest foam all apply to this app by default (caustics run on either model since spec 13.2), and every cascade change in 11.33 and 11.35 reaches it. No tree capture from before 11.35 compares; none from before 11.36 does either, which re-scaled the water's absorption. |
-| `apps/spores` | particles | no | deterministic headless since spec 11.2 (x3 0 px; game-loop step count is exact). Since 11.103 it also takes `--taa`, `--headless-jitter` and `--msaa`, which exist to have MEASURED a refusal rather than to be used: its particles write no motion vector, so TAA reprojects every mote through the geometry behind it and turns dots into dashes. Compare its mote field at 4x against `--taa` if you want to see it; brighten 4x, the field is dim. |
-| `apps/gametest` | physics | no | **0 px run-to-run and byte-identical traces** (spec 11.109, measured x2 at 240 frames: two `--trace-player --trace-every 10` traces `cmp` equal, two `-S` frames 0 px). **This row said 48 px for six specs, with an explanation that was wrong**: headless the engine hands the loop its FIXED frame dt, so wall clock never reaches the accumulator; the 48 px was the FPS overlay, drawn headless from the wall clock (108 px with it on, 0 without, on one build) and off headless since 11.109. `-x`, `-f`, `-S`, `--screenshot-every`, `--taa`, `--msaa`, plus `--pad-script`, `--gamepad-db`, `--trace-player`, `--trace-every`, `--print-bindings`; since 12.2 also `-W`/`-H` (so a golden can state the size it was baked at), `--no-ui`, `--ui-screen <name>`, `--ui-focus <n>` and `--ui-probe <case>`; the HDR path stays positional. **It owned the only goldens that were not the render app's**, `menu` and `menu_focus`, until spec 13.6 dropped both (see "Why there are no menu goldens" under the UI paths). **The `gamepad` gate group plays it** with five scripted pads and reads the trace's commanded move -- the move and not the position, because five boxes fall at `rand()` positions, which differ per platform's libc, and a leg that walks into one on Linux would fail a displacement there alone. One cross-build curiosity for the record: the phase-2 and phase-3 builds of 11.109 agree on every input column and every position of the probe script except an 8 mm sideways nudge after the character presses on a box at t=1.8, which mirrors between them (a face-on contact's tie-break); each build is exact against itself. It runs one sample plus TAA windowed, which it earns by every surface writing a motion vector: rigid meshes on `pbr` and, since 12.1, one skinned rig on `pbr_skinned`, whose vectors come from the previous frame's bone rows (`uPrevBoneRows`) latched once per frame. `--no-puppet` is the all-rigid frame if you need to separate them. **Re-measured with the rig on the frame (spec 12.1): still 0 px and byte-identical traces.** **The real gamepad path is unverified here**, and two recipes close it -- see "The gamepad device path" below. |
-| `apps/silent` | physics + tube flicker | no | **0 px run-to-run, with its jittered TAA and without it** (spec 13.6: two runs each of the kitchen view at 60 frames, 960x540 on a 2x display; held again in spec 13.25 with the two houses, the hill and its swaying trees in the world). Headless it runs one sample with TAA jittered like the window, so the jitter must follow the frame index for this to hold, and it does. The flicker is a pure function of the sim clock, so a capture lands on the same instant of it every run -- but a frame that falls in a stutter burst shows the ceiling tube dark, which reads as a lighting change when comparing two configurations; `--no-flicker` takes it out. The GI volumes and the reflection probes bake from frame 2, so a very early frame is still converging; at 60 frames the log reports the volume converged before the screenshot is written. Since 13.25 a house's volume waits for its own candles to hold cached tiles, which go to the lights nearest the camera, so read the log's "converged" line before trusting a frame in the mansion; the stills of 13.25 were shot there at 80 frames. No goldens and no gate arms, by decision. |
-| `assets/scenes/puppet.cscn` | no | no | **the blending instrument (spec 12.1)**, and the corpus's first rig built to be MEASURED rather than looked at: twenty-two rigid boxes, one per bone (twenty until spec 12.9 added the toes), on the `cetra_rig:` names the committed walk clip carries, a T-pose with identity rest rotations and pure-translation bind offsets -- so a wrong axis or order reads as a number in `--anim-probe`. Feet on y = 0 and centred in x/z, which makes the render app's recentre a no-op (the generator asserts it). Seven clips, all authored in closed form: `idle`, `walk` and `run` loop in COS phase so the read frame is an extreme rather than a crossing; `jump` and `wave` are one-shots that end on bind; `hold90` swings one forearm to 90 degrees and HOLDS it past the read frame (a clip that ended there would wrap to bind in exactly the frame being measured -- `skinned_cull`'s own lesson); `rest` is the bind pose as a clip, the other endpoint of the analytic midpoint blend. Every animated joint also carries a translation track holding its bind offset, because an embedded clip with rotation keys alone reads position (0,0,0) and collapses the joint onto its parent. `puppet_golden` is baked from `--anim-clip run`. |
-| `assets/models/strut_walk.fbx` | no | no | a real walk cycle, animation-only (no mesh): 52 channels, 86 ticks at 60 tps. Binds onto the puppet by EXACT name -- twenty-two channels, one per bone, with an identity retarget delta since an animation-only file carries no source skeleton -- which is what `anim-clip-loads` asserts and what a retarget delta is measured against. The unmatched 30 are fingers, a second toe joint and a head tip the puppet does not model. **How it LOOKS on the puppet is unverified**: the puppet's rest rotations are identity where a real rig's are not, so the absolute rotations land differently. That is the retarget question the puppet cannot answer -- see "The real-character path" below. |
-| `apps/shapes`, `apps/splash` | no | no | **no capture path, and none is planned** (spec 11.103). shapes keeps 4x MSAA deliberately, so there is nothing to regress; adding headless is 40-60 lines for a decision that is not changing. `apps/splash` cannot be captured at all without porting it onto `engine_run` — it draws to the default framebuffer and the engine's screenshot lives in the loop it does not use. |
-| `apps/sprites`, `apps/network` | particles / no | no | **capturable since 11.105** (`-x -f -S`) and **0 px run-to-run** (measured x2 at 30 frames in spec 11.108; both are 4x MSAA, TAA off under the 2D preset). Neither has a golden, so a capture against the previous commit is their whole proof; sprites' one recorded move is 11.107's clear colour (one 8-bit code over 1,222,050 px). |
-| `apps/pcb` | no | no | **A repository of its own** (`../apps/pcb`, cetra as a submodule); capturable the same way and **0 px run-to-run** (spec 11.108). Built against every phase of the three API specs from its submodule, which is what makes it the one consumer that tests the public surface from outside the tree. |
-| `apps/forest` | no (deliberately) | no | **NOT pixel-deterministic. 34,991 px run-to-run** at 60 frames / 3200x1800, 7,134 at 20 / 1600x900 -- it accumulates, and **140,910 px (9.8%) at 20 frames / 800x450 with `--taa`** (measured on the pre-11.34 build, whose `--taa` target was accidentally 2-sample; re-measure before citing against the genuine 1-sample path), so the floor is far worse on the AA path it ships than on the MSAA one these older figures were taken at. **The Hillaire sky is the source**: `--no-sky` drops it to 4 px and `--render-mode 6` to 0. Physics is exact (two `--trace-player` traces diff byte-identical), as are geometry, scatter, LOD and textures. For a 0 px claim use `--no-sky` or `--render-mode 6`, or assert on the submission integers instead. Spec 11.29 asserted determinism as a precondition and never checked it -- every `forest-*` arm reads integers, so the suite has never compared two forest frames. **Its GPU timings are a different matter and are tight**: 0.23% run-to-run at 1600x900, and **0.8% at 3200x1800 when the runs are BACK-TO-BACK** (five samples, 330.3-332.9 ms). An earlier 11% recorded here was a protocol artefact -- those two samples had four other heavy configurations between them, so it measured drift across a sequence, not per-run jitter. **Interleave configurations (A/B/A/B) instead of running A then B**, and take each config's floor from samples adjacent in time to the ones compared; done that way the native-resolution comparison resolves a 1.5% effect cleanly. **No forest capture from before 11.62 compares, even on the 0 px paths.** `windObjectPhase` now rounds an object's position to a whole unit before hashing it -- which it does whether or not the origin has ever moved -- so every tree draws a different sway phase than it did. The LOOK is unchanged, since the phases are arbitrary either way, and nothing automated reports it: the only wind fixture runs `phase_variation = 0`, which returns before the snap. The round exists to absorb an ulp of reconstruction error that would otherwise re-phase objects on every shift, and it cannot wait for the first shift without producing exactly the pop it prevents. **And no capture from before 11.63 compares at all**: forest is an ISLAND on a terrain quadtree with resident regions now, which is a different world with a different scatter (prop counts fell about 7%, which is the margin — a region draws inside its own square and clips against the domain's, where the old scatter drew inside the clipped box so every draw landed). `--no-island --no-quadtree --no-regions` is as close to the old configuration as the flags reach, and it is not identical: the quadtree draws a different surface at a different density, which is the point of it. |
-| `assets/scenes/mask_fixture.cscn` | no | no | **the only visible ALPHA_MASK geometry in the corpus** (spec 11.31). An opaque quad, a MASK quad above the cutoff and one below it, in one frame. **It IS a golden**, and this said otherwise for several specs: it is the only golden rendering visible masked geometry at the 4x MSAA default, which is where alpha-to-coverage is live. Two of its four arms pass `--taa` to drop to one sample, because a fractional alpha there is *supposed* to become fractional sample coverage and the kept-quad equality only holds at one sample. What does NOT vary with the sample count is which quad is there at all -- `mask-samples` (spec 11.87) is the arm asking that, and it renders bare `--msaa 1`, the one configuration nothing else in the file exercises. |
-| `assets/scenes/water_fixture.cscn` | no | no | **the water instrument** (specs 11.32 to 11.35). A ramp DESCENDING toward the camera into the water over a flat bed, so one frame carries a shoreline, a continuous absorption ramp (path grows with distance as the sight line goes grazing), and a Fresnel reflection. **0 px x2 same build** -- the surface is a pure function of the frame clock. Read it as RATIOS: R/B falls 0.2168 -> 0.1461 -> 0.0963 with distance, dry land reads 1.98. Since 11.35 the frame also carries the HORIZON, which is what `water-horizon` reads as reach invariance and `water-farfield` reads as filtering; do NOT extend the absorption monotonicity read up into that band, where sky reflection legitimately raises R/B again. Since 11.33 the fixture's own `water{}` block creates the surface and authors every key -- 21 flat since 11.84 split `scatter` into `scatterAlbedo` and `scatterGlow`, and 8 in each of the two wave trains since 11.48 -- so an arm names only what it varies, and `--no-water` is what turns it off. Note an arm overriding one field of a train has to go through `_water_cscn_variant`'s one-level merge: a plain `dict.update` replaces the whole nested object and the seven fields it drops fall back to `create_water`'s defaults, which are this fixture's own values and so would hide the mistake. Its 31 arms also drive `--water-bed dome` (shoaling), `--water-probe` (the surface query on both wave models, the GPU pass printed beside the Gerstner closed form it is checked against), `--water-fft-probe` (the spectrum's variance and the transform against its closed form) and `--no-water-lod` (far-field filtering) off this one file. **Three arms author their own framing on top of it**, because the fixture's own cannot see what they measure: `water-waterline` needs crests closing OVER the eye (amplitude two orders above 0.06), `water-glitter` needs the sun dead ahead and lower, and `water-foam-persist` needs a 20 m/s sea over 90 frames AND raises the level to 1.1 to drown the ramp, so its box needs no notch cut round dry geometry. **Its sun was a lie until 11.43**: the block authored `sun_elevation` / `sun_azimuth` FLAT where `parse_env` reads them under a nested `sun` object, so the stated 26 degrees was never in effect and every arm here is calibrated against the sky's own 35. Rendering the stated 26 moves 85% of the frame. `parse_env` and `parse_water` now report a key nothing read. **The ramp's orientation flipped in 11.43** (it was a paper blade seen from beneath), which moved the waterline from row 0.5079 to 0.4530 -- so every box that reads the shoreline is now DERIVED from the wedge's corners in the glTF via `_water_ramp_band`, stated as heights on the ramp rather than as screen rows. No capture from before 11.43 compares. **Its golden was re-baked in spec 13.2**, when the refracted-grid caustics reached Gerstner water: the recipe's Gerstner frame had carried no caustics at all until then, since the old ones were FFT-only. `water_submerged` did not move (0 px): seen from under the surface, the bed does not come through the refraction path the caustics are applied on. No capture of this fixture from before 13.2 compares. **Re-baked again in spec 13.3** for the fine caustic level, whose 2.34 cm cells draw the lines on the ramp smooth where the 9.4 cm cells stepped. |
-| `assets/scenes/beach_fixture.cscn` | no | no | **the surf instrument** (spec 11.44). A dome rising out of the sea, so one frame carries open water at the rim, the whole shoaling ramp, and a dry crown 0.6 units up — and unlike the ramp above it has a shoreline facing EVERY direction, which is what lets `beach-shoreline` ask whether the surf is a ring rather than a band that happens to cross the frame. **The analytic bed is a flag, not a scene key**: without `--water-bed dome` nothing shoals and the frame has no surf, no shore foam and no run-up at all, so every arm installs it. The mesh duplicates `render_dome_bed_height` deliberately — the water shoals against the analytic field and this mesh is what the eye watches it shoal against — and the gate reads the waterline (r 5.66) out of the glTF rather than re-deriving the formula, so the two copies are compared instead of becoming three. **Its arms run Gerstner**, for two reasons: crest foam is FFT-only so whatever whitewater is left is the SHORE band, and the spectral path's foam HISTORY accumulates per cascade texel and therefore tiles the world, which makes the bed measurably change the frame out to the horizon. Read as R/B against depth: 1.0123 → 0.7962 → 0.5000 → 0.3172 → 0.2482 over depths 0.29 to 5.12 m (re-measured after 11.84 re-derived its in-scatter; the smallest step is 1.27x against a 1.15 bar, the tightest of the suite's RATIO arms --
-`water-shore-foam`'s exact-zero leg has less slack still), flat at 1.204 with `--no-water`. The sun's glitter path owns the right of frame, so every brightness read is taken on the left. **Its `.cscn` says `"waves": "fft"` and NO arm renders it that way**, which is a trap worth knowing before reading a hand render: opening the fixture plainly (`render -m assets/models/beach_fixture.gltf --water-bed dome`) auto-loads the block, gets the spectral sea, and paints a blown-out white ring over the whole shoal that no gate covers — the arms all pass `--water-waves gerstner`. 11.48 confirmed the arms really are insulated (`beach-shoal` identical to 4 dp across it, `beach-shoreline` failing at the same count), so its sea-state block is authored and unexercised. **`beach-shoreline` was a KNOWN RED for four specs — 16 of 18 azimuths at 11.44, 9 at 11.45, 7 by 11.48 and 6 after its P6 — and the ring was intact the whole time.** The arm took the brightest sample along each outward ray, and the ray crosses the DRY CROWN: sunlit sand reads 580-591 luma against a shore band at 570-607, so the argmax was decided by ties of a few codes between two unrelated surfaces, and at two azimuths the two peaks were EQUAL and the crown won on walk order. It now takes the argmax of |with bed − without bed| along the same ray, which cannot read dry sand at all because the bed does not touch it — the standing assertion of `beach-surf-zone`, whose crown samples read exactly 0 moved. That reads 16 of 18 against the SAME unmoved bar of 13. **Do not read a brightness peak on this fixture as the shore band**: the crown is as bright, which is why the note above says every brightness read is taken on the left of frame — the glitter is only half of what a ray here competes against. **The group has FOUR arms, not the three named above**: `shore-twin` rides this fixture too, reading the swash film's CPU twin against its own ceiling. |
-| `assets/scenes/fog_volume_mix_fixture.cscn` | no | no | **the σ-weighted-fold instrument** (spec 11.40). Same geometry, camera and crop boxes as the fixture below; only the volume set differs. Left strip warm alone at D, right strip white D/2 **coincident with** warm D/2 — total extinction D on both, so transmittance and the depth mix are identical and the only variable is what the tint sum is made of. R agrees to four decimals, which is the control. Exists because **nothing else can distinguish the σ-weighted fold from a plain `S *= tint`**: with no global fog `airSigma` is 0 and the fold degenerates to exactly that. Adding global fog does NOT work as an instrument — 3.8 units of clear air sit in front of every box, so density drowns the box before it dilutes its tint (0.8917 the wrong way at 0.5, a uniform frame at 2.0). Measured 1.0454, and seen to fail at 1.0004. |
-| `assets/scenes/fog_volume_fixture.cscn` | no | no | **the local-fog-volume instrument** (spec 11.39). One emissive backdrop and two boxes of denser air at EQUAL density differing only in tint, with a gap of bare backdrop between them as the control, so every read is in-frame. Authors no global fog at all, which is what makes `fogvol-off` also a test that the volume ARMED the pass. **Needs 60 frames, not 30**: at 30 two runs of one build differ 3/255 across the whole frame while the froxel accumulator settles; at 60 and 120 it is byte-identical and the gap reads the exact no-medium value. The classic `--fog` arming is 0 px at 30 on this same scene, so the instability belongs to arming by a per-frame published count and is **not explained**. A white tint is an exact identity (spread 0.0000) and `--no-fog-volumes` returns box/gap to exactly 1.0000. |
-| `assets/scenes/absorption_fixture.cscn` | no | no | **the volume-absorption instrument** (spec 11.32). Three transmissive panels over ONE uniform emissive backdrop, same attenuation, thicknesses 0.0/0.3/0.6. The backdrop is uniform because thickness also drives the refraction bend, so a patterned one would confound absorption with which backdrop each panel covers. Zero thickness is an exact identity (G/R 1.0000) and red is authored unabsorbed as the in-frame reference. |
-| `assets/scenes/sss_msaa_fixture.cscn` | no | no | **the SSS profile-tag instrument** (spec 11.37 phase 3). `.cscn`-only on `sss_fixture.gltf`: two profiles with opposite channel weights at equal radius, spheres small enough that the silhouette is a real fraction of each. `sss_skin_a` is tag 1 and `sss_skin_b` tag 2 (slots follow the order in the materials block, and the slot is printed at startup) -- only the **tag-2** sphere can show the defect, because its silhouette averages 2 with the uncovered 0 and lands on 1; the tag-1 sphere averages toward 0, is dropped, and is therefore the control. **Read by varying the profile COUNT at a fixed `--msaa 4`, never 4x against 1x** -- antialiasing dominates that comparison and moves the rim the opposite way, so it reads as the defect being absent. Measured +3.58% on the outer band with the interior at +0.19%. |
-| `assets/scenes/wind_uv_fixture.cscn` | wind (deliberately) | no | **the UV1-as-wind-data instrument** (spec 11.51). Three identical quads differing ONLY in TEXCOORD_1.y (1.0 / 0.5 / 0.0), which `wind_mode` 2 reads as a flex weight. **0 px x2 same build** -- wind rides the fixed-step frame clock. Ships with a `_still.cscn` twin at strength 0, because wind has no CLI flag and a single frame cannot substitute: a linear ramp of displacement preserves the quads' even spacing, so three quads that all moved by the same wrong amount look exactly like three that moved right. Read as travel in px: 48.57 / 31.80 / 15.04, steps 16.76 vs 16.77. **The failure it guards is SILENT** -- geometry arriving without UV1 does not error, it gets phase 0 and flex 0 and still LEANS (the height-mask body term carries no flex), so a broken frame reads as a calm day. Deliberately written in Python, not exported from Blender: what cetra owns is assimp's two V-flips CANCELLING, which an assimp bump or a change to `uv_flip_flag()` would invert silently. Blender's own flip (`v_gltf = 1 - v_blender`, so author `UV1.y = 1 - flex` and put the stem at `v = 1`) is on the far side of the file boundary and is recorded in the spec, not asserted here. |
-| `assets/scenes/wind_cull_fixture.cscn` | wind (deliberately) | no | **the wind-cull instrument** (spec 11.53), and it fails in two directions on purpose. Three wind quads BEHIND the camera that must be culled (exactly 3 of 6, 3 draws), and TWO whose import AABBs are entirely outside the left frustum plane and which the wind blows back into view — one CLOTH, one VEGETATION — read as **0 px against `--no-frustum-cull`**. **The vegetation quad is the whole reason the fixture tests the mechanism**: authored at `turbulence: 0` with no `windMode`, as it first shipped, `wind_max_offset` collapses to `strength × response` and none of `wind_bounds.glsl`'s six coefficients, neither `wind_flex_max` nor `wind_leaf_max`, nor any of the vegetation branch reaches the value under test — which is the branch `apps/forest` runs on. Its UV1 is authored FLAT, not as a ramp: UV0.y runs 1 at the base and 0 at the top, so a flex ramping with height meets `uv0.y = 0` wherever it is non-zero and the leaf term's `max |uv1.y · uv0.y|` comes out 0, inert. A culling arm is unusually easy to write green -- "nothing visible was dropped" is satisfied perfectly by a build that culls nothing, which is the bug this fixture exists to catch -- so neither arm is safe alone. The geometry is DERIVED: the generator computes the frustum half-width (4.4183) from the same fov and aspect the gate renders at and states the quad's offset as a fraction of it, with four `assert`s that fail loudly if a camera or wind change stops the fixture testing anything -- one of them fired during 11.53's review and caught the vegetation quad's flex-weighted terms cancelling its lean. **Falsified by hand**: zeroing the cloth margin takes culled 3 -> 4 and loses 3,114 px; zeroing the VEGETATION branch does the same and loses 4,846 px. Its light CASTS, which is what gives `cull-cascade` a row to read -- and that arm asserts the cascade culls **ZERO**, in the `shadowcull-draws` idiom: every mesh here is inside the cascade fit, so the predicate that rejects three for the camera must reject none for the light, and a cull wired to the wrong frustum passes `cull-wind` and fails this. |
-| `assets/scenes/shadow_lag_fixture.cscn` (+ `shadow_lag_still.cscn`) | skeletal clip (deliberately) | yes | **the shadow-lag instrument** (spec 11.96), and the corpus's first MOVING CASTER. A box holds still until t=0.25 and then slides along +X; the sun is overhead and the caster floats above the camera, so the only thing in frame that can change is its shadow and the read is a whole-frame compare with no projector, threshold or region mask. **Ships with a PARKED twin**, like `wind_uv_fixture`'s, and reads against it rather than against an earlier frame of itself: comparing consecutive frames also discriminates, but only while the onset falls exactly between the sampled pair, so a retimed clip would silently stop testing anything. Frame 15 vs the twin is **0 px** (the hold, which is the control) and frame 16 is **8,617 px**. **The motion has to be an authored clip**: a `.cscn` cannot express a moving object, and a schedule flag driven from the render app's update hook runs BEFORE the shadow pass and passes against the very build it exists to catch. Being skinned, it covers the POSE half of the defect; the node-transform half is the `transform` group's, off a CPU probe. **Falsified by hand**: restoring the pre-fix ordering reads **0 px** and slips the onset from frame 16 to 17 — **but only with an explicit `--bin-dir`**, because the suite auto-selects `out/release/bin` whenever its forest is no older, and a mutation confined to `apps/render` never re-links forest, so a debug-only rebuild falsifies against a stale release binary and comes back green. Three geometry traps it had to find, and all three render as *nothing rather than wrong*: a single quad casts no shadow, because the depth pass culls a face and a zero-thickness plane then writes no depth; the obvious winding over the ground's corners gives a −Y normal, so the plane is culled from a camera above and the frame is empty background; and a box whose six faces are emitted in one index order has three wound inward, leaving two VERTICAL quads whose shadow under a vertical sun is a hairline — which reads as a shadow-map problem and sends you to the wrong pass. The generator now asserts every caster triangle's normal points away from the box centre. |
-| `assets/scenes/occlusion_fixture.cscn` (+ `_bare`, `_mat`, `_inside`, `_near`, `occlusion_scatter`) | no | no | **the occlusion instruments** (spec 11.98), and the first fixtures in the corpus where anything stands behind anything — every other scene is fully visible or frustum-culled, so a culler that hides on-screen geometry, or hides nothing, is green everywhere but here. A portal room: four wall slabs framing a window, 300 distinct heavy meshes behind it (culled EXACTLY, as an integer read off the submission table), three visible through the gap, and one marginal mesh whose projection pokes into the window by 2.3 mask texels — wide enough that conservatism must keep it, narrow enough that an inward-rounding mutation deletes it (measured: 2,613 px). Five `.cscn` variants select five configurations from one `.gltf`: authored boxes, the material row, NO occluders key at all — the empty-context early-out no flag can reach, which is why `occl-bare` exists — the camera inside the room, and the camera almost touching a slab, where the near plane clips the wall open and only front-face classification keeps the raster honest (`occl-near`; without it, 118,794 px of visible scene culled, invisible to every other arm's framing). The scatter twin is the measured loss: one shared mesh in one instanced run, pillars hiding every third column, draws UP while triangles DOWN. **Goldens are blind to this feature by construction** — correct occlusion changes no pixel, so no golden was added and the group's 0 px identity arms against `--no-occlusion-cull` are the coverage. The generator asserts every property an arm depends on, including that the app's model recenter is a provable NO-OP: the authored world-space boxes would not follow a shift the model took. |
-| `assets/scenes/skinned_cull_fixture.cscn` | no | no | **the posed-bound instrument** (spec 11.53), and **the corpus's first ANIMATED skinned asset**. `skinned_instance_fixture` is skinned but has no animation at all -- its joints sit at the origin so the pose cannot drift, deliberately, because that fixture is about which PROGRAM a mesh takes -- so nothing here could previously tell a pose-aware bound from a bind-pose one. One joint swings a panel from x ~ -6.4 (against the same 4.4183 half-width) to centre frame, read as **0 px against `--no-frustum-cull`**, plus an aimed-away arm at 2 of 2 culled. **The clip HOLDS the swung pose rather than ending on it**: the render app plays looping, so a clip ending at the read frame wraps to the bind pose exactly when measured -- which is what the first draft did, and it read as the panel being culled. **Falsified by hand**: forcing the bound back to the bind pose loses 10,000 px. |
-| `assets/scenes/varying_fixture.cscn` | no | no | **the partial-coverage instrument** (spec 11.38). 24 thin splayed fins with fanned normals and a base-to-tip colour ramp, a full-frame backdrop, and one quad whose UVs are authored outside [0,1]. **0 px x2 same build.** Read with `--render-mode 12` at `--msaa 4` against `--msaa 1`: the 1-sample frame is ground truth, because coverage is a single centre test there so extrapolation is impossible rather than merely small. Every element is load-bearing, and `parallax_fixture` reading exactly 0 in all three channels is why -- a big flat quad has almost no partly covered pixels (478,677 px of surface, ~423 partly covered), and a constant normal extrapolates to itself. Opaque on purpose: alpha-to-coverage is gated on `msaa_samples > 1`, so a MASK material would change with the sample count being varied. |
-| `assets/scenes/lut_fixture.cscn` (+ four `.cube` files) | no | no | **the colour-grading LUT instrument** (spec 11.58). A 24-patch chart -- a grey ramp along the top, then 18 colours over the RGB cube -- and every patch is EMISSIVE over a black base. That is what makes it an instrument: a LUT is indexed by the pixel's own value, so what the fixture must control is WHERE IN THE TABLE each patch lands, and an emissive patch maps through exposure and the tonemap alone with no N.L, no shadow and no IBL in the path. **0 px x2 same build**, range 32..244 with nothing clipped, and all six greys read exactly r == g == b -- which is what gives the neutral-axis arm a signal. **The four tables carry three different SIZES (9, 17, 33) on purpose**: size is the one header field the loader must act on, and an all-33 corpus would let a hardcoded 33 pass everything. `lut_identity` is the no-op, `lut_swap` (linear, so both interpolants agree exactly) isolates the table from the interpolation and is the only thing that catches the data block being read blue-fastest, `lut_steep` is the realistic-size interpolation read, and `lut_neutral` is the coarse probe the tetrahedral claim rests on. **That probe took two silent failures to build**, both measuring exactly zero: a SEPARABLE table preserves greys under trilinear because the off-axis weights factor out, and a CHANNEL-SYMMETRIC one preserves them because the corner pairs cancel. The shipped table lifts red alone, and the generator asserts against both wrong shapes. Read via the gate's own tetrahedral interpolator rather than the generator's closed forms -- importing the generator would make ground truth a function of the thing under test, and it writes at module scope so it would rewrite the committed assets mid-gate. |
-| `assets/scenes/postfx_convergence_fixture.cscn` | no | no | **the metering instrument** (spec 11.52), and the only fixture in the corpus with `"auto_exposure": true` -- every other one pins exposure, by CLI or by authoring `post.exposure` with no `auto_exposure` key, which `cscene_apply` turns into a pin. It was written for an auto-exposure convergence gate in spec 10.2 and **no script referenced it for nine specs**; the `exposure` group wires it now. Read through `--exposure-probe`, not as pixels: all 24 goldens pin exposure, so no golden can see a metering change, which is exactly why auto-exposure was the least-tested subsystem shipping on by default. **Read only CONVERGED frames** -- the meter reads a PRE-EXPOSED frame, so its own value sits inside a feedback loop until the scene settles, which on this fixture is frame 91 -- the gap touches the deadband around 18 and is pushed back out twice first, so the arms use 150 as margin over 91, not over 18. Measured on it: gain 0.490 uniform, 0.531 centre-weighted, 0.842 spot. |
-| `assets/scenes/cornell_box.cscn`, `assets/scenes/cornell_leak.cscn` | no | no | **the reference pair for derived area lights, and they are deliberately NOT converted to use them** (spec 11.49). Each authors a hand-placed light beside an emissive quad that emits a token 1 nit -- the pre-11.49 idiom -- and three gate arms work by generating a DERIVED twin at run time (`cscn_copy`) and comparing: does a fitted panel light the room the same (`emissive-match`), lift the indirect term the same (`emissive-gi`), add the same to a reflection probe (`emissive-spec`). Convert the committed fixture and there is no authored side left to compare against. The twin is generated rather than committed so the two halves cannot differ in anything the mutation does not touch. **Two traps.** `cornell_box`'s authored light sits at y 1.97 and its quad at y 1.98 while the generator's comment says the light mirrors the quad -- so they never quite matched; `emissive-fit` asserts **1.98**, the mesh's value, since the fit is a fit of the MESH, and `EMISSIVE_MATCH_EPS` 0.03 is sized for that 1 cm. And `cornell_box` cannot see an area panel's shadow AT ALL -- toggling `cast_shadows` moves no band, for the authored light either -- which is why `cornell_leak` exists: one room cut in half by a partition, where an unshadowed derived panel reads 0.41 of the lit half straight through the wall and a `light_overrides` entry takes it to an exact 0. |
-| `assets/scenes/cornell_rooms.cscn` | no | no | **the clustered-specular-probe instrument** (spec 11.70), and the fourth variant `gen_cornell_rooms.py` emits. Two rooms joined by a doorway over **ONE floor mesh spanning both**, and that shared mesh is the whole design of the fixture: per-DRAW probe selection -- the cheaper answer 11.70 refused -- hands one mesh a single probe and lights half of it with the wrong room's reflections, while every per-room measurement still passes. Split the floor in two and the fixture stops being able to tell the two designs apart. **The doorway is at the FRONT**, not the middle, because a doorway in the middle puts the near half of the partition directly in front of the band where the two probes overlap -- the only place a seam can be seen at all. Lit by SPOTS rather than the area panels its emissive quads suggest, `cornell_leak`'s stated reason plus a scalloped shadow blob the panels printed at the partition base; the partition carries its own thickness (`ROOMS_PARTITION_HALF`) rather than the leak room's 6 cm, which is thinner than a shadow texel here. **It authors its own `environment` block**, and that is load-bearing rather than tidy: a probe cannot be created without a precomputed IBL, so with only the gate arms passing `--sky` the file opened by hand rendered with its probes refused -- the `beach_fixture` trap, a second time. Read as the dark room's floor against a variant that moves probe B's CAPTURE POINT into room A and changes nothing else, which isolates selection from storage: **1.82x**, with the lit room as an in-frame control at **0.0000** drift. **Was known open and is CLOSED (spec 11.76):** the stair-stepped region on the right room's floor was the specular-occlusion cone resolving to fully-lit or fully-dark either side of an epsilon, at half res and then magnified -- which is why it tracked shadows without being one. Reading the reflection lobe against the sector bitmask removed it and the band beside it together. The lesson generalises past this fixture: **a screen-space artifact that appears and disappears with an unrelated toggle is worth suspecting as a discontinuity in a term that toggle happens to move**, rather than as a property of the thing toggled. |
-| `assets/scenes/board_fixture.cscn` | no | no | **the true-scale instrument** (spec 13.57): a circuit board in metres -- a 0402 is a millimetre long -- at a typical size of 0.001 with fitted planes, lit by three area panels and a lamp, on a table. **0 px x2 same build** (its golden baked, then checked). The golden is the three-quarter view at a pinned exposure of 0.0088. Its three views are `scale-twin` rows, run GROWN 1024 times, since shrunk its depths fall under fp16's normal range. `fit-clip` works its planes out from its glTF. **Contact shadows reach no light on it**: the frame is byte-identical without `--contact-shadows`, since its panels are area lights and its lamp casts a map of its own. Generated by `gen_board_fixture.py`, whose header carries the other two views' flags. |
-| `assets/models/emissive_fixture.gltf` | no | no | **the derived-area-light instrument** (spec 11.49), read through `--emissive-light-probe` rather than as pixels, because a panel half a metre out or sqrt(2) too wide still lights a room and no frame can tell a correct fit from a plausible one. Five emitters, each answering a question nothing else in the corpus asks. `emissive_quad` carries the only emissive TEXTURE in the corpus, half black and half white, so the 1x1-top-mip readback has an answer known in advance (0.5) rather than one measured off itself. `emissive_box` is a closed cube whose faces cancel -- planarity 0. `emissive_strip` is 2.0 x 0.25 rotated 30 degrees IN ITS OWN PLANE, which is the case the covariance principal axis gets wrong and an axis-aligned bound reads as 1.8571 x 1.2165. `emissive_split` (two strips, fill 0.2857) and `emissive_ell` (fill 0.51) are both perfectly FLAT -- planarity exactly 1.0 -- and exist because planarity does not reject non-rectangles; two of them rather than one because they fail for different reasons, disjoint against concave. **Every emitter lies on z = 0, so two overlapping in xy z-fight** -- the L and the split did, and the constraint is written beside the generator. Generated by `gen_emissive_fixture.py`; the lighting comparison lives on `cornell_box` instead, since it needs a hand-authored panel to compare against. |
-| `assets/scenes/overdraw_layers.cscn`, `assets/scenes/overdraw_tiles.cscn` | no | no | **the depth-complexity instruments** (spec 11.31). `layers` is N full-frame opaque quads submitted far-to-near, so the counter must read exactly N -- which is how the budget's 2x error was found. `tiles` is a 24x24 grid of distinct meshes at complexity 1.00, built so the prepass has nothing to reject and can only cost. |
-| `assets/scenes/ies_fixture.cscn` (+ five `.ies` files) | no | no | **the IES photometric instrument** (spec 11.57), and **every candela in it is a closed form of its two angles** rather than a measurement. That is the whole design: an IES reader cannot be tested against a picture, because a table resampled off the wrong plane still lights a room plausibly -- and it cannot be tested against a REAL `.ies` either, because nobody knows what a real luminaire's candela at 37.5 degrees ought to be. Ground truth is PAINTED. Five files, each answering a question no other does: one horizontal plane (rotational, most real downlights), 0..180 (bilateral -- the case a modulo fold gets wrong), 0..90 (quadrant, the second mirror), 0..360 (none, where a reader assuming a mirror renders the far half backwards), and `ies_tinytail.ies`, whose 90-degree candela is 1.2e-6 rather than 0 -- the only input the tail SNAP acts on, and so the only one that can tell an enforced exact zero from an inherited one. The horizontal ramp is MONOTONE on purpose: a symmetric one reads the same whether the reader mirrors or wraps. `gen_ies_fixture.py` **imports and runs `tools/gen_ies_table.py`** rather than reimplementing it -- the `gen_hair_fixture` pattern, holding the tool, the C reader and the shader to one arithmetic. The scene authors NO intensity, which is what exercises the peak-seeding path. **Its light is a POINT**, which is load-bearing twice over: it is what makes the roll authorable-and-unauthored case real, and it is why `ies-replace` has to build its own spots -- `spotConeFactor` returns 1.0 for every non-spot, so on this scene as authored multiplying the profile by the cone and replacing the cone with it are byte-identical, and the feature's central claim went untested for a spec cycle. Three of the six arms read `--ies-probe` and three render; **both halves are needed and neither substitutes**, because the shader is a THIRD implementation of the same table and no probe reaches it. |
-| `assets/scenes/contact_local_fixture.cscn` (+ `contact_local_bare.gltf`) | no | no | **the local-light contact-shadow instrument** (spec 11.56), and the corpus's only scene with NO directional at all. A cube resting on a plane with two point lights MIRRORED about a receiver strip in front of it -- same height, same distance, both at x = 0 -- so along the whole line z = 0.55 they have identical falloff and identical N.L and their contribution weights differ by exactly their authored intensities. One is occluded by the cube and one is not, which makes a contribution-weighted fold predictable in closed form and an unweighted one immobile. **Read the RAW bytes of `--cs-debug`** -- the debug view returns early from the tonemap with no display encode, so decoding sRGB reports 0.6326 as 0.3564. **Sample the LINE, not a box**: the mirror holds at z = 0.55 and only there, and 0.02 either side already costs 2.8% of the weight ratio. The cube's front face is what the occluded ray crosses and it faces the camera at full incidence -- that is the screen-space march's hard requirement, not framing, since a ray that must pass behind a surface the camera cannot see reads no occlusion for reasons that have nothing to do with the feature. Measured strip 0.6326 against an in-frame control of exactly 1.0000; 0 px x2 same build. **Its two practicals are both map-less and there is no directional**, which is deliberate -- it exists to be the scene the pre-11.56 gate refused to run. The MIXED path (a key light with local lights folded) is reached by `contact-mixed`, which adds a shadow-casting directional as a gate variant and then a MAPPED lamp beside it: 0.6326 -> 0.8192 -> 0.8957, each step one light joining the fold's DENOMINATOR and nothing else. Drop skipped lights from that denominator and the third read collapses onto the second exactly. The bare twin drops the cube from the SAME vertex arrays, so an arm swapping the model path varies the occluder and nothing else. Its generator carries seven asserts and **the binding one is the SCREEN clamp, not the march reach** -- `MAX_UV_LEN` cuts 0.8 units of world march to 0.72 here, so a fixture checked only against `csDistance` can be short by a factor of two. |
-| `assets/scenes/layer_fixture.cscn` (+ 7 painted maps) | no | no | **the layered-surface instrument** (spec 11.60). A FLOOR and a WALL sharing one layered material, and the perpendicular normals are the point: the projection is world-aligned, so a fixture with one plate tests one axis of it and reads the same whether the other two exist or not. **0 px x2 same build.** Every arm reads `--render-mode 6`, where the shader returns `linearToSRGB(factor * sRGBToLinear(blend))` against a white factor -- so a correct renderer hands back the exact painted byte, and `layers-select` reads 128 / 48 / 208 off by ZERO. A lit read would be a claim about the BRDF as much as about the blend. **Layer 1 is a CHECKER, not stripes, and that took two attempts**: the wall sits at constant z, so a projection frozen on Y still varies stripes correctly along x -- the wrong answer and the right one are the same picture. It is also the only layer with a RELIEF surface map, added in review: a flat tangent normal makes `triplanarBlendNormal` an exact algebraic identity, so its three axis-sign flips could be deleted for 0 px, and per-layer roughness and AO had no coverage at all while every layer shared one map. Giving layer 1 its own moved the golden 16,468 px. **UV0 is authored DIFFERENT from UV1** (doubled and v-flipped) for the same class of reason -- authored identically, "the splat reads UV1" is untestable. The flat map is still shared by layers 0, 2 and 3, which is what exercises `material_texture_layer_for`'s dedup: three uses, one array layer, and the build logs 7 layers for 5 files. |
-| `assets/scenes/layer_vt_fixture.cscn` (+ its own splat; maps shared with layer_fixture) | no | no | **the composite-cache instrument** (spec 11.66). A FLOOR and a 45-DEGREE RAMP on one layered material whose splat is authored in WORLD XZ -- which is the whole reason it exists beside layer_fixture: that one's splat is UV1-space and the cache serves world-XZ splats only, so no arm on it can see the cache in either direction. **0 px x2 same build.** The ramp is the anti-vacuity and the reason it is 45 degrees exactly: on the flat floor the cached path is byte-exact by construction (macro of top-mip means, detail ratio of map over mean), so a floor-only fixture could not tell the cache being ON from the flag doing nothing -- the ramp sits exactly between the Y and Z projections, where the two paths legitimately differ. Measured: cached vs per-texel 2,330 px of 480,000 at the derived 256 (splat-resample edges plus one patch at the blend crossover, the predicted interlock loss), byte-exact 128/48/208 at every column centre, and at a FORCED 8x8 atlas -- a texel wider than a checker period -- the columns still read exact while the checker still alternates 32/224 through the detail term, which is the frame a plain baked atlas cannot produce. Splat rows: ramp = checker alone, floor near-band = the four selection columns, floor mid-band = the layer 2-into-3 transition the invalidate arm watches move (0.697 to 0.497) across a `--layer-blend-at` re-bake. Reuses gen_layer_fixture's painted maps by name, so the codes the arms predict have exactly one source; its generator asserts the coarse texel exceeds a checker period and that columns align to the coarse texel grid. **Since 11.67 the RAMP DRAWS FIRST and the order is load-bearing**: the feedback vote pass's occlusion claim rests on its depth test, and a hidden surface drawn before its occluder is also hidden by painter's order -- with the occluder last, deleting the depth test changed nothing and the mutation round could not see the deletion. Occluder first makes depth the only rejector, and the reorder moved the lit golden on the floor/ramp coplanar seam (the draw-order-tie class), rebaked deliberately. Its five 11.66 arms were joined by six 11.67 ones: pages identity/effect/churn/walk and feedback sky/occlusion, the last discriminating feedback from prediction (12 pages voted behind the ramp against a frustum wanting 25). **11.68 adds four ROAD arms and the fixture stays road-free to carry them**: every road arm builds a runtime `cscn_copy` variant, so the golden and the sixteen arms before them render an unmutated file and read byte-identical numbers. The generator gains the road's constants and their asserts (the band fits the floor; the pages arm's shoulder sits between a coarse page texel and a coarse fallback texel) but writes the same three files byte for byte. Two traps the mutation round found, both worth knowing before writing an arm here. **A whole-frame pixel count cannot see a road**: two legs of the composite cache differ by a code or two across every flat surface in view, so `layers-road-pages` passed with the road deleted until it was rebuilt on a byte read. And **an arm that moves the camera must move the projector too** — `_projector` builds from `_cscn_camera`, which reads the COMMITTED scene, so an arm passing `--cam-eye` samples pixels the render never drew and reads plausible bytes off the wrong part of the frame; pass `_cscn_camera(name, eye=..., target=...)`. |
-| `assets/scenes/decal_fixture.cscn` (+ three painted images) | no | no | **the clustered-decal instrument** (spec 11.73). A floor, a wall facing the camera, and an OBLIQUE PLATE, with a poster on the wall and a scorch on the floor. **0 px x2 same build.** **The poster is painted in four QUADRANTS and that is the fixture's whole lesson**: every earlier version of it was invariant under mirror, flip, transpose AND 180-degree rotation, so the shipped projector -- which laid every image on backwards and upside down -- painted a frame eight arms could not tell from a correct one. A single-colour patch cannot test a projector. The generator asserts the four codes separate in every channel, so each wrong transform gives a different wrong answer. **The oblique plate is the other anti-vacuity**: it sits INSIDE the poster's box and past its angle fade, so a correct build leaves it at its own substrate -- delete the facing test and the poster smears onto it. `decals-albedo` alone passes on a build with no facing test, and `decals-angle-fade` alone passes on a build that projects NOTHING; neither is safe without the other. **The plate stands in FRONT of the wall, so where it sits decides what every arm reads** -- its first draft covered the poster's own read point and the albedo arm reported a decal that landed as one that did not. Read points are generator constants, asserted clear of the plate, inside the opaque region, and ON THE SURFACE being read: a point at the box's own centre hangs a quarter unit in front of the wall, which is fine mid-quadrant and wrong at an edge. Ground truth is PAINTED and read as a byte through `--render-mode 6`, and the substrates are `pow(1/2.2)` of the authored factors -- **not** the piecewise sRGB curve, which is a two-code error on the floor. **Two guards here were measured INERT and the fixture was changed rather than the claim softened**: the half-texel UV inset moves 0 px (its images carry a transparent margin, so a wrapped blend is between two transparent texels) and has no arm, recorded in the docstring; the edge FEATHER was the same failure a second time -- the margin retired the alpha at |local| 0.75 while the ramp began at 0.88 -- and is now 0.35, with the generator asserting the two bands overlap. The scorch's normal map was a flat 128/128, which encodes 0.0039 and tilts the surface a third of a degree toward its own normal, so the whole tangent frame was unobservable; it is a 39-degree tilt now. Its `environment` block is `"mode": "sky"`, not `"sky": true` -- the first draft authored the latter, which parses, warns and renders a scene whose probes would be refused. |
-| `assets/scenes/purkinje_fixture.cscn` | no | no | **the scotopic-shift instrument** (spec 11.83). COLUMNS ARE A LUMINANCE LADDER over 7 stops, ROWS ARE CHROMATICITY held constant -- which is the whole reason `lut_fixture` could not be reused. That chart is the right IDIOM (emissive over black, so a patch's value is a property of `emissiveFactor` alone) and the wrong SHAPE: its colours all sit at one magnitude, so it shows how the blue shift varies with luminance and not how the DRAIN does, which is the axis this feature turns on. **0 px x2 same build.** Six rows, each answering something no other can: neutral (grey is an EXACT fixed point of desaturation, so anything that moves it is the TINT -- a desaturate-only build reads 0 codes here, not nearly 0), red (rods see it worst, V'(610) about 1/32 of V(610)), green, blue (the row a TINT-ONLY build pushes the WRONG way, raising its saturation where it lowers red's), a mid-saturation warm for the cube's interior, and the rod tint's own chromaticity as a near fixed point that must move LEAST. **Its trick is that the `.cscn` authors `post.exposure` well above 1**: absolute radiances stay scotopic, which is what the rod ramp reads, while displayed codes land in readable 8-bit territory -- and if `oneOverPreExposure` is ever dropped the whole ladder shifts by `log2(EXPOSURE)` and `purkinje-absolute` reports it. **Two generator asserts came out of building it and both caught real errors**: the ladder must STRADDLE the shipped ramp (the first draft did not), and the chart must be a MINORITY of the frame (measured 0.140 against a 0.20 bar) -- the meter keeps the brightest 30% of the population, so a chart filling that tail makes the frame's metered mean its own bright rungs, closes the global gate, and renders its own subject unshifted. **That trap then bit `purkinje-lamp` for real**: `moon_fixture` at its shipped 49x reads a global gate of exactly 0.0000, so the arm renders a 12x variant. Read colour at rung 5 and rung 1, chosen by measurement -- 7 stops cannot all be legible in 8 bits and the dimmest rung lands at code 2 -- and with `--no-purkinje-acuity`, since acuity pools across patch boundaries and lifts a dim rung toward its brighter neighbour. |
-| `assets/models/clearcoat_fixture.gltf` | no | no | **the clearcoat instrument** (spec 11.86), and for six specs the only one of the three KHR material-extension fixtures with no coverage at all -- `sheen_fixture` and `specular_fixture` have had goldens for specs. That gap is why 11.85 shipped a coat normal decoded from a channel BC5 does not store, z = -1, a normal pointing INTO the surface, past a fully green suite twice. **0 px x2 same build.** Three spheres: a coated dielectric, the SAME base with no coat, and a coated near-black metal. The uncoated one is the fixture's whole design -- under `--clearcoat-debug` it reads EXACTLY black, which a normalized vector cannot encode, so it catches a build that writes the geometric normal everywhere and nothing else does. Both coated materials carry a procedural carbon-fibre WEAVE as a clearcoat normal map, embedded as a data URI, and it is the corpus's only tangent normal reaching `pbr_frag` through a path of its own: assimp exposes it at `aiTextureType_CLEARCOAT` **index 2**, which `import.c`'s index-0 mapping table cannot reach, so it takes a bespoke read. **Its two debug reads are orthogonal and neither substitutes**: with the Z rebuild removed mean blue falls 237.8 -> 17.5 while the weave contrast barely moves; with the map ignored the contrast falls 5.99 -> 0.40 while mean blue reads 240. The golden AUTO-FRAMES to match its two siblings and the gate group pins its own tighter camera, which is not a contradiction -- a golden wants comparability, an arm wants the weave big enough to resolve a twill cell. Its generator's docstring carried three stale claims until 11.86, including "materials are flat factors (no textures)", untrue since the weave arrived. |
-| `assets/scenes/texcomp_fixture.cscn` (+ 3 painted maps) | no | no | **the block-compression instrument** (spec 11.85), and **the only fixture in the corpus that MINIFIES**. Every golden here is 0 px with every mip level painted SOLID BLACK, and so is the raiden recipe -- they sit near the camera and never sample a level above 0, while most of a compressed texture's bytes live in the chain. This is a plane running 1 to 400 units out under a camera aimed down it, so one frame sweeps a few texels per pixel to hundreds. **0 px x2 same build.** Three maps, one per format, each shaped so its format can fail: the albedo is a HUE WHEEL over a luminance ramp because DXT quantises to RGB565 with four colours a block and its error is worst where a block spans hues at one luminance (a photo hides that; flat patches report DXT as free); the normal's x and y use different frequencies AND a phase offset so no block sees dy as a function of dx, which is what tests BC5's SEPARATE per-channel endpoints; the roughness is genuinely ONE channel, since a three-channel grey would exercise the DECLINE path while looking like it tested BC4. **Its arms are bounded both ways**: storing normals as DXT5 instead of BC5 leaves the byte ledger IDENTICAL at 1.833 MB, so `texcomp-format` reads the format NAME, and `texcomp-colour` carries a FLOOR because a dead colour switch reads RMSE 0.0000 and would pass a ceiling alone. **Its camera block cost two drafts**: the key is `eye`, not `position`, and a wrong key parses, warns nowhere and silently leaves the auto-framed camera in place -- the same trap `decal_fixture` records for `mode` and `beach_fixture` for its waves. |
-| `assets/scenes/alpha_ladder_fixture.cscn` (+ 2 generated cards, + `alphacov_dots.png`) | no | no | **the mip LADDER** (spec 11.101): three rows of facing cards, each card one mip deeper -- the UV range doubles per card; distance-and-size doubling cancels and the generator records shipping that way first -- on a flat backdrop, so one frame shows every regime of an alpha-tested texture side by side under ONE AA state. Foliage blobs, hard specks, and the alphacov lattice: the first two never dither before the 1x1 tail, the lattice does at mip 3, and `ladder-fire` pins that from the texture probe without a render. **Its numbers are calibrated to the gate's 800x600 framebuffer**: a hand render at `-W 800` is 1600x1200 on a HiDPI host and shifts every card one mip finer, which is how a first round of hand measurements disagreed with the arms. Its churn arms take both frames from ONE process (`--screenshot-every 61 -f 62`), the `_taa_churn` arrangement, because two jittered processes are not byte-comparable; `ladder-gate` is the one two-process 0 px identity here, and has held. **This is the fixture that overturned a spec's recommendation**: the grazing alphacov plane had read the jittered lookup as worse than the crawl it dissolves, and the ladder showed the same lookup cutting the one-sample churn 8x and alpha-to-coverage carrying the dither's coverage at truth level. **It then overturned the conclusion drawn FROM that** (spec 11.102): asked for a middle rung it answered 0.75 coverage at 737 churn for two samples, so churn is not monotonic in the sample count and two is worse than one; and the coverage MSAA preserves so much better is coverage the first two rows never have at a visible mip, which is why the promotion those numbers seemed to argue for was refused on cost with nothing visible lost. Every arm states its own sample count since 11.102 -- `ladder-churn` says `--msaa 1` rather than inheriting it from the render app's TAA policy, the convention `mask-samples` argues for sixty lines away. |
-| `assets/data/terrain_fixture.r16` | no | no | **the heightfield instrument** (spec 11.59), and the corpus's only fixture that is NOT a scene. What is under test is a height FIELD and a sampler over it, so the fixture is a 256² headerless 16-bit heightmap and the consumers are `forest --heightmap` plus the two probes -- there is no `.gltf` and no `.cscn`, because a terrain fixture cannot be either. **Ground truth is PAINTED**: every sample is a closed form of its two normalised coordinates, so the gate knows what the sampler owes at any point, including BETWEEN nodes where a filter is decided. Read at 0.47 codes on the lattice and 53 codes at a cell midpoint. **It carries a near-Nyquist band on purpose** -- 7.5 samples per cycle, which is the regime forest actually bakes in -- and that is the fix for its first version, which at 85 samples per cycle was so smooth that bilinear and bicubic differed by **five codes** and `terrain-bicubic` was green against a bilinear sampler. The generator asserts the separation now rather than assuming it, alongside asymmetry (a transpose must move >500 codes, the single most common heightmap bug and one that renders as plausible terrain) and headroom. **Probe rows snap onto NODES**, which is what keeps the mapping arm and the filter arm from contaminating each other: on the lattice every correct sampler is exact, so a transpose cannot hide behind interpolation error. |
-| `assets/scenes/moon_fixture.cscn` | no | no | **the moon, framed** (spec 11.82), and the corpus's only fixture that exists to be LOOKED at rather than measured -- a near-full disc filling most of the view over the star field, which is the one thing about that feature no number reports. **0 px x2 same build.** Loads with no flags: it authors its own sky, sun, stars, moon, camera and pinned exposure. **Borrows `aerial_fixture.gltf`** (the `sss_msaa_fixture` precedent) because a `.cscn` must name a model and nothing of it is in frame -- the camera looks 40 degrees up through a 40-degree field, so the horizon sits 20 degrees below the bottom edge. Two things are deliberate and both read as arbitrary. The sun's azimuth is 20 degrees off opposition, **not** at it: dead full puts the light head-on, where Lommel-Seeliger correctly flattens the relief and only albedo survives, and 20 degrees lands the terminator just inside the right limb where the crater walls shade themselves. And the size comes from `moon.size 49` rather than from widening the shared `sun_disc_deg` -- the latter reproduces an earlier hand render exactly, including a much wider aureole, but authors a 26-degree SUN disc that is invisible only because the sun happens to sit below the horizon, which any later elevation change breaks silently. |
+| `my_models/raiden/source/raiden_textured_rigged.glb` | no | **yes** | **The best baseline.** Rigged, animated and normal-mapped; 0 px headless with or without springs. Exercises the skinned tangent path nothing else does. |
+| `assets/models/parallax_fixture.gltf` | no | no | Deterministic, but 4 vertices and no mirrored UVs: only proves the `w = +1` path. |
+| `assets/abandoned_window/abandoned_window.glb` (+ sibling `.cscn`) | **yes** (curtains) | no | 0 px pairwise headless with pinned exposure. `-m foo.glb` auto-loads the sibling `foo.cscn`; `--no-scene-file` escapes it. |
+| `assets/models/room.fbx`, `assets/models/c64.fbx` | no | no | room's textures point at a dead path; c64 renders fully, textured and lit. |
+| `apps/tree` | **yes** + particles | no | **Not pixel-deterministic on the orbit path**: about 9k to 31k px run-to-run depending on resolution and frame count, so measure the floor at your framing. The cause is `camera_drag_update`, fed `glfwGetTime()` because drag damping is input response. `--player` never creates the drag controller and steps by `engine->render_delta`, so **`--player --headless` is 0 px** and is the framing for any A/B in this app. Wind, grass sway and falling leaves are frame-index pure. It has a sea and a seabed, both under one `--no-water` switch. **Its water is spectral (FFT) by default**; `--gerstner-waves` switches back, and the four Gerstner wave params it authors are dead unless that flag is passed. So the FFT's cost and its crest foam apply to this app by default. |
+| `apps/spores` | particles | no | 0 px headless; the game loop's step count is exact. `--taa`, `--headless-jitter` and `--msaa` exist to show why it keeps four samples, not to be used: its particles write no motion vector, so TAA reprojects every mote through the geometry behind it and turns dots into dashes. |
+| `apps/gametest` | physics | no | **0 px run-to-run and byte-identical traces** (two `--trace-player --trace-every 10` traces `cmp` equal at 240 frames). Headless the loop gets the fixed frame dt, so the wall clock never reaches the accumulator; the FPS overlay, which draws from the wall clock, is off headless. **The `gamepad` group reads the trace's commanded move, not the position**: five boxes fall at `rand()` positions, which differ per platform's libc, so a leg walking into one on Linux would fail a displacement there alone. Across builds a face-on contact with a box can resolve its tie-break the other way (an 8 mm sideways nudge, mirrored); each build is exact against itself. Windowed it runs one sample plus TAA: every surface writes a motion vector, rigid meshes on `pbr` and the skinned rig on `pbr_skinned` from the previous frame's bone rows (`uPrevBoneRows`). `--no-puppet` gives an all-rigid frame. Its flags are in `apps/gametest/README.md`. The real gamepad path is unverified; see [The gamepad device path](#the-gamepad-device-path). |
+| `apps/silent` | physics + tube flicker | no | **0 px run-to-run, with its jittered TAA and without it** (the kitchen view at 60 frames). Headless it runs one sample with TAA jittered as in the window; the jitter follows the frame index. The flicker is a pure function of the sim clock, so a capture lands on the same instant every run, but a frame in a stutter burst shows the ceiling tube dark, which reads as a lighting change between two configurations; `--no-flicker` takes it out. The GI volumes and probes start at frame 2, so an early frame is still converging, and a house's volume waits for its candles to hold cached tiles, which go to the lights nearest the camera: read the log's "converged" line before trusting a frame. No goldens and no gate arms, by decision. |
+| `assets/scenes/puppet.cscn` | no | no | **The blending instrument** (spec 12.1), a rig built to be measured: twenty-two rigid boxes, one per bone, on the `cetra_rig:` names the committed walk clip carries, a T-pose with identity rest rotations and pure-translation bind offsets, so a wrong axis or order reads as a number in `--anim-probe`. Feet on y = 0 and centred in x/z, which makes the render app's recentre a no-op (the generator asserts it). Seven clips, all in closed form: `idle`, `walk` and `run` loop in cosine phase so the read frame is an extreme rather than a crossing; `jump` and `wave` are one-shots that end on bind; `hold90` swings one forearm to 90 degrees and holds it past the read frame (a clip ending there would wrap to bind on the frame measured); `rest` is the bind pose as a clip, the other end of the analytic midpoint blend. Every animated joint also carries a translation track holding its bind offset, because an embedded clip with rotation keys alone reads position (0,0,0) and collapses the joint onto its parent. `puppet_golden` is baked from `--anim-clip run`. |
+| `assets/models/strut_walk.fbx` | no | no | A real walk cycle, animation-only: 52 channels, 86 ticks at 60 tps, authored on `t_pose.fbx`. Binds onto the puppet by exact name, twenty-two channels, which `anim-clip-loads` asserts; the other 30 are fingers, a second toe joint and a head tip the puppet does not model. On its own the retarget delta is identity and the rig folds; with `-s assets/models/t_pose.fbx` it walks. See [Debugging an animation](#debugging-an-animation). |
+| `apps/shapes`, `apps/splash` | no | no | **No capture path, and none planned.** shapes keeps 4x MSAA deliberately and has nothing to regress. splash draws to the default framebuffer outside `engine_run`, where the screenshot lives, so it cannot be captured without porting. |
+| `apps/sprites`, `apps/network` | particles / no | no | Capturable (`-x -f -S`) and 0 px run-to-run; both are 4x MSAA with TAA off under the 2D preset. Neither has a golden, so a capture against the previous commit is their whole proof. |
+| `apps/pcb` | no | no | A repository of its own (`../apps/pcb`, cetra as a submodule); capturable the same way and 0 px run-to-run. It builds against the public headers from outside the tree, so it is the one consumer that tests the public surface. |
+| `apps/forest` | no (deliberately) | no | **Not pixel-deterministic**: 34,991 px run-to-run at 60 frames / 3200x1800, 7,134 at 20 / 1600x900; it accumulates. With `--taa` it is far worse (about 10% of an 800x450 frame at 20 frames, measured on an older build: re-measure before citing). **The Hillaire sky is the source**: `--no-sky` drops it to 4 px and `--render-mode 6` to 0. Physics, geometry, scatter, LOD and textures are exact (two `--trace-player` traces are byte-identical), and every `forest-*` arm reads integers. For a 0 px claim use `--no-sky` or `--render-mode 6`, or assert on the submission integers. Nothing automated sees a change in sway phase: `windObjectPhase` hashes an object's position rounded to a whole unit, and the only wind fixture runs `phase_variation = 0`, which returns before that. **Its GPU timings are tight**: 0.23% run-to-run at 1600x900 and 0.8% at 3200x1800 with the runs back to back. **Interleave configurations (A/B/A/B)** rather than running A then B, and take each configuration's floor from samples adjacent in time to those compared; a sequence of other heavy runs between two samples measures drift, not jitter. |
+| `assets/scenes/mask_fixture.cscn` | no | no | **The only visible ALPHA_MASK geometry in the corpus** (spec 11.31): an opaque quad, a MASK quad above the cutoff and one below it. **It is a golden**, the only one with visible masked geometry at the 4x MSAA default, where alpha-to-coverage is live. Two of its arms pass `--taa` to drop to one sample, because at four samples a fractional alpha becomes fractional sample coverage by design and the kept-quad equality holds only at one. What does not vary with the sample count is which quad is there at all: `mask-samples` asks that, rendering bare `--msaa 1`. |
+| `assets/scenes/water_fixture.cscn` | no | no | **The water instrument.** A ramp descending toward the camera into the water over a flat bed, so one frame carries a shoreline, a continuous absorption ramp (the path grows as the sight line goes grazing) and a Fresnel reflection. 0 px x2 same build: the surface is a pure function of the frame clock. Read it as ratios: R/B falls 0.2168, 0.1461, 0.0963 with distance, and dry land reads 1.98. The frame also carries the horizon, which `water-horizon` reads as reach invariance and `water-farfield` as filtering; do not extend the absorption monotonicity read up into that band, where sky reflection legitimately raises R/B again. The fixture's own `water{}` block creates the surface and authors every key, so an arm names only what it varies and `--no-water` turns it off. **An arm overriding one field of a wave train must go through `_water_cscn_variant`'s one-level merge**: a plain `dict.update` replaces the whole nested object, and the fields it drops fall back to `create_water`'s defaults, which equal this fixture's values and so hide the mistake. Arms also drive `--water-bed dome` (shoaling), `--water-probe` (the surface query on both wave models, the GPU pass beside the Gerstner closed form it is checked against), `--water-fft-probe` (the spectrum's variance and the transform against its closed form) and `--no-water-lod` off this one file. Three arms author their own framing because the fixture's cannot see what they measure: `water-waterline` needs crests closing over the eye, `water-glitter` needs the sun dead ahead and lower, and `water-foam-persist` needs a 20 m/s sea over 90 frames and raises the level to 1.1 to drown the ramp. Its sun is a nested `sun` object, as `parse_env` reads it. **Every box that reads the shoreline is derived from the wedge's corners in the glTF** through `_water_ramp_band`, as heights on the ramp rather than screen rows. `water_submerged` cannot see caustics: from under the surface the bed does not come through the refraction path they are applied on. |
+| `assets/scenes/beach_fixture.cscn` | no | no | **The surf instrument** (spec 11.44). A dome rising out of the sea: open water at the rim, the whole shoaling ramp, and a dry crown 0.6 units up, with a shoreline facing every direction, which is what lets `beach-shoreline` ask whether the surf is a ring. **The analytic bed is a flag, not a scene key**: without `--water-bed dome` nothing shoals, so every arm installs it. The mesh duplicates `render_dome_bed_height` deliberately (the water shoals against the analytic field, the mesh is what the eye sees it against), and the gate reads the waterline (r 5.66) out of the glTF rather than re-deriving the formula, so two copies are compared rather than three kept. **Its arms run Gerstner (`--water-waves gerstner`)**, for two reasons: crest foam is FFT-only, so the whitewater left is the shore band; and the spectral path's foam history accumulates per cascade texel and tiles the world, so the bed would change the frame out to the horizon. Read as R/B against depth: 1.0123, 0.7962, 0.5000, 0.3172, 0.2482 over depths 0.29 to 5.12 m, flat at 1.204 with `--no-water`. **Its `.cscn` says `"waves": "fft"` and no arm renders it that way**: opened by hand (`render -m assets/models/beach_fixture.gltf --water-bed dome`) it gets the spectral sea and a blown-out white ring over the shoal that no gate covers. **Do not read a brightness peak here as the shore band**: the sunlit dry crown is as bright (580-591 luma against 570-607), and the sun's glitter owns the right of frame, so brightness is read on the left. `beach-shoreline` therefore takes the argmax of \|with bed − without bed\| along each outward ray, which cannot read dry sand because the bed does not touch it. The group's arms are `beach-shoal`, `beach-shoreline`, `beach-surf-zone` and `shore-twin`, the last reading the swash film's CPU twin against its own ceiling. |
+| `assets/scenes/fog_volume_mix_fixture.cscn` | no | no | **The σ-weighted fold instrument** (spec 11.40). Same geometry, camera and crop boxes as the fixture below; only the volume set differs. Left strip warm alone at density D, right strip white D/2 coincident with warm D/2: total extinction D on both, so transmittance and the depth mix are identical and the only variable is what the tint sum is made of. R agrees to four decimals, which is the control. Nothing else can tell the σ-weighted fold from a plain `S *= tint`: with no global fog `airSigma` is 0 and the fold is exactly that. Adding global fog does not make an instrument: the clear air in front of every box drowns the box before it dilutes its tint. |
+| `assets/scenes/fog_volume_fixture.cscn` | no | no | **The local fog volume instrument** (spec 11.39). One emissive backdrop and two boxes of denser air at equal density differing only in tint, with a gap of bare backdrop between them as the control. It authors no global fog, which makes `fogvol-off` also a test that the volume armed the pass. **Needs 60 frames, not 30**: at 30 two runs of one build differ by 3/255 across the frame while the froxel accumulator settles; at 60 they are byte-identical. The classic `--fog` arming is 0 px at 30 on the same scene, so the instability belongs to arming by a per-frame published count, and is not explained. A white tint is an exact identity, and `--no-fog-volumes` returns box/gap to exactly 1.0000. |
+| `assets/scenes/absorption_fixture.cscn` | no | no | **The volume absorption instrument** (spec 11.32). Three transmissive panels over one uniform emissive backdrop, same attenuation, thicknesses 0.0, 0.3 and 0.6. The backdrop is uniform because thickness also drives the refraction bend, so a patterned one would confound absorption with which backdrop each panel covers. Zero thickness is an exact identity (G/R 1.0000), and red is authored unabsorbed as the in-frame reference. |
+| `assets/scenes/sss_msaa_fixture.cscn` | no | no | **The SSS profile-tag instrument** (spec 11.37). `.cscn`-only on `sss_fixture.gltf`: two profiles with opposite channel weights at equal radius, on spheres small enough that the silhouette is a real fraction of each. `sss_skin_a` is tag 1 and `sss_skin_b` tag 2 (slots follow the order of the materials block, and startup prints them). Only the tag-2 sphere can show the defect, because its silhouette averages 2 with the uncovered 0 and lands on 1; the tag-1 sphere averages toward 0 and is dropped, which makes it the control. **Read it by varying the profile count at a fixed `--msaa 4`, never 4x against 1x**: antialiasing dominates that comparison and moves the rim the other way, so the defect reads as absent. |
+| `assets/scenes/wind_uv_fixture.cscn` | wind (deliberately) | no | **The UV1-as-wind-data instrument** (spec 11.51). Three identical quads differing only in TEXCOORD_1.y (1.0, 0.5, 0.0), which `wind_mode` 2 reads as a flex weight. 0 px x2 same build. Ships with a `_still.cscn` twin at strength 0, because wind has no CLI flag and a single frame cannot substitute: a linear ramp of displacement keeps the quads evenly spaced, so three quads moved by the same wrong amount look like three moved right. Read as travel in px (48.57, 31.80, 15.04). **The failure it guards is silent**: geometry arriving without UV1 gets phase 0 and flex 0 and still leans (the height-mask body term carries no flex), so a broken frame reads as a calm day. It is written in Python rather than exported from Blender because what cetra owns is assimp's two V-flips cancelling, which an assimp bump or a change to `uv_flip_flag()` would invert silently. Blender's own flip (`v_gltf = 1 - v_blender`, so author `UV1.y = 1 - flex` with the stem at `v = 1`) is on the far side of the file boundary and is in the spec. |
+| `assets/scenes/wind_cull_fixture.cscn` | wind (deliberately) | no | **The wind-cull instrument** (spec 11.53), failing in two directions on purpose. Three wind quads behind the camera must be culled (exactly 3 of 6, 3 draws), and two whose import AABBs lie entirely outside the left frustum plane, one cloth and one vegetation, are blown back into view and must read 0 px against `--no-frustum-cull`. A culling arm is easy to write green, since "nothing visible was dropped" is satisfied by a build that culls nothing, so neither arm is safe alone. **The vegetation quad is what tests the mechanism `apps/forest` runs on**: at `turbulence: 0` with no `windMode`, `wind_max_offset` collapses to `strength × response` and none of `wind_bounds.glsl`'s coefficients is reached. Its UV1 is authored flat, not as a ramp: UV0.y runs 1 at the base and 0 at the top, so a height ramp makes the leaf term's `max \|uv1.y · uv0.y\|` 0. The geometry is derived: the generator computes the frustum half-width (4.4183) from the fov and aspect the gate renders at, states the quad's offset as a fraction of it, and asserts the fixture still tests something. Its light casts, which gives `cull-cascade` a row: it asserts the cascade culls zero (the `shadowcull-draws` idiom), since every mesh is inside the cascade fit; a cull wired to the wrong frustum passes `cull-wind` and fails this. |
+| `assets/scenes/shadow_lag_fixture.cscn` (+ `shadow_lag_still.cscn`) | skeletal clip (deliberately) | yes | **The shadow-lag instrument** (spec 11.96), the corpus's first moving caster. A box holds still until t = 0.25, then slides along +X; the sun is overhead and the caster floats above the camera, so the only thing in frame that can change is its shadow and the read is a whole-frame compare. **It reads against a parked twin**, not an earlier frame of itself: consecutive frames discriminate only while the onset falls between the sampled pair, so a retimed clip would silently stop testing anything. Frame 15 against the twin is 0 px (the hold, the control) and frame 16 is not. **The motion has to be an authored clip**: a `.cscn` cannot express a moving object, and a schedule flag driven from the render app's update hook runs before the shadow pass and passes against the very build it exists to catch. Being skinned, it covers the pose half; the node-transform half is the `transform` group's, off a CPU probe. Falsify it with an explicit `--bin-dir` (see Which binaries a number describes). **Three geometry traps, all rendering as nothing rather than wrong**: a single quad casts no shadow, because the depth pass culls a face and a zero-thickness plane then writes no depth; the obvious winding over the ground's corners gives a −Y normal, so the plane is culled from above and the frame is empty; and a box whose faces share one index order has three wound inward, leaving vertical quads whose shadow under a vertical sun is a hairline, which sends you to the wrong pass. The generator asserts every caster triangle's normal points away from the box centre. |
+| `assets/scenes/occlusion_fixture.cscn` (+ `_bare`, `_mat`, `_inside`, `_near`, `occlusion_scatter`) | no | no | **The occlusion instruments** (spec 11.98), and the only fixtures where anything stands behind anything: every other scene is fully visible or frustum-culled, so a culler that hides on-screen geometry, or hides nothing, is green everywhere but here. A portal room: four wall slabs framing a window, 300 distinct heavy meshes behind it (culled exactly, read as an integer off the submission table), three visible through the gap, and one marginal mesh whose projection pokes into the window by 2.3 mask texels, wide enough that conservatism must keep it and narrow enough that an inward rounding deletes it. Five `.cscn` variants select five configurations from one `.gltf`: authored boxes; the material row; no occluders key at all (the empty-context early-out no flag reaches, hence `occl-bare`); the camera inside the room; and the camera almost touching a slab, where the near plane clips the wall open and only front-face classification keeps the raster honest (`occl-near`). The scatter twin is one shared mesh in one instanced run, pillars hiding every third column: draws go up while triangles go down. **Goldens are blind to this feature by construction**, since correct occlusion changes no pixel; the group's 0 px identity arms against `--no-occlusion-cull` are the coverage. The generator asserts every property an arm depends on, including that the app's model recentre is a no-op, since the authored world-space boxes would not follow a shift. |
+| `assets/scenes/skinned_cull_fixture.cscn` | no | no | **The posed-bound instrument** (spec 11.53), and the corpus's first animated skinned asset (`skinned_instance_fixture` is skinned but unanimated, deliberately, since it is about which program a mesh takes). One joint swings a panel from x ≈ −6.4 (against the same 4.4183 half-width) to centre frame, read as 0 px against `--no-frustum-cull`, plus an aimed-away arm at 2 of 2 culled. **The clip holds the swung pose rather than ending on it**: the render app plays looping, so a clip ending at the read frame wraps to the bind pose exactly when measured, and reads as the panel being culled. |
+| `assets/scenes/varying_fixture.cscn` | no | no | **The partial-coverage instrument** (spec 11.38). 24 thin splayed fins with fanned normals and a base-to-tip colour ramp, a full-frame backdrop, and one quad whose UVs are authored outside [0,1]. 0 px x2 same build. Read with `--render-mode 12` at `--msaa 4` against `--msaa 1`: the one-sample frame is ground truth, because coverage is a single centre test there, so extrapolation is impossible. Every element is load-bearing: a big flat quad (`parallax_fixture`, which reads exactly 0) has almost no partly covered pixels, and a constant normal extrapolates to itself. Opaque on purpose: alpha-to-coverage is gated on `msaa_samples > 1`, so a MASK material would change with the sample count being varied. |
+| `assets/scenes/lut_fixture.cscn` (+ four `.cube` files) | no | no | **The colour-grading LUT instrument** (spec 11.58). A 24-patch chart (a grey ramp along the top, then 18 colours over the RGB cube), every patch emissive over a black base. A LUT is indexed by the pixel's own value, so the fixture must control where in the table each patch lands, and an emissive patch maps through exposure and the tonemap alone. 0 px x2 same build, range 32..244 with nothing clipped, all six greys exactly r == g == b. **The four tables have three sizes (9, 17, 33) on purpose**: size is the one header field the loader must act on, and an all-33 corpus would let a hardcoded 33 pass. `lut_identity` is the no-op; `lut_swap` (linear, so both interpolants agree exactly) isolates the table from the interpolation and is the only one that catches the data block read blue-fastest; `lut_steep` is the realistic-size interpolation read; `lut_neutral` is the probe the tetrahedral claim rests on. **That probe must be neither separable nor channel-symmetric**: a separable table preserves greys under trilinear because the off-axis weights factor out, and a symmetric one because the corner pairs cancel, so both measure exactly zero. It lifts red alone, and the generator asserts against both wrong shapes. The gate reads through its own tetrahedral interpolator, not the generator's closed forms: importing the generator would make ground truth a function of the thing under test, and it writes at module scope, so it would rewrite the committed assets mid-gate. |
+| `assets/scenes/postfx_convergence_fixture.cscn` | no | no | **The metering instrument** (spec 11.52), and the only fixture with `"auto_exposure": true`. Every other one pins exposure, by CLI or by authoring `post.exposure` with no `auto_exposure` key, which `cscene_apply` turns into a pin, so no golden can see a metering change. The `exposure` group reads it through `--exposure-probe`, not as pixels. **Read only converged frames**: the meter reads a pre-exposed frame, so its value sits inside a feedback loop until the scene settles, here at frame 91 (the gap touches the deadband around 18 and is pushed back out twice first), so the arms use 150. Gain: 0.490 uniform, 0.531 centre-weighted, 0.842 spot. |
+| `assets/scenes/cornell_box.cscn`, `assets/scenes/cornell_leak.cscn` | no | no | **The reference pair for derived area lights, deliberately not converted to use them** (spec 11.49). Each authors a hand-placed light beside an emissive quad emitting a token 1 nit, and three arms generate a derived twin at run time (`cscn_copy`) and compare: does a fitted panel light the room the same (`emissive-match`), lift the indirect term the same (`emissive-gi`), add the same to a reflection probe (`emissive-spec`). Convert the fixture and there is no authored side to compare against; the twin is generated rather than committed so the two halves differ only in what the mutation touches. **Two traps.** `cornell_box`'s authored light sits at y 1.97 and its quad at y 1.98: `emissive-fit` asserts 1.98, the mesh's value, since the fit is a fit of the mesh, and `EMISSIVE_MATCH_EPS` 0.03 is sized for that centimetre. And `cornell_box` cannot see an area panel's shadow at all (toggling `cast_shadows` moves nothing, for the authored light too), which is why `cornell_leak` exists: one room cut in half by a partition, where an unshadowed derived panel reads 0.41 of the lit half through the wall and a `light_overrides` entry takes it to exactly 0. |
+| `assets/scenes/cornell_rooms.cscn` | no | no | **The clustered specular probe instrument** (spec 11.70), the fourth variant `gen_cornell_rooms.py` emits. Two rooms joined by a doorway over **one floor mesh spanning both**: per-draw probe selection hands one mesh a single probe and lights half of it with the wrong room's reflections while every per-room measurement still passes, so a split floor could not tell per-draw from per-fragment selection. **The doorway is at the front**, not the middle, because a middle doorway puts the partition's near half in front of the band where the two probes overlap, the only place a seam can be seen. Lit by spots rather than area panels, for `cornell_leak`'s reason; the partition carries its own thickness (`ROOMS_PARTITION_HALF`), since 6 cm is thinner than a shadow texel here. **It authors its own `environment` block**, which is load-bearing: a probe cannot be created without a precomputed IBL, so without it the file opened by hand renders with its probes refused. Read as the dark room's floor against a variant that moves probe B's capture point into room A and changes nothing else, which isolates selection from storage (1.82x), with the lit room as an in-frame control. A screen-space artifact that comes and goes with an unrelated toggle is worth suspecting as a discontinuity in a term that toggle moves: the stair-stepped band once seen on this floor was the specular-occlusion cone, not the probes. |
+| `assets/scenes/board_fixture.cscn` | no | no | **The true-scale instrument** (spec 13.57): a circuit board in metres (a 0402 is a millimetre long) at a typical size of 0.001 with fitted planes, lit by three area panels and a lamp, on a table. 0 px x2 same build. The golden is the three-quarter view at a pinned exposure of 0.0088. Its three views are `scale-twin` rows, run grown 1024 times. `fit-clip` works its planes out from its glTF. **Contact shadows reach no light on it**: its panels are area lights and its lamp casts a map of its own, so the frame is byte-identical without `--contact-shadows`. Generated by `gen_board_fixture.py`, whose header carries the other two views' flags. |
+| `assets/models/emissive_fixture.gltf` | no | no | **The derived area light instrument** (spec 11.49), read through `--emissive-light-probe` rather than as pixels, because a panel half a metre out or sqrt(2) too wide still lights a room plausibly. Five emitters, each answering one question. `emissive_quad` carries the only emissive texture in the corpus, half black and half white, so the 1x1 top-mip readback has a known answer (0.5). `emissive_box` is a closed cube whose faces cancel: planarity 0. `emissive_strip` is 2.0 x 0.25 rotated 30 degrees in its own plane, the case the covariance principal axis gets wrong and an axis-aligned bound reads as 1.8571 x 1.2165. `emissive_split` (two strips, fill 0.2857) and `emissive_ell` (fill 0.51) are perfectly flat (planarity 1.0) and show that planarity does not reject non-rectangles; two, because disjoint and concave fail for different reasons. **Every emitter lies on z = 0, so two overlapping in xy z-fight**; the constraint is written beside the generator, `gen_emissive_fixture.py`. The lighting comparison lives on `cornell_box`, which has a hand-authored panel to compare against. |
+| `assets/scenes/overdraw_layers.cscn`, `assets/scenes/overdraw_tiles.cscn` | no | no | **The depth-complexity instruments** (spec 11.31). `layers` is N full-frame opaque quads submitted far to near, so the counter must read exactly N. `tiles` is a 24x24 grid of distinct meshes at complexity 1.00, so the prepass has nothing to reject and can only cost. |
+| `assets/scenes/ies_fixture.cscn` (+ five `.ies` files) | no | no | **The IES photometric instrument** (spec 11.57). Every candela in it is a closed form of its two angles, because an IES reader cannot be tested against a picture (a table resampled off the wrong plane still lights a room) or against a real `.ies` (nobody knows what a real luminaire's candela at 37.5 degrees should be). Five files: one horizontal plane (rotational, most real downlights), 0..180 (bilateral, the case a modulo fold gets wrong), 0..90 (quadrant, the second mirror), 0..360 (none, where a reader assuming a mirror renders the far half backwards), and `ies_tinytail.ies`, whose 90-degree candela is 1.2e-6 rather than 0, the only input the tail snap acts on. The horizontal ramp is monotone on purpose: a symmetric one reads the same whether the reader mirrors or wraps. `gen_ies_fixture.py` imports and runs `tools/gen_ies_table.py` rather than reimplementing it, holding the tool, the C reader and the shader to one arithmetic. The scene authors no intensity, which exercises the peak-seeding path. **Its light is a point**: `spotConeFactor` returns 1.0 for every non-spot, so on this scene multiplying the profile by the cone and replacing the cone with it are byte-identical, and `ies-replace` builds its own spots to tell them apart. Three of the six arms read `--ies-probe` and three render; **neither half substitutes for the other**, because the shader is a third implementation of the table and no probe reaches it. |
+| `assets/scenes/contact_local_fixture.cscn` (+ `contact_local_bare.gltf`) | no | no | **The local-light contact shadow instrument** (spec 11.56), the only scene with no directional light. A cube on a plane with two point lights mirrored about a receiver strip in front of it, same height and distance, both at x = 0, so along z = 0.55 they have identical falloff and N.L and their weights differ by exactly their authored intensities. One is occluded by the cube and one is not, so a contribution-weighted fold is predictable in closed form and an unweighted one does not move. **Read the raw bytes of `--cs-debug`**: the debug view returns before the display encode, so decoding sRGB reports 0.6326 as 0.3564. **Sample the line, not a box**: the mirror holds at z = 0.55 only, and 0.02 either side already costs 2.8% of the weight ratio. The cube's front face, which the occluded ray crosses, faces the camera at full incidence: a screen-space march reads no occlusion from a surface the camera cannot see. Strip 0.6326 against an in-frame control of exactly 1.0000. Both practicals are map-less. The mixed path is `contact-mixed`'s: it adds a shadow-casting directional as a gate variant, then a mapped lamp beside it (0.6326, 0.8192, 0.8957), each step one light joining the fold's denominator; drop skipped lights from the denominator and the third read collapses onto the second. The bare twin drops the cube from the same vertex arrays, so an arm swapping the model varies the occluder and nothing else. **The binding constraint in its generator is the screen clamp, not the march reach**: `MAX_UV_LEN` cuts 0.8 units of world march to 0.72 here, so a fixture checked only against `csDistance` can be short by a factor of two. |
+| `assets/scenes/layer_fixture.cscn` (+ 7 painted maps) | no | no | **The layered-surface instrument** (spec 11.60). A floor and a wall sharing one layered material; the perpendicular normals are the point, since the projection is world-aligned and one plate tests one axis of it. 0 px x2 same build. Every arm reads `--render-mode 6`, where the shader returns `linearToSRGB(factor * sRGBToLinear(blend))` against a white factor, so a correct renderer hands back the painted byte exactly: `layers-select` reads 128, 48 and 208 off by zero. A lit read would test the BRDF as much as the blend. **Layer 1 is a checker, not stripes**: the wall sits at constant z, so a projection frozen on Y still varies stripes correctly along x. It is also the only layer with a relief surface map: a flat tangent normal makes `triplanarBlendNormal` an exact identity, so its axis-sign flips could be deleted unseen, and per-layer roughness and AO need a map of their own to be covered. **UV0 is authored different from UV1** (doubled and v-flipped), or "the splat reads UV1" is untestable. The flat map is shared by layers 0, 2 and 3, which exercises `material_texture_layer_for`'s dedup: the build logs 7 layers for 5 files. |
+| `assets/scenes/layer_vt_fixture.cscn` (+ its own splat; maps shared with `layer_fixture`) | no | no | **The composite-cache instrument** (spec 11.66). A floor and a 45-degree ramp on one layered material whose splat is authored in world XZ, which is why it exists beside `layer_fixture`: that one's splat is UV1-space and the cache serves world-XZ splats only. 0 px x2 same build. **The ramp is the anti-vacuity**: on the flat floor the cached path is byte-exact by construction (macro of top-mip means, detail ratio of map over mean), so a floor alone cannot tell the cache on from the flag doing nothing; the ramp sits exactly between the Y and Z projections, where the two paths legitimately differ. Cached against per-texel differs by a few thousand pixels (splat-resample edges and the blend crossover) while every column centre reads exactly 128/48/208, and at a forced 8x8 atlas the columns still read exact while the checker still alternates 32/224 through the detail term. Splat rows: ramp = checker alone, floor near band = the four selection columns, floor mid band = the layer 2-into-3 transition the invalidate arm watches move across a `--layer-blend-at` re-bake. It reuses `gen_layer_fixture`'s painted maps by name, so the codes the arms predict have one source; its generator asserts the coarse texel exceeds a checker period and that columns align to the coarse texel grid. **The ramp draws first, and the order is load-bearing**: the feedback vote pass's occlusion claim rests on its depth test, and with the occluder drawn last painter's order alone hides the hidden surface, so deleting the depth test would change nothing. The road arms (spec 11.68) each build a runtime `cscn_copy` variant, so the fixture stays road-free and the golden and the other arms render an unmutated file. **A whole-frame pixel count cannot see a road**: two legs of the composite cache differ by a code or two across every flat surface, so road arms read bytes. **An arm that moves the camera must move the projector too**: `_projector` builds from `_cscn_camera`, which reads the committed scene, so an arm passing `--cam-eye` samples pixels the render never drew; pass `_cscn_camera(name, eye=..., target=...)`. |
+| `assets/scenes/decal_fixture.cscn` (+ three painted images) | no | no | **The clustered decal instrument** (spec 11.73). A floor, a wall facing the camera and an oblique plate, with a poster on the wall and a scorch on the floor. 0 px x2 same build. **The poster is painted in four quadrants**, because a single-colour or symmetric patch cannot test a projector: an image laid backwards and upside down paints the same frame. The generator asserts the four codes separate in every channel, so each wrong transform gives a different wrong answer. **The oblique plate is the other anti-vacuity**: it sits inside the poster's box and past its angle fade, so a correct build leaves it at its own substrate, and without the facing test the poster smears onto it. `decals-albedo` alone passes a build with no facing test, and `decals-angle-fade` alone passes a build that projects nothing; neither is safe without the other. **The plate stands in front of the wall, so where it sits decides what every arm reads**: read points are generator constants, asserted clear of the plate, inside the opaque region and on the surface being read (a point at the box's centre hangs a quarter unit in front of the wall, which is wrong at an edge). Ground truth is painted and read as a byte through `--render-mode 6`, and the substrates are `pow(1/2.2)` of the authored factors, not the piecewise sRGB curve, which is two codes off on the floor. The half-texel UV inset has no arm: the images carry a transparent margin, so a wrapped blend is between two transparent texels and the inset moves nothing. The edge feather starts at 0.35, and the generator asserts the feather band overlaps the margin, or the margin retires the alpha before the ramp begins. The scorch's normal map tilts the surface 39 degrees, so the tangent frame is observable. Its `environment` block is `"mode": "sky"`; `"sky": true` parses, warns and renders a scene whose probes would be refused. |
+| `assets/scenes/purkinje_fixture.cscn` | no | no | **The scotopic shift instrument** (spec 11.83). Columns are a luminance ladder over 7 stops, rows are chromaticity held constant, which is why `lut_fixture` (the right idiom, emissive over black, but all colours at one magnitude) could not be reused: this feature turns on how the drain varies with luminance. 0 px x2 same build. Six rows: neutral (grey is an exact fixed point of desaturation, so anything moving it is the tint; a desaturate-only build reads exactly 0 there), red (rods see it worst, V'(610) about 1/32 of V(610)), green, blue (the row a tint-only build pushes the wrong way), a mid-saturation warm for the cube's interior, and the rod tint's own chromaticity as a near fixed point that must move least. **The `.cscn` authors `post.exposure` well above 1**: absolute radiances stay scotopic, which the rod ramp reads, while displayed codes land in readable 8-bit territory; drop `oneOverPreExposure` and the ladder shifts by `log2(EXPOSURE)`, which `purkinje-absolute` reports. The generator asserts the ladder straddles the shipped ramp, and that **the chart is a minority of the frame** (0.140 against a 0.20 bar): the meter keeps the brightest 30% of the population, so a chart filling that tail makes the metered mean its own bright rungs, closes the global gate, and renders its subject unshifted. For the same reason `moon_fixture` at its shipped 49x reads a global gate of 0, so `purkinje-lamp` renders a 12x variant. Read colour at rungs 5 and 1 (7 stops cannot all be legible in 8 bits; the dimmest rung lands at code 2), with `--no-purkinje-acuity`, since acuity pools across patch boundaries and lifts a dim rung toward its brighter neighbour. |
+| `assets/models/clearcoat_fixture.gltf` | no | no | **The clearcoat instrument** (spec 11.86). 0 px x2 same build. Three spheres: a coated dielectric, the same base with no coat, and a coated near-black metal. **The uncoated sphere reads exactly black under `--clearcoat-debug`**, which a normalized vector cannot encode, so it catches a build that writes the geometric normal everywhere. Both coated materials carry a procedural carbon-fibre weave as a clearcoat normal map, embedded as a data URI, the corpus's only tangent normal reaching `pbr_frag` through its own path: assimp exposes it at `aiTextureType_CLEARCOAT` index 2, which `import.c`'s index-0 mapping table cannot reach, so it takes a bespoke read. **Its two debug reads are orthogonal and neither substitutes**: with the normal's Z rebuild removed mean blue falls from about 238 to 18 while the weave contrast barely moves; with the map ignored the contrast falls from about 6 to 0.4 while mean blue holds. The golden auto-frames to match its two siblings (`sheen_fixture`, `specular_fixture`), and the gate group pins its own tighter camera so the weave is big enough to resolve a twill cell. |
+| `assets/scenes/texcomp_fixture.cscn` (+ 3 painted maps) | no | no | **The block-compression instrument** (spec 11.85), and **the only fixture that minifies**. Every golden is unchanged with every mip above level 0 painted black, since they sit near the camera, while most of a compressed texture's bytes live in the chain. This is a plane running 1 to 400 units out under a camera aimed down it, so one frame sweeps from a few texels per pixel to hundreds. 0 px x2 same build. Three maps, one per format, each shaped so its format can fail: the albedo is a hue wheel over a luminance ramp, because DXT quantises to RGB565 with four colours a block and errs worst where a block spans hues at one luminance; the normal's x and y use different frequencies and a phase offset so no block sees dy as a function of dx, which tests BC5's separate per-channel endpoints; the roughness is one channel, since a three-channel grey would exercise the decline path while looking like it tested BC4. **Its arms are bounded both ways**: normals stored as DXT5 instead of BC5 leave the byte ledger identical, so `texcomp-format` reads the format name, and `texcomp-colour` carries a floor because a dead colour switch reads RMSE 0 and would pass a ceiling alone. Its camera key is `eye`; `position` parses, warns nowhere and leaves the auto-framed camera. |
+| `assets/scenes/alpha_ladder_fixture.cscn` (+ 2 generated cards, + `alphacov_dots.png`) | no | no | **The mip ladder** (spec 11.101): three rows of facing cards, each card one mip deeper (the UV range doubles per card), on a flat backdrop, so one frame shows every regime of an alpha-tested texture under one AA state. Foliage blobs, hard specks and the alphacov lattice: the first two never dither before the 1x1 tail, the lattice does at mip 3, and `ladder-fire` pins that from the texture probe without a render. **Its numbers are calibrated to the gate's 800x600 framebuffer**: a hand render at `-W 800` is 1600x1200 on a HiDPI host and shifts every card one mip finer. Its churn arms take both frames from one process (`--screenshot-every 61 -f 62`), because two jittered processes are not byte-comparable; `ladder-gate` is the one two-process 0 px identity. It shows the jittered lookup cutting one-sample churn 8x, and that churn is not monotonic in the sample count: two samples churn more than one, and the coverage four samples preserve is coverage the first two rows never have at a visible mip, which is why alpha-tested materials stay at one sample. Every arm states its own sample count (`ladder-churn` passes `--msaa 1`) rather than inheriting the render app's TAA policy. |
+| `assets/data/terrain_fixture.r16` | no | no | **The heightfield instrument** (spec 11.59), the only fixture that is not a scene: a 256² headerless 16-bit heightmap read by `forest --heightmap` and two probes. **Ground truth is painted**: every sample is a closed form of its two normalised coordinates, so the gate knows what the sampler owes at any point, including between nodes where a filter is decided (0.47 codes on the lattice, 53 at a cell midpoint). **It carries a near-Nyquist band**, 7.5 samples per cycle, the regime forest bakes in: a smoother field leaves bilinear and bicubic a few codes apart, and `terrain-bicubic` passes against a bilinear sampler. The generator asserts that separation, asymmetry (a transpose must move more than 500 codes; it is the commonest heightmap bug and renders as plausible terrain) and headroom. **Probe rows snap onto nodes**, so the mapping arm and the filter arm do not contaminate each other: on the lattice every correct sampler is exact, so a transpose cannot hide behind interpolation error. |
+| `assets/scenes/moon_fixture.cscn` | no | no | **The moon, framed** (spec 11.82), the one fixture that exists to be looked at rather than measured: a near-full disc filling most of the view over the star field. 0 px x2 same build. Loads with no flags: it authors its own sky, sun, stars, moon, camera and pinned exposure. It borrows `aerial_fixture.gltf` because a `.cscn` must name a model, and none of it is in frame (the horizon sits 20 degrees below the bottom edge). **The sun's azimuth is 20 degrees off opposition**: dead full puts the light head-on, where Lommel-Seeliger correctly flattens the relief, and 20 degrees lands the terminator just inside the right limb, where the crater walls shade themselves. **The size comes from `moon.size 49`, not a wider `sun_disc_deg`**: the latter authors a 26-degree sun disc, invisible only while the sun is below the horizon. |
 
 ### The recipe
 
@@ -361,307 +318,240 @@ covers it either.
     -x -f 120 --no-springs --no-auto-exposure -E 1.0 -S out.ppm
 ```
 
-The clip is the COMMITTED one (`assets/models/strut_walk.fbx`) rather than the copy under
-`my_models/`, which is gitignored and so reproduces for nobody else. The two are **0 px**
-apart on this rig (measured, spec 12.1): the committed file differs only in bone-name
-prefixes, which `normalize_bone_name` strips either way, so the pose is the same pose.
+The clip is the committed one, `assets/models/strut_walk.fbx`, not the copy under `my_models/`,
+which is gitignored and so reproduces for nobody else. The two pose this rig identically: they
+differ only in bone-name prefixes, which `normalize_bone_name` strips.
 
-`--no-auto-exposure -E 1.0` is load-bearing: it stops the exposure drift
-above. `--no-springs` is no longer required for determinism (springs ride the
-frame clock; measured 0 px x2 without it) -- keep it in the recipe anyway so
-new baselines stay comparable against ones captured before spec 11.2, and use
-it on its own to isolate spring motion in an A/B.
+- **`--no-auto-exposure -E 1.0` is required.** It pins the exposure, which otherwise drifts with
+  async-load order before it converges (see "What breaks determinism").
+- **`--no-springs` is not needed for determinism**, since springs ride the frame clock. Keep it so
+  a new baseline compares with the existing ones, and use it on its own to isolate spring motion in
+  an A/B.
 
-### The six times the recipe has moved
+Two builds of the same renderer give 0 px on this recipe.
 
-A baseline captured before any of these will not compare against one after. Read the list before
-concluding that a diff against an old capture is your change.
+### What moves the recipe's output
 
-**This recipe's output has moved twice on the hair, ~0.12% each time**, and both
-are small enough to read as noise and are not. The rig carries an alpha-blend
-mesh, so it is the one real asset that goes through OIT, and the diff is the hair
-silhouette and nothing else on both occasions:
+Before concluding that a diff against an old capture is your change, check whether it is one of
+these.
 
-- **spec 11.17**, when OIT went on by default. `--no-oit` reaches the old frame.
-- **11.17's review round**, when moment generation stopped shading a frame it
-  discarded. The moment reconstruction is ill-conditioned where layers sit at one
-  depth -- which is what hair is -- so it amplifies the last-bit differences that
-  reshuffling the shader's arithmetic produces. `--no-oit-moments` compares 0 px
-  across that change; nothing else in the frame moves either way.
+- **The hair is sensitive to last-bit arithmetic.** The rig carries an alpha-blend mesh, so it is
+  the one real asset that goes through OIT, and the moment reconstruction is ill-conditioned where
+  layers sit at one depth, which hair does. Reordering the shader's arithmetic moves the hair
+  silhouette by about 0.1% of the frame and nothing else. `--no-oit` and `--no-oit-moments` take the
+  hair out of that path. The analytic OIT gate is the instrument for OIT itself: it does not move
+  with such a change, which is how a hair diff is read as sensitivity rather than regression.
+- **Output dither is on by default**: the 8-bit write carries a +/-1 LSB triangular dither, so
+  most of the frame differs by exactly one code from an undithered one. Use `--no-dither` for any
+  comparison against an undithered capture, and for any gate that reads single pixels or
+  high-frequency residuals rather than whole-frame structure.
+- **`--translucent-shadows` is opt-in** and changes the groom and the shoulder under it: an
+  ALPHA_MASK strand mesh casts, and the ALPHA_BLEND ones attenuate rather than casting solid. The
+  recipe's `-e <hdr>` is what makes it visible, since the HDR's key lights cast and the fallback
+  three-point rig does not; most of the fixture corpus cannot see this feature.
+- **A shader edit can move pixels by codegen alone, and no flag reaches it.** A change to how a
+  vertex stage receives its inputs (an include, a select) lets the driver schedule the float math
+  differently: isolated specks at exactly 1/255 with no structure in the diff map. Re-bake the
+  goldens it moves. `--no-instancing` does not reach this, since it governs whether draws are
+  batched, not the shader; batched against unbatched is itself 0 px, the UBO carrying the same
+  floats into the same arithmetic.
+- **An ALPHA_MASK fragment above the cutoff is fully opaque**, as glTF's binary MASK means, and the
+  opaque lane does not blend it. A capture from a build that blended masked fragments toward the
+  clear colour differs across the whole groom.
 
-So a baseline captured before either point will not compare against one after.
-The analytic OIT gate is the instrument that did NOT move (bit-identical across
-both), which is why the hair is read as sensitivity rather than regression.
+### Masked materials and the mip chain
 
-**And a fourth time, back on the hair — but this one is a behaviour change, not
-sensitivity.** Spec 11.26 gave translucent casters a partial shadow under
-`--translucent-shadows`: raiden's `Hair_1` (ALPHA_MASK) cast nothing and now
-casts, and `Hair` / `Cool_Touch` / `rai_decal` (ALPHA_BLEND) cast solid black
-and now attenuate. **331,967 px (4.0%), PAE 33/255**, and the diff map is the
-groom and the shoulder under it and nothing else. It is opt-in, so the default
-recipe is unaffected; `--no-translucent-shadows` reaches the pre-change frame at
-0 px. Note the recipe's `-e <hdr>` is what makes this visible at all — the HDR
-key lights cast, where the fallback three-point rig does not, which is why most
-of the fixture corpus cannot see this feature.
+The masked shading path is covered by the `mask_fixture` golden. **The mip chain of a masked
+texture is covered by no golden**: coverage preservation only acts where a cutout minifies,
+`mask_fixture` declares no textures, and `translucent_shadow`'s masked albedo is a linear alpha
+ramp, which a box filter leaves a linear ramp. `assets/scenes/alphacov_fixture.cscn` and the
+`alphacov` group are the whole instrument.
 
-**Then it moved a third time, and this one is the whole frame, not the hair.**
-Spec 11.24 turned output dither on by default, so the 8-bit write now carries a
-+/-1 LSB triangular dither: **5,691,710 of 8,294,400 px (68.6%) differ, at PAE
-exactly 1/255**. Every pixel that moved moved by one code and none by more --
-the signature this file calls last-bit rounding -- so it is a re-quantization,
-not a shading change. `--no-dither` reaches the old frame at 0 px. Use it for
-any comparison against a baseline captured before 11.24, and for any gate that
-reads single pixels or high-frequency residuals rather than whole-frame
-structure; four in `scripts/gates.py` had to be given it.
+- **Its arms are bounded in both directions**, because saturating distant cutouts solid pushes the
+  mid/near ratio up, and a bound only below passed a chain that did exactly that.
+- **`alphacov-deep` reads a camera-facing quad by mean luma**, not a count of bright pixels.
+  Grazing anisotropy averages a sparse dither into a smooth low-alpha field the sharpened test
+  deletes, so a count reads the distributing chain lower than a vanishing one. The grazing loss is
+  the technique's ceiling, not the arm's.
+- **A rewritten level 0 has no arm**: the dot grid is binary there, so the fixture cannot see it.
+  It is checked at the cook artefact's bytes instead.
 
-**And a fifth time, four goldens by 26 pixels total, and this one no flag
-reaches.** Spec 11.28 gave `pbr_vert.glsl` an `instancing.glsl` include, so the
-per-object transforms arrive through a select rather than straight off a
-uniform. The driver schedules the vertex float math differently for it:
-`guard_thin_panel` 1 px, `skin_curvature_fixture` 1 px, `skin_curvature_sss` 6
-px, `oit_sphere_moments` 18 px, all at **PAE exactly 1/255**, diff maps showing
-isolated specks with no structure. Re-baked at 11.28.
+**`apps/tree` and `apps/forest` are the only in-tree consumers and neither is a golden**, so a
+change to the mip chain moves both leaf atlases at every level with nothing automated able to see
+it; the `forest-*` arms read submission integers. Compare canopy captures by hand before believing
+a green suite on anything touching `texture_alpha_coverage`.
 
-**`--no-instancing` does NOT reach it**, and that is the part worth carrying:
-the flag governs whether draws are batched, where the movement is the shader
-edit itself. Three of the four fixtures batch nothing at all -- `oit_sphere` is
-3 meshes in 3 draws -- which is what identifies this as codegen rather than a
-behaviour change. The batching's own identity is separately exact: instanced
-against non-instanced on a 131-node fixture compares at 0 px, because the UBO
-carries the same floats into the same arithmetic.
-
-**And a sixth time, the largest yet, and no flag reaches this one either.**
-Spec 11.31 stopped the opaque lane blending geometry that is not translucent.
-An ALPHA_MASK fragment above the cutoff used to write fractional alpha and get
-lerped toward the CLEAR COLOUR -- the opaque pass runs before the skybox -- so
-the groom was being darkened. **1,058,960 px (12.8%), PAE 103/255**, and the
-diff map is the hair and nothing else. Both directions and both correct:
-brighter where a strand was lerped toward the clear colour, darker where a dark
-strand now fully occludes a bright one instead of half-showing it, which is
-what glTF's binary MASK means. Any baseline captured before 11.31 will not
-compare.
-
-**No golden moved with it, and that was worth knowing before trusting a green
-golden run on anything masked.** `translucent_shadow` carried the corpus's only
-other MASK material and it is a CASTER HELD ABOVE THE FRAME -- what the golden
-measures is its shadow. So at the time no golden contained visible masked
-geometry and all 21 passed either way. **`mask_fixture` is a golden now** (spec
-11.87 baked one, and it moved: both masked quads had been rendering as a
-screen-door stipple where glTF says a fragment at or above the cutoff is fully
-opaque), so that gap is closed for the shading path. It is NOT closed for the
-mip chain, and that is the next paragraph.
-
-**No golden can see a masked material's MIP CHAIN, and 11.88 is what that cost.**
-Coverage preservation only bites where a cutout MINIFIES, and the one golden
-carrying a MASK material with an albedo texture is `translucent_shadow`, whose
-image is a 512x4 linear alpha RAMP -- symmetric about the threshold, and a box
-filter of a linear ramp is another linear ramp, so the rescale barely moves it.
-`mask_fixture` declares no textures at all. So spec 11.87 shipped a chain that
-painted distant cutouts SOLID with all 29 goldens at 0 px and its own gate green
--- the gate bounded the mid/near ratio only BELOW, and saturation pushes that
-ratio UP. `assets/alphacov_fixture` and the `alphacov` group are the whole
-instrument, bounded in both directions for that reason; spec 11.88 carries the
-matrix of which of the three fixes each arm actually sees, and the answer is one
-of three. **Spec 11.100 repeated the lesson one instrument down**: its deep arm's
-first draft counted bright pixels, and the count read the DISTRIBUTING build
-lower than the vanishing one -- grazing anisotropy averages a sparse dither into
-a smooth low-alpha field the sharpened test deletes, so the arm now reads a
-camera-facing quad by MEAN luma, and the grazing loss is recorded as the
-technique's ceiling rather than the arm's. The old "correctly vanishes past the
-uniform level" sentence is retired: distribution answers there, `alphacov-deep`
-is its instrument, and the ledger row that cannot be armed (a rewritten level 0
--- the dot grid is binary there, so the fixture is blind) is proven live at the
-cook-artefact byte level instead.
-
-**`apps/tree` and `apps/forest` are the feature's only in-tree consumers and
-neither is a golden**, so a change to the mip chain moves both leaf atlases at
-every level with nothing automated able to see it -- the `forest-*` arms read
-submission integers. Compare canopy captures by hand before believing a green
-suite on anything touching `texture_alpha_coverage`. And do not reach for
-`assets/ivy_arcade` as the hand-A/B content, natural as it looks: it is NOT
-pixel-comparable -- measured 8,674 px between two pinned runs
-(`--no-auto-exposure -E 1.0`) and 9,681 unpinned at 800x600, so anything under
-~9k px on it is noise. Forest's `--render-mode 6` at a fixed camera (0 px) and
-`--no-sky` (40 px) are the floors that work -- both measured at the suite's
-wide framing, `-f 20 -W 800 -H 450 --no-fog --cam-eye 0,300,700 --cam-target
-0,-20,0`; the determinism table's 4 px `--no-sky` figure above is a different
-framing and both are honest at their own configs.
+- **Do not use `assets/ivy_arcade` for that A/B.** It is not pixel-comparable: about 9,000 px
+  between two runs at 800x600, pinned or not, so anything under that on it is noise.
+- **Forest's floors that work** are `--render-mode 6` at a fixed camera (0 px) and `--no-sky`
+  (40 px), both at the suite's wide framing, `-f 20 -W 800 -H 450 --no-fog --cam-eye 0,300,700
+  --cam-target 0,-20,0`. The 4 px `--no-sky` figure in the asset table is at another framing.
 
 ### Capturing a before
 
-Capture the "before" from the base commit BEFORE starting work (`git stash`,
-build, render, `git stash pop`). Both builds must be complete -- **never pipe
-`./build.sh` through `head`**, which SIGPIPEs the build mid-link and leaves a
-stale binary that renders the old code.
+Capture the "before" from the base commit before starting work (`git stash`, build, render,
+`git stash pop`). Both builds must be complete: **never pipe `./build.sh` through `head`**, which
+kills the build mid-link with SIGPIPE and leaves a stale binary that renders the old code.
 
-**And run both legs `--no-cook` when the change touches anything a bake produces** (spec 11.99).
-The cache is content-keyed on INPUTS, not on the code -- a changed bake whose recipe version was
-not bumped computes the same key, the after leg silently renders the before's artefact, and a
-real change reads 0 px. The inverted-confidence failure this file exists to prevent, in its
-newest form.
+**Run both legs `--no-cook` when the change touches anything a bake produces** (spec 11.99). The
+cook is keyed on a bake's inputs, not on its code, so a changed bake whose recipe version was not
+bumped computes the same key, the after leg renders the before's artefact, and a real change reads
+0 px.
 
-For a pure refactor there is a stronger check than pixels: diff the generated
-GLSL. `out/generated/shader_strings.h` is reproducible (sorted), so unescaping
-both versions and diffing comment-stripped proves "no shader code changed" directly,
-without going through a renderer at all.
+For a pure refactor there is a stronger check than pixels: diff the generated GLSL.
+`out/generated/shader_strings.h` is reproducible (sorted), so unescaping both versions and
+diffing them with comments stripped proves no shader code changed, without a renderer.
 
 ### The gamepad device path
 
-Spec 11.109 built the game layer's gamepad support on a machine with no controller and
-only macOS to hand, which has no supported way to fake one (a virtual HID device there
-needs a DriverKit extension). So the layer reads a pad through a seam -- one function
-fills GLFW's standard layout for a slot -- and everything ABOVE the seam is what the
-`gamepad` gate group verifies, with a scripted reader in the seam's place. **Nothing in
-either suite has exercised GLFW's real joystick backends** (evdev, IOKit, XInput), and the
-ledger in `specs/11.109-gamepad-input.md` records that as owed.
+The game layer reads a pad through a seam: one function fills GLFW's standard layout for a slot
+(spec 11.109). The `gamepad` gate group puts a scripted reader in the seam and verifies everything
+above it. **Nothing in either suite exercises GLFW's real joystick backends** (evdev, IOKit,
+XInput); macOS has no supported way to fake a pad, since a virtual HID device there needs a
+DriverKit extension.
 
-**The same is now true of the MOUSE, and for the same reason.** Spec 12.19 gave the pointer the
-seam the pad already had -- `--input-script`, the same frame-range grammar through the same
-parser -- so a drag, a shift-pan and a wheel notch are asserted in the `camera` group with no
-hand on a mouse. What that covers is everything above the seam: the drag state, the ray picking
-and the app's own forwarded callback all run exactly as they do for a real event. **GLFW's real
-cursor and button path is exercised by nothing**, which is the third entry on this list beside
-the joystick backends and the audio device. Closing it is a minute's work with a hand: run
-`./out/bin/render -m assets/models/puppet.gltf` windowed, drag, shift-drag, and turn the wheel. Two ways to close it, each
-about a minute once the hardware or the machine is there:
+**The mouse is in the same position.** The pointer has the same kind of seam, `--input-script`,
+through the same frame-range parser, so the `camera` group asserts a drag, a shift-pan and a wheel
+notch with no hand on a mouse: the drag state, the ray picking and the app's forwarded callback all
+run as they do for a real event. **GLFW's real cursor and button path is exercised by nothing.**
+To check it, run `./out/bin/render -m assets/models/puppet.gltf` windowed, drag, shift-drag and
+turn the wheel.
+
+Two ways to close the pad path, each about a minute once the hardware or the machine is there:
 
 **A pad on this Mac.** Pair any Xbox, PlayStation or Switch controller over Bluetooth
 (all three are in the bundled SDL database), run `./out/bin/gametest --trace-player`
 windowed, push the left stick and press A, and read the trace: the `move` column follows
 the stick through the dead zone and `Jump!` prints once per press. The startup log names
 the pad (`gamepad 0 connected: <name>`), and `(no mapping)` after it means the database
-has no row for that GUID -- pass a newer SDL `gamecontrollerdb.txt` with `--gamepad-db`.
+has no row for that GUID; pass a newer SDL `gamecontrollerdb.txt` with `--gamepad-db`.
 
 **A Linux machine with no pad.** The kernel's `uinput` lets a process create an input
 device the system serves like any other, and GLFW's Linux backend reads
 `/dev/input/event*` with an inotify hot-plug watch, so a virtual pad is indistinguishable
-from a real one -- PROVIDED it matches a database row, which GLFW does by the full GUID.
-Read `cetra/src/ext/glfw/src/linux_joystick.c` before writing the device; what it needs:
+from a real one, provided it matches a database row, which GLFW does by the full GUID.
+Read `cetra/src/ext/glfw/src/linux_joystick.c` before writing the device. What it needs:
 
 - **Bus 0x03, vendor 0x045e, product 0x028e and version 0x0104**, all four non-zero.
   GLFW builds the GUID `030000005e0400008e02000004010000` from them, which is the
-  "Microsoft X-Box 360 pad" row of `mappings.h`; a ZERO version takes the other branch of
+  "Microsoft X-Box 360 pad" row of `mappings.h`. A zero version takes the other branch of
   that `if` and yields a name-keyed GUID that matches nothing, so the pad connects as a
   joystick and `glfwGetGamepadState` returns false for it.
 - **Exactly eleven key bits, in ascending code**: `BTN_A`, `BTN_B`, `BTN_X`, `BTN_Y`,
   `BTN_TL`, `BTN_TR`, `BTN_SELECT`, `BTN_START`, `BTN_MODE`, `BTN_THUMBL`, `BTN_THUMBR`.
   GLFW numbers buttons by walking the key bits from `BTN_MISC` upward, so the row's
-  `a:b0 ... rightstick:b10` holds only if those are the bits and nothing else is set --
+  `a:b0 ... rightstick:b10` holds only if those are the bits and nothing else is set:
   `BTN_C` or `BTN_Z` between them shifts every later index.
 - **Six absolute axes** `ABS_X`, `ABS_Y`, `ABS_Z`, `ABS_RX`, `ABS_RY`, `ABS_RZ`, each with
   range information (the backend queries `EVIOCGABS` per axis and skips one it cannot),
   which the row reads as `leftx:a0 lefty:a1 lefttrigger:a2 rightx:a3 righty:a4
   righttrigger:a5`; and **the hat pair** `ABS_HAT0X` / `ABS_HAT0Y` for the dpad.
 - **A `SYN_REPORT` after every batch of events**, or nothing is delivered.
-- **Two permission grants, not one**: writing `/dev/uinput` to create the device, and
-  reading `/dev/input/event*` to let gametest see it (the `input` group, or a udev rule).
+- **Two permission grants**: writing `/dev/uinput` to create the device, and reading
+  `/dev/input/event*` to let gametest see it (the `input` group, or a udev rule).
 
-The tooling is `python3-evdev` (Ubuntu's universe repository) and `modprobe uinput`; the
+The tooling is `python3-evdev` (Ubuntu's universe repository) and `modprobe uinput`. The
 script creates that device with `evdev.UInput`, then replays the scripted-pad text format
 from `cetra/src/game/input.h` at a wall-clock frame rate, writing each range's buttons and
-axes and a `SYN_REPORT`. Then `./out/bin/gametest -x --trace-player` with NO `--pad-script`
--- the point is that the default reader, `glfwGetGamepadState`, sees it. The three gate
-scripts (`pad_edge.txt`, `pad_legs.txt`, `pad_off.txt` in the gates' temp directory under
-`--keep`, or the strings in `run_gamepad_gate`) are the inputs to replay, and the
-`gamepad` group's expected values are the answers. This was written as a recipe rather than
-committed as a tool because it cannot be run here, and a tool nobody has run is the kind
-of code this repository does not keep.
+axes and a `SYN_REPORT`. Then run `./out/bin/gametest -x --trace-player` with no `--pad-script`,
+so the default reader, `glfwGetGamepadState`, is the one that sees it. The inputs to replay are
+the three gate scripts (`pad_edge.txt`, `pad_legs.txt`, `pad_off.txt` in the gates' temp
+directory under `--keep`, or the strings in `run_gamepad_gate`), and the `gamepad` group's
+expected values are the answers. It is a recipe and not a committed tool because it cannot be run
+here, and this repository does not keep code nobody has run.
 
 ### The audio device path
 
-Spec 12.0 built the audio subsystem the same way, around the same kind of seam. The device
-is the seam: a windowed run opens the OS device and mixes on miniaudio's own real-time
-thread; a headless run opens NONE (`noDevice`) and renders the mix offline, which the
-caller pulls with `audio_system_read_pcm`. Everything ABOVE the device -- the buses, the
-voices, the spatialization -- is what the `audio` gate group verifies, off that offline
-PCM, so it needs no sound card and is a pure function of the frames pulled.
+The audio subsystem's seam is the device (spec 12.0). A windowed run opens the OS device and
+mixes on miniaudio's own real-time thread; a headless run opens none (`noDevice`) and renders the
+mix offline, which the caller pulls with `audio_system_read_pcm`. Everything above the device --
+the buses, the voices, the spatialization -- is what the `audio` gate group verifies, off that
+offline PCM, so it needs no sound card and is a pure function of the frames pulled.
 
-The `audio` group runs ten arms through `gametest --audio-probe`, each a headless offline
-render measured as per-channel RMS: **onset** (a tone is silent before it is played and
-energetic after), **pan** (a source to the right is louder in the right channel, and to the
-left in the left -- a ratio each way, so a swapped channel fails), **distance** (the same
-tone is louder near than far and still audible far -- attenuation, not a cutoff), **master**
-(the master bus at 1 passes energy and at 0 passes silence), **decode** (a WAV
-synthesized by the gate, with no committed binary, loads from a file and decodes to energy),
-**noise** (spec 13.9: white, pink and brown each loud, each darker than the last), and four
-for the zones (spec 13.33): **zone** (a tone through a link of 0.25 is a quarter of itself,
-and a sound decoded from a file and never placed is whole, being 2D -- spatialized from the
-start, it would sit at the origin, in the tone's zone), **zone-path** (a direct link of 0.1 against a way round at 0.5 and 0.5: the
-best path, 0.25), **zone-start** (the first update lands a gain outright whatever its delta,
-and a tone placed after it starts at its zone's gain) and **zone-fade** (the listener stepping
-into the tone's zone eases it up, every window where the 0.4 s fade predicts; an opened link
-lets it through whole; a voice started in another zone is a quarter of itself from its first
-window). The tone arms drive procedural `ma_waveform` tones and the noise arm `ma_noise` beds
-through the real spatializer, so the layer is exercised end to end with nothing on disk but the
-decode arm's temporary WAV, which the zone arms reuse. **The voice pool and a source's several
-sounds (spec 13.17) have no arm of their own**: the spec took none, by decision, and silent's
-offline dumps with `--cat-say` less the same dump with `--no-cat` are how they were checked.
-Nor does an `AUDIO_SOURCE`'s zone gain: it is the held sound's, eased by the same call.
+The `audio` group runs ten arms through `gametest --audio-probe`, each a headless offline render
+measured as per-channel RMS:
 
-**What no suite covers is the OS device path** -- that a real speaker produces the sound, on
-each platform's backend (CoreAudio, ALSA/PulseAudio, WASAPI). The offline render proves the
-mix; it does not prove the driver, and it says nothing about whether the result sounds
-right. Closing it is a listen, not a script: run `./out/bin/gametest` windowed on each OS,
-jump (a high beep), spawn a box (a low beep), and walk the camera around the door -- its
-looping tone should pan left and right and fade with distance. The startup log names the
-mode (`audio: device, 2 ch @ <rate> Hz` with a card, `audio: offline (no device)` headless).
-**Heard on macOS (2026-09-10)**: gametest windowed plays the jump and spawn beeps and the
-door's looping tone through CoreAudio. **Linux (ALSA/PulseAudio) and Windows (WASAPI) are
-still owed** the same one-minute listen -- the layer is identical above the device, but no
-one has run it on those two backends.
+- **onset**: a tone is silent before it is played and energetic after.
+- **pan**: a source to the right is louder in the right channel, and to the left in the left; a
+  ratio each way, so a swapped channel fails.
+- **distance**: the same tone is louder near than far and still audible far (attenuation, not a
+  cutoff).
+- **master**: the master bus at 1 passes energy and at 0 passes silence.
+- **decode**: a WAV the gate synthesizes, with no committed binary, loads from a file and decodes
+  to energy.
+- **noise** (spec 13.9): white, pink and brown are each loud, and each darker than the last.
+- **zone** (spec 13.33, as are the next three): a tone through a link of 0.25 is a quarter of
+  itself, and a sound decoded from a file and never placed is whole, being 2D (spatialized from
+  the start, it would sit at the origin, in the tone's zone).
+- **zone-path**: a direct link of 0.1 against a way round at 0.5 and 0.5 gives the best path,
+  0.25.
+- **zone-start**: the first update lands a gain outright whatever its delta, and a tone placed
+  after it starts at its zone's gain.
+- **zone-fade**: the listener stepping into the tone's zone eases it up, every window where the
+  0.4 s fade predicts; an opened link lets it through whole; a voice started in another zone is a
+  quarter of itself from its first window.
+
+The tone arms drive procedural `ma_waveform` tones and the noise arm `ma_noise` beds through the
+real spatializer, so the layer is exercised end to end with nothing on disk but the decode arm's
+temporary WAV, which the zone arms reuse. **The voice pool and a source's several sounds (spec
+13.17) have no arm**, by decision; they were checked with silent's offline dumps, `--cat-say`
+against `--no-cat`. Nor does an `AUDIO_SOURCE`'s zone gain, which is the held sound's, eased by
+the same call.
+
+**No suite covers the OS device path**: that a real speaker produces the sound on each platform's
+backend (CoreAudio, ALSA/PulseAudio, WASAPI). The offline render proves the mix, not the driver,
+and says nothing about whether it sounds right. Closing it is a listen: run `./out/bin/gametest`
+windowed on each OS, jump (a high beep), spawn a box (a low beep), and walk the camera round the
+door, whose looping tone should pan left and right and fade with distance. The startup log names
+the mode (`audio: device, 2 ch @ <rate> Hz` with a card, `audio: offline (no device)` headless).
+**Heard on macOS (2026-09-10)** through CoreAudio. **Linux and Windows are owed** the same listen.
 
 ### The idle wait's real events
 
-Spec 14.1's idle mode waits for window events, and a headless run has none. So the `idle` group
+Idle mode (spec 14.1) waits for window events, and a headless run has none. So the `idle` group
 proves everything but the real ones: requests from threads, timed wakes, the loader's wake, the
-UI's and the debug GUI's own requests, a scripted pointer, the clocks across a wait, the
-headless end, and that a 3D scene is drawn every frame as without it. It drives them through
+UI's and the debug GUI's own requests, a scripted pointer, the clocks across a wait, the headless
+end, and that a 3D scene is drawn every frame as without idle mode. It drives them through
 `apps/canvas --idle` and `apps/render --idle`.
 
 **A hidden window is woken once in its first tenth of a second on macOS**, a spurious return from
-`glfwWaitEvents` that GLFW's documentation allows for. A headless wait asks again after any wake,
-but a request already made is then found, so work that ends inside that window was drawn with the
-empty event removed, and the first idle-thread arm passed so. The arms' late work -- the board's
-thread, the late load -- now starts on the frame a 0.5 s timed wake draws, past it. With the
-empty event removed, or the loader's wake, those runs now wait for good.
+`glfwWaitEvents` that GLFW's documentation allows. A headless wait asks again after any wake, but
+a request already made is then found, so work ending inside that tenth is drawn even with the
+empty event or the loader's wake removed, and an arm would pass on it. So the arms' late work --
+the board's thread, the late load -- starts on the frame a 0.5 s timed wake draws, past it. With
+the empty event or the loader's wake removed, those runs wait for good.
 
-**What no suite covers is real input waking the wait.** In a window any wake draws a frame, so
-every event does, with nothing for a callback to mark. Neither does any suite cover a windowed
-pointer script's last frame, which the frame after the wait draws; headless drew it either way.
-Closing it is a look: run `./out/bin/canvas --idle --sheet board` windowed and press F. The
-readout's count of frames drawn should stand still while nothing moves, the process should sit at
-0% CPU in Activity Monitor, and a drag, the wheel, G's debug GUI and its clicks should each draw at
-once. **Done on macOS (2026-10-29):** 0.0% CPU still, before the reviews' restructure and after
-it, the process's CPU time standing at its start-up's 1.11 s. Linux and Windows are owed the
-same look.
+**No suite covers real input waking the wait.** In a window any wake draws a frame, so every event
+does, with nothing for a callback to mark. Nor does any suite cover a windowed input script's last
+frame, which the frame after the wait draws; headless draws it either way. Closing it is a look:
+run `./out/bin/canvas --idle --sheet board` windowed and press F. The readout's count of frames
+drawn should stand still while nothing moves, the process should sit at 0% CPU in Activity
+Monitor, and a drag, the wheel, G's debug GUI and its clicks should each draw at once. **Done on
+macOS (2026-10-29)**, at 0.0% CPU while still. **Linux and Windows are owed** the same look.
 
 ### The real-character path
 
-Spec 12.1 built the blend layer against a puppet whose clips are authored in closed form, and
-that is what makes its fourteen gate arms assert numbers rather than impressions: an endpoint
-is 0 px, an unmasked bone moves by 0 exactly, a settled crossfade equals the incoming clip bit
-for bit, the nlerp midpoint reads 21.60/45.00/68.40 degrees at the quarter points. All of that
-is true of the MATH. None of it is a claim about how a character looks.
+The blend layer's arms (spec 12.1) run on the puppet, whose clips are authored in closed form, so
+they assert numbers: an endpoint is 0 px, an unmasked bone moves by exactly 0, a settled crossfade
+equals the incoming clip bit for bit, the nlerp midpoint reads exact angles at the quarter points.
+All of that is true of the math and is no claim about how a character looks.
 
-**What no suite here covers is a real rig.** The puppet has twenty-two bones, identity rest
-rotations, boxes for limbs and no spring bones; a real character has a hundred-odd bones, an
-authored rest pose, skin that slides over joints, and hair. Four things only a person watching
-one can settle:
+**No suite covers a real rig.** The puppet has twenty-two bones, identity rest rotations, boxes for
+limbs and no spring bones; a real character has a hundred-odd bones, an authored rest pose, skin
+that slides over joints, and hair. Four things only a person watching one can settle:
 
-- **Foot sliding through the locomotion blend.** The phase is shared, which is what stops feet
-  skating between walk and run -- but whether the two clips' stride LENGTHS agree at a given
-  speed is a content question, and the puppet's do not have to.
-- **The crossfade transient on real limbs.** 0.25 s reads well on box arms. Whether an arm with
-  a shoulder and a wrist swings through the fade or snaps at its ends is a look.
+- **Foot sliding through the locomotion blend.** The shared phase stops feet skating between walk
+  and run, but whether the two clips' stride lengths agree at a given speed is a content question.
+- **The crossfade transient on real limbs.** 0.25 s reads well on box arms; whether an arm with a
+  shoulder and a wrist swings through the fade or snaps at its ends is a look.
 - **The override layer over a real upper body**, with fingers under the mask and a spring-boned
-  mane on top of it: the layer runs before the springs, so the springs should follow the waving
-  arm rather than fight it.
-- **`assets/models/strut_walk.fbx` on a rig whose rest pose is not identity.** On the puppet it binds
-  by name with an identity delta and the legs land where the clip's absolute rotations put them.
-  On a real rig the retarget delta is doing work, and that is the path spec 11.x's retargeting
-  analysis is about.
+  mane over it. The layer runs before the springs, so the springs should follow the waving arm
+  rather than fight it.
+- **`assets/models/strut_walk.fbx` on a rig whose rest pose is not identity.** On the puppet it
+  binds by name with an identity delta; on a real rig the retarget delta does the work
+  (`docs/animation-retargeting-analysis.md`).
 
-Closing it is a watch, not a script:
+Closing it is a watch:
 
 ```bash
 ./out/bin/render -m my_models/raiden/source/raiden_textured_rigged.glb \
@@ -671,317 +561,193 @@ Closing it is a watch, not a script:
     --anim-switch-to flair --anim-switch-at 120 --anim-fade 0.35
 ```
 
-and, windowed, `./out/bin/gametest --twin run` -- two rigs side by side under TAA, which is the
-one thing `anim-twin`'s headless frames cannot see: that neither smears into the other.
-**Owed.** The blend layer is identical above the rig, but nobody has watched it on one.
+and, windowed, `./out/bin/gametest --twin run`: two rigs side by side under TAA, which is the one
+thing `anim-twin`'s headless frames cannot see, that neither smears into the other. **Owed.**
 
-**Two cautions about `anim-twin` specifically, one settled and one not.**
+**Two cautions about `anim-twin`:**
 
-The settled one: that arm failed intermittently, and the cause was not in animation at all. It
-was a heap overflow in the GLYPH ATLAS — `stbtt_GetGlyphSDF` returns NULL for a glyph with no
-outline and returns it before writing `*width`, `*height`, `*xoff` or `*yoff`, so `text.c`'s
-metrics probe read four uninitialised locals for every blank glyph. The default charset begins
-with a space, so this happened on the first glyph of every SDF font load, advanced the atlas
-cursor by whatever the stack held, and put a later glyph's write outside the allocation. It
-faulted only when that allocation ended on a page boundary, which is why it looked like flake.
-Fixed by asking once and keeping the pixels. Recorded here because the arm's NAME points at
-animation and the fault was in text: an intermittent failure in this group is worth suspecting
-elsewhere before it is suspected in the blend layer.
-
-The unsettled one: the arm's pixel count varies a great deal run to run — 55937, 35967, 224729
-and 55937 across four runs in one session, every one of them passing a `>= 20` threshold by
-orders of magnitude. That is not what a frame-deterministic app should produce, and the two
-processes it compares differ only in the twin's clip, so the crates (same seed, same draw
-order) ought to cancel out of the difference entirely. **Do not theorise about this before
-measuring the floor**, which is this document's own first rule: render each of the two
-configurations TWICE and diff those, and find out whether one run of one configuration is even
-reproducible, before reading anything into the number the arm prints.
+- **An intermittent failure of it has been a fault elsewhere.** It once failed because of a heap
+  overflow in the glyph atlas, which faulted only when an allocation ended on a page boundary.
+  Suspect the rest of the app before the blend layer.
+- **Its pixel count varies a great deal run to run** (from about 36,000 to 225,000 px in one
+  session, every run far past its `>= 20` bar), which a frame-deterministic app should not do,
+  since the two processes differ only in the twin's clip. This is unexplained. Before reading
+  anything into its number, render each of the two configurations twice and diff those, to find
+  whether one configuration even reproduces.
 
 ---
 
 ### The root-motion path
 
-Spec 12.18's nine arms are in the `anim` group. Seven measure the engine with no app: what a clip
-STATES (`anim-root-travel`), what the animator hands out over a loop seam (`anim-root-wrap`), a
-mixture (`anim-root-blend`), a crossfade (`anim-root-fade`), a turn (`anim-root-yaw`) and the
-pose it leaves behind (`anim-root-zeroed`), plus one pin (`anim-root-switch`). Two drive the
-demo with a scripted pad and read its own trace: `anim-root-lunge` and `anim-root-spin`, both
-two-sided against `--no-root-motion`.
+Root motion's arms (spec 12.18) are in the `anim` group. Seven measure the engine with no app:
+what a clip states (`anim-root-travel`), what the animator hands out over a loop seam
+(`anim-root-wrap`), a mixture (`anim-root-blend`), a crossfade (`anim-root-fade`), a turn
+(`anim-root-yaw`), the pose it leaves behind (`anim-root-zeroed`), and one pin
+(`anim-root-switch`). Two drive the demo with a scripted pad and read its trace,
+`anim-root-lunge` and `anim-root-spin`, both two-sided against `--no-root-motion`.
 
-**The bars, and where they came from.** Every distance is a number
-`assets/generators/gen_puppet_fixture.py` declares and asserts — 1.20 m per walk loop, 1.60 per
-run loop, 1.20 for the lunge, half a turn for the spin — so the gate and the asset are two ends
-of one statement rather than two measurements that agree. The arms expect one UPDATE less than
-the whole distance, which is the contract: a source's first update has no previous reading to
-difference and rebases instead.
+**Every distance is one `assets/generators/gen_puppet_fixture.py` declares and asserts** -- 1.20 m
+per walk loop, 1.60 per run loop, 1.20 for the lunge, half a turn for the spin -- so the gate and
+the asset are two ends of one statement. The arms expect one update less than the whole distance,
+which is the contract: a source's first update has nothing to difference and rebases instead.
 
-**What it is NOT a claim about.** Root motion's textbook benefit is that a stance foot cannot
-slide, the body going exactly where the animation says. **That is unmeasurable on every asset in
-this tree, and no arm or doc line should say otherwise.** The generated puppet's `gait()` is a
-straight-leg pendulum with no stance phase, so its feet slide whatever the body does; and every
-committed FBX clip is in place, which spec 12.18 measured rather than assumed — `strut_walk`
-states **0.000071 m** of travel over its whole loop. So the two halves never meet. What the arms
-do assert is that the character travels exactly what the clip states, which is the half that can
-be checked here.
+**The arms make no claim that a stance foot cannot slide**, root motion's textbook benefit, and no
+arm or doc should. It is unmeasurable on every asset here: the generated puppet's `gait()` is a
+straight-leg pendulum with no stance phase, so its feet slide whatever the body does, and every
+committed FBX clip is in place (`strut_walk` states 0.000071 m of travel over its loop). What the
+arms assert is that the character travels exactly what the clip states.
 
 **Three things only a person watching can settle:**
 
-- **Whether a wall reads as a bug.** Under root motion the blend knob is what the STICK asks
-  for, because the travel comes from the clip the knob selects and a knob fed by the achieved
-  speed would start at zero and stay there. So walking into a wall plays the walk on the spot,
-  where the stride-matched path stops it. That is inherent to inverting the ownership; whether
-  it looks wrong enough to want a blocked-detector is a judgement nobody has made yet.
+- **Whether a wall reads as a bug.** Under root motion the blend knob is what the stick asks for,
+  since the travel comes from the clip the knob selects and a knob fed by the achieved speed would
+  start at zero and stay there. So walking into a wall plays the walk on the spot, where the
+  stride-matched path stops it. Whether that wants a blocked-detector is undecided.
 - **The lunge's opening.** It carries 2.192 m of the 2.40 it states, the 0.08 s crossfade
-  discounting the start. The number is right; whether the move reads as landing short is a look.
+  discounting the start. Whether the move reads as landing short is a look.
 - **A rig that is not the puppet.** No imported clip carries a root curve, so `--puppet` never
-  enters this path at all. A character with authored root motion would be the first real test,
-  and would immediately want the retarget to carry translation, which spec 12.18 left out.
+  enters this path. A character with authored root motion would be the first real test, and would
+  want the retarget to carry translation, which it does not.
 
-**Owed.** The arithmetic is exact and the demo travels what its clips state. Nobody has watched
-a character whose animation was authored to move it.
+**Owed.** Nobody has watched a character whose animation was authored to move it.
 
 ---
 
 ## The foot-planting path
 
-Spec 12.4's thirteen arms assert two-bone IK where it is a pure function. Six drive the solver
-with synthetic targets and no physics at all, so a bend is `acos((c² − a² − b²)/2ab)` and
-nothing else — matched to 0.0000 degrees at five distances, against a closed form the gate
-computes itself from the segment lengths the probe reports, so neither side carries the other's
-number. Three stand the rig on a ramp rising 1 in 4, where the feet are 0.20 apart and the
-ground under them therefore differs by 0.050000 exactly, and on a staircase where it differs by
-one riser with the uphill foot on the OTHER side — which is what catches a solver that has
-hardcoded which leg bends. Six feet land on their target to 0.00000000 m.
+The `ik` group asserts two-bone IK where it is a pure function.
 
-**Eleven of those twelve passed while the player's feet were welded to the floor.**
+- **Synthetic solves**, with no physics: a bend is `acos((c² − a² − b²)/2ab)` and nothing else,
+  matched at five distances against a closed form the gate computes itself from the segment
+  lengths the probe reports, so neither side carries the other's number.
+- **A ramp rising 1 in 4**, where the feet are 0.20 apart and the ground under them differs by
+  exactly 0.050000, and **a staircase** where it differs by one riser with the uphill foot on the
+  other side, which catches a solver that has hardcoded which leg bends.
+- **`ik-swing`** ticks a walk cycle and measures the ankle's vertical travel. Every other planting
+  arm poses the rig once and solves once, and **a solve that overwrites a stride looks perfect in a
+  single pose**: the feet were once welded to the floor with every arm but one green. Watch the
+  character walk before believing the group.
 
-That is the fact worth carrying out of this spec. Every arm except one poses the rig ONCE and
-solves once, and a solve that overwrites a stride looks perfect in a single pose. The defect was
-found by watching the character walk, reported as "the legs don't move", and it was found three
-times in a row as each fix exposed the next: a release decided from the caller's stale globals
-welded the feet; correcting the ankle's ground clearance re-welded them by removing the accident
-that had been disabling planting; a pelvis reading the raw weight instead of the faded one bobbed
-the whole body at frame rate. `ik-swing` — which ticks a walk cycle and measures the ankle's
-vertical travel — exists only because of that, and was written after the first report rather than
-before it.
+**What the group asserts is the solve, not walking.** Five things only a person watching can
+settle:
 
-**What the group asserts is the SOLVE. It is not a claim about walking.** Five things only a
-person watching can settle:
+- **A stride through real locomotion.** `ik-swing` measures amplitude and nothing about shape; a
+  walk of the right height and the wrong rhythm passes it.
+- **The plant fraction as a look.** It is 0.10 of leg length, and its two failure modes are
+  opposite and both visible: too small and feet float over a slope, too large and swinging feet are
+  dragged back down. No number here says which way it is wrong.
+- **The pelvis drop as a silhouette.** `docs/foot-locking.md` records the warning that dragging the
+  hips down to reach produces "T-Rex" posturing. The cap is 0.31 of a leg (0.2542 m on this rig),
+  which `ik-drop` exercises with a foot asking for more than the cap; nobody has judged how it
+  reads.
+- **Two characters.** The chaser carries the same rig and nothing plants its feet, so the
+  per-entity question `anim-two-rigs` asks of the animator goes unasked here.
+- **Nothing photographs it.** Every arm reads CPU numbers, so a solve correct in model space but
+  spliced into the wrong node would pass them all. `ik-scale` covers the narrower case, that a rig
+  node scaled 2 changes nothing the solver decides. A pixel arm was considered and dropped: on flat
+  ground the solve is an identity by design, so IK against `--no-ik` at the default spawn measures
+  nothing, and gametest has no flag to stand the player on the ramp.
 
-- **A stride through real locomotion.** `ik-swing` measures amplitude (0.128942 against the clip's
-  own 0.149859) and nothing about shape. A walk that is the right height and the wrong rhythm
-  passes it.
-- **The plant fraction as a LOOK.** It is 0.10 of leg length, and its two failure modes are
-  opposite and both visible: too small and feet float over a slope, too large and swinging feet
-  are dragged back down. No number here says which way it is wrong.
-- **The pelvis drop as a silhouette.** `docs/foot-locking.md` records the warning that dragging
-  hips down to reach produces "T-Rex" posturing, and that a little sliding beats breaking the
-  source animation. Ours dropped up to 0.61 of a leg until spec 12.9 halved it to 0.31 (0.2542 m on this
-  rig), which ik-drop now exercises; nobody has judged how the remainder reads.
-- **Two characters.** The chaser carries the same rig and nothing plants ITS feet, so the
-  per-entity question `anim-two-rigs` had to ask of the animator goes unasked here.
-- **Nothing photographs it.** All twenty-one arms read CPU numbers, so a solve that is correct in
-  model space but spliced into the wrong node or the wrong space would pass every one of them.
-  Spec 12.10's `ik-scale` closes the narrower half of that -- a rig node scaled 2 must change
-  nothing the solver decides, which is the shape of the live bug 12.9 shipped -- but a splice into
-  the wrong NODE is still unseen by any arm.
-  A pixel arm was considered and dropped, for three reasons worth recording rather than
-  rediscovering: on flat ground the solve is now an IDENTITY by design (0.0198 degrees), so
-  IK against `--no-ik` at the default spawn measures nothing; standing the player on the ramp
-  needs camera and position flags gametest does not have; and the two menu goldens' instability
-  would sit inside whatever bar such an arm could set — 752 px twice, 672 px three times and
-  675 px once, each of which read 0 px on a re-run of the same binary (spec 12.5). A 34th golden
-  was refused for the same determinism reason — see the `anim-twin` note above.
+**Planting is not locking.** Planting answers "where is the ground under this foot" every frame
+and keeps no memory, so on its own a walking character slides. Locking (spec 12.9) holds a
+world-space contact; `docs/foot-locking.md` has the method and how the engine differs from it.
+The staircase case runs with release disabled: a foot reaching down to a lower tread is 0.25 above
+its target, and a release decided on height alone cannot tell that from a foot the clip has swung
+up.
 
-**And planting is not LOCKING, which is the larger gap.** Planting answers "where is the ground
-under this foot" every frame and keeps no memory, so a contact point is never held and a walking
-character slides — not as a bug to find but as a property of the design. The staircase case has
-to run with release DISABLED for the same reason: a foot reaching down to a lower tread is 0.25
-above its target, and a release decided on height alone cannot tell that apart from a foot the
-clip has swung up. `docs/foot-locking.md` writes up the technique that closes this and the four
-specific things missing here — a held world-space contact, two thresholds with hysteresis rather
-than one, velocity continuity in the blend, and an extension soft-clamp in place of the hip drop.
-
-Closing it is a watch, not a script:
+Closing it is a watch:
 
 ```bash
 ./out/bin/gametest                    # walk onto the ramp at +X, the stairs at -X
 ./out/bin/gametest --no-ik            # the same without planting, to tell the two apart
-./out/bin/gametest --no-lock          # planting without locking -- but see the speed note
+./out/bin/gametest --no-lock          # planting without locking -- but see the stance note below
 ```
 
-**What spec 12.5 learned about these instruments**, which is worth more than the cleanup it was
-doing at the time:
+**What the instruments can and cannot see:**
 
-- **The goldens are structurally blind to half this module.** A build that failed FIVE `ik` arms
-  — `ik-reach`, `ik-clamp`, `ik-singular`, `ik-analytic` and `ik-plant`, every one of them by
-  exactly the same 0.08 m — passed all 33 goldens. Every gametest golden was a *planting* path,
-  and planting was the half that stayed correct. The synthetic arms are the only thing in
-  the tree that sees the geometric path at all.
-- **`ik-pole` is a weak arm and still is.** It passed throughout that same build while its
-  measured value moved 37 per cent (±0.1786 to ±0.2445): it asserts opposite signs and a span,
-  never a magnitude. Same family as the four arms 12.4's own review strengthened for passing
-  "for a reason that could not fail".
-- **Nothing has ever exercised `max_pelvis_drop`'s cap.** 12.5 changed it from metres to a
-  fraction of leg length and every arm printed identical digits — because a foot on a 1-in-4
-  ramp asks for far less than half a leg, so `min(worst, cap)` returns `worst` either way. A
-  wrong cap passed before that change and passes after it.
-- **`springbone.c` has no instrument of any kind.** No gate arm, no golden, and it is inert in
-  the corpus: `render.c` registers chains only under the prefix `hair`, and no fixture rig has
-  such a bone, so `spring_bone_update` returns at its first guard in every golden. 12.5 shares a
-  write-back between it and `ik.c`; the IK half is covered by twenty-one arms and the spring half by
-  nothing. Closing that is its own piece of work.
-
-**What spec 12.9 added to this list, and what it did not.**
-
-- ~~**The lock is live in the app and the demo cannot show it.**~~ **Closed by spec 12.10.**
-  `gametest`'s player moved at `PLAYER_SPEED` 10 m/s against a clip implying 0.95, so no contact
-  was ever labelled and the frame was **0 px** against `--no-lock`. The travel speed now comes
-  from the clips: `animation_stride_speed` measures what a clip's feet imply, `animator_stride_speed`
-  blends it across a space, and `gametest` places its entries at the speeds they imply and derives
-  full stick from the fastest. On `--puppet assets/models/t_pose.fbx` that is 2.67 m/s and
-  `--no-lock` moves **2217 px**. The generated puppet still reads 0 px at any speed, and that is
-  also the mechanism working: its walk is a straight-leg pendulum with no stance, and the stride
-  measurement REFUSES it by name. **Under `--no-root-motion` the run still says so at startup**;
-  by default it no longer reaches that measurement at all, since spec 12.18 gave the puppet clips
-  that state their own travel and `build_locomotion` answers from those first. **Root motion, the
-  other answer, arrived in that spec** -- and it does not close this row from the other side,
-  because the two features meet on no asset in this tree: only the four clips 12.18 authored carry
-  a root curve, and they are on the same stanceless pendulum. `strut_walk` states **0.000071 m** of
-  travel over its whole loop, measured rather than assumed, so every clip a lock has ever been read
-  on is in place.
-- **A real character is still owed, and the reason is narrower than it first looked.**
-  `--puppet assets/models/t_pose.fbx` does NOT work, and not for the reason first written here:
-  `take_puppet_root` requires a node named exactly **`puppet`**, which only the generated rig
-  has, so the load is refused before any clip is looked at (the committed humanoid is a 65-bone
-  Mixamo Beta rig WITH toe bones, and its `rest_pose_` clip does import). Past that it would
-  fail again at the idle/walk/run lookup, since the repo has one humanoid locomotion clip.
-  `--puppet` is therefore far less general than its name: it swaps one generated rig for
-  another. Standing a real character in gametest is its own piece of work, and now a specific
-  one -- a node-name convention and two missing clips, not a retarget.
-
-  **That is closed too**, by the same 12.9 commit that wrote it (`take_puppet_root` falls back to
-  the scene root, and a rig with no idle/walk/run takes the committed walk with its own rest pose
-  for standing) and finished by spec 12.10, which watched it. `--puppet assets/models/t_pose.fbx`
-  stands the committed 65-bone humanoid in the world, walking on `strut_walk` with its feet
-  locked, and the two defects that look cost nothing to find: the walk played at **eighteen times speed** at
-  any stick short of full, because a two-tick rest pose phase-synced against an 86-tick walk turns
-  the shared clock 43 times too fast; and the right leg carries a standing correction of 0.45 of a
-  leg that no playback rate moves, which is the contact label opening during late swing. The first
-  is fixed. **The second is filed, not fixed**, and it is the clearest thing in this file about
-  what a one-sided instrument is worth: every measurement spec 12.9 built reads the LEFT foot, so
-  nineteen green arms never touched the leg that was wrong. Moving the label would move
-  `ik-contact`, `ik-slide` and `ik-hysteresis` with it.
-
-  Six committed clips later the same rig runs, idles, swims, treads, falls and lands, and the
-  locomotion axis reads 0 to 5.01 m/s with full stick at 8.01. That paragraph used to end
-  **"None of that has an arm"**, and said what one would look like: *"An arm here would read the
-  trace's source column the way `anim-trace-idle` already reads its weight column."* **Spec 12.20
-  wrote four of them**, and they read exactly that column -- `graph-parity-ground`,
-  `graph-parity-air`, `graph-parity-water` and `graph-no-swim`, each asserting a state sequence
-  spelled out in `gates.py` rather than a recording, so a reviewer can disagree with it. The
-  sequence was still LEARNED by recording the old machine first; what ships is the literal list.
-
-  **Two things about that coverage are worth knowing before trusting it.** The arms prove the new
-  machine is the SAME, not that it is right: if the sequence read off a trace by eye in 12.6 was
-  wrong, it is wrong identically now and every arm is green. And **the re-cadencing they pass over
-  is the largest behaviour change in that spec** -- the decision moved from the fixed step to the
-  rendered frame, and headless the two are identical, one step per frame, which is the property
-  every gametest arm in this suite rests on. So no arm here can see it. Windowed, on a frame that
-  runs three steps or none, the machine now decides once where it used to decide three times or
-  zero; that wants a human at an uncapped frame rate and at a throttled one, and has not had one.
-
-  **What still has no arm** is how a transition READS: whether a fade is the right length for the
-  move it covers, whether the landing lands on the beat, and what a swim looks like. Four state
-  sequences and a pose diff say nothing about any of it.
-- **The menu goldens' instability reaches 48,886 px.** This section already warned that they
-  cannot support single-measurement attribution. Spec 12.9 met a `menu` failure of 48,886 px --
-  the Quit button focused, not a few edge pixels -- which survived a bisect across four commits,
-  a build of master and a build of each phase, and a diff proving two of those builds render the
-  frame byte-identically by hand. It read **0 px on a re-run of the same binary with no
-  rebuild**, as did `menu_focus`. The recorded magnitudes of 752, 672 and 675 px are small
-  enough to be mistaken for noise around a real change. This one is not, and it cost most of an
-  afternoon. **Re-run first. Always.** Spec 13.6 dropped both menu goldens for exactly this.
-
-- **The demo's own walk clip has no stance phase, and that is the remaining limit.** `gait()`
+- **No golden sees the geometric path.** A build that failed five `ik` arms by the same 0.08 m
+  passed every golden; only the synthetic arms see it.
+- **`ik-pole` is weak**: it asserts opposite signs and a span, never a magnitude, so its value can
+  move by a third and still pass.
+- **`springbone.c` has no instrument of any kind.** No gate arm and no golden, and it is inert in
+  the corpus: the render app registers chains only under the prefix `hair`, and no fixture rig has
+  such a bone, so `spring_bone_update` returns at its first guard in every golden. It shares a
+  write-back with `ik.c`, whose half is covered and whose spring half is not.
+- **The travel speed comes from the clips** (spec 12.10): `animation_stride_speed` measures what a
+  clip's feet imply, `animator_stride_speed` blends it across a space, and gametest places its
+  entries at those speeds. On `--puppet assets/models/t_pose.fbx` the lock shows clearly against
+  `--no-lock`. The generated puppet shows nothing at any speed, and that is the mechanism working:
+  its walk has no stance, and the stride measurement refuses it by name (said at startup under
+  `--no-root-motion`; by default its clips state their own travel and the measurement is not
+  reached).
+- **The generated puppet's walk has no stance phase, and that is the remaining limit.** `gait()`
   swings thighs about a straight leg, so the foot never dwells and a lock has nothing to hold
-  during locomotion. `--ik-probe lock` plays the committed `strut_walk.fbx` for exactly that
-  reason. `--speed 1.2` makes the feature visible (22,643 px against `--no-lock`) by dropping
-  the gear into the idle/walk blend, where the feet are slow enough to be labelled -- which is
-  demonstrating it around the edges of the problem rather than through it. Giving the generated
-  clips a real stance is the next thing this fixture wants.
+  during locomotion. `--ik-probe lock` plays the committed `strut_walk.fbx` for that reason.
+  `--speed 1.2` makes the lock visible on it by dropping into the idle/walk blend, where the feet
+  are slow enough to be labelled, which shows the feature round the edges of the problem rather
+  than through it. Giving the generated clips a real stance is the next thing this fixture wants.
+  Root motion and locking meet on no asset here: only the puppet's own clips carry a root curve,
+  and they are the same stanceless pendulum.
+- **On the committed humanoid the right leg carries a standing correction of 0.45 of a leg**
+  that no playback rate moves: the contact label opens during late swing. It is filed, not fixed,
+  and every lock measurement reads the left foot, so no arm sees it. Moving the label would move
+  `ik-contact`, `ik-slide` and `ik-hysteresis` with it.
+- **The state machine's arms prove sameness, not rightness.** `graph-parity-ground`,
+  `graph-parity-air`, `graph-parity-water` and `graph-no-swim` read the trace's source column
+  against state sequences spelled out in `gates.py`, which were learnt by recording the
+  hand-written machine the graph replaced. If that sequence was wrong, it is wrong identically now.
+- **The graph decides once per rendered frame, not per fixed step**, and headless the two are the
+  same, one step per frame, which every gametest arm rests on. So no arm can see a frame that runs
+  three steps or none; that wants a person watching at an uncapped frame rate and at a throttled
+  one.
+- **How a transition reads has no arm**: whether a fade is the right length for the move it
+  covers, whether a landing lands on the beat, what a swim looks like.
 
-**Owed.** The solve is exact and the lock holds to 0.4 per cent of a leg, on ground nobody has
-walked across at a speed the animation agrees with.
+**Owed.** The solve is exact and the lock holds to 0.4% of a leg, on ground nobody has walked
+across at a speed the animation agrees with.
 
 ### The grotto, the ocean and swimming
 
-Spec 12.6 put the platform in a walled basin with a turquoise sea around it, made both
-characters swim, and added a swim clip. **Not one line of it has a gate arm**, and that is
-worth stating plainly rather than leaving to be discovered:
+gametest's platform stands in a walled basin on an eroded heightfield, with a sea round it that
+both characters swim in (specs 12.6 and 12.7). **None of it has a gate arm:**
 
-- **Swimming is a feel, and nothing measures a feel.** The float is a critically damped drive
-  toward the surface with the rise clamped, and its two failure modes are opposite and both
-  only visible: too stiff and the character pops out of the water like a cork, too soft and it
-  sinks before recovering. The numbers were chosen against two *hazards* rather than by eye —
-  the seabed sits below the foot ray's reach, and three metres under the feet so
-  `stick_to_floor_distance` cannot grab it — but nothing asserts how it reads.
+- **Swimming is a feel, and nothing measures a feel.** The float is a spring drive toward the
+  surface with the rise clamped. Its two failure modes are opposite and only visible: too stiff
+  and the character pops out like a cork, too soft and it sinks before recovering. The numbers
+  were chosen against two hazards: the seabed sits below the foot ray's reach, and three metres
+  under the feet so `stick_to_floor_distance` cannot grab it.
 - **The water's colour is authored, not derived.** Turquoise is a pale bed seen through clear
-  water, so it depends on the seabed's albedo, the depth, and the sun's elevation together. Any
-  of the three moving changes the look with no arm to notice. The `water` and `beach` gate
-  groups drive the render app against their own fixtures and never see gametest.
-- **The swim clip is checked for existence, not for shape.** `fixture-gen` asserts the
-  committed asset is what the generator emits, and the regeneration was verified to carry
-  thirteen channels against thirteen samplers — but whether a breaststroke *reads* as one is a
-  watch, and the clip shares the rig's known limitation that its walk bends no knee.
-- **The follow camera is covered by arms, not pixels.** The two menu goldens framed the player
-  from the rig's initial aim until spec 13.6 dropped them, so nothing photographs its rest pose
-  now. Since spec 12.19 the turning, the pitch clamp and the movement basis are asserted in the
-  `camera` group: `cam-pitch-clamp` saturates 12 radians of demand at each end,
-  `cam-basis` reads the published frame and its sentinel, and `pad-camera-relative` reads the
-  scheme end to end through a scripted pad. That basis is the half that failed twice in review,
-  and turning `steers_controls` off now reddens an arm by 104.85 degrees.
-- **The chaser now swims after you**, which is the per-entity question `anim-two-rigs` had to
-  ask of the animator and nothing asks here.
+  water, so it depends on the seabed's albedo, the depth and the sun's elevation together, and any
+  of the three moving changes the look with no arm to notice. The `water` and `beach` groups drive
+  the render app against their own fixtures and never see gametest.
+- **The swim clip is checked for existence, not shape.** `fixture-gen` asserts the committed asset
+  is what the generator emits, but whether a breaststroke reads as one is a watch, and the clip
+  shares the rig's limitation that its walk bends no knee.
+- **The follow camera is covered by arms, not pixels.** `cam-pitch-clamp` saturates 12 radians of
+  demand at each end, `cam-basis` reads the published frame and its sentinel, and
+  `pad-camera-relative` reads the movement scheme end to end through a scripted pad; turning
+  `steers_controls` off reddens it by 104.85 degrees. Nothing photographs the camera's rest pose.
+- **The chaser swims after you**, and nothing asks the per-entity question of it.
+- **The clustered light budget's failure looks like a renderer fault.** The index pool is
+  `LC_MAX_CLUSTER_INDICES`, 65,536 slots in a 64 KB uniform block (spec 13.51). A light whose
+  sphere holds the camera claims every tile of every slice out to its range, and a panel authored
+  with `range = 0` derives a cull radius from its size, thousands of units for a 90x90 panel, so it
+  sits in every froxel. Running out leaves one cluster partly lit and every cluster after it in the
+  z-major walk unlit: a hard horizontal line on a tile row that moves with the camera. The
+  `light-pool` group is the budget's arm: `pool-fit` stores more indices than 16 KB holds, and
+  `pool-overflow` holds the warning, which names the demand, the pool and the widest-reaching
+  light and repeats every 600 builds while an overflow lasts. **Read the warnings.**
+- **Terrain correctness is one measurement, and not a picture.** The pool floor's highest point is
+  checked against the swimmer's foot probe at build time, because a floating character whose feet
+  reach rock plants on the bottom. It has caught four regressions none of which was visible in a
+  frame. Anything that moves the field's noise lattice can breach it, so extent, resolution and
+  seeds are all inputs to it.
+- **Startup cost has no arm.** `terrain.c` memoises the Perlin permutation table one entry deep, so
+  noise sources with different seeds interleaved per point rebuild it on every tap; the terrain
+  shares one seed for that reason. Nothing would notice a regression; it took a hand profile to
+  find.
 
-Spec 12.7 replaced the boxes with an eroded heightfield and added a lighting rig, and it
-brings three more blind spots — two of which cost hours before they were understood:
-
-- **The clustered light budget's failure looks like a renderer fault.** A light whose sphere
-  holds the camera claims every tile of every slice out to its range, and that is what spends
-  the index pool. Its history:
-  - `LC_MAX_CLUSTER_INDICES` was 6144 over 3072 froxels, an average of **two** lights per
-    froxel, and three lights with frustum-wide reach did not fit. 12.7's two pool panels were
-    authored with `range = 0`, which `light_cull_radius` derives into the *thousands* of units
-    for a 90x90 panel, so both sat in every froxel and the pool overflowed.
-  - Spec 13.6 took the indices from a halfword to a byte and the block to GL 4.1's guaranteed
-    16 KB, 16384 slots.
-  - Spec 13.51 found silent's hall needing 18,270, once nine lights stood within a few metres
-    of it. It took the block to 64 KB, 65,536 slots, and the engine now refuses a driver that
-    allows less.
-
-  Running out still leaves one cluster partly lit and every cluster after it in the z-major
-  walk unlit: a hard horizontal line on a tile row that moves with the camera.
-
-  The `light-pool` group is the budget's arm:
-  - `pool-fit` stores more indices than 16 KB holds.
-  - `pool-overflow` holds the warning, which names the demand, the pool and the widest-reaching
-    light, and **repeats every 600 builds while an overflow lasts**. Until 13.51 it printed once
-    a session, so an overflow at load spent it, and one that came later went unreported.
-
-  **Read the warnings**: in 12.7 it had been printing the answer on every run for hours.
-- **Terrain correctness is asserted by ONE measurement, and it is not a picture.** The pool
-  floor's *highest* point is checked against the swimmer foot probe at build time, because a
-  floating character whose feet reach rock plants on the bottom. It has caught four separate
-  regressions — an ungated crag warp, an ungated landform warp, a domain change, and a seed
-  change — and not one of them was visible in a frame. Anything that moves the field's noise
-  lattice can breach it, so extent, resolution and seeds are all inputs to it.
-- **Startup cost is unmeasured and was 19.7 s.** `terrain.c` memoises the Perlin permutation
-  table one entry deep; four noise seeds interleaved seven taps a point cost seven million
-  Fisher-Yates shuffles. One shared seed took the fill from 11.7 s to 2.7 s. No arm would
-  have noticed, and the profile had to be added by hand to find it.
-
-Closing it is a watch, not a script:
+Closing it is a watch:
 
 ```bash
 ./out/bin/gametest                      # walk off the edge, land in water, swim; arrows turn the camera
@@ -995,144 +761,111 @@ Closing it is a watch, not a script:
 
 ## The UI paths
 
-Spec 12.2's ten gate arms assert the UI where it is a pure function: `ui_layout` is
-(tree, width, height) with no GL, no clock and no input, and the input pass takes a struct of
-values rather than a device. So navigation, hit-testing, capture, the stack, wrapping, theme
-resolution and the settings round-trip are all checked with **no window and no GPU** -- and
-nothing compares the layer's pixels at all. The two menu goldens that did were dropped in spec
-13.6 for not being reliably 0 px.
+The `ui` group (spec 12.2) asserts the UI where it is a pure function: `ui_layout` is (tree, width,
+height) with no GL, no clock and no input, and the input pass takes a struct of values rather than
+a device. So navigation, hit-testing, capture, the stack, wrapping, theme resolution and the
+settings round-trip are checked with **no window and no GPU**, and nothing compares the layer's
+pixels.
 
-Five things that leaves open, none of them reachable from this machine:
+What that leaves open:
 
-- **Another display.** The layer works in window POINTS and is captured at framebuffer
-  resolution, so a Retina panel doubles it and a 1x panel does not. Every golden here was baked
-  at 2x on one Mac. Whether a menu reads correctly on a 4K panel at some other scale factor, or
-  on a 1x monitor, is a look nobody has had — and the `_detect_fb_scale` machinery means a
-  mismatch reports as "not the display it was baked on" rather than as a bug.
-- **A real controller through a menu.** The `ui` group drives navigation by writing the
-  `UIInput` struct directly, which is the layer's own contract and deliberately not a device.
-  The pad path above it — `ui_up`/`ui_down`/`ui_accept` as ACTIONS, sharing a table with the
-  game's — is exercised only by the scripted pad in the `gamepad` group. This is the same debt
-  spec 11.109 already carries, and closing that closes this.
-- **The settings file on Linux and Windows.** `settings_default_path` resolves three different
-  locations and only `~/Library/Application Support` has ever been written to. The other two
-  are one `#if` each and have never run. `CETRA_SETTINGS_DIR` is what the gate uses, so the
-  gate does not exercise the platform branches either — by design, since a hermetic test must
-  not write to a real user directory, but it means the branches are untested rather than
-  merely unasserted.
-- **A ragdoll that looks right, as opposed to one that behaves.** The `ragdoll` group (spec
-  12.16) steps Jolt 300 times and asserts the things a number can carry: that it falls, comes
-  to rest, takes its pose from its bodies, holds together, and leaves the world's body count
-  where it found it. What no arm can say is whether a heap of limbs looks like a person who
-  fell over. The joint LIMITS in particular are authored constants — a knee is given 5 degrees
-  of cone and 75 of plane, which is a hinge pretending to be symmetric, and Jolt's own sample
-  says as much about its equivalents. They sit in `RAGDOLL_HUMANOID[]` in `ragdoll.c`, beside
-  the bones they bend, and are the first thing to reach for if a character ever reads as
+- **Another display.** The layer works in window points and is captured at framebuffer resolution,
+  so a Retina panel doubles it and a 1x panel does not. Every golden was baked at 2x on one Mac.
+  Whether a menu reads correctly on a 4K panel at another scale factor, or a 1x monitor, is
+  unlooked-at, and `_detect_fb_scale` reports a mismatch as "not the display it was baked on"
+  rather than as a bug.
+- **A real controller through a menu.** The `ui` group drives navigation by writing the `UIInput`
+  struct directly, which is the layer's contract and deliberately not a device. The pad path above
+  it -- `ui_up`/`ui_down`/`ui_accept` as actions sharing a table with the game's -- is exercised
+  only by the scripted pad in the `gamepad` group, so closing the gamepad device path closes this.
+- **The settings file on Linux and Windows.** `settings_default_path` resolves three locations and
+  only `~/Library/Application Support` has ever been written. The gate sets `CETRA_SETTINGS_DIR`,
+  as a hermetic test must, so it does not exercise the platform branches either: they are
+  untested, not merely unasserted.
+- **A ragdoll that looks right, as opposed to one that behaves.** The `ragdoll` group (spec 12.16)
+  steps Jolt 300 times and asserts what a number can carry: it falls, comes to rest, takes its pose
+  from its bodies, holds together, and leaves the world's body count where it found it. Whether a
+  heap of limbs looks like a person who fell over is a look. The joint limits are authored
+  constants (a knee gets 5 degrees of cone and 75 of plane, a hinge pretending to be symmetric) in
+  `RAGDOLL_HUMANOID[]` in `ragdoll.c`, and are the first thing to reach for if a character reads as
   rubbery.
 
-  **This entry claimed "collapses, collides with the plate and settles connected" for a spec
-  cycle and the last word was false.** The figure came apart at every joint and settled as a
-  cloud of limbs — a left-handed capsule basis, which is a reflection, read back through Jolt's
-  quaternion as the nearest rotation. Six arms were green over it. The two that see it now,
-  `ragdoll-roundtrip` and `ragdoll-rigid`, measure the relationship between two bodies, which
-  is the only thing a ragdoll actually is; every other arm measures one body at a time and
-  cannot. **The correction is not that the check was skipped — it was run, at 60 and 240
-  frames, and the pieces were read as the box puppet's own geometry.** A strip at
-  `--screenshot-every 20` through the collapse is what distinguishes the two, and a figure
-  that has come apart is obvious in it. Small captures of a segmented character are not a
-  look; they are a look-shaped thing to tick off.
-- **A window actually moving.** Spec 12.15 closed the feature half of this — `settings_apply`
-  now reaches `engine_set_window_mode`, there are three modes, and a monitor is chosen by name
-  — but the EFFECT is still a look nobody has had, and structurally so. The switch is refused
-  under headless, because a suite that seized a display would be intolerable and a golden whose
-  frame size came from whatever monitor the machine has would not be a golden; so the `display`
-  group asserts the DECISION (`engine_window_placement`, a pure function of the mode, the
-  monitor rectangle and the saved geometry) and `display-headless` asserts that the refusal
-  holds. What is owed is a human watching a window go fullscreen and come back to the size it
-  left with, on a machine with a SECOND display — this one has one, so `display-monitors`
-  cannot tell a correct name lookup from one that always answers 0.
+  **An arm that measures one body at a time cannot see a ragdoll come apart.** `ragdoll-roundtrip`
+  and `ragdoll-rigid` measure the relationship between two bodies, which is the only thing a
+  ragdoll is. When looking, take a strip at `--screenshot-every 20` through the collapse: a figure
+  come apart is obvious in it, and a couple of small captures of a segmented character can pass
+  for the box puppet's own geometry.
+- **A window actually moving.** Window modes are refused headless, since a suite that seized a
+  display would be intolerable and a golden whose size came from the machine's monitor would not be
+  a golden. So the `display` group asserts the decision (`engine_window_placement`, a pure function
+  of the mode, the monitor rectangle and the saved geometry) and `display-headless` that the refusal
+  holds. Owed: a person watching a window go fullscreen and come back to the size it left, on a
+  machine with a second display; this one has one, so `display-monitors` cannot tell a correct name
+  lookup from one that always answers 0.
 
-  **The IDEMPOTENCE half of that is no longer owed, and was measured on a real window rather
-  than reasoned about.** `settings_apply` pushes every value on every edit and the UI fires it
-  once a frame while a slider is held, so a mode switch that re-applied itself moved the window
-  on each of those frames. A throwaway windowed probe placed a 640x480 window at (220, 180),
-  called `settings_apply` thirty times — half a second of holding a slider — and read the
-  position back: **unmoved, 220 180 640 480**. Falsified in the same session by restoring the
-  departure-only latch with no early-out, which moved it to **(0, 65)**, the top-left corner
-  with y clamped by the menu bar. Both halves of the fix are load-bearing: the windowed
-  rectangle is kept current so a replay lands where the window already is, and the early-out
-  returns when the mode and the monitor are both unchanged. The probe was removed after; it
-  needs a window, so it can never be an arm.
-- **`uTime` windowed.** The clock a custom element program is written against is
-  `total_frames * ENGINE_FIXED_FRAME_DT`, which is exactly right headless and wrong windowed —
-  it advances at sixty-over-refresh rather than in seconds, so a shader backdrop runs slow on a
-  144 Hz panel and fast on a stalling one. **It cannot simply take `engine->render_time`, and
-  that was tried and measured:** under the game framework that clock is the SIM's, so it stops
-  while the sim is paused — which is precisely when a menu is up. The entrance never advanced,
-  every screen with a transition drew at alpha 0, and both menu goldens moved by the whole
-  frame while the HUD, carrying no transition, kept drawing. The fix is a wall clock on the
-  windowed side only, and it wants its own before/after rather than a late guess.
+  The switch's idempotence was checked on a real window: a 640x480 window at (220, 180) stayed put
+  through thirty `settings_apply` calls, half a second of a held slider, and moved to the top-left
+  corner with the early-out removed. Both halves of the fix are needed: the windowed rectangle kept
+  current, so a replay lands where the window already is, and the early-out when the mode and the
+  monitor are unchanged. It needs a window, so it cannot be an arm.
+- **`uTime` windowed.** The clock a custom element program reads is
+  `total_frames * ENGINE_FIXED_FRAME_DT`, right headless and wrong windowed: it advances at
+  sixty-over-refresh rather than in seconds, so a shader backdrop runs slow on a 144 Hz panel and
+  fast on a stalling one. **It cannot take `engine->render_time`**: under the game framework that
+  is the sim's clock, which stops while the sim is paused, which is when a menu is up, so every
+  screen with a transition would draw at alpha 0. The fix is a wall clock on the windowed side
+  only, and it wants its own before/after.
 
-**Why there are no menu goldens.** `menu` and `menu_focus` were `apps/gametest` frames, and
-that app is 0 px run-to-run (the row above says so). The recipes reproduced at 0 px by hand and
-standalone through `goldens.py --only`, but inside full runs `menu` failed more than once --
-1212 px once, 48,886 px once -- and never reproduced on a re-run of the same binary. Spec 13.6
-dropped both. What was never explained is recorded for whoever brings one back: the first
-suspect was the async texture upload budget (<=5/frame), the one part of a gametest frame that
-depended on how busy the machine is. Since spec 14.8 a headless run's start-up textures are in
-before frame 1, which clears that suspect for anything loaded at start-up; a texture a menu asks
-for after the run has begun still streams, and a recipe should give it frames to land.
+**Why there are no menu goldens.** `menu` and `menu_focus` were `apps/gametest` frames, and that
+app is 0 px run-to-run. Their recipes reproduced at 0 px by hand and through `goldens.py --only`,
+but inside full runs `menu` failed more than once (once by 48,886 px, the Quit button focused) and
+never reproduced on a re-run of the same binary; spec 13.6 dropped both. **A golden that fails
+once in a full run: re-run it before bisecting.** The cause was never found. The first suspect was
+the async texture upload budget (<=5 a frame), the one part of a gametest frame that depended on
+how busy the machine is. A headless run's start-up textures are now in before frame 1 (spec 14.8),
+which clears that for anything loaded at start-up; a texture a menu asks for after the run has
+begun still streams, and a recipe should give it frames to land.
 
 ---
 
 ## The save paths
 
-Spec 12.3's eight gate arms assert the save format where it is a pure function of a file and a
-world. The probe builds its own scene, physics world and entities, so every number an arm
-checks is one this repository can state in closed form: eight app fields back from a ZEROED
-struct, a pose and a velocity restored after both were moved away, a destroyed crate rebuilt
-from its recipe at the position it had, one drop each for an absent entity and an unregistered
-recipe with the file still loading, a refusal below the version floor that applies nothing, and
-a 75-at-version-1 that becomes 0.75 at version 2.
+The `save` group (spec 12.3) asserts the save format where it is a pure function of a file and a
+world. The probe builds its own scene, physics world and entities, so every number an arm checks
+can be stated in closed form: eight app fields back from a zeroed struct, a pose and a velocity
+restored after both were moved away, a destroyed crate rebuilt from its recipe at the position it
+had, one drop each for an absent entity and an unregistered recipe with the file still loading, a
+refusal below the version floor that applies nothing, and a 75 at version 1 that becomes 0.75 at
+version 2.
 
-**A restored world is not bit-exact, and that is the design rather than a shortfall.** Jolt's
-contact caches, island assignments and sleep timers are not serialized, because doing so would
-pin the save format to `JPH_VERSION_ID` — which `physics_cook.h` already exports for exactly
-that reason — and break every save in players' hands on a physics upgrade. Poses and velocities
-are restored into a freshly built world and the solver settles from there. Anyone measuring a
-crate that came to rest a fraction of a millimetre from where it was is looking at the trade,
-not a defect. What the arms do NOT yet bound is how far that drift goes over many steps: a
-save-step-reload-step comparison with a measured tolerance is the arm this group is still owed,
-and the tolerance has to be measured before it is quoted, not guessed.
+**A restored world is not bit-exact, by design.** Jolt's contact caches, island assignments and
+sleep timers are not serialized, because that would pin the format to `JPH_VERSION_ID` (which
+`physics_cook.h` exports for exactly that reason) and break every save on a physics upgrade. Poses
+and velocities are restored into a freshly built world and the solver settles from there, so a
+crate coming to rest a fraction of a millimetre from where it was is the trade, not a defect. No
+arm yet bounds how far that drift goes over many steps: a save-step-reload-step comparison with a
+measured tolerance is owed, and the tolerance has to be measured before it is quoted.
 
-Five more things this cannot settle from here:
+Five more things this cannot settle:
 
-- **The rename path.** `former_key` on a descriptor row is what makes a renamed key cost no
-  migration at all — the reader tries the current name, then the old one. It ships with no
-  consumer and no arm: nothing in the tree writes a `SAVE_ROW_WAS`, so the first person to rely
-  on it will be the first to exercise it. It is three lines and the affordance has to exist
-  before it is needed to be worth anything, which is the argument for keeping it — not for
-  believing it works.
-- **A migration in anger.** The chain is exercised by a synthetic version-1 file the probe
-  writes itself, which proves the mechanism and nothing about the judgement. The real test is
-  a format that changed for a reason nobody anticipated, read by a build shipped months later,
-  and only time produces that. The committed fixture ladder the spec describes is the shape
-  that would catch it, and it wants real historical files rather than hand-authored ones —
-  which is why none are committed yet: there is exactly one version so far, so a ladder would
-  be a rung.
+- **The rename path.** `former_key` on a descriptor row lets a renamed key cost no migration: the
+  reader tries the current name, then the old one. Nothing in the tree writes a `SAVE_ROW_WAS`, so
+  it has no consumer and no arm, and the first person to rely on it will be the first to exercise
+  it.
+- **A migration in anger.** The chain is exercised by a synthetic version-1 file the probe writes
+  itself, which proves the mechanism and nothing about the judgement. The real test is a format
+  that changed for an unforeseen reason, read by a build shipped months later. The fixture ladder
+  the spec describes would catch it, with real historical files rather than hand-authored ones;
+  there is one version so far, so none is committed.
 - **The save file on Linux and Windows.** `save_default_path` resolves the same three locations
-  `settings_default_path` does, and only `~/Library/Application Support` has ever been written
-  to. This is the same debt spec 12.2 already carries, and closing that closes this.
-- **Forward compatibility.** An older build reading a newer save skips keys it does not know
-  and reads the ones it does, which is as far as it goes. A key whose MEANING changed in the
-  newer build reads wrong, silently, because nothing in an older binary can know that happened.
-  Unknown-field PRESERVATION — writing back what it did not understand — is what would fix it,
-  and it becomes real the day Steam Cloud syncs one player's save between two machines on
-  different patch levels.
-- **A crash mid-write.** The write is atomic by temp-file-and-rename, flushed and fsynced
-  before the rename, which is the departure from `settings.c` and `config_snapshot.c` that a
-  player's progress justifies. Nothing has actually pulled the plug on one to watch the old
-  file survive.
+  `settings_default_path` does, with the same gap as the UI paths' settings file.
+- **Forward compatibility.** An older build reading a newer save skips keys it does not know and
+  reads the ones it does. A key whose meaning changed in the newer build reads wrong, silently.
+  Unknown-field preservation, writing back what it did not understand, would fix it, and becomes
+  necessary once a save syncs between two machines on different patch levels.
+- **A crash mid-write.** The write is atomic by temp file and rename, flushed and fsynced before
+  the rename, unlike `settings.c` and `config_snapshot.c`. Nothing has pulled the plug on one to
+  watch the old file survive.
 
 ## Reproducing a session: the config snapshot (spec 11.71)
 
