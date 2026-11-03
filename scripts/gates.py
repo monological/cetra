@@ -28428,6 +28428,11 @@ def run_ui_gate(workdir):
                      cells, four with the character at its far end (a vim mode's
                      visual mode), and its line whole with the line break (visual
                      line mode); the block caret over the character at the head.
+      ui-editor-line-numbers the code editor's line numbers in theme.line_numbers
+                     (spec 14.14): with it zeroed, every number glyph is the
+                     text's colour at 38% of its alpha; set to red, every number
+                     is red and the code's glyphs keep their colour; with the
+                     theme put back, the numbers are at 38% again.
       ui-editor-steps each action told with its step: typing joined into words
                      shares one; a group holds one over typing, a Backspace and
                      more typing, one undo takes the group back and one redo makes
@@ -29663,6 +29668,12 @@ def run_ui_gate(workdir):
                            "the line break; the block caret over the character at the head")
     print(f"  ui-editor-shapes      {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-shapes", ok)
+
+    ok, detail = doc_flags("editor-line-numbers", 3, "the line numbers in the text's colour at 38% "
+                           "with theme.line_numbers zeroed, all red with it set while the code "
+                           "keeps its colour, and at 38% again with the theme put back")
+    print(f"  ui-editor-line-numbers {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-line-numbers", ok)
 
     ok, detail = doc_flags("editor-steps", 7, "typing joined into words shares a step, a group "
                            "holds one over typing, a Backspace and more typing, and one undo takes "

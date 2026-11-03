@@ -354,12 +354,13 @@ typedef struct UITheme {
     // it takes the keys.
     UIStyle text_field[UI_STATE_COUNT];
     vec4 selection; // behind a field's selected text; alpha 0 = the engine's
-    // The code editor (spec 14.4): `bg` behind its text, `fg` its plain text and carets, its line
-    // numbers `fg` dimmed; FOCUS its border while it takes the keys. Its face is drawn from
-    // bitmaps made at the size shown, not from `font`.
+    // The code editor (spec 14.4): `bg` behind its text, `fg` its plain text and carets; FOCUS its
+    // border while it takes the keys. Its face is drawn from bitmaps made at the size shown, not
+    // from `font`.
     UIStyle editor[UI_STATE_COUNT];
-    struct GlyphCache* editor_face;                // borrowed; NULL draws no text
-    float editor_size;                             // points; 0 = 13
+    vec4 line_numbers;              // the code editor's line numbers; alpha 0 = its text at 38%
+    struct GlyphCache* editor_face; // borrowed; NULL draws no text
+    float editor_size;              // points; 0 = 13
     UIEditorStyle editor_styles[UI_EDITOR_STYLES]; // a span's or a range's style, by its index
 } UITheme;
 
