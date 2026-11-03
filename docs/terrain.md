@@ -16,17 +16,51 @@ The height has two sources behind that one function (spec 11.59):
 - **The fbm**, over a private Perlin table, defined everywhere.
 - **A stored `TerrainField`**, sampled Catmull-Rom, which clamps to its edge row outside the domain.
 
-Installing a field changes where the number comes from and nothing else.
+Installing a field changes where the number comes from and nothing else. Rules both sources keep:
+
+- **A field's filter must be C1, so it samples bicubic, not bilinear.** `terrain_normal_at`
+  central-differences the height over about 1.3 units on a cell of about 2, and a piecewise-constant
+  derivative facets the normals and reaches the scatter's slope gate as rows of missing trees.
+- **Outside `[-extent, +extent]` a field clamps its coordinate, not its taps.** Callers ask out
+  there (the third-person eye trails the player off the domain); clamping the taps alone
+  interpolates with an out-of-range `t` and extrapolates the cubic past the edge.
+- **`terrain_height_at` is not thread-safe.** The analytic path memoizes its permutation table in
+  file statics; the field path touches none, but the contract is the weaker of the two.
+- **Island shaping applies to the analytic height alone** (`island_start`, `island_depth`, spec
+  11.63; `island_start` outside (0,1) is off). `terrain_field_seed` writes the fbm into a field, so
+  an eroded island is eroded as an island, while a field loaded from a file is left as the file
+  says. The radius is Euclidean against a square domain, so the corners are open sea.
+- **A height has levels.** `terrain_height_at_level(p, x, z, k)` is the surface with everything
+  finer than level k's cell removed: a filtered mip on the field path, dropped octaves on the fbm
+  path, and level 0 is `terrain_height_at` bit for bit. A consumer names a cell
+  (`terrain_level_for_cell`), not a level, which keeps a quadtree patch and its parent one level
+  apart without either knowing of the other. The pyramid is filtered under a separable `[1 2 1]`
+  tent: taking every other node removes nothing whenever a patch cell is a whole multiple of a
+  field cell.
 
 ## Erosion
 
 `erosion.c` runs Mei's virtual-pipes hydraulic erosion and a thermal pass over a field (spec
 11.59): on the CPU, Eulerian, double-buffered, threaded like the cloud noise bake.
 
-- **It is bit-identical at any worker count.** That constraint is what rules out droplet erosion:
-  two droplets landing in one cell resolve by arrival order, so no two thread counts agree.
+- **It is bit-identical at any worker count, within one build.** That constraint is what rules out
+  droplet erosion: two droplets landing in one cell resolve by arrival order, so no two thread
+  counts agree. `--terrain-erosion-probe` prints an FNV-1a `digest` over all four planes, the only
+  thing that can show it, since the budget sums hide compensating differences. An `-O0` and an
+  `-O2` build of the same source differ.
+- **Sediment moves by the fluxes**, in the pipes' own proportions. Mei's semi-Lagrangian gather
+  leaks (3% of the sediment budget over 220 iterations), since a bilinear gather conserves mass only
+  for a divergence-free field; by the fluxes the budget closes to rounding.
+- **Rain over evaporation is the equilibrium water depth**, the one number to get right first.
+  Set it to ten units over two-unit cells and the terrain is a lake: every cell drains into every
+  other, flow comes out uniform and the mask paints the map one colour.
 - **The flow, deposit and wear masks are as much the point as the silhouette.** A sim knows where
   water ran, so the ground can be gravel in a stream bed and bare rock on a scoured ridge.
+  `terrain_mask_at` returns all three exactly 0 with no field, so a caller blending by them falls
+  back to the un-eroded look with no special case. `flow` is drainage, not depth (rain falls on
+  every cell, so standing water says nothing), log1p-compressed because drainage is heavy-tailed.
+  Its mean is near 0.4: a channel is the top few per cent, and a threshold near the mean paints the
+  whole map as riverbed.
 
 ## Heightmap files
 
@@ -82,6 +116,11 @@ level returns unstreamed.
   containment test beats a lookup per corner of a 4x4 footprint straddling up to four tiles. A
   window's position is also a pure function of the anchor path, so there is no eviction order or
   hysteresis to get wrong.
+- **A streamed field's planes address a resident window, not the whole level.**
+  `TerrainField.stream` non-NULL means indexing the planes res by res is wrong, and only
+  `terrain.c`'s samplers and `terrain_stream.c` may touch them; its height range comes from the
+  file's manifest. `heightmap_save`, `terrain_field_measure` and `terrain_erode` do not check, so
+  never hand them a streamed field. The sampler is the same either way.
 - **The file stores the pyramid already in memory, never re-filtered.** Filtered again, the coarse
   answer stops equalling the unstreamed one while level 0 still matches.
 - **A window is `n*tile + 1` nodes**, for the reason a level is `2^k + 1`: the grid is

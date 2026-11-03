@@ -323,6 +323,9 @@ From `common.h`:
 
 - **There is no bitangent attribute or stream.** The fragment shader rebuilds `B = cross(N, T)`
   and needs only the sign, which rides in `tangent.w`, so a mesh uploads four floats of tangent.
+- **A tangent is `d(position)/du` and nothing else.** A frame that looks natural for the mesh (a
+  circular tangent on an island) is wrong when the UVs are planar: the normal map runs through a
+  basis that disagrees with the map it indexes, and creases along every triangle edge.
 - **Slot 4 is free for mesh VAOs, but not unclaimed.** `particle_sim_vert.glsl` binds location 4 as
   `iLife` on the GPU-sim VAO, and the billboard renderer uses 9-11 for per-instance centre, params
   and colour as bare literals. Those are separate VAOs, so nothing conflicts at runtime, but mesh
@@ -366,6 +369,13 @@ create, bind, sampler state, formats, upload, insert. The transparent-texel dila
 places, the async one on a worker thread on purpose, but the decision is `texture_wants_dilate`,
 from the caller's `TextureAlpha` (a layer's alpha is a height, a decal's an opacity).
 `moon_surface.c` is outside the pool: pure CPU pixels that `sky.c` uploads itself.
+
+**By-example stochastic texturing** (`include/stochastic.glsl`, spec 11.46, per material through
+`stochastic_scale`) blends three lattice taps under Heitz and Neyret's histogram transform. **The
+normal map rides the same lattice and is blended in slope space, with no transform**: its channels
+are a unit vector, so a per-channel transform and blend makes non-unit normals with a distribution
+the map never had, while the slopes `-dh/du`, `-dh/dv` are unconstrained and filter linearly, and
+the reconstruction restores the unit length.
 
 ### Block compression
 

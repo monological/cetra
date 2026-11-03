@@ -247,6 +247,17 @@ The scene FBO is MSAA, RGBA16F, multi-render-target:
 
 Each target is written only when a post pass that consumes it is active.
 
+**Nothing categorical or positional may sit in a channel the MSAA resolve averages.** The colour
+resolve is a box filter (`resolve_color_attachment` in `postfx.c`, a `glBlitFramebuffer`), valid
+only for quantities linear in radiance: the average of two categories is a third, and the average
+of two positions is a point that exists nowhere. att4's alpha, the SSS profile tag, breaks this
+and is an open defect (`sss-tag`; `docs/aaa-rendering-roadmap.md`, "Nothing categorical or
+positional in an MSAA-resolved channel"). One sample with TAA is immune by construction.
+
+**The resolved linear view-Z is read with nearest filtering** (`aux_texture`). View-space Z is not
+screen-linear under perspective, so linear filtering bends flat surfaces and breaks GTAO's
+half-resolution reconstruction on fine geometry into speckle.
+
 ### The per-frame loop
 
 `engine_run`, or `game_run` in the game framework:
@@ -314,6 +325,15 @@ recompute reads the rig's own arm.
 
 So the update callback (step 2) is not the place.
 
+**The origin shift** (spec 11.62): `scene_set_world_origin` schedules a shift, the engine applies
+it at step 3 (`scene_apply_origin_delta`, which moves the root's children), and
+`Scene.origin_shift_distance` re-centres once the camera drifts that far. There is one coordinate
+change, storage = authoring - `uWorldOrigin`. **A shader that reads a world position as an
+identity, a hash or a tiling lattice, takes the authored position through `authoredPos()` in
+`include/world_origin.glsl`**; everything that reads it as a location shades in storage space. A
+hash is discontinuous, so read in storage space it changes completely a few units out and stays
+changed however far the world goes, where precision only degrades gradually.
+
 **The walk is idempotent and the latch is not**, which is why they are two functions. A latch
 (`prev := global`) run twice in a frame makes every node's previous pose its current one, zeroes
 every motion vector and stops TAA reprojecting. The engine owns the latch and calls it once;
@@ -372,6 +392,63 @@ other app leaves it off. Five things about it are easy to get backwards.
     ahead, and ended by the worker, never by a frame draining what it posted. Work begun before the
     timed wake whose frame starts its thread waits for itself forever. Work that never ends is
     reported once after ten seconds, and the run goes on waiting.
+
+### The draw list
+
+`draw_list.c/h` flattens one frame's drawable meshes out of the scene graph once
+(`draw_list_build`), and every pass reads the result: the camera's, each shadow cascade and
+punctual layer, each capture face.
+- **Order is exactly the recursive walk's**: depth-first, children left to right, a node's meshes
+  before its gizmo. Alpha-to-coverage, the unsorted late pass and transmissive blending all make
+  submission order visible.
+- **It is rebuilt when its stamp changes**: the frame index folded with `scene_graph_epoch()`,
+  which the mutators bump themselves (a node or mesh added or freed, a mesh uploaded), so no app
+  has to remember to. A material's fields are plain writes and bump nothing, so anything kept from
+  an item's lane or flags compares the list itself, frame to frame.
+- **Each item's lane and material flags are decided once, at build**: opaque, blend (the OIT
+  sub-passes), transmissive, shadow-only, late draw; masked, foliage, occluder, kept-still,
+  capture-hidden, hooked caster.
+
+**Four per-item answers are settled once and read only through a `CullView` that armed them**, so
+a light's pass never sees a camera answer:
+- `lod`, the level of the mesh's chain, chosen from the camera and used by every pass. A per-light
+  level would let a caster's depth-map silhouette disagree with the surface it is shaded with,
+  which reads as acne. A GI
+  capture chooses its own from its eye while it draws (`draw_list_select_lod`), and the camera's
+  come back when the burst ends.
+- `occluded`, from the occlusion pass, read where `CullView.occlusion` is set.
+- `beyond`, past the node's draw distance, read where `distance` is set.
+- `small`, too small for the GI capture drawing it, read where `size` is set.
+
+They live on the item rather than in a side array because the lane sort copies items in permuted
+order.
+
+**`draw_item_visible` is the one visibility test, and `draw_item_bounds` the one bound.** A pass
+asks visibility twice, whether to draw an item and whether it can join the run in front of it;
+two answers that disagree shift every instance behind it in the batch. A bound that cannot be
+established means visible and never occlusion-culled.
+
+**Batching joins only consecutive items with the same key** (`draw_run_key_equal`: mesh, LOD level
+and pose), since one draw submits one index range and uploads one set of bone matrices.
+
+**`draw_list_sort_lane` copies a lane into a scratch list ordered by one 64-bit key**: depth bucket
+in bits 63-48, material in 47-28, mesh in 27-4, level in 3-0, ties broken by graph order so the
+order is total. Three things about it are easy to get backwards:
+- **Depth is bucketed** (`DRAW_SORT_DEPTH_BUCKETS`, 32, spanning the drawn depth range). An exact
+  front-to-back sort gives every item a distinct key, and the batcher finds runs of one.
+- **The depth bucket sits above material**, so material is ordered only within a bucket, and
+  grouping by material needs material above depth: a different sort, competing with
+  front-to-back on the same key (open, `docs/aaa-rendering-roadmap.md` E6).
+- **It is a copy, not a permutation of the list.** The shadow pass orders its own casters, but
+  only within spans of one mesh the graph already made adjacent, so permuting the list would leave
+  it spans of a handful. The eye is this pass's camera: a capture face sorted against the main
+  camera is ordered backwards.
+
+**LOD chains** are built at import by meshoptimizer into one index buffer (`lod.c`), refused for a
+skinned mesh. Borders are weighted, not locked: `lod.c` passes options 0, and only
+`meshopt_SimplifyLockBorder` makes a border uncollapsible, so anything that tiles can T-junction
+between two neighbours at different levels. A level change moves only the `triangles` column of
+the submission table; `draws` and `instances` are blind to it.
 
 ### Scene passes
 

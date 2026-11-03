@@ -33,6 +33,8 @@ tree's binaries: `git archive` into a scratch directory, the seven submodules li
 
 - [Running the gates](#running-the-gates) — which binaries a number describes, what a release run
   moves, why frame counts are a correctness question, how to read a `--profiler` table
+- [Writing a gate arm](#writing-a-gate-arm) — falsifying an arm, and the constructions that cannot
+  fail
 - [Deterministic renders](#deterministic-renders) — the bar, the noise floor, reading a diff
 - [The scale twin](#the-scale-twin) — a scene and itself shrunk 1024 times at 0 px, why that is
   exact, and what it cannot see
@@ -53,6 +55,8 @@ tree's binaries: `git archive` into a scratch directory, the seven submodules li
   benefit root motion exists for cannot be measured on any asset in this tree
 - [The UI paths](#the-ui-paths) — what the `ui` group does not cover: the layer's pixels,
   another display, a real pad through a menu, and the other two settings locations
+- [The ragdoll path](#the-ragdoll-path) — what the `ragdoll` group asserts, and why only a look
+  sees a ragdoll come apart
 - [The save paths](#the-save-paths) — what the `save` group asserts, why a restored world is
   deliberately not bit-exact, and the migration nobody can test until time passes
 - [The foot-planting path](#the-foot-planting-path) — what the `ik` group asserts about the
@@ -89,6 +93,11 @@ The release win is almost entirely forest's (spec 11.65): forest starts in 6.58 
 1.36 s release, because its startup is CPU work `-O2` reaches (procedural texture bakes,
 cluster-DAG builds, the scatter, erosion). `render` goes from 0.41 s to 0.36 s, since its startup
 is a GL context and driver-side shader compiles.
+
+**Quote a CPU cost from a release build** (`./build.sh --release`, then `out/release/bin`). A
+debug build re-orders costs rather than inflating them evenly: Jolt's BVH build is 24x slower in
+debug where forest's scatter is 5.7x, so a debug profile makes cheap things look expensive in
+exactly the proportion that motivates work on them.
 
 ### What a release run moves
 
@@ -137,6 +146,30 @@ end; PERIOD is begin to begin, so it also carries the swap, the vsync wait and t
 **A 0.000 GPU row is not necessarily a free pass.** It may also be a driver that accepts timer
 queries without measuring, which `gpu-nonzero` watches for. The query ring is drained at each
 latch and a query given up on is reported by name.
+
+## Writing a gate arm
+
+An arm that cannot fail looks exactly like one that works. Before trusting a new arm:
+
+- **Falsify it against the mutation its docstring names.** For each coverage claim, name a
+  one-line mutation the arm catches and one it would not, build it, and watch the arm go red (with
+  an explicit `--bin-dir`; see Which binaries a number describes).
+- **Ask whether the construction can show the effect at all.** A LUT whose channels each depend on
+  two inputs hides tetrahedral interpolation's three-way term; an identity table exact in fp16
+  hides storage error; a culling arm that asks only "was nothing visible dropped" passes a build
+  that culls nothing. An argmax is meaningful only when nothing else in its search range can win,
+  which is a property of the scene.
+- **A round trip compares every payload**, not the easiest one: a heightmap save that kept the
+  geometry and dropped the masks passed a geometry-only arm.
+- **A state no flag can reach is covered by no number of arms.** Build the lever first: a
+  transition no headless run reaches gets a schedule flag in the `--shadows-off-at` and
+  `--render-scale-at` idiom.
+- **Some defects only an instrument sees and some only a look sees.** A light counted twice is
+  invisible in the frame; a mottled surface is invisible to the arms. Use both.
+- **A scale arm pins exposure.** The `SCALE_GATES` shape scales every emitter by K and the exposure
+  by 1/K and asks for the same frame. With a live meter that double-compensates: the meter responds
+  to the same K the camera divided out, so the pre-exposure lands K² off. The meter's linearity is
+  its own arm, emitters scaled with the exposure left alone.
 
 ## Deterministic renders
 
@@ -782,19 +815,6 @@ What that leaves open:
   only `~/Library/Application Support` has ever been written. The gate sets `CETRA_SETTINGS_DIR`,
   as a hermetic test must, so it does not exercise the platform branches either: they are
   untested, not merely unasserted.
-- **A ragdoll that looks right, as opposed to one that behaves.** The `ragdoll` group (spec 12.16)
-  steps Jolt 300 times and asserts what a number can carry: it falls, comes to rest, takes its pose
-  from its bodies, holds together, and leaves the world's body count where it found it. Whether a
-  heap of limbs looks like a person who fell over is a look. The joint limits are authored
-  constants (a knee gets 5 degrees of cone and 75 of plane, a hinge pretending to be symmetric) in
-  `RAGDOLL_HUMANOID[]` in `ragdoll.c`, and are the first thing to reach for if a character reads as
-  rubbery.
-
-  **An arm that measures one body at a time cannot see a ragdoll come apart.** `ragdoll-roundtrip`
-  and `ragdoll-rigid` measure the relationship between two bodies, which is the only thing a
-  ragdoll is. When looking, take a strip at `--screenshot-every 20` through the collapse: a figure
-  come apart is obvious in it, and a couple of small captures of a segmented character can pass
-  for the box puppet's own geometry.
 - **A window actually moving.** Window modes are refused headless, since a suite that seized a
   display would be intolerable and a golden whose size came from the machine's monitor would not be
   a golden. So the `display` group asserts the decision (`engine_window_placement`, a pure function
@@ -825,6 +845,24 @@ the async texture upload budget (<=5 a frame), the one part of a gametest frame 
 how busy the machine is. A headless run's start-up textures are now in before frame 1 (spec 14.8),
 which clears that for anything loaded at start-up; a texture a menu asks for after the run has
 begun still streams, and a recipe should give it frames to land.
+
+---
+
+## The ragdoll path
+
+**A ragdoll that looks right, as opposed to one that behaves.** The `ragdoll` group (spec 12.16)
+steps Jolt 300 times and asserts what a number can carry: it falls, comes to rest, takes its pose
+from its bodies, holds together, and leaves the world's body count where it found it. Whether a
+heap of limbs looks like a person who fell over is a look. The joint limits are authored constants
+(a knee gets 5 degrees of cone and 75 of plane, a hinge pretending to be symmetric) in
+`RAGDOLL_HUMANOID[]` in `ragdoll.c`, and are the first thing to reach for if a character reads as
+rubbery.
+
+**An arm that measures one body at a time cannot see a ragdoll come apart.** `ragdoll-roundtrip`
+and `ragdoll-rigid` measure the relationship between two bodies, which is the only thing a ragdoll
+is. When looking, take a strip at `--screenshot-every 20` through the collapse: a figure come apart
+is obvious in it, and a couple of small captures of a segmented character can pass for the box
+puppet's own geometry.
 
 ---
 

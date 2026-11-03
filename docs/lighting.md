@@ -49,6 +49,31 @@ Cascaded shadow maps: up to 3 cascades for up to 3 shadow-casting directional li
 `GL_TEXTURE_2D_ARRAY`, each cascade fitted as a bounding sphere under an orthographic projection.
 3x3 PCF by default, PCSS contact hardening optional.
 
+**The outermost cascade is the camera-independent scene-fit map.** A camera-fitted cascade clips
+casters, so a set made only of them would leak a shadow boundary that moves with the camera;
+anything the tight cascades clip falls back to the outermost. The shadow catcher samples only that
+map (`CSM_OUTERMOST_PCF`), and a capture bakes and uses it alone, which is why the lighting update
+runs before the frame's shadow pass.
+
+**Translucent casters attenuate rather than block** under `ShadowSystem.tsm_enabled` (spec 11.26,
+deep opacity maps; the render app's `--translucent-shadows`, off by default). A caster the depth
+map cannot represent, masked without the foliage opt-in (hair, which casts nothing on the depth
+path), blend or transmissive (which cast solid), writes a transmittance instead, for the key
+light's cascades only (`TSM_SLOTS`). Four rules:
+- **The layers are appended to the cascade depth array on unit 10**, two a cascade
+  (`TSM_PARTS`), rather than an array of their own: `pbr_frag` has no sampler to spare, and the
+  transmittance is read beside the occlusion, so it cannot ride the unit by exclusion as the
+  moment maps do.
+- **They store the transmittance `exp(-b0)`, not the absorbance `b0`.** Transmittance averages
+  linearly, so the 3x3 PCF over it (`csmTransmittance`) is exact; averaging absorbance carries
+  Jensen's bias, worst on the dense casters this is for.
+- **The second layer is the nearest translucent depth**, so a receiver in front of a caster (a
+  shoulder in front of hair hanging behind it) is not darkened by it.
+- **A caster goes to one map or the other**, so occlusion and transmittance multiply as
+  independent attenuations. The depth routing reads `tsm_live` and the lookup `tsm_built`, never
+  the request: a failed program or allocation would otherwise withhold the casters with nothing
+  representing them, and glass would cast nothing at all.
+
 **A cascade's soft-shadow thresholds are counted in texels of its map, never as a fraction of its
 depth range** (spec 13.58). The range is mostly the scene pad the cascade's eye is pushed back by,
 about 4% of the scene's radius, so a fraction of it drops every occluder shorter than that. See
@@ -124,19 +149,48 @@ How the faces stay right, each a rule a plausible frame has broken:
 - **A caster that moves is drawn over a copy.** A face that sees a mover keeps its still casters
   in a store cell and is that copy plus the movers each frame (Unreal's static/dynamic shadow
   caching). A mover still for 120 frames (`SHADOW_TILE_MOVER_HOLD`) becomes still again.
+  `tiles-movers` holds the copy to the scene that never moved, at the swing's rest frame, and fails
+  if the overlay is skipped; `tiles-store` holds the copy and the whole draw to the same picture.
+- **A pose is a mover on every frame** (spec 13.18). A skinned, swaying or morphing surface moves
+  without its node moving, so a face drawn once would freeze it. It is in no store and in no face
+  drawn whole and kept: it is drawn only over a copy, into the faces its posed bounds reach this
+  frame. A face is drawn over its copy until a frame in which no moving caster reaches it, and is
+  kept from then on, so a character walking past a candle costs that candle's faces only while it
+  is in them.
 - **The store cells are a pool of 64 on top of the budget** (spec 13.26), one cell a face, given
   to faces drawn this frame, nearest light first. Inside the budget the lights would take every
   cell first and every face seeing a mover would be drawn whole each frame. A face keeps its cell
-  while nothing moves in it, until a face on screen needs it. `--tile-stores 0` is the no-store
-  path. A face left without a cell is warned about only when the camera's pass runs out: a
-  capture's pass draws every face a mover reaches, in view or not, and would warn every frame a
-  capture ran.
+  while nothing moves in it, until a face on screen needs it. A face that needs a cell and finds
+  none free takes one held by a face not drawn this frame, the farthest light's first, then a cell
+  of a light more than 2 m farther (`tile_store_take`). `--tile-stores 0` is the no-store path. A
+  face left without a cell is warned about only when the camera's pass runs out: a capture's pass
+  draws every face a mover reaches, in view or not, and would warn every frame a capture ran.
+- **Stores are taken with every other block, before the region is laid out.** A store taken
+  mid-frame lands past the array until the region grows, and its blit is to an invalid
+  framebuffer.
 - **A swaying mesh is a mover only under a wind that moves it** (spec 13.26): a wind response
-  under no wind, or under a wind of no strength, is still. And `cachedShadowWind: "rest"` on a
-  material (Unreal's "Rigid") holds the caster at its rest pose in the kept faces, while the
-  camera, the cascades and the per-frame lights keep the sway. Following a sub-millimetre sway on
-  silent's 110 trees cost 176 ms of a 227 ms frame. A material change the graph cannot see
-  redraws the faces of the caster it changed, not every face.
+  under no wind, or under a wind of no strength, is still, which classification asks of
+  `wind_mesh_max_offset`. And `cachedShadowWind: "rest"` on a material (Unreal's "Rigid") holds
+  the caster at its rest pose in the kept faces, while the camera, the cascades and the per-frame
+  lights keep the sway. Following a sub-millimetre sway on silent's 110 trees cost 176 ms of a
+  227 ms frame.
+  - **Rest sets the wind response per draw**, to 0 in every kept set, not in the material's block,
+    which is uploaded once across every set of the depth pass: a rest material uploaded for a
+    cascade and then drawn into a kept face would keep its sway there. Rest is one end of the
+    lean, not its middle, so a swaying caster sees its own shadow off by at most its sway.
+- **A material change the graph cannot see redraws the faces of the caster it changed, not every
+  face.** The draw list is compared item by item with the one the faces last saw
+  (`tiles_mark_changed_looks`): its wind, its opacity, its shadow role, its cut-out, or the rest
+  setting can move a caster into or out of the kept faces, so it is drawn again where it stands
+  and where it stood (`tiles-rest-toggle`).
+- **`tile_generation` counts the times the kept faces were lost**: the array rebuilt, its base
+  moved, or a change the record could not answer. A graph change the record answers leaves it
+  alone. An origin shift moves the blocks' centres and the recorded boxes with the world
+  (`shadow_system_shift_origin`), so nothing is drawn again for it.
+- **The rain's cover moves with the tiles when the array is rebuilt.** The per-frame layers are
+  redrawn by the same pass, but the rain's layer is drawn only by the rain pass, which a capture
+  does not run; a rebuild inside a capture would otherwise light every GI probe under a layer
+  nothing drew, and the volume keeps the result. The cover is folded for the new edge.
 - **Glass casts nothing for a cached light**: the kept caster sets leave the blend and
   transmissive lanes out. Drawn solid, a clear pane shadows what is behind it.
 - **A light with no body is read from exactly where its faces were drawn** (spec 13.31), so two
@@ -172,6 +226,11 @@ light through atmospheric transmittance.
   are absolute, so a night frame is the same on either scale.
 - **Overcast**: `overcast` (0..1) lays a CIE overcast dome under cloud the sun cannot get through
   (spec 13.7).
+- **The sun disc is drawn in the background only, never into the environment cube**
+  (`sky_env_frag.glsl`). A 0.53-degree disc is a few texels there, which aliases the prefilter's
+  importance sampling into fireflies, and its direct light is already the key light, so baking it
+  in would count it twice. A mirror reflection of the environment therefore shows no disc; the key
+  light's highlight stands in for it.
 
 The day/night cycle, the moon, the stars, the night floor, overcast and the scale are each a
 section of `docs/shader-subsystems.md`.
@@ -336,6 +395,14 @@ The cover lookup, the streaks, splashes, wet surfaces, SSR on wet ground, glass 
 `--emissive-lights` (spec 11.49, off by default) fits a rectangle to each emissive mesh and
 registers it as a real `LIGHT_AREA` in the cluster list.
 
+- **The rectangle is the minimum-area one over the mesh's own edge directions**, not the principal
+  axis of the vertex covariance. A square panel has an isotropic covariance, so the axis is
+  arbitrary, and a square bounded at 45 degrees comes out sqrt(2) too wide each way. The
+  minimum-area rectangle has a side flush with a hull edge, so testing the mesh's edges finds it.
+- **A mesh must fill its rectangle, not just be flat.** Planarity rejects a closed box, but an L,
+  a ring, a quad with a hole and two strips apart are all perfectly flat, and the panel of two
+  strips would radiate from the empty middle. So a fit whose `fill`, the mesh's area over the
+  rectangle's, is under `EMISSIVE_FIT_MIN_FILL` is refused.
 - **The fit is cached in local space** and epoch-gated on the scene graph, while placement runs
   per frame from the owning node's transform. A lamp on a moving node costs four vector transforms
   rather than a refit: three corners through the node's matrix and the normal through its normal

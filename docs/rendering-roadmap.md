@@ -82,9 +82,7 @@ blend (the blend is what suppresses specular fireflies the clamp cannot at one s
 master before specs were numbered; TAAU builds on it (spec 11.7). See `docs/architecture.md`, TAA
 and the sample count.
 
-A skinned mesh's previous pose is uploaded as three affine rows a bone (`uPrevBoneRows` in
-`include/skin.glsl`): a second `mat4[128]` beside `boneMatrices` does not fit the vertex stage's
-uniform budget and the program fails to link.
+How a skinned mesh's previous pose reaches the shader is in `docs/animation.md`, Clips and poses.
 
 - **Open: surfaces with no velocity.** The skybox, the shadow catcher and translucent surfaces
   write zero velocity, so they reproject as static and smear a little under fast motion. S.
@@ -100,8 +98,7 @@ the aux buffer and temporal accumulation through the velocity buffer. The bitmas
 what SSGI (4.3) gathers through. Merged to master before specs were numbered. See
 `docs/shaders.md`, Inventory (AO / GI).
 
-The linear view-Z must be read with nearest filtering: it is not screen-linear, and linear
-filtering bends flat surfaces and breaks fine geometry into speckle.
+Why the linear view-Z is read with nearest filtering is in `docs/architecture.md`, The G-buffer.
 
 - **Open: the aux resolve averages view-Z at silhouettes.** With MSAA above one sample (the
   headless default) the aux attachment is resolved by a blit, which averages `.z` across an edge.
@@ -147,22 +144,15 @@ lives in one shader. See `docs/shader-subsystems.md`, Atmosphere.
 #### 4.6 Cascaded Shadow Maps — **M** — DONE
 
 Up to three cascades per light in a texture array, sphere-fitted and texel-snapped so they are
-stable under orbit (spec 4.6). See `docs/lighting.md`, Cascades.
-
-The outermost cascade is the camera-independent scene-fit map: a camera-fitted cascade clips
-casters, so a set made only of them leaks a boundary that moves with the camera. The catcher
-samples only that map, and a capture uses it alone.
+stable under orbit (spec 4.6), the outermost a camera-independent scene-fit map. See
+`docs/lighting.md`, Cascades.
 
 #### 4.7 Physically-based sky & atmosphere — **M** — DONE
 
 Hillaire's transmittance, multiple-scattering and sky-view LUTs as raster passes, rendered into the
 IBL environment so one sun drives the skybox, IBL, probes, fog and the key light (spec 4.7).
-Aerial perspective followed in spec 9.6 (aaa B9). See `docs/lighting.md`, The sky.
-
-The sun disc is drawn analytically in the background only, never into the environment cube: a
-0.53 degree disc is a few texels there, which aliases the prefilter's importance sampling into
-fireflies, and its direct energy is already the key light, so baking it in would count it twice.
-IBL mirror reflections therefore show no disc; the key light's highlight stands in for it.
+Aerial perspective followed in spec 9.6 (aaa B9). See `docs/lighting.md`, The sky, which also
+says why the sun disc never goes into the environment cube.
 
 ---
 

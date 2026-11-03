@@ -587,40 +587,8 @@ centre cannot express, and is what remains of the gap to the current flame's ref
 ### Movers and the kept faces
 
 A face that sees a moving caster is its store cell's copy of the still casters plus the movers,
-drawn each frame. `tiles-movers` holds that copy to the scene that never moved, at the swing's rest
-frame, and fails if the overlay is skipped; `tiles-store` holds the copy and the whole draw to the
-same picture. A drawn face that needs a cell and finds none free takes an idle cell first, the
-farthest light's, then a cell of a light more than 2 m farther. What is easy to get backwards on
-the drawing side:
-
-- **A pose is a mover on every frame** (spec 13.18). A skinned, swaying or morphing surface moves
-  without its node moving, so a face drawn once would freeze it. It is in no store and in no face
-  drawn whole and kept: it is drawn only over a copy, into the faces its posed bounds reach this
-  frame. A face is drawn over its copy until a frame in which no moving caster reaches it, and is
-  kept from then on, so a character walking past a candle costs that candle's faces only while it
-  is in them.
-- **A sway is a mover only when the scene's wind can move it**, which classification asks of
-  `wind_mesh_max_offset`.
-- **`cachedShadowWind: "rest"` sets the wind response per draw**, to 0 in every kept set, not with
-  the material's block, which is uploaded once across every set of the depth pass: a rest material
-  uploaded for a cascade and then drawn into a kept face would keep its sway there. Rest is one end
-  of the lean, not its middle, so a swaying caster sees its own shadow off by at most its sway.
-- **A material change the graph cannot see is found by comparing the draw list with the one the
-  faces last saw**, item by item (`tiles_mark_changed_looks`): its wind, its opacity, its shadow
-  role, its cut-out, or the rest setting can move a caster into or out of the kept faces. Such a
-  caster is drawn again where it stands and where it stood (`tiles-rest-toggle`).
-- **A graph change is matched by node serial and mesh id**, both lists sorted on that and merged
-  (`tiles_mark_graph_change`). Matched by pointer, a node freed and another hung in its place at
-  the same address is the same caster that never moved, and its old shadow stays in the kept faces
-  (`tiles-graph-replace`). `tile_generation` is bumped only when the array's contents are lost,
-  never for a graph change, and an origin shift moves the recorded boxes with the blocks.
-- **Stores are taken with every other block, before the region is laid out.** A store taken
-  mid-frame lands past the array until the region grows, and its blit is to an invalid
-  framebuffer.
-- **The rain's cover moves with the tiles when the array is rebuilt.** The per-frame layers are
-  redrawn by the same pass, but the rain's layer is drawn only by the rain pass, which a capture
-  does not run; a rebuild inside a capture otherwise lights every GI probe under a layer nothing
-  drew, and the volume keeps the result. The cover is folded for the new edge.
+drawn each frame. What counts as a mover, how the store cells are given out and how the kept faces
+follow the scene are in `docs/lighting.md`, Cached point- and area-light shadows.
 
 ## Water
 
@@ -648,10 +616,44 @@ describes a surface the raster never drew.
 **The CPU twin.** `procedural/water_waves.c` is the CPU twin of the Gerstner half and duplicates
 its constants. Nothing compares the two; that is a known gap.
 
+**The mesh is a projected grid** (Johanson 2004): a fixed NDC lattice in one draw, each vertex a
+ray onto the still plane, so its density is a screen-space quantity and needs no tessellation. A
+geometry clipmap was built and refused: its snap ties its reach to the finest cell's size, so it
+cannot reach the horizon. Past what the grid resolves, the slope variance it drops is handed to
+roughness through the Beckmann relation, added to the authored roughness.
+
+**Every physical length in the water is in metres** (spec 11.44), converted where it is used
+through `waterUnitsPerMetre`, which comes from `Sky.world_units_per_km`, the atmosphere's own
+authority, so the ocean and its sky agree on the size of the world.
+
+**Two wave trains** (spec 11.48): `windSea{}` and `swell{}` in a `.cscn`, each its own spectrum,
+beside a shared `seaDepth`.
+
+**The shore chain** (spec 11.45) is a Lagrangian chain per alongshore column of the traced
+shoreline, forced by the shallow-water pressure form; a linear spring has degenerate equilibria and
+settles into piled-up states. The sea's lens and the sand's wetness read the same tips, through a
+std140 block (`ShoreFilmBlock`) rather than a sampler.
+
 **Foam and roughness** (spec 11.42). `water_foam_frag` accumulates whitewater per cascade texel, so
 it outlives the crest that made it, in three bands of one RGB target. `water_frag` adds a Cox-Munk
 sun lobe and a far-field roughness, both built from the seeded spectrum's own height and slope
-variance, which `--water-fft-probe` checks rather than asserts.
+variance, which `--water-fft-probe` checks rather than asserts. Whitecaps (spec 11.47) follow four
+rules:
+- **The short cascade does not vote on where foam is**: its waves outrun everything else in the
+  path.
+- **The accumulator is read with `textureGrad`, never an implicit derivative**, since
+  `oceanCascadeUv` wraps with `fract` and a screen derivative across the wrap reads a whole tile.
+- **A fold births foam only near its own band's crest**, normalised by that band's RMS.
+- **Depth-limited breaking takes its face term from the wave's own direction, never the bed's
+  gradient.** The bed decides whether a wave breaks; it does not know which way the wave goes: its
+  gradient is zero on a flat shelf, has no component across a shore running along the wind, and
+  reverses past the beam, putting the foam on the rear face of every wave on the lee shore.
+
+**The baked foam pattern** (spec 11.45) has two sampling rules. Its footprint comes from the
+undisplaced position: the shore band advects the lookup along the bed's gradient, which is only C0,
+so an implicit footprint steps mip at every bed texel and prints the sea as a grid. And it is
+domain-warped rather than blended with a second tap, since a warp leaves the value distribution,
+and so the erosion threshold, untouched.
 
 **The water program declares 15 samplers of 16.** The six identical RGBA16F cascade textures are
 one `sampler2DArray`, one unit where six textures would take six. The units (the table in
