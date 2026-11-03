@@ -119,8 +119,9 @@ level returns unstreamed.
 - **A streamed field's planes address a resident window, not the whole level.**
   `TerrainField.stream` non-NULL means indexing the planes res by res is wrong, and only
   `terrain.c`'s samplers and `terrain_stream.c` may touch them; its height range comes from the
-  file's manifest. `heightmap_save`, `terrain_field_measure` and `terrain_erode` do not check, so
-  never hand them a streamed field. The sampler is the same either way.
+  file's manifest. `heightmap_save` and `terrain_erode` refuse a streamed field by name, and
+  `terrain_field_measure` leaves its range as the manifest stated it. The sampler is the same
+  either way.
 - **The file stores the pyramid already in memory, never re-filtered.** Filtered again, the coarse
   answer stops equalling the unstreamed one while level 0 still matches.
 - **A window is `n*tile + 1` nodes**, for the reason a level is `2^k + 1`: the grid is

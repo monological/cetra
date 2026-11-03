@@ -5,6 +5,7 @@
 
 #include "erosion.h"
 
+#include "../ext/log.h"
 #include "../thread.h"
 
 ErosionParams erosion_default_params(void) {
@@ -491,6 +492,11 @@ bool terrain_erode(TerrainField* field, const TerrainParams* terrain, const Eros
                    ErosionStats* stats) {
     if (!field || !field->height || !terrain || !params)
         return false;
+    if (field->stream) {
+        log_warn("erosion: refusing a streamed field, whose planes hold a resident window and not "
+                 "the level");
+        return false;
+    }
     if (field->res < 4 || params->iterations <= 0 || !(terrain->extent > 0.0f))
         return false;
 

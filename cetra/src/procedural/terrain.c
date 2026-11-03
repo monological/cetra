@@ -5,6 +5,7 @@
 
 #include "terrain.h"
 
+#include "../ext/log.h"
 #include "../mesh_builder.h"
 #include "../noise.h"
 // The samplers own the streamed residency's READ half -- the containment test
@@ -191,6 +192,10 @@ int terrain_field_build_pyramid(TerrainField* field) {
 }
 
 void terrain_field_measure(TerrainField* field) {
+    if (field && field->stream) {
+        log_warn("terrain: not measuring a streamed field; its range is the file's manifest");
+        return;
+    }
     if (!field || !field->height || field->res < 1) {
         if (field) {
             field->min_y = 0.0f;
