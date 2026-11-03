@@ -1,7 +1,7 @@
 # Cetra as a Game Engine — Roadmap: What We Have and What We Need
 
 What stands between Cetra and a shippable game, as opposed to a rendering library. Companion to
-`rendering-roadmap.md`: that doc owns the graphics pipeline; this one owns everything else
+`aaa-rendering-roadmap.md`: that doc owns the graphics pipeline; this one owns everything else
 (physics, gameplay, assets, core, and the gaps between "engine" and "shippable game").
 
 ---
@@ -34,7 +34,7 @@ hardware.
 The engine as it is lives in `docs/`:
 
 - **Rendering**: `docs/architecture.md`, `docs/shaders.md`, `docs/shader-subsystems.md`,
-  `docs/lighting.md`; the plan for it is `rendering-roadmap.md`.
+  `docs/lighting.md`; the plan for it is `aaa-rendering-roadmap.md`.
 - **The game layer** (fixed-step loop, Jolt physics, entities, characters, brains, navigation,
   input and the action table, audio and zones, settings, saves, particles):
   `docs/game-framework.md`.

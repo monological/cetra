@@ -18,8 +18,9 @@ doc that describes it now. What is still open in this part of the plan:
 - **B11's leftovers**: sub-face slicing of the env re-bake, probe sets under a moving sun, and
   shadow motion missing from the motion vectors.
 
-Open work in Tracks C-F is stated in those entries, and real but unbooked defects under "Known
-limitations not booked as items".
+Open work in Tracks C-F is stated in those entries, what the first roadmap's techniques left open
+under "The first roadmap's follow-ups", and real but unbooked defects under "Known limitations not
+booked as items".
 
 **The walls.** Tier 4's items could not each be another gated fullscreen pass; four structural
 walls, stated in "The four walls" before Track C, decided what was reachable. Wall 3 is gone (E4),
@@ -668,6 +669,55 @@ after Unreal's DDC) plus a `--cook` pre-warm verb, rather than as a build step. 
 artefact's identity, so a stale artefact is unfindable rather than refused. `docs/architecture.md`,
 "The derived-data cook", describes it.
 
+## The first roadmap's follow-ups
+
+The engine's first rendering plan was eighteen techniques, numbered 4.1 to 4.18, built before this
+one, several before specs were numbered: TAA and the velocity buffer (4.1), GTAO (4.2, 4.2.1),
+SSGI (4.3), a reflection probe (4.4) and SSR (4.4.1), volumetric fog (4.5, now spec 9.5), cascaded
+shadows (4.6), the physically based sky (4.7), energy compensation (4.8), refraction (4.9),
+clearcoat, specular and sheen (4.10, 4.10.1), POM (4.11), screen-space SSS (4.12), the bloom
+pyramid (4.13), auto-exposure (4.14), motion blur (4.15), AgX (4.16), OIT (4.17) and clustered
+forward lighting (4.18, now spec 9.1). Each is described in the docs; what each left open, with
+effort (S days, M 1-2 weeks, L 3+ weeks):
+
+- **4.1 TAA:** the skybox, the shadow catcher and translucent surfaces write zero velocity, so
+  they reproject as static and smear a little under fast motion. S.
+- **4.2 GTAO:**
+  - With MSAA above one sample (the headless default) the aux attachment is resolved by a blit,
+    which averages view-Z across a silhouette. S.
+  - Concentric banding on large flat ground, from the 32-sector by two-slice sweep's quantisation
+    in `gtao_frag`; unconfirmed since SSR's rewrite (10.9). S/M.
+- **4.4 Reflection probes:** a captured probe does not follow a moved sun (relight, M); a
+  `--probe-box` override for the auto-placed probe's proxy box (S).
+- **4.8 Energy compensation:** the LUT fetch and the compensation sit inside `pbr_frag`'s
+  `iblEnabled` gate, so a scene with no environment gets none on its analytic specular. The LUT is
+  always bound, so hoisting both out of the gate is the fix; it moves every no-environment render.
+  S.
+- **4.9 Refraction:** glass writes no G-buffer, so AO, SSR and TAA's velocity see the surface behind
+  it (Known limitations, below: screen-space post sees one depth per pixel); the refracted image holds
+  no transparent surface, since the resolve runs before the transparent pass, and overlapping
+  transmissive surfaces are not sorted.
+- **4.10 Clearcoat:**
+  - The coat lobe shares the base's `N.L` and denominator rather than taking `Nc.L`, so the coat
+    normal map shows only through the microfacet terms. S.
+  - The capture and bake prologues each save and restore GL state their own way
+    (`layers_vt.c`'s `vt_gl_state_save` is one); a shared helper. S.
+  - The material mask slots are wired one by one in `material.c`, `material_texture_array.c` and
+    `render.c`; a descriptor table. S.
+- **4.10.1 Specular and sheen:** `Material.reflectance_tex` is loaded and owned but has no unit and
+  is never bound (`docs/shaders.md`, Fitting a new texture in), M; sheen roughness is the factor
+  alone, with no texture, S/M.
+- **4.11 POM:**
+  - Grazing silhouettes step without TAA: the discard is all-or-nothing per pixel and quantised by
+    the march layers. Alpha-to-coverage on the silhouette and finer adaptive layers. S/M.
+  - A fade by distance (S), a gate on the seam at tile 0's own [0,1] boundary (S), a glTF height
+    convention if a standard emerges, and real displacement by tessellation, which GL 4.1 has (L).
+- **4.12 SSS:** transmission driven by a thickness map (M); a per-material transmission tint
+  distinct from the scatter colour (S).
+- **4.15 Motion blur:** a separable tile max if its cost ever matters (S); per-object shutter
+  tuning and motion-blur-aware TAA (M).
+- **4.16 AgX:** whether it becomes the default tone curve instead of Neutral is the user's call.
+
 ## Sequencing — tiers & rationale
 
 Every row below is built, refused or rejected; its track entry above says which, and where the
@@ -801,8 +851,8 @@ The next step is a comparison sweep against engines that ship (UE, Unity, Frostb
 third. The first found that terrain was missing as a subject (rows 39-44, spec 11.59) and the
 second found the asset pipeline (rows 51 and 52). Rows cannot reveal a missing subject, since the
 absence is written nowhere. Before booking a subject as absent, check the other plans:
-`docs/game-engine-roadmap.md` already books animation blending, IK and audio, and
-`docs/rendering-roadmap.md` holds the earlier tiers.
+`docs/game-engine-roadmap.md` already books animation blending, IK and audio, and "The first
+roadmap's follow-ups" below holds what the earlier techniques left open.
 
 Read this table as a backlog, not a schedule: much of the work arrives from content rather than
 from rows (the water and shore series, 11.32 to 11.48, against the one row D3; 11.50 and 11.51 with
@@ -846,9 +896,18 @@ Real and understood, and nobody's row.
 - **The GL 4.1 ceiling.** Lumen-class GI, virtual shadow maps, GPU-driven culling and hardware ray
   tracing need compute. The ceiling blocks less than the label suggests: Nanite's CPU half, the
   cluster DAG with a cut quantised by distance band, shipped on 4.1 (spec 11.63), and what needs
-  4.3 is GPU-driven selection and a visibility buffer. `docs/rendering-roadmap.md` §5 prices the
-  three ways past it (offline CPU path tracer, hybrid Metal RT through IOSurface, a Metal or Vulkan
-  backend) and owns the question.
+  4.3 is GPU-driven selection and a visibility buffer. GL 4.1 does have tessellation, texture
+  buffers, fp32 targets and transform feedback. The three ways past the ceiling, cheapest first:
+  - **An offline CPU path tracer** (days, not interactive): a BVH over the scene's triangles on
+    `intersect.c`, traced and accumulated to the headless image output. The easiest way to a
+    reference image.
+  - **Hybrid GL and Metal ray tracing through IOSurface** (weeks, interactive): GL keeps raster,
+    post and present; a Metal device builds an `MTLAccelerationStructure` and traces reflections,
+    AO or GI into an IOSurface-backed texture GL imports (`CGLTexImageIOSurface2D`). Costs a Metal
+    module, a second copy of the geometry and a GL-to-Metal sync each frame, since macOS has no
+    shared fence. Hardware RT on M3 and later.
+  - **A Metal or Vulkan (MoltenVK) backend** (months): compute, SSBOs, hardware RT. A rewrite of
+    the renderer, not a mode.
 
 ## Foundations ownership (just-in-time)
 
