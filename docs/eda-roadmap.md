@@ -66,7 +66,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 | 9 | What the panes and the fonts need of the UI | **Built** | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
 
-Specs 14.7 and 14.9 to 14.15 are the smaller changes pcb's window asked for, listed under "Not
+Specs 14.7 and 14.9 to 14.16 are the smaller changes pcb's window asked for, listed under "Not
 among the nine". Spec 14.8 was not asked for by pcb: a headless run waits for the textures its
 start-up asked for before frame 1 (`docs/architecture.md`, Render Pipeline), which `pcb render`
 gets for free.
@@ -292,7 +292,6 @@ mode of its own; `ui_editor_commands` lists the editor's commands for pcb's comm
 - bold and italic styles;
 - a fallback face for what JetBrains Mono lacks;
 - input methods;
-- folding and gutter markers;
 - a keystroke at 100 carets in a 64 MB text, 2.25 ms. The line starts are worked out again from the
   first caret's line, and a tree of line lengths would make that a logarithm;
 - Enter at 100 carets: about 6.5 ms at 10 MB and 42 ms at 64 MB, over the 1 ms bar. Each line break
@@ -428,10 +427,16 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
   had, the focus rings included.
 - **Whole-line ranges and an exact scroll** -- spec 14.15, built, for pcb 6.5's side-by-side
   comparison of two versions: `UIEditorStyle.whole_lines` for its red and green lines, and
-  `ui_editor_top_line` and `ui_editor_scroll_line` to hold one side's scroll to the other's. Blank
-  filler rows to line the sides up row for row, as GitHub pads them, are left out: pcb lines them up
-  by their top lines (`docs/ui.md`, The editor). Moving between the sides is pcb's own, on its pane
-  keys, Ctrl+H and Ctrl+L.
+  `ui_editor_top_line` and `ui_editor_scroll_line` to hold one side's scroll to the other's. Moving
+  between the sides is pcb's own, on its pane keys, Ctrl+H and Ctrl+L.
+- **Folds, filler rows and gutter marks** -- spec 14.16, built, for the same comparison to look as
+  GitHub's split diff does: folds a host makes (`ui_editor_set_folds`), a closed one a row of its
+  own that the vim mode's `z` keys and the standard mode's commands open and close, held to vim's
+  manual folds by `ui-vim-folds`; filler rows above a line (`ui_editor_set_fillers`), so a line and
+  its counterpart stand on the same row; and `UIEditorStyle.gutter` and `.sign` for a `-` or `+`
+  and a stronger colour beside a changed line's number. The changed words within a line needed
+  nothing new: a plain range over them on the layer that holds the line. Folds the person makes
+  (`zf`, `zd`, `foldmethod`) and nested folds are left out: the host makes them.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the
