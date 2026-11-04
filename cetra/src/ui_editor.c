@@ -101,11 +101,12 @@ struct UIEditor {
     UIEditorPlace at; // where it is in the text it shows
     Parked* parked;   // where it was in each text it left
     // A place asked for before the editor was laid out on the text it shows, whose rows and gutter
-    // it does not know yet: the offset, and how far down the view it stands, or the offset to
-    // reveal; applied by the layout. `laid` is the serial the last layout placed it under.
-    enum { PENDING_NONE, PENDING_PLACE, PENDING_REVEAL } pending;
-    size_t pending_offset;
-    float pending_where;
+    // it does not know yet: the offset, and how far down the view it stands; the offset to reveal;
+    // or the line at the top and the rows scrolled into it. Applied by the layout. `laid` is the
+    // serial the last layout placed it under.
+    enum { PENDING_NONE, PENDING_PLACE, PENDING_REVEAL, PENDING_LINE } pending;
+    size_t pending_offset, pending_line;
+    float pending_where, pending_rows;
     uint64_t laid;
     // As the last layout left it: pixels a point, a cell and a row in points, the face, where the
     // content and the text are, and the columns.
@@ -868,6 +869,7 @@ static int _digits(size_t n) {
 
 static void _reveal(UIEditor* ed, size_t offset);
 static void _scroll_place(UIEditor* ed, size_t offset, float where);
+static void _scroll_line(UIEditor* ed, size_t line, float rows);
 
 // The layout's: the face at its size, the gutter, where the text goes and how many columns a row
 // holds; rows wrapped at other columns are guesses again.
@@ -913,6 +915,8 @@ static void _place(const UISystem* ui, UIElement* el, UIRect content) {
         _scroll_place(ed, ed->pending_offset, ed->pending_where);
     else if (ed->pending == PENDING_REVEAL)
         _reveal(ed, ed->pending_offset);
+    else if (ed->pending == PENDING_LINE)
+        _scroll_line(ed, ed->pending_line, ed->pending_rows);
     ed->pending = PENDING_NONE;
 }
 
@@ -1027,6 +1031,15 @@ size_t ui_editor_top(const UIElement* el) {
     return ed ? _row_down_from_top(ed, 0) : 0;
 }
 
+size_t ui_editor_top_line(const UIElement* el, float* rows) {
+    UIEditor* ed = _seen(el);
+    size_t line = 0, row = 0;
+    if (ed)
+        _top(ed, &line, &row);
+    *rows = ed ? (float)row + ed->at.top_frac : 0.0f;
+    return line;
+}
+
 // Whether the last layout placed the editor on the text it shows: its rows, columns and gutter are
 // that text's. Before then, where a view goes is asked of the next layout.
 static bool _laid_out(const UIEditor* ed) {
@@ -1073,6 +1086,17 @@ static void _scroll_place(UIEditor* ed, size_t offset, float where) {
     ed->at.top_frac = 0.0f;
 }
 
+// The line's top row at the view's top, then a wheel's scroll down by `rows`, at most the line's
+// own rows: past them is the next line's top, so a view held to another's line never runs on into
+// lines below it.
+static void _scroll_line(UIEditor* ed, size_t line, float rows) {
+    ed->at.top_line = line < ed->doc->line_count ? line : ed->doc->line_count - 1;
+    ed->at.top_row = 0;
+    ed->at.top_frac = 0.0f;
+    const float most = (float)_rows_of(ed, ed->at.top_line);
+    _scroll_rows(ed, rows < 0.0f ? 0.0f : rows < most ? rows : most);
+}
+
 void ui_editor_reveal(UIElement* el, size_t offset) {
     UIEditor* ed = _of(el);
     if (!ed)
@@ -1095,6 +1119,19 @@ void ui_editor_scroll_place(UIElement* el, size_t offset, float where) {
         ed->pending = PENDING_PLACE;
         ed->pending_offset = offset;
         ed->pending_where = where;
+    }
+}
+
+void ui_editor_scroll_line(UIElement* el, size_t line, float rows) {
+    UIEditor* ed = _of(el);
+    if (!ed)
+        return;
+    if (_laid_out(ed)) {
+        _scroll_line(ed, line, rows);
+    } else {
+        ed->pending = PENDING_LINE;
+        ed->pending_line = line;
+        ed->pending_rows = rows;
     }
 }
 
