@@ -2055,10 +2055,19 @@ static int probe_editor_whole_lines(UISystem* ui) {
     return 0;
 }
 
-// The glyphs drawn on the row from `y`, `row` tall, by their centres: those left of `x` -- a line's
-// number -- or those right of it, up to `max`; how many.
-static size_t row_glyphs(const UISystem* ui, float x, float y, float row, bool left, UIRect* out,
-                         vec4* colours, size_t max) {
+// A glyph drawn: its rect, its top measured from its row's, its colour, and where it is in the draw
+// list.
+typedef struct {
+    UIRect r;
+    vec4 colour;
+    size_t at;
+} Glyph;
+
+// The glyphs drawn on the row from `y`, `row` tall, whose centres stand in [x0, x1) -- left of the
+// text a line's number and in the gap after it its sign, right of it the code -- in the order
+// drawn, up to `max`; how many.
+static size_t row_glyphs(const UISystem* ui, float x0, float x1, float y, float row, Glyph* out,
+                         size_t max) {
     const UIDrawList* dl = ui_draw_list(ui);
     size_t n = 0;
     for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
@@ -2067,12 +2076,11 @@ static size_t row_glyphs(const UISystem* ui, float x, float y, float row, bool l
         int kind = 0;
         ui_draw_list_quad(dl, i, &r, colour, &kind);
         const float cx = r.x + r.w * 0.5f, cy = r.y + r.h * 0.5f;
-        if (kind != 1 || cy < y || cy >= y + row || (cx < x) != left)
+        if (kind != 1 || cy < y || cy >= y + row || cx < x0 || cx >= x1)
             continue;
         if (n < max) {
-            out[n] = (UIRect){r.x, r.y - y, r.w, r.h};
-            if (colours)
-                glm_vec4_copy(colour, colours[n]);
+            out[n] = (Glyph){{r.x, r.y - y, r.w, r.h}, {0.0f}, i};
+            glm_vec4_copy(colour, out[n].colour);
         }
         n++;
     }
@@ -2136,11 +2144,11 @@ static int probe_editor_folds(UISystem* ui) {
     editor_pass(ui);
     float y40 = 0.0f;
     ui_editor_point_of(ed, text_doc_line_start(doc, 40), &x, &y40);
-    UIRect want[4], got[4];
-    const size_t want_n = row_glyphs(ui, tx, y40, row, true, want, NULL, 4);
+    Glyph want[4], got[4];
+    const size_t want_n = row_glyphs(ui, -INFINITY, tx, y40, row, want, 4);
 
     // Closed, from line 8.
-    ui_editor_fold_open(ed, 10, false);
+    ui_editor_set_fold_open(ed, 10, false);
     ui_editor_scroll_line(ed, 8, 0.0f);
     editor_pass(ui);
     float fold_y = 0.0f;
@@ -2150,22 +2158,20 @@ static int probe_editor_folds(UISystem* ui) {
     bool rows = fill_n == 1 && fabsf(fills[0].r.y - fold_y) < 0.01f &&
                 fabsf(fills[0].r.h - row) < 0.01f && fills[0].r.x < tx - 4.0f * cell &&
                 fills[0].r.x + fills[0].r.w >= ed->rect.x + ed->rect.w - 20.0f;
-    UIRect label[32];
-    vec4 label_colours[32];
-    const size_t label_n = row_glyphs(ui, tx, fold_y, row, false, label, label_colours, 32);
+    Glyph label[32];
+    const size_t label_n = row_glyphs(ui, tx, INFINITY, fold_y, row, label, 32);
     size_t inked = 0;
     for (const char* c = FOLD_LABEL; *c; c++)
         inked += *c != ' ';
-    rows = rows && label_n == inked && row_glyphs(ui, tx, fold_y, row, true, got, NULL, 4) == 0;
+    rows = rows && label_n == inked && row_glyphs(ui, -INFINITY, tx, fold_y, row, got, 4) == 0;
     for (size_t i = 0; rows && i < label_n; i++)
-        rows = same_colour(label_colours[i], numbers);
+        rows = same_colour(label[i].colour, numbers);
     // Line 40 the next row, numbered 41 as before.
     ui_editor_point_of(ed, text_doc_line_start(doc, 40), &x, &y40);
-    const size_t got_n = row_glyphs(ui, tx, y40, row, true, got, NULL, 4);
+    const size_t got_n = row_glyphs(ui, -INFINITY, tx, y40, row, got, 4);
     rows = rows && fabsf(y40 - (fold_y + row)) < 0.01f && got_n == want_n && want_n == 2;
     for (size_t i = 0; rows && i < got_n; i++)
-        rows = fabsf(got[i].x - want[i].x) < 0.01f && fabsf(got[i].y - want[i].y) < 0.01f &&
-               fabsf(got[i].w - want[i].w) < 0.01f && fabsf(got[i].h - want[i].h) < 0.01f;
+        rows = same_rect(got[i].r, want[i].r);
     // The open fold's lines each on rows of their own.
     float last_y = y40;
     for (size_t line = 45; rows && line <= 50; line++) {
@@ -2213,8 +2219,8 @@ static int probe_editor_folds(UISystem* ui) {
     const bool clicked = folds_are(ed, opened, 2) && one_selection(ed, text_doc_line_start(doc, 10),
                                                                    text_doc_line_start(doc, 10));
     const UIEditorFold shut[2] = {{10, 39, false, NULL}, {45, 50, true, NULL}};
-    const bool closed = ui_editor_fold_open(ed, 20, false) && !ui_editor_fold_open(ed, 41, false) &&
-                        folds_are(ed, shut, 2);
+    const bool closed = ui_editor_set_fold_open(ed, 20, false) &&
+                        !ui_editor_set_fold_open(ed, 41, false) && folds_are(ed, shut, 2);
     const UIEditorFold* read = NULL;
     ui_editor_folds(ed, &read);
     const bool labelled = read && read[0].label && !strcmp(read[0].label, FOLD_LABEL) &&
@@ -2236,10 +2242,30 @@ static int probe_editor_folds(UISystem* ui) {
     size_t l6_len = 0;
     const char* l6 = text_doc_line(doc, 6, &l6_len);
     edits = edits && folds_are(ed, &(UIEditorFold){4, 8, true, NULL}, 1) && l6_len && l6[0] == 'x';
+    // A Delete there opens it too; typing on the text read-only opens nothing, as nothing changes.
+    ui_editor_set_fold_open(ed, 4, false);
+    ui_editor_set_selections(ed, &(TextSelection){at6, at6}, 1);
+    ui_editor_apply(ed, UI_OP_DELETE, UI_MOTION_CHAR_RIGHT, 1);
+    edits = edits && folds_are(ed, &(UIEditorFold){4, 8, true, NULL}, 1);
+    ui_editor_set_fold_open(ed, 4, false);
+    doc->read_only = true;
+    ui_editor_type(ed, "y");
+    doc->read_only = false;
+    edits = edits && folds_are(ed, &(UIEditorFold){4, 8, false, NULL}, 1);
     say_flag("editor-folds", "edits", "moved", edits);
 
+    // Home and End from a line the fold hides stay on that line.
+    ui_editor_set_selections(ed, &(TextSelection){at6 + 2, at6 + 2}, 1);
+    ui_editor_apply(ed, UI_OP_MOVE, UI_MOTION_ROW_START, 1);
+    bool hidden = one_selection(ed, at6, at6);
+    ui_editor_apply(ed, UI_OP_MOVE, UI_MOTION_ROW_END, 1);
+    size_t end6 = 0;
+    text_doc_line(doc, 6, &end6);
+    hidden = hidden && one_selection(ed, at6 + end6, at6 + end6);
+    say_flag("editor-folds", "hidden", "own_line", hidden);
+
     // Shown another text and back, the folds as they were; a second editor on the text has none.
-    ui_editor_fold_open(ed, 4, false);
+    ui_editor_set_fold_open(ed, 4, false);
     TextDoc* other = create_text_doc("other\ntext\n", 11);
     ui_editor_set_doc(ed, other);
     editor_pass(ui);
@@ -2319,10 +2345,8 @@ static int probe_editor_fillers(UISystem* ui) {
         rows = fabsf(fills[i].r.y - want_y[i]) < 0.01f && fabsf(fills[i].r.x - tx) < 0.01f &&
                fabsf(fills[i].r.h - row) < 0.01f &&
                fills[i].r.x + fills[i].r.w >= ed->rect.x + ed->rect.w - 20.0f;
-    UIRect glyphs[4];
     for (size_t i = 0; rows && i < 3; i++)
-        rows = row_glyphs(ui, tx, want_y[i], row, true, glyphs, NULL, 4) == 0 &&
-               row_glyphs(ui, tx, want_y[i], row, false, glyphs, NULL, 4) == 0;
+        rows = row_glyphs(ui, -INFINITY, INFINITY, want_y[i], row, NULL, 0) == 0;
     if (!rows)
         fprintf(stderr, "editor-fillers: %zu filler quads, line 5 at %.2f, line 4 at %.2f\n",
                 fill_n, (double)y5, (double)y4);
@@ -2360,9 +2384,14 @@ static int probe_editor_fillers(UISystem* ui) {
     ui_editor_scroll_line(ed, 3, 0.0f);
     editor_pass(ui);
     press_drag(ui, tx + 40.0f, y4 + row * 1.5f, tx + 40.0f, y4 + row * 1.5f, 0);
-    say_flag("editor-fillers", "click", "line_start",
-             ui_editor_offset_at(ed, tx + 40.0f, y4 + row * 1.5f) == at5 &&
-                 one_selection(ed, at5, at5));
+    bool click =
+        ui_editor_offset_at(ed, tx + 40.0f, y4 + row * 1.5f) == at5 && one_selection(ed, at5, at5);
+    // On the filler above a closed fold's row: the fold's first line, the fold left closed.
+    press_drag(ui, tx + 40.0f, y10 - row * 0.5f, tx + 40.0f, y10 - row * 0.5f, 0);
+    const UIEditorFold* folds = NULL;
+    click = click && one_selection(ed, at10, at10) && ui_editor_folds(ed, &folds) == 1 &&
+            !folds[0].open;
+    say_flag("editor-fillers", "click", "line_start", click);
 
     // Line 20's rows as asked, as drawn: from its first row to line 21's.
     ui_editor_scroll_line(ed, 19, 0.0f);
@@ -2380,24 +2409,16 @@ static int probe_editor_fillers(UISystem* ui) {
     return 0;
 }
 
-// The glyphs on the row from `y` whose centres stand in the gutter's gap, between the numbers and
-// the text at `tx`: a sign. Up to `max` into `out`, with their colours; how many.
-static size_t gap_glyphs(const UISystem* ui, float tx, float cell, float y, float row, UIRect* out,
-                         vec4* colours, size_t max) {
-    UIRect left[8];
-    vec4 left_colours[8];
-    const size_t n = row_glyphs(ui, tx, y, row, true, left, left_colours, 8);
-    size_t k = 0;
-    for (size_t i = 0; i < n && i < 8; i++) {
-        if (left[i].x + left[i].w * 0.5f < tx - 2.0f * cell)
-            continue;
-        if (k < max) {
-            out[k] = left[i];
-            glm_vec4_copy(left_colours[i], colours[k]);
-        }
-        k++;
-    }
-    return k;
+// Whether a flat quad ends at the text's left edge `tx` -- a gutter's fill -- on the row from `y`,
+// or with `y` NAN on any.
+static bool ends_at_text(const UISystem* ui, float tx, float y) {
+    Fill fills[256];
+    const size_t n = fills_in(ui, NULL, fills, 256);
+    for (size_t i = 0; i < n && i < 256; i++)
+        if (fabsf(fills[i].r.x + fills[i].r.w - tx) < 0.01f &&
+            (isnan(y) || fabsf(fills[i].r.y - y) < 0.01f))
+            return true;
+    return false;
 }
 
 // A range's style marks the gutter of each line it reaches: a fill on every row from the gutter's
@@ -2440,41 +2461,29 @@ static int probe_editor_gutter(UISystem* ui) {
         fill = fabsf(reds[i].r.y - (y_long + (float)i * row)) < 0.01f &&
                fabsf(reds[i].r.h - row) < 0.01f && fabsf(reds[i].r.x + reds[i].r.w - tx) < 0.01f &&
                reds[i].r.x < tx - 4.5f * cell;
-    const UIDrawList* dl = ui_draw_list(ui);
-    size_t number_at = SIZE_MAX;
-    for (size_t i = 0; i < ui_draw_list_quad_count(dl) && number_at == SIZE_MAX; i++) {
-        UIRect r;
-        vec4 colour;
-        int kind = 0;
-        ui_draw_list_quad(dl, i, &r, colour, &kind);
-        if (kind == 1 && r.x + r.w * 0.5f < tx - 2.0f * cell && r.y + r.h * 0.5f >= y_long &&
-            r.y + r.h * 0.5f < y_long + row)
-            number_at = i;
-    }
-    fill = fill && number_at != SIZE_MAX && reds[0].at < number_at;
+    // The gutter's numbers stand left of its gap, the gap's two cells before the text.
+    const float gap = tx - 2.0f * cell;
+    Glyph number[4];
+    fill = fill && row_glyphs(ui, -INFINITY, gap, y_long, row, number, 4) > 0 &&
+           reds[0].at < number[0].at;
     if (!fill)
         fprintf(stderr, "editor-gutter: %zu red quads for %d rows\n", red_count, long_rows);
     say_flag("editor-gutter", "fill", "under", fill);
 
-    // The + on the long line's first row only, in the text's colour; the - on its line, shorter.
-    UIRect code[1], plus[2], minus[2], none[2];
-    vec4 code_colour[1], plus_colour[2], minus_colour[2], none_colour[2];
-    row_glyphs(ui, tx, y0, row, false, code, code_colour, 1);
-    const size_t plus_n = gap_glyphs(ui, tx, cell, y_long, row, plus, plus_colour, 2);
+    // The + on the long line's first row only, in the text's colour; the - on its line, shorter;
+    // and the - alone fills nothing.
+    Glyph code[1], plus[2], minus[2];
+    row_glyphs(ui, tx, INFINITY, y0, row, code, 1);
+    const size_t plus_n = row_glyphs(ui, gap, tx, y_long, row, plus, 2);
     size_t later = 0;
     for (int r = 1; r < long_rows; r++)
-        later += gap_glyphs(ui, tx, cell, y_long + (float)r * row, row, none, none_colour, 2);
-    const size_t minus_n = gap_glyphs(ui, tx, cell, y_minus, row, minus, minus_colour, 2);
-    const size_t short_n = gap_glyphs(ui, tx, cell, y0, row, none, none_colour, 2);
-    // The - alone fills nothing: no quad on its row ends at the text's edge.
-    Fill any[256];
-    const size_t any_n = fills_in(ui, NULL, any, 256);
-    bool bare = any_n <= 256;
-    for (size_t i = 0; bare && i < any_n; i++)
-        bare = fabsf(any[i].r.y - y_minus) >= 0.01f || fabsf(any[i].r.x + any[i].r.w - tx) >= 0.01f;
-    const bool sign = plus_n == 1 && later == 0 && minus_n == 1 && short_n == 0 && bare &&
-                      same_colour(plus_colour[0], code_colour[0]) &&
-                      same_colour(minus_colour[0], code_colour[0]) && plus[0].h > minus[0].h;
+        later += row_glyphs(ui, gap, tx, y_long + (float)r * row, row, NULL, 0);
+    const size_t minus_n = row_glyphs(ui, gap, tx, y_minus, row, minus, 2);
+    const size_t short_n = row_glyphs(ui, gap, tx, y0, row, NULL, 0);
+    const bool sign = plus_n == 1 && later == 0 && minus_n == 1 && short_n == 0 &&
+                      !ends_at_text(ui, tx, y_minus) &&
+                      same_colour(plus[0].colour, code[0].colour) &&
+                      same_colour(minus[0].colour, code[0].colour) && plus[0].r.h > minus[0].r.h;
     if (!sign)
         fprintf(stderr, "editor-gutter: + %zu, on later rows %zu, - %zu, on the short line %zu\n",
                 plus_n, later, minus_n, short_n);
@@ -2484,13 +2493,9 @@ static int probe_editor_gutter(UISystem* ui) {
     theme.editor_styles[1] = theme.editor_styles[2] = (UIEditorStyle){0};
     ui_set_theme(ui, &theme);
     editor_pass(ui);
-    Fill all[256];
-    const size_t all_n = fills_in(ui, NULL, all, 256);
-    bool zero = all_n <= 256;
-    for (size_t i = 0; zero && i < all_n; i++)
-        zero = fabsf(all[i].r.x + all[i].r.w - tx) >= 0.01f;
+    bool zero = !ends_at_text(ui, tx, NAN);
     for (int r = 0; zero && r < long_rows + 3; r++)
-        zero = gap_glyphs(ui, tx, cell, y0 + (float)r * row, row, none, none_colour, 2) == 0;
+        zero = row_glyphs(ui, gap, tx, y0 + (float)r * row, row, NULL, 0) == 0;
     say_flag("editor-gutter", "zero", "none", zero);
     ui_set_theme(ui, &before);
     free_text_doc(doc);
@@ -2784,11 +2789,10 @@ static bool layout_format(UIElement* el, size_t first, size_t last, char** out, 
 
 // Each case of the file CETRA_VIM_CASES names -- "<text in hex> <line> <column> <keys in hex>",
 // the keys in vim's notation, after any folds -- run on a fresh text, editor and vim mode, the
-// cursor put where
-// vim's cursor() would put it, the text read-only with CETRA_VIM_READ_ONLY set, and the layout
-// rules installed as the host's hooks with CETRA_VIM_LAYOUT. Prints "vim <case> <line> <column>
-// <the text in hex> <emptied>", as vim's line('.') and col('.') count, the last 1 when the text was
-// emptied on the way.
+// cursor put where vim's cursor() would put it, the text read-only with CETRA_VIM_READ_ONLY set,
+// and the layout rules installed as the host's hooks with CETRA_VIM_LAYOUT. Prints "vim <case>
+// <line> <column> <the text in hex> <emptied>", as vim's line('.') and col('.') count, the last 1
+// when the text was emptied on the way.
 static int probe_vim_run(UISystem* ui) {
     const char* path = getenv("CETRA_VIM_CASES");
     const bool read_only = getenv("CETRA_VIM_READ_ONLY") != NULL;

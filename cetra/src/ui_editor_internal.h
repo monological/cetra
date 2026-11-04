@@ -38,7 +38,11 @@ int ui_editor_rows_shown(const UIElement* el);
 size_t ui_editor_row_at(UIElement* el, int down);
 // The view scrolled by rows, the carets left where they are.
 void ui_editor_scroll_rows(UIElement* el, float rows);
-// Whether a closed fold holds `line`, and its first and last lines (either may be NULL).
+// Whether a closed fold holds `line`, and its first and last lines (either may be NULL). A fold of
+// one line is never closed.
 bool ui_editor_closed_fold(const UIElement* el, size_t line, size_t* first, size_t* last);
+// The fold each caret stands in opened (`how` 1), closed (0) or turned (-1), once however many
+// carets stand in it, the view following the primary caret; false when none stands in one.
+bool ui_editor_fold_carets(UIElement* el, int how);
 
 #endif // _UI_EDITOR_INTERNAL_H_

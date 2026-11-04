@@ -26310,9 +26310,19 @@ _VIM_FOLD_KEYS = [
     "ddu", "dduj", "xu", "zoxzcuj", "jddu", "u",
     "iZ<Esc>j", "AZ<Esc>j", "oZ<Esc>", "OZ<Esc>", "joZ<Esc>", "jOZ<Esc>", "i<Esc>j",
     "zodd", "zoddj", "zRddj", "zozcx", "/a<CR>zcj", "?e<CR>j", "3x", "d$", "yyjp", "zMgg2dd",
+    "gej", "gEj", "3|j", "g_j",
+    # Visual areas take a closed fold at either end whole.
+    "Vd", "Vjd", "Vkd", "vjd", "vkd", "vjjd", "Vy4jp", "v<Esc>k", "V<Esc>k", "vj<Esc>j", "vjy",
+    # Where o and O leave the folds, seen by the moves after them.
+    "oZ<Esc>k", "oZ<Esc>kk", "oZ<Esc>ggjj", "zooZ<Esc>zMgg2j", "OZ<Esc>zMggj", "joZ<Esc>ggjj",
+    # Insert mode's arrows take a closed fold as one line.
+    "i<Down>Z<Esc>", "i<Down><Down>Z<Esc>", "i<Up>Z<Esc>", "A<Down><Down>Z<Esc>",
 ]
+# A fold of one line is never closed, as vim's 'foldminlines' has it.
+_VIM_ONE_LINE_FOLD_KEYS = ["x", "D", "dw", "wj", "j", "k", "dd", "zcj", "jk", "Vd"]
 _VIM_FOLD_SEQUENCES = ([f"<fold 2 4>{k}" for k in _VIM_FOLD_KEYS]
-                       + [f"<fold 2 3><fold 5 6>{k}" for k in _VIM_FOLD_KEYS])
+                       + [f"<fold 2 3><fold 5 6>{k}" for k in _VIM_FOLD_KEYS]
+                       + [f"<fold 3 3>{k}" for k in _VIM_ONE_LINE_FOLD_KEYS])
 
 # The layout oracle (spec 14.9): every fixture, and one indented badly on purpose -- brackets
 # opening and closing over lines, tabs, comment lines the rule keeps (one with a tab, which a kept
@@ -28482,7 +28492,9 @@ def run_ui_gate(workdir):
                      drawn there; a click opens it, the caret on its first line,
                      and it closes again by line, its label a copy; a line put in
                      among its lines joins it, taking them all out takes it, and
-                     typing in a closed fold opens it; an editor shown another
+                     typing or a Delete in a closed fold opens it, typing on a
+                     read-only text does not; Home and End from a line a fold
+                     hides stay on that line; an editor shown another
                      text and back keeps its folds, a second has none; folds
                      that overlap are refused; the standard mode's open-fold,
                      toggle-fold and close-fold act on the caret's fold, and do
@@ -28495,7 +28507,8 @@ def run_ui_gate(workdir):
                      4 lands on line 5 and from line 9 on the fold, up from line
                      5 on line 4; a wheel's row from line 4 puts line 5 at the
                      top at row 0, and line 5 put at 2 rows is its text's first
-                     row; a click on a filler lands at its line's start; the
+                     row; a click on a filler lands at its line's start, and on
+                     the one above the fold leaves the fold closed; the
                      long line's rows as ui_editor_line_rows gives them are its
                      rows as drawn.
       ui-editor-gutter gutter marks (spec 14.16): a style with a red gutter fill and
@@ -29769,12 +29782,13 @@ def run_ui_gate(workdir):
     print(f"  ui-editor-scroll-line {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-scroll-line", ok)
 
-    ok, detail = doc_flags("editor-folds", 7, "a closed fold one row in the fold colour with its "
+    ok, detail = doc_flags("editor-folds", 8, "a closed fold one row in the fold colour with its "
                            "label and no number, the next line numbered as before; a row move, a "
                            "wheel, a click and an offset inside it take it as one row; a click "
-                           "opens it; it moves with its lines and goes with them, typing in it "
-                           "opens it; kept in a text left, none on a second editor; overlaps "
-                           "refused; open-fold, close-fold and toggle-fold by name")
+                           "opens it; it moves with its lines and goes with them, typing or a "
+                           "Delete in it opens it, not on a read-only text; Home and End from a "
+                           "line it hides stay on that line; kept in a text left, none on a second "
+                           "editor; overlaps refused; open-fold, close-fold and toggle-fold by name")
     print(f"  ui-editor-folds       {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-folds", ok)
 
