@@ -75,13 +75,6 @@ typedef enum UIEditorVimLookup {
 typedef bool (*UIEditorVimLookupFn)(UIElement* el, UIEditorVimLookup kind, void* user);
 // NULL for none.
 void ui_editor_vim_set_lookup(UIEditorVim* vim, UIEditorVimLookupFn fn, void* user);
-// ]c and [c, vim's next and previous change, asked of a host that knows what changed: `forward`
-// for ]c, `count` how many changes on (1 with none typed). The host moves the carets where it
-// likes, another text included. False when there is none, and nothing moves. Asked in normal mode
-// with no operator waiting; never kept for `.`.
-typedef bool (*UIEditorVimChangeFn)(UIElement* el, bool forward, int count, void* user);
-// NULL for none: ]c and [c then do nothing.
-void ui_editor_vim_set_change(UIEditorVim* vim, UIEditorVimChangeFn fn, void* user);
 
 // The indent for lines `first` to `last` (lines from 0), a column each into `cols`, -1 to keep a
 // line's own: worked out top to bottom as they will stand, each line as though the lines above it

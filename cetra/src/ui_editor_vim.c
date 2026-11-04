@@ -204,8 +204,6 @@ struct UIEditorVim {
     void* prompt_user;
     UIEditorVimLookupFn lookup;
     void* lookup_user;
-    UIEditorVimChangeFn jump; // ]c and [c's
-    void* jump_user;
     UIEditorVimIndentFn indent;
     void* indent_user;
     UIEditorVimFormatFn format;
@@ -4891,14 +4889,6 @@ static bool _ask_host(Ctx* c, UIEditorVimLookup kind) {
     return answered;
 }
 
-// ]c and [c, `count0` changes on, asked of the host the same way.
-static void _ask_jump(Ctx* c, bool forward, int count0) {
-    UIEditorVim* v = c->v;
-    if (v->jump)
-        v->jump(c->el, forward, count0 ? count0 : 1, v->jump_user);
-    _switch(v, c->el);
-}
-
 // Ctrl+] and K in visual mode: the host asked with the area in place, then visual mode ended -- at
 // the carets where a host that answered put them, else with the cursor on the area's head. An area
 // over more than one line is no name: vim beeps at it and keeps it.
@@ -4974,14 +4964,6 @@ static bool _second(Ctx* c, uint32_t p, uint32_t k) {
             if (_replace(c, k, count0))
                 _keep_change(v, count0);
         }
-        _reset(v);
-        return true;
-    }
-    // ]c and [c in normal mode alone, as Ctrl+]: an operator can reach no other text. Any other key
-    // after ] or [ does nothing, as vim beeps at it.
-    if (p == ']' || p == '[') {
-        if (k == 'c' && !op)
-            _ask_jump(c, p == ']', count0);
         _reset(v);
         return true;
     }
@@ -5086,8 +5068,6 @@ static bool _command(Ctx* c, uint32_t k) {
         case 't':
         case 'T':
         case 'r':
-        case ']':
-        case '[':
             v->prefix = k;
             return true;
         case 'x':
@@ -5362,8 +5342,7 @@ static bool _after_op(Ctx* c, uint32_t k) {
         _reset(v);
         return true;
     }
-    if (k == 'g' || k == 'f' || k == 'F' || k == 't' || k == 'T' || k == 'i' || k == 'a' ||
-        k == ']' || k == '[') {
+    if (k == 'g' || k == 'f' || k == 'F' || k == 't' || k == 'T' || k == 'i' || k == 'a') {
         v->prefix = k;
         _pending_add(v, k);
         return true;
@@ -5710,13 +5689,6 @@ void ui_editor_vim_set_lookup(UIEditorVim* vim, UIEditorVimLookupFn fn, void* us
     vim->lookup_user = user;
 }
 
-void ui_editor_vim_set_change(UIEditorVim* vim, UIEditorVimChangeFn fn, void* user) {
-    if (!vim)
-        return;
-    vim->jump = fn;
-    vim->jump_user = user;
-}
-
 void ui_editor_vim_set_indent(UIEditorVim* vim, UIEditorVimIndentFn fn, void* user) {
     if (!vim)
         return;
@@ -5792,7 +5764,6 @@ static const UIEditorVimKey KEYS[] = {
     {"* #", "Search for the word under the cursor, forward or back"},
     {"gd gD", "To where the name under the cursor is declared, in its block or the text"},
     {"Ctrl+] K", "Ask where the name under the cursor is defined, or what it is"},
-    {"]c [c", "To the next or previous change"},
     {":N :noh", "Go to line N; put out the search's light"},
     {"zz zt zb", "Scroll the cursor's line to the middle, top or bottom"},
     {"Ctrl+D Ctrl+U Ctrl+F Ctrl+B", "Half a page down or up, a page down or up"},

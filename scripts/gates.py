@@ -26290,10 +26290,6 @@ _VIM_SEQUENCES = [
     "gd", "gD", "1gd", "1gD", "3gd", "gdn", "gdN", "gDn", "gDN", "dgd", "dgD", "ygDP", "ygdp",
     "cgdZ<Esc>", "cgDZ<Esc>", "vgdd", "vgDy", "VgDd", "gd.", "xgd.", "gdx", "Ggd", "GgD", "G$gd",
     "jgd", "2jgdn", "wgd", "wgD", "<C-v>gdd",
-    # ]c and [c with no host (spec 14.15): out of diff mode vim beeps, moves nothing and goes on
-    # with the keys after; an operator before them is let go, and any other key after ] or [ is
-    # taken with it.
-    "]c", "[c", "3]c", "]cx", "[cx", "2]cj", "d]c", "d]cx", "d[cx", "]xx", "[xx", "]<Esc>x",
 ]
 
 # The layout oracle (spec 14.9): every fixture, and one indented badly on purpose -- brackets
@@ -28506,14 +28502,6 @@ def run_ui_gate(workdir):
                      characterwise, the one difference from vim kept; and a host
                      showing the editor another text from visual mode leaving the
                      mode normal there.
-      ui-vim-change  a host answering ]c and [c (spec 14.15), recording what it is
-                     asked: ]c, [c and 3]c asked forward 1, back 1 and forward 3;
-                     d]c asking nothing, deleting nothing and leaving nothing
-                     waiting; ]x, [x and ] Esc the same; ] in visual mode what it
-                     was, asking nothing; a host with no change leaving the caret;
-                     . after a jump making the change before it again; a read-only
-                     text still asking; a host showing another text leaving the
-                     mode normal there; and with no host, nothing.
       ui-vim-carets  several carets, which vim has none of: Ctrl+V and I puts a
                      caret on each line, Z typed at every one, Esc and then u each
                      leaving one cursor at the block's top left; A after the block;
@@ -29787,15 +29775,6 @@ def run_ui_gate(workdir):
                            "characterwise; another text shown from visual mode left normal")
     print(f"  ui-vim-lookup         {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-vim-lookup", ok)
-
-    ok, detail = doc_flags("vim-change", 9, "]c, [c and 3]c asked of the host forward 1, back 1 "
-                           "and forward 3; d]c, ]x and ] Esc asking nothing and leaving nothing "
-                           "waiting; ]c in visual mode asking nothing; a host with no change "
-                           "leaving the caret; . repeating the change before a jump; a read-only "
-                           "text asking; another text shown left normal; no host, nothing")
-    print(f"  ui-vim-change         {'PASS' if ok else 'FAIL'}  {detail}")
-    note("ui-vim-change", ok)
-
     ok, detail = doc_flags("vim-carets", 10, "a block's I a caret on each line, what is typed on "
                            "every one, one cursor at the top left after Esc and after undo, A after "
                            "the block; each of three carets taking 3x, dw and a visual area; two "
