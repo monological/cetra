@@ -2987,6 +2987,107 @@ static int probe_vim_lookup(UISystem* ui) {
     return 0;
 }
 
+// ---- The host answering ]c and [c (spec 14.15)
+
+#define CHANGE_TEXT "one two\nthree four\nfive\n"
+
+// The recording host: each direction and count asked, and its answer -- true moving the caret to
+// the text's start, or showing the editor another text when one is given.
+static int g_jumps;
+static bool g_jump_forward[16];
+static int g_jump_count[16];
+static bool g_jump_answer = true;
+static TextDoc* g_jump_elsewhere;
+
+static bool jump_host(UIElement* el, bool forward, int count, void* user) {
+    (void)user;
+    if (g_jumps < 16) {
+        g_jump_forward[g_jumps] = forward;
+        g_jump_count[g_jumps] = count;
+    }
+    g_jumps++;
+    if (g_jump_elsewhere)
+        ui_editor_set_doc(el, g_jump_elsewhere);
+    else if (g_jump_answer)
+        caret_at(el, 0);
+    return g_jump_answer;
+}
+
+static int probe_vim_change(UISystem* ui) {
+    TextDoc* doc = create_text_doc(CHANGE_TEXT, strlen(CHANGE_TEXT));
+    UIEditorVim* vim = create_ui_editor_vim();
+    ui_editor_vim_set_change(vim, jump_host, NULL);
+    UIElement* ed = vim_fixture(ui, doc, vim, 9);
+    // ]c forward one, [c back one, 3]c forward three: each asked once, the host's caret kept.
+    static const char* const ASKS[] = {"]c", "[c", "3]c"};
+    bool went = true;
+    for (int i = 0; i < 3; i++) {
+        caret_at(ed, 9);
+        vim_keys(ui, ASKS[i]);
+        went = went && one_selection(ed, 0, 0) && !*ui_editor_vim_pending(vim);
+    }
+    say_flag("vim-change", "asked", "counts",
+             went && g_jumps == 3 && g_jump_forward[0] && g_jump_count[0] == 1 &&
+                 !g_jump_forward[1] && g_jump_count[1] == 1 && g_jump_forward[2] &&
+                 g_jump_count[2] == 3);
+    // After an operator: nothing asked, nothing deleted, nothing waiting.
+    caret_at(ed, 9);
+    vim_keys(ui, "d]c");
+    say_flag("vim-change", "operator", "let_go",
+             g_jumps == 3 && doc_is_str(doc, CHANGE_TEXT) && one_selection(ed, 9, 9) &&
+                 !*ui_editor_vim_pending(vim));
+    // Another key after ] or [, and Esc: taken with it, nothing else done.
+    vim_keys(ui, "]x[x]<Esc>");
+    say_flag("vim-change", "unknown", "nothing",
+             g_jumps == 3 && doc_is_str(doc, CHANGE_TEXT) && one_selection(ed, 9, 9) &&
+                 !*ui_editor_vim_pending(vim));
+    // In visual mode ] is what it was, nothing: asked nothing, and the c changes the area.
+    vim_keys(ui, "v]c");
+    const bool visual = g_jumps == 3 && ui_editor_vim_state(vim) == UI_VIM_INSERT;
+    vim_keys(ui, "<Esc>u");
+    say_flag("vim-change", "visual", "unasked", visual && doc_is_str(doc, CHANGE_TEXT));
+    // A host with no change to go to: the caret where it was.
+    g_jump_answer = false;
+    caret_at(ed, 9);
+    vim_keys(ui, "]c[c");
+    say_flag("vim-change", "declined", "kept", g_jumps == 5 && one_selection(ed, 9, 9));
+    g_jump_answer = true;
+    // . after ]c makes the change before it again, not the jump.
+    caret_at(ed, 0);
+    vim_keys(ui, "x");
+    caret_at(ed, 7);
+    vim_keys(ui, "]c.");
+    say_flag("vim-change", "repeat", "change",
+             g_jumps == 6 && doc_is_str(doc, "e two\nthree four\nfive\n"));
+    // A read-only text still asks: a jump changes nothing.
+    doc->read_only = true;
+    vim_keys(ui, "]c[c");
+    say_flag("vim-change", "read_only", "asked", g_jumps == 8);
+    doc->read_only = false;
+    // A host showing another text: the mode let go of this one, the next key read there.
+    TextDoc* other = create_text_doc("xyz\n", 4);
+    g_jump_elsewhere = other;
+    vim_keys(ui, "]c");
+    g_jump_elsewhere = NULL;
+    const bool away = ui_editor_doc(ed) == other && ui_editor_vim_state(vim) == UI_VIM_NORMAL;
+    vim_keys(ui, "x");
+    say_flag("vim-change", "elsewhere", "normal", away && doc_is_str(other, "yz\n"));
+    // With no host: nothing.
+    ui_editor_vim_set_change(vim, NULL, NULL);
+    ui_editor_set_doc(ed, doc);
+    caret_at(ed, 9);
+    vim_keys(ui, "]c[c");
+    say_flag("vim-change", "none", "nothing",
+             g_jumps == 9 && doc_is_str(doc, "e two\nthree four\nfive\n") &&
+                 one_selection(ed, 9, 9) && !*ui_editor_vim_pending(vim));
+    ui_editor_set_mode(ed, NULL);
+    ui_editor_set_doc(ed, NULL);
+    free_text_doc(other);
+    free_text_doc(doc);
+    free_ui_editor_vim(vim);
+    return 0;
+}
+
 // ---- The host's edits: carets, selections and the view through them
 
 #define HOST_TEXT "abc def ghi\nline two\n"
@@ -3492,5 +3593,7 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_vim_set_doc(ui);
     if (!strcmp(which, "vim-lookup"))
         return probe_vim_lookup(ui);
+    if (!strcmp(which, "vim-change"))
+        return probe_vim_change(ui);
     return -1;
 }
