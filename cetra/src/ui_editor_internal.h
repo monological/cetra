@@ -38,5 +38,7 @@ int ui_editor_rows_shown(const UIElement* el);
 size_t ui_editor_row_at(UIElement* el, int down);
 // The view scrolled by rows, the carets left where they are.
 void ui_editor_scroll_rows(UIElement* el, float rows);
+// Whether a closed fold holds `line`, and its first and last lines (either may be NULL).
+bool ui_editor_closed_fold(const UIElement* el, size_t line, size_t* first, size_t* last);
 
 #endif // _UI_EDITOR_INTERNAL_H_

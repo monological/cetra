@@ -26292,6 +26292,28 @@ _VIM_SEQUENCES = [
     "jgd", "2jgdn", "wgd", "wgD", "<C-v>gdd",
 ]
 
+# The fold oracle (spec 14.16): the host's folds, made closed by vim's :A,Bfold on vim's side and
+# ui_editor_set_folds on the mode's, on the two texts long enough for them -- one fold over lines 2
+# to 4, or two, 2 to 3 and 5 to 6 -- and the keys over them: moves by lines taking a closed fold as
+# one, the z keys, the moves along a line, the searches and the undo that open one, the operators
+# that take one whole, and the inserts and puts beside one.
+_VIM_FOLD_FIXTURES = {name: _VIM_FIXTURES[name] for name in ("sexpr", "words")}
+_VIM_FOLD_KEYS = [
+    "j", "k", "2j", "2k", "3j", "jj", "kk", "jk", "kj", "+", "-", "<CR>", "_", "2_", "2$",
+    "G", "gg", "<Down>", "<Up>",
+    "zo", "zO", "zv", "zc", "za", "zR", "zM", "zoj", "zok", "zozc", "zozcj", "zaj", "zazaj",
+    "zRj", "zMj", "zRzMj", "zOj", "zvj", "zcj", "zRk", "zozMj",
+    "lj", "hj", "wj", "bj", "ej", "$j", "0j", "^j", "fej", "%j", "}j", "{j",
+    "/e<CR>j", "/e<CR>nj", "*j", "#j",
+    "dd", "2dd", "x", "X", "dj", "dk", "D", "dw", "d_", "dG", "dgg", "ddj", "jdd", "kdd",
+    "yyp", "yyP", "ddp", "ddP", "jyyp", "jyyP", "cwZ<Esc>", "ccZ<Esc>", ">>", "J",
+    "ddu", "dduj", "xu", "zoxzcuj", "jddu", "u",
+    "iZ<Esc>j", "AZ<Esc>j", "oZ<Esc>", "OZ<Esc>", "joZ<Esc>", "jOZ<Esc>", "i<Esc>j",
+    "zodd", "zoddj", "zRddj", "zozcx", "/a<CR>zcj", "?e<CR>j", "3x", "d$", "yyjp", "zMgg2dd",
+]
+_VIM_FOLD_SEQUENCES = ([f"<fold 2 4>{k}" for k in _VIM_FOLD_KEYS]
+                       + [f"<fold 2 3><fold 5 6>{k}" for k in _VIM_FOLD_KEYS])
+
 # The layout oracle (spec 14.9): every fixture, and one indented badly on purpose -- brackets
 # opening and closing over lines, tabs, comment lines the rule keeps (one with a tab, which a kept
 # indent rebuilds of spaces), a line of blanks -- with the rules of _VIM_LAYOUT on both sides. =
@@ -26434,8 +26456,13 @@ def _vim_reference(case, path, read_only=False, layout=False):
     and a key after one that failed is still read, as when a person types them; normal! would
     make every command one step and let go of the keys after a failure. `read_only` sets
     'nomodifiable' on the buffer, which is what a read-only text is held to; `layout` sources the
-    indent and format rules a host's hooks answer with (spec 14.9)."""
+    indent and format rules a host's hooks answer with (spec 14.9). Keys beginning with
+    "<fold A B>" have lines A to B folded first, closed, by :A,Bfold (spec 14.16)."""
     text, line, col, keys = case
+    folds = re.match(r"((?:<fold \d+ \d+>)*)", keys).group(1)
+    keys = keys[len(folds):]
+    fold_cmds = [arg for a, b in re.findall(r"<fold (\d+) (\d+)>", folds)
+                 for arg in ("-c", f"{a},{b}fold")]
     with open(path, "wb") as f:
         f.write(text)
     out, pos = path + ".out", path + ".pos"
@@ -26445,7 +26472,7 @@ def _vim_reference(case, path, read_only=False, layout=False):
     cmd = [_VIM, "-Nu", "NONE", "-i", "NONE", "-n", "-es", "-c", _VIM_SET,
            *(["-c", "execute 'source ' . fnameescape('" + _VIM_LAYOUT.replace("'", "''") + "')"]
              if layout else []),
-           *(["-c", "set nomodifiable"] if read_only else []),
+           *(["-c", "set nomodifiable"] if read_only else []), *fold_cmds,
            "-c", f"call cursor({line}, {col})",
            "-c", f"call feedkeys(\"{_vim_exe_keys(keys)}\", 'xt')",
            "-c", f"call writefile([line('.') . ' ' . col('.')], '{pos}')",
@@ -28457,7 +28484,9 @@ def run_ui_gate(workdir):
                      among its lines joins it, taking them all out takes it, and
                      typing in a closed fold opens it; an editor shown another
                      text and back keeps its folds, a second has none; folds
-                     that overlap are refused.
+                     that overlap are refused; the standard mode's open-fold,
+                     toggle-fold and close-fold act on the caret's fold, and do
+                     nothing with no fold there.
       ui-editor-steps each action told with its step: typing joined into words
                      shares one; a group holds one over typing, a Backspace and
                      more typing, one undo takes the group back and one redo makes
@@ -28473,6 +28502,13 @@ def run_ui_gate(workdir):
                      and through vim 9 fed the keys as typed; the text, byte for
                      byte, and the cursor must agree. Skips without vim on the
                      path.
+      ui-vim-folds   the same over the host's folds (spec 14.16): one fold or two,
+                     closed by :A,Bfold in vim and ui_editor_set_folds in the mode,
+                     on the two fixtures long enough for them; moves by lines that
+                     take a closed fold as one line, zo zO zv zc za zR zM, the moves
+                     along a line, searches, % and undo that open one, operators
+                     that take one whole, and inserts and puts beside one. Skips
+                     without vim on the path.
       ui-vim-random  the same, on 1600 sequences no one wrote: two to six whole
                      commands each -- motions, operators over motions and objects,
                      edits, inserts, undo, `.`, searches, areas in the three visual
@@ -29714,12 +29750,12 @@ def run_ui_gate(workdir):
     print(f"  ui-editor-scroll-line {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-scroll-line", ok)
 
-    ok, detail = doc_flags("editor-folds", 6, "a closed fold one row in the fold colour with its "
+    ok, detail = doc_flags("editor-folds", 7, "a closed fold one row in the fold colour with its "
                            "label and no number, the next line numbered as before; a row move, a "
                            "wheel, a click and an offset inside it take it as one row; a click "
                            "opens it; it moves with its lines and goes with them, typing in it "
                            "opens it; kept in a text left, none on a second editor; overlaps "
-                           "refused")
+                           "refused; open-fold, close-fold and toggle-fold by name")
     print(f"  ui-editor-folds       {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-folds", ok)
 
@@ -29743,6 +29779,20 @@ def run_ui_gate(workdir):
                   + (f": {shown}" if shown else ""))
         print(f"  ui-vim-oracle         {'PASS' if ok else 'FAIL'}  {detail}")
         note("ui-vim-oracle", ok)
+
+    # ---- the vim mode over the host's folds, held to vim's manual folds (spec 14.16)
+    if not _VIM:
+        print("  ui-vim-folds          SKIP  (no vim on the path)")
+    else:
+        cases = _vim_corpus(_VIM_FOLD_SEQUENCES, _VIM_FOLD_FIXTURES)
+        diffs, ran = _vim_oracle(cases, workdir, "folds")
+        ok = ran == len(cases) and not diffs
+        shown = _vim_shown(diffs, lambda case: f"{case[3]!r} at {case[1]}:{case[2]}")
+        detail = (f"{len(cases)} cases of {len(_VIM_FOLD_SEQUENCES)} sequences over closed folds "
+                  f"on {len(_VIM_FOLD_FIXTURES)} texts, vim ran {ran}, {len(diffs)} differ from it"
+                  + (f": {shown}" if shown else ""))
+        print(f"  ui-vim-folds          {'PASS' if ok else 'FAIL'}  {detail}")
+        note("ui-vim-folds", ok)
 
     # ---- the vim mode held to vim on sequences no one wrote (spec 14.5)
     if not _VIM:

@@ -2259,6 +2259,20 @@ static int probe_editor_folds(UISystem* ui) {
     say_flag("editor-folds", "refused", "kept",
              folds_are(ed, &(UIEditorFold){4, 8, false, NULL}, 1));
 
+    // The standard mode's commands, by name: open, toggle shut, close, and none with no fold at
+    // the caret.
+    const size_t at5 = text_doc_line_start(doc, 5);
+    ui_editor_set_selections(ed, &(TextSelection){at5, at5}, 1);
+    bool commands =
+        ui_editor_run(ed, "open-fold") && folds_are(ed, &(UIEditorFold){4, 8, true, NULL}, 1) &&
+        ui_editor_run(ed, "toggle-fold") && folds_are(ed, &(UIEditorFold){4, 8, false, NULL}, 1) &&
+        ui_editor_run(ed, "toggle-fold") && ui_editor_run(ed, "close-fold") &&
+        folds_are(ed, &(UIEditorFold){4, 8, false, NULL}, 1);
+    const size_t at12 = text_doc_line_start(doc, 12);
+    ui_editor_set_selections(ed, &(TextSelection){at12, at12}, 1);
+    commands = commands && !ui_editor_run(ed, "open-fold");
+    say_flag("editor-folds", "commands", "by_name", commands);
+
     ui_set_theme(ui, &before);
     free_text_doc(other);
     free_text_doc(doc);
@@ -2551,7 +2565,8 @@ static bool layout_format(UIElement* el, size_t first, size_t last, char** out, 
 }
 
 // Each case of the file CETRA_VIM_CASES names -- "<text in hex> <line> <column> <keys in hex>",
-// the keys in vim's notation -- run on a fresh text, editor and vim mode, the cursor put where
+// the keys in vim's notation, after any folds -- run on a fresh text, editor and vim mode, the
+// cursor put where
 // vim's cursor() would put it, the text read-only with CETRA_VIM_READ_ONLY set, and the layout
 // rules installed as the host's hooks with CETRA_VIM_LAYOUT. Prints "vim <case> <line> <column>
 // <the text in hex> <emptied>", as vim's line('.') and col('.') count, the last 1 when the text was
@@ -2594,8 +2609,21 @@ static int probe_vim_run(UISystem* ui) {
                 const size_t start = text_doc_line_start(doc, at_line - 1) + at_col - 1;
                 UIElement* ed = vim_fixture(ui, doc, vim, start);
                 doc->read_only = read_only;
+                // The folds the keys begin with, "<fold A B>" lines A to B as vim numbers them,
+                // closed, as vim's :A,Bfold makes them.
+                UIEditorFold folds[8];
+                size_t fold_count = 0;
+                const char* rest = keys;
+                int a = 0, b = 0, used = 0;
+                while (fold_count < 8 && sscanf(rest, "<fold %d %d>%n", &a, &b, &used) == 2 &&
+                       used > 0) {
+                    folds[fold_count++] = (UIEditorFold){(size_t)a - 1, (size_t)b - 1};
+                    rest += used;
+                    used = 0;
+                }
+                ui_editor_set_folds(ed, folds, fold_count);
                 // A key at a time, as typed.
-                const size_t n = vim_events(keys, events, 4096);
+                const size_t n = vim_events(rest, events, 4096);
                 for (size_t i = 0; i < n; i++)
                     send_keys(ui, &events[i], 1);
                 const TextSelection* s = NULL;
