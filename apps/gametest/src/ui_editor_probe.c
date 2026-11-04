@@ -4166,16 +4166,23 @@ static void top_row_level(UISystem* ui) {
     editor_pass(ui);
     const size_t wrapped = ui_editor_line_rows(left, 4);
     ui_editor_set_fillers(right, &(UIEditorFiller){5, (uint32_t)(wrapped - 1)}, 1);
-    ui_editor_scroll_line(right, 5, (float)(wrapped - 1) + 0.5f);
-    ui_editor_scroll_row(left, ui_editor_top_row(right));
-    editor_pass(ui);
-    const size_t in_left[2] = {text_doc_line_start(left_doc, 6), text_doc_line_start(left_doc, 7)};
-    const size_t in_right[2] = {text_doc_line_start(right_doc, 6),
-                                text_doc_line_start(right_doc, 7)};
-    const bool level = wrapped >= 2 && rows_level(left, right, in_left, in_right, 2);
-    if (!level)
-        fprintf(stderr, "editor-top-row: the left at row %.2f, the right at %.2f, not level\n",
-                ui_editor_top_row(left), ui_editor_top_row(right));
+    const size_t in_left[2] = {text_doc_line_start(left_doc, 7), text_doc_line_start(left_doc, 8)};
+    const size_t in_right[2] = {text_doc_line_start(right_doc, 7),
+                                text_doc_line_start(right_doc, 8)};
+    // Half a row into line 5's own row, inside the pair, and into line 6, below its fillers.
+    bool level = wrapped >= 2;
+    const size_t lead_line[2] = {5, 6};
+    const float lead_rows[2] = {(float)(wrapped - 1) + 0.5f, 0.5f};
+    for (int i = 0; level && i < 2; i++) {
+        ui_editor_scroll_line(right, lead_line[i], lead_rows[i]);
+        ui_editor_scroll_row(left, ui_editor_top_row(right));
+        editor_pass(ui);
+        level = rows_level(left, right, in_left, in_right, 2);
+        if (!level)
+            fprintf(stderr,
+                    "editor-top-row: from line %zu the left at row %.2f, the right at %.2f\n",
+                    lead_line[i], ui_editor_top_row(left), ui_editor_top_row(right));
+    }
     say_flag("editor-top-row", "level", "lines", level);
     free_text_doc(left_doc);
     free_text_doc(right_doc);
@@ -4344,11 +4351,13 @@ static bool filler_end_fold(UISystem* ui) {
     text_doc_replace(doc, text_doc_line_start(doc, 19) - 1, text_doc_length(doc), "", 0);
     ui_editor_scroll_row(ed, 1e9);
     const double after_edit = ui_editor_top_row(ed);
-    // Two on a line the fold hides beside those under the text, read, then those under taken away:
-    // rows 0 to 10.
-    ui_editor_set_fillers(ed, (const UIEditorFiller[]){{15, 2}, {19, 3}}, 2);
-    ui_editor_scroll_row(ed, 1e9);
+    // Two on a line the fold hides, the sums put right from the fold by setting it again and read,
+    // then those under the text put back beside them: rows 0 to 13. (A sum left too long would not
+    // show here: the top held to the fold's row reads right.)
     ui_editor_set_fillers(ed, &(UIEditorFiller){15, 2}, 1);
+    ui_editor_set_folds(ed, &(UIEditorFold){10, 18, false, NULL}, 1);
+    ui_editor_scroll_row(ed, 1e9);
+    ui_editor_set_fillers(ed, (const UIEditorFiller[]){{15, 2}, {19, 3}}, 2);
     ui_editor_scroll_row(ed, 1e9);
     const double after_set = ui_editor_top_row(ed);
     // Opened, the top on the first line's second row, closed again: the top on the fold's row.
@@ -4369,7 +4378,7 @@ static bool filler_end_fold(UISystem* ui) {
     ui_editor_set_selections(ed, &(TextSelection){row1 + 2, row1 + 2}, 1);
     ui_editor_apply(ed, UI_OP_MOVE, UI_MOTION_ROW_START, 1);
     const bool home = rows >= 2 && one_selection(ed, row1, row1);
-    const bool ok = before_edit == 14.0 && after_edit == 13.0 && after_set == 10.0 && top == 10 &&
+    const bool ok = before_edit == 14.0 && after_edit == 13.0 && after_set == 13.0 && top == 10 &&
                     into == 0.0f && home;
     if (!ok)
         fprintf(stderr,
