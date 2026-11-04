@@ -61,12 +61,12 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 4 | Drawing the 3D scene into part of the window | Not started | 8 | |
 | 5 | Text input and scrolling panes in the UI | **Built**; composing text in an input method, glyphs past the atlas and the rest below are left for later | 6 (the command palette and the `/` jump); 9 (the chat) | 14.2, 14.3 |
 | 6 | The text editor widget | **Built**; sideways scrolling, a regular-expression find and the rest below are left for later | 6 (the code view) | 14.4 |
-| 6a | The editor's vim mode | **Built**, held to vim 9.2 itself; named registers, macros, marks and the rest below are left for later | 6 (the code view, which is vim only) | 14.5, 14.9 |
+| 6a | The editor's vim mode | **Built**, held to vim 9.2 itself; named registers, macros, marks and the rest below are left for later | 6 (the code view, which is vim only) | 14.5, 14.9, 14.15 |
 | 7 | Rendering at any scale, in true units | **Built**; the physical depth of field left | Already used by pcb's pictures | 13.57, 13.58 |
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 | 9 | What the panes and the fonts need of the UI | **Built** | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
 
-Specs 14.7 and 14.9 to 14.14 are the smaller changes pcb's window asked for, listed under "Not
+Specs 14.7 and 14.9 to 14.15 are the smaller changes pcb's window asked for, listed under "Not
 among the nine". Spec 14.8 was not asked for by pcb: a headless run waits for the textures its
 start-up asked for before frame 1 (`docs/architecture.md`, Render Pipeline), which `pcb render`
 gets for free.
@@ -309,12 +309,13 @@ text. pcb's own keys go over it: Space for help in normal mode, `/` searching wh
 focus, `:` its command line. So the mode is built in cetra, beside the standard one, for any app to
 use, and pcb stacks a layer of its keys on it.
 
-**Built in spec 14.5, with the language's keys in 14.9** (`docs/ui.md`, The vim mode):
+**Built in spec 14.5, with the language's keys in 14.9 and `]c` `[c` in 14.15** (`docs/ui.md`, The
+vim mode):
 `ui_editor_vim.c/h`, one per host shared by its editors, held to vim 9.2 itself by an oracle; the
 editor's general seams it needed (layer modes, commands that decline, a used key taking its
 character, three selection shapes, a pointer hook, undo steps of parts); and the hooks for keys that
-need the language (`ui_editor_vim_set_lookup`, `_set_indent`, `_set_format`, see "Not among the
-nine").
+need the language or what changed (`ui_editor_vim_set_lookup`, `_set_indent`, `_set_format`,
+`_set_change`, see "Not among the nine").
 
 **Left for later:**
 
@@ -324,7 +325,8 @@ nine").
 - a host's own key sequences, a `:map`, once pcb wants a command vim has no meaning for;
 - the differences from vim spec 14.5 lists: `A` after an area ending inside a character of several
   bytes, `.` after `v$` and after a visual `A` or `I`, `p` of lines over a block of empty lines
-  then `u`, `r` with Enter in visual mode, and a quote object growing a visual area.
+  then `u`, `r` with Enter in visual mode, and a quote object growing a visual area; and spec
+  14.15's `]c` in visual mode, which vim beeps at keeping the area.
 
 ---
 
@@ -426,6 +428,12 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
 - **A line-number colour** -- spec 14.14, built, for pcb's theme file: `UITheme.line_numbers`, the
   code editor's line numbers in a colour of their own (`code.line-number`). Every other name in pcb's theme reaches something cetra already
   had, the focus rings included.
+- **Whole-line ranges, an exact scroll and change jumps** -- spec 14.15, built, for pcb 6.5's
+  side-by-side comparison of two versions: `UIEditorStyle.whole_lines` for its red and green lines,
+  `ui_editor_top_line` and `ui_editor_scroll_line` to hold one side's scroll to the other's, and
+  `ui_editor_vim_set_change` for `]c` and `[c`, which may go into another file. Blank filler rows to
+  line the sides up row for row, as GitHub pads them, are left out: pcb lines them up by their top
+  lines (`docs/ui.md`, The editor).
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the
