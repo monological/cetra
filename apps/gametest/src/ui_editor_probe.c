@@ -2055,6 +2055,216 @@ static int probe_editor_whole_lines(UISystem* ui) {
     return 0;
 }
 
+// The glyphs drawn on the row from `y`, `row` tall, by their centres: those left of `x` -- a line's
+// number -- or those right of it, up to `max`; how many.
+static size_t row_glyphs(const UISystem* ui, float x, float y, float row, bool left, UIRect* out,
+                         vec4* colours, size_t max) {
+    const UIDrawList* dl = ui_draw_list(ui);
+    size_t n = 0;
+    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
+        UIRect r;
+        vec4 colour;
+        int kind = 0;
+        ui_draw_list_quad(dl, i, &r, colour, &kind);
+        const float cx = r.x + r.w * 0.5f, cy = r.y + r.h * 0.5f;
+        if (kind != 1 || cy < y || cy >= y + row || (cx < x) != left)
+            continue;
+        if (n < max) {
+            out[n] = (UIRect){r.x, r.y - y, r.w, r.h};
+            if (colours)
+                glm_vec4_copy(colour, colours[n]);
+        }
+        n++;
+    }
+    return n;
+}
+
+// The folds the editor holds are `want`, line for line and open for open.
+static bool folds_are(const UIElement* ed, const UIEditorFold* want, size_t n) {
+    const UIEditorFold* f = NULL;
+    const size_t count = ui_editor_folds(ed, &f);
+    bool same = count == n;
+    for (size_t i = 0; same && i < n; i++)
+        same =
+            f[i].first == want[i].first && f[i].last == want[i].last && f[i].open == want[i].open;
+    if (!same) {
+        fprintf(stderr, "  %zu folds, want %zu:", count, n);
+        for (size_t i = 0; i < count; i++)
+            fprintf(stderr, " %zu-%zu%s", f[i].first, f[i].last, f[i].open ? " open" : "");
+        fprintf(stderr, "\n");
+    }
+    return same;
+}
+
+#define FOLD_LABEL "@@ -11,30 +11,30 @@"
+
+// A closed fold is one row, in the theme's fold colour, its label in the line numbers' and no
+// number, the line after it numbered as before; a row move and a wheel take it as one row, a click
+// on it lands on its first line and opens it; a line put in among its lines joins it and taking
+// them all out takes it away; typing in a closed fold opens it; an editor keeps its folds in a text
+// it leaves, another has none, and folds that overlap are refused.
+static int probe_editor_folds(UISystem* ui) {
+    // 60 lines, every seventh from the fourth long enough to wrap in 600 points.
+    static char text[60 * 160];
+    size_t len = 0;
+    for (int i = 0; i < 60; i++)
+        len += (size_t)snprintf(text + len, sizeof(text) - len, "line %02d%s\n", i,
+                                i % 7 == 3 ? " of a text whose lines are long enough to wrap in a "
+                                             "editor six hundred points across, once over at least"
+                                           : "");
+    TextDoc* doc = create_text_doc(text, len - 1);
+    UIElement* ed = editor_fixture(ui, doc, 600.0f, 400.0f);
+    const UITheme before = *ui_theme(ui);
+    UITheme theme = before;
+    vec4 fold_colour = {0.5f, 0.0f, 0.5f, 1.0f}, numbers = {0.2f, 0.9f, 0.9f, 1.0f};
+    glm_vec4_copy(fold_colour, theme.editor_fold);
+    glm_vec4_copy(numbers, theme.line_numbers);
+    ui_set_theme(ui, &theme);
+    UIEditorFold folds[2] = {{10, 39, true, FOLD_LABEL}, {45, 50, true, NULL}};
+    ui_editor_set_folds(ed, folds, 2);
+    editor_pass(ui);
+    float tx = 0.0f, y8 = 0.0f, x = 0.0f, y9 = 0.0f;
+    ui_editor_scroll_line(ed, 8, 0.0f);
+    editor_pass(ui);
+    ui_editor_point_of(ed, text_doc_line_start(doc, 8), &tx, &y8);
+    ui_editor_point_of(ed, text_doc_line_start(doc, 9), &x, &y9);
+    const float row = y9 - y8;
+    ui_editor_point_of(ed, text_doc_line_start(doc, 8) + 1, &x, &y9);
+    const float cell = x - tx;
+    // Line 40's number as it is drawn with the fold open, at the top.
+    ui_editor_scroll_line(ed, 40, 0.0f);
+    editor_pass(ui);
+    float y40 = 0.0f;
+    ui_editor_point_of(ed, text_doc_line_start(doc, 40), &x, &y40);
+    UIRect want[4], got[4];
+    const size_t want_n = row_glyphs(ui, tx, y40, row, true, want, NULL, 4);
+
+    // Closed, from line 8.
+    ui_editor_fold_open(ed, 10, false);
+    ui_editor_scroll_line(ed, 8, 0.0f);
+    editor_pass(ui);
+    float fold_y = 0.0f;
+    ui_editor_point_of(ed, text_doc_line_start(doc, 10), &x, &fold_y);
+    Fill fills[4];
+    const size_t fill_n = fills_in(ui, fold_colour, fills, 4);
+    bool rows = fill_n == 1 && fabsf(fills[0].r.y - fold_y) < 0.01f &&
+                fabsf(fills[0].r.h - row) < 0.01f && fills[0].r.x < tx - 4.0f * cell &&
+                fills[0].r.x + fills[0].r.w >= ed->rect.x + ed->rect.w - 20.0f;
+    UIRect label[32];
+    vec4 label_colours[32];
+    const size_t label_n = row_glyphs(ui, tx, fold_y, row, false, label, label_colours, 32);
+    size_t inked = 0;
+    for (const char* c = FOLD_LABEL; *c; c++)
+        inked += *c != ' ';
+    rows = rows && label_n == inked && row_glyphs(ui, tx, fold_y, row, true, got, NULL, 4) == 0;
+    for (size_t i = 0; rows && i < label_n; i++)
+        rows = same_colour(label_colours[i], numbers);
+    // Line 40 the next row, numbered 41 as before.
+    ui_editor_point_of(ed, text_doc_line_start(doc, 40), &x, &y40);
+    const size_t got_n = row_glyphs(ui, tx, y40, row, true, got, NULL, 4);
+    rows = rows && fabsf(y40 - (fold_y + row)) < 0.01f && got_n == want_n && want_n == 2;
+    for (size_t i = 0; rows && i < got_n; i++)
+        rows = fabsf(got[i].x - want[i].x) < 0.01f && fabsf(got[i].y - want[i].y) < 0.01f &&
+               fabsf(got[i].w - want[i].w) < 0.01f && fabsf(got[i].h - want[i].h) < 0.01f;
+    // The open fold's lines each on rows of their own.
+    float last_y = y40;
+    for (size_t line = 45; rows && line <= 50; line++) {
+        float ly = 0.0f;
+        rows = ui_editor_point_of(ed, text_doc_line_start(doc, line), &x, &ly) && ly > last_y;
+        last_y = ly;
+    }
+    if (!rows)
+        fprintf(stderr,
+                "editor-folds: %zu fold fills, the label %zu glyphs of %zu, line 40 at %.2f after "
+                "the fold at %.2f, its number %zu glyphs of %zu\n",
+                fill_n, label_n, inked, (double)y40, (double)fold_y, got_n, want_n);
+    say_flag("editor-folds", "rows", "one", rows);
+
+    // A row down from line 9 onto the fold, its first line, and on to line 40; a wheel's row from
+    // line 9 puts the fold at the top; the row's offset and an offset in it.
+    ui_editor_set_selections(
+        ed, &(TextSelection){text_doc_line_start(doc, 9), text_doc_line_start(doc, 9)}, 1);
+    ui_editor_apply(ed, UI_OP_MOVE, UI_MOTION_ROW_DOWN, 1);
+    const bool onto = one_selection(ed, text_doc_line_start(doc, 10), text_doc_line_start(doc, 10));
+    ui_editor_apply(ed, UI_OP_MOVE, UI_MOTION_ROW_DOWN, 1);
+    const bool past = one_selection(ed, text_doc_line_start(doc, 40), text_doc_line_start(doc, 40));
+    ui_editor_scroll_line(ed, 9, 0.0f);
+    editor_pass(ui);
+    wheel_rows(ui, ed, 1.0f);
+    float top_rows = 1.0f;
+    const size_t top = ui_editor_top_line(ed, &top_rows);
+    const bool wheel =
+        top == 10 && top_rows == 0.0f && ui_editor_top(ed) == text_doc_line_start(doc, 10);
+    editor_pass(ui);
+    ui_editor_point_of(ed, text_doc_line_start(doc, 10), &x, &fold_y);
+    float in_x = 0.0f, in_y = 0.0f;
+    const bool in = ui_editor_point_of(ed, text_doc_line_start(doc, 20) + 3, &in_x, &in_y) &&
+                    fabsf(in_x - tx) < 0.01f && fabsf(in_y - fold_y) < 0.01f;
+    const bool hit =
+        ui_editor_offset_at(ed, tx + 0.5f, fold_y + row * 0.5f) == text_doc_line_start(doc, 10);
+    if (!(onto && past && wheel && in && hit))
+        fprintf(stderr, "editor-folds: onto %d past %d wheel %d (top %zu, %.2f) in %d hit %d\n",
+                onto, past, wheel, top, (double)top_rows, in, hit);
+    say_flag("editor-folds", "walk", "one_row", onto && past && wheel && in && hit);
+
+    // A click on its row opens it, the caret on its first line; closed again by line.
+    press_drag(ui, tx + 0.5f, fold_y + row * 0.5f, tx + 0.5f, fold_y + row * 0.5f, 0);
+    const UIEditorFold opened[2] = {{10, 39, true, NULL}, {45, 50, true, NULL}};
+    const bool clicked = folds_are(ed, opened, 2) && one_selection(ed, text_doc_line_start(doc, 10),
+                                                                   text_doc_line_start(doc, 10));
+    const UIEditorFold shut[2] = {{10, 39, false, NULL}, {45, 50, true, NULL}};
+    const bool closed = ui_editor_fold_open(ed, 20, false) && !ui_editor_fold_open(ed, 41, false) &&
+                        folds_are(ed, shut, 2);
+    const UIEditorFold* read = NULL;
+    ui_editor_folds(ed, &read);
+    const bool labelled = read && read[0].label && !strcmp(read[0].label, FOLD_LABEL) &&
+                          read[0].label != folds[0].label && !read[1].label;
+    say_flag("editor-folds", "open", "click", clicked && closed && labelled);
+
+    // A line put in among its lines joins it; the other moves down a line. Taking all its lines out
+    // takes it away. Typing at a caret in a closed fold opens it.
+    text_doc_replace(doc, text_doc_line_start(doc, 20), text_doc_line_start(doc, 20), "new\n", 4);
+    const UIEditorFold grown[2] = {{10, 40, false, NULL}, {46, 51, true, NULL}};
+    bool edits = folds_are(ed, grown, 2);
+    text_doc_replace(doc, text_doc_line_start(doc, 10), text_doc_line_start(doc, 41), "", 0);
+    const UIEditorFold gone[1] = {{15, 20, true, NULL}};
+    edits = edits && folds_are(ed, gone, 1);
+    ui_editor_set_folds(ed, &(UIEditorFold){4, 8, false, NULL}, 1);
+    const size_t at6 = text_doc_line_start(doc, 6);
+    ui_editor_set_selections(ed, &(TextSelection){at6, at6}, 1);
+    ui_editor_type(ed, "x");
+    size_t l6_len = 0;
+    const char* l6 = text_doc_line(doc, 6, &l6_len);
+    edits = edits && folds_are(ed, &(UIEditorFold){4, 8, true, NULL}, 1) && l6_len && l6[0] == 'x';
+    say_flag("editor-folds", "edits", "moved", edits);
+
+    // Shown another text and back, the folds as they were; a second editor on the text has none.
+    ui_editor_fold_open(ed, 4, false);
+    TextDoc* other = create_text_doc("other\ntext\n", 11);
+    ui_editor_set_doc(ed, other);
+    editor_pass(ui);
+    bool parked = ui_editor_folds(ed, NULL) == 0;
+    ui_editor_set_doc(ed, doc);
+    editor_pass(ui);
+    parked = parked && folds_are(ed, &(UIEditorFold){4, 8, false, NULL}, 1);
+    UIElement* second = ui_editor(ui_screen_root(ui_top(ui)), doc);
+    ui_set_size(second, UI_FIXED, 300.0f, UI_FIXED, 100.0f);
+    editor_pass(ui);
+    parked = parked && ui_editor_folds(second, NULL) == 0;
+    say_flag("editor-folds", "parked", "kept", parked);
+
+    // Folds that overlap, refused: the fold stays.
+    const UIEditorFold overlapping[2] = {{1, 5, false, NULL}, {5, 9, false, NULL}};
+    ui_editor_set_folds(ed, overlapping, 2);
+    say_flag("editor-folds", "refused", "kept",
+             folds_are(ed, &(UIEditorFold){4, 8, false, NULL}, 1));
+
+    ui_set_theme(ui, &before);
+    free_text_doc(other);
+    free_text_doc(doc);
+    return 0;
+}
+
 // Each action told with its step: typing joined into words shares one, a group holds one open over
 // any actions -- typing, a Backspace, more typing -- and one undo takes it all back. The same with
 // keep_undo off.
@@ -3464,6 +3674,8 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_editor_line_numbers(ui);
     if (!strcmp(which, "editor-whole-lines"))
         return probe_editor_whole_lines(ui);
+    if (!strcmp(which, "editor-folds"))
+        return probe_editor_folds(ui);
     if (!strcmp(which, "editor-steps"))
         return probe_editor_steps(ui);
     if (!strcmp(which, "vim-run"))

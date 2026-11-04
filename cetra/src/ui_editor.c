@@ -69,6 +69,9 @@ typedef struct UIEditorPlace {
     uint32_t* rows;
     uint64_t* tops;
     size_t line_capacity, tops_capacity, tops_good;
+    // The folds, in order of their lines and none overlapping, each label the place's own copy.
+    UIEditorFold* folds;
+    size_t fold_count;
     // The scroll: the line and row at the view's top, and how far that row is scrolled past.
     size_t top_line;
     size_t top_row;
@@ -313,8 +316,48 @@ static Rows _wrap_line(UIEditor* ed, size_t line) {
     return (Rows){ed->starts, count, hang};
 }
 
-static size_t _rows_of(UIEditor* ed, size_t line) {
-    return ed->at.rows[line] ? ed->at.rows[line] : _wrap_line(ed, line).count;
+// The fold holding `line`; NULL for none.
+static UIEditorFold* _fold_of(const UIEditorPlace* at, size_t line) {
+    size_t lo = 0, hi = at->fold_count;
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2;
+        if (at->folds[mid].last < line)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo < at->fold_count && at->folds[lo].first <= line ? &at->folds[lo] : NULL;
+}
+
+static const UIEditorFold* _closed(const UIEditorPlace* at, size_t line) {
+    const UIEditorFold* f = _fold_of(at, line);
+    return f && !f->open ? f : NULL;
+}
+
+// The line after `line` that shows: past the closed fold it starts, if any.
+static size_t _next_shown(const UIEditorPlace* at, size_t line) {
+    const UIEditorFold* f = _closed(at, line);
+    return (f ? f->last : line) + 1;
+}
+
+/*
+ * The rows a line shows, which every walk of the rows counts by: a closed fold's first line one,
+ * its row, and the fold's other lines none; any other line its wrapped rows, a guess while `wrap`
+ * is false and it is not wrapped yet. A line a closed fold hides is never wrapped for drawing.
+ */
+static size_t _shown(UIEditor* ed, size_t line, bool wrap) {
+    const UIEditorFold* f = _closed(&ed->at, line);
+    if (f)
+        return f->first == line;
+    if (ed->at.rows[line])
+        return ed->at.rows[line];
+    return wrap ? _wrap_line(ed, line).count : _estimate(ed, line);
+}
+
+// A change to the folds from `line` on: the rows above every later line are counted again.
+static void _shown_changed(UIEditorPlace* at, size_t line) {
+    if (at->tops_good > line)
+        at->tops_good = line;
 }
 
 // Wraps a guessed line for the budget: the bytes it read.
@@ -356,21 +399,22 @@ bool ui_editor_settled(const UIElement* el) {
 // The rows above `line`, guessed for the lines not wrapped yet.
 static uint64_t _top_of(UIEditor* ed, size_t line) {
     for (size_t i = ed->at.tops_good; i < line; i++)
-        ed->at.tops[i + 1] = ed->at.tops[i] + (ed->at.rows[i] ? ed->at.rows[i] : _estimate(ed, i));
+        ed->at.tops[i + 1] = ed->at.tops[i] + _shown(ed, i, false);
     if (ed->at.tops_good < line)
         ed->at.tops_good = line;
     return ed->at.tops[line];
 }
 
-// Moves (line, row) one row down; false at the text's last row.
+// Moves (line, row) one row down, over the lines that show none; false at the text's last row.
 static bool _row_down(UIEditor* ed, size_t* line, size_t* row) {
-    if (*row + 1 < _rows_of(ed, *line)) {
+    if (*row + 1 < _shown(ed, *line, true)) {
         (*row)++;
         return true;
     }
-    if (*line + 1 >= ed->doc->line_count)
+    const size_t next = _next_shown(&ed->at, *line);
+    if (next >= ed->doc->line_count)
         return false;
-    (*line)++;
+    *line = next;
     *row = 0;
     return true;
 }
@@ -382,8 +426,9 @@ static bool _row_up(UIEditor* ed, size_t* line, size_t* row) {
     }
     if (*line == 0)
         return false;
-    (*line)--;
-    *row = _rows_of(ed, *line) - 1;
+    const UIEditorFold* f = _closed(&ed->at, *line - 1);
+    *line = f ? f->first : *line - 1;
+    *row = _shown(ed, *line, true) - 1;
     return true;
 }
 
@@ -400,20 +445,30 @@ static int _column(const UIEditor* ed, const Line* l, Rows rows, size_t r, size_
     return _col_after(l->s, l->len, rows.starts[r], byte, r ? rows.hang : 0, _tab(ed));
 }
 
-// The line and row at the view's top, the row held to the line's rows: an edit can leave the line
-// shorter than the row the view had scrolled to until the next layout.
+// The line and row at the view's top, the line held to one that shows and the row to its rows: an
+// edit can leave the line shorter than the row the view had scrolled to until the next layout, and
+// a fold closed over the top puts its row there.
 static size_t _held_line(const UIEditor* ed, size_t line) {
-    return line < ed->doc->line_count ? line : ed->doc->line_count - 1;
+    line = line < ed->doc->line_count ? line : ed->doc->line_count - 1;
+    const UIEditorFold* f = _closed(&ed->at, line);
+    return f ? f->first : line;
 }
 
 static void _top(UIEditor* ed, size_t* line, size_t* row) {
     *line = _held_line(ed, ed->at.top_line);
-    const size_t rows = _rows_of(ed, *line);
+    const size_t rows = _shown(ed, *line, true);
     *row = ed->at.top_row < rows ? ed->at.top_row : rows - 1;
 }
 
+// The offset starting a row a line shows: a closed fold's row starts at its first line's start.
+static size_t _row_offset(UIEditor* ed, size_t line, size_t row) {
+    const size_t at = text_doc_line_start(ed->doc, line);
+    return _closed(&ed->at, line) ? at : at + _wrap_line(ed, line).starts[row];
+}
+
 // The offset on (line, row) nearest column `want`; past a wrapped row's end, before its last
-// character, as a click there is, so the caret stays on that row.
+// character, as a click there is, so the caret stays on that row. A closed fold's row is its first
+// line's first.
 static size_t _at_column(UIEditor* ed, size_t line, size_t row, float want) {
     const Line l = _line_at(ed, line);
     const Rows rows = _wrap_line(ed, line);
@@ -428,9 +483,18 @@ static size_t _at_column(UIEditor* ed, size_t line, size_t row, float want) {
     return l.at + at;
 }
 
-// The line, the row and the column an offset stands at; `col` may be NULL.
+// The line, the row and the column an offset stands at -- in a closed fold, the start of its row;
+// `col` may be NULL.
 static void _place_of(UIEditor* ed, size_t offset, size_t* line, size_t* row, int* col) {
     const Line l = _line(ed, offset);
+    const UIEditorFold* f = _closed(&ed->at, l.line);
+    if (f) {
+        *line = f->first;
+        *row = 0;
+        if (col)
+            *col = 0;
+        return;
+    }
     const Rows rows = _wrap_line(ed, l.line);
     *line = l.line;
     *row = _row_holding(rows, offset - l.at);
@@ -625,13 +689,70 @@ static bool _carets_add(UIEditor* ed, TextSelection s) {
 
 // ---- The text's calls
 
+// A change to the text's lines: `removed` lines from `first` became `inserted`, the first of them
+// still the old first line when `head`, the change having begun past its start, and the last still
+// the old last when `tail`, the text after the change starting a line of its own.
+typedef struct {
+    size_t first, removed, inserted;
+    bool head, tail;
+} Shift;
+
+static Shift _shift_of(TextDoc* doc, const TextViewChange* c) {
+    Shift s = {c->first_line, c->lines_removed, c->lines_inserted, true, true};
+    if (s.removed == 1 && s.inserted == 1)
+        return s; // within one line
+    s.head = text_doc_line_start(doc, s.first) < c->start;
+    s.tail = (s.removed > 1 || !s.head) &&
+             text_doc_line_start(doc, s.first + s.inserted - 1) == c->start + c->inserted;
+    return s;
+}
+
+// Where a change takes `line`; SIZE_MAX for a line it took out.
+static size_t _moved(const Shift* s, size_t line) {
+    if (line < s->first)
+        return line;
+    if (line >= s->first + s->removed)
+        return line - s->removed + s->inserted;
+    if (line == s->first && s->head)
+        return s->first;
+    if (line == s->first + s->removed - 1 && s->tail)
+        return s->first + s->inserted - 1;
+    return SIZE_MAX;
+}
+
+// The folds through a change: each keeps the lines of it the change kept and takes the lines put
+// in among them, as vim's do; one it took every line of goes.
+static void _shift_folds(UIEditorPlace* at, const Shift* s) {
+    size_t kept = 0;
+    for (size_t i = 0; i < at->fold_count; i++) {
+        UIEditorFold f = at->folds[i];
+        size_t lo = _moved(s, f.first), hi = _moved(s, f.last);
+        // A first line taken out gives the fold the first new line not the old first; a last, the
+        // last not the old last. A fold keeping a line ends at one at least.
+        const bool gone = lo == SIZE_MAX && hi == SIZE_MAX;
+        lo = lo != SIZE_MAX ? lo : s->first + s->head;
+        hi = hi != SIZE_MAX ? hi : s->first + s->inserted - s->tail - 1;
+        // Lines put in where two folds met are the first's.
+        if (kept && lo <= at->folds[kept - 1].last)
+            lo = at->folds[kept - 1].last + 1;
+        if (gone || lo > hi) {
+            free((char*)f.label);
+            continue;
+        }
+        f.first = lo;
+        f.last = hi;
+        at->folds[kept++] = f;
+    }
+    at->fold_count = kept;
+}
+
 // The lines a change rewrote, the view kept at its place in the text -- a line above the change
 // stays, one below it moves with its lines, and one the change rewrote is held to what replaced
 // it, which is at least one line. A line edited within itself that was wrapped is wrapped again
 // now, so typing leaves the rows above every later line as they were unless its own count changed;
 // any other line rewritten is a guess the budget wraps first.
-static void _shift_lines(UIEditorPlace* at, size_t count, size_t first, size_t removed,
-                         size_t inserted) {
+static void _shift_lines(UIEditorPlace* at, size_t count, const Shift* s) {
+    const size_t first = s->first, removed = s->removed, inserted = s->inserted;
     const size_t old = count - inserted + removed;
     if (!grow_array((void**)&at->rows, &at->line_capacity, count, sizeof(uint32_t), 64) ||
         !grow_array((void**)&at->tops, &at->tops_capacity, count + 1, sizeof(uint64_t), 64))
@@ -662,6 +783,7 @@ static void _shift_lines(UIEditorPlace* at, size_t count, size_t first, size_t r
         const size_t into = at->top_line - first;
         at->top_line = first + (into < inserted ? into : inserted - 1);
     }
+    _shift_folds(at, s);
 }
 
 // The selections through a change, which moves every offset the same way, so they stay in order;
@@ -675,16 +797,18 @@ static void _map_selections(UIEditorPlace* at, const TextViewChange* c) {
     }
 }
 
-static void _change_lines(UIEditor* ed, size_t first, size_t removed, size_t inserted) {
-    if (removed == 1 && inserted == 1 && ed->at.rows[first])
-        _wrap_line(ed, first);
-    else
-        _shift_lines(&ed->at, ed->doc->line_count, first, removed, inserted);
+static void _change_lines(UIEditor* ed, const TextViewChange* c) {
+    if (c->lines_removed == 1 && c->lines_inserted == 1 && ed->at.rows[c->first_line]) {
+        _wrap_line(ed, c->first_line);
+        return;
+    }
+    const Shift s = _shift_of(ed->doc, c);
+    _shift_lines(&ed->at, ed->doc->line_count, &s);
 }
 
 static void _view_changed(void* view, const TextViewChange* c) {
     UIEditor* ed = view;
-    _change_lines(ed, c->first_line, c->lines_removed, c->lines_inserted);
+    _change_lines(ed, c);
     if (c->held)
         return;
     _map_selections(&ed->at, c);
@@ -697,7 +821,8 @@ static void _view_changed(void* view, const TextViewChange* c) {
 // is a guess, wrapped when the editor comes back; selections a change ran together are merged then.
 static void _parked_changed(void* view, const TextViewChange* c) {
     Parked* p = view;
-    _shift_lines(&p->at, p->doc->line_count, c->first_line, c->lines_removed, c->lines_inserted);
+    const Shift s = _shift_of(p->doc, c);
+    _shift_lines(&p->at, p->doc->line_count, &s);
     if (!c->held)
         _map_selections(&p->at, c);
 }
@@ -712,11 +837,18 @@ static void _parked_gone(void* view) {
     ((Parked*)view)->doc = NULL;
 }
 
+static void _folds_free(UIEditorFold* folds, size_t count) {
+    for (size_t i = 0; i < count; i++)
+        free((char*)folds[i].label);
+    free(folds);
+}
+
 static void _place_free(UIEditorPlace* at) {
     free(at->sel);
     free(at->want);
     free(at->rows);
     free(at->tops);
+    _folds_free(at->folds, at->fold_count);
 }
 
 static size_t _view_selections(void* view, const TextSelection** out) {
@@ -920,11 +1052,7 @@ static void _place(const UISystem* ui, UIElement* el, UIRect content) {
         _rows_guessed(&ed->at, ed->doc->line_count);
         ed->cols = cols;
     }
-    if (ed->at.top_line >= ed->doc->line_count)
-        ed->at.top_line = ed->doc->line_count - 1;
-    const size_t rows = _rows_of(ed, ed->at.top_line);
-    if (ed->at.top_row >= rows)
-        ed->at.top_row = rows - 1;
+    _top(ed, &ed->at.top_line, &ed->at.top_row);
     // A place asked for before the editor was laid out on this text.
     ed->laid = ed->serial;
     _take_pending(ed);
@@ -941,14 +1069,16 @@ static bool _scroll(const UIElement* el, UIScrollPlace* place) {
     if (!ed || ed->row <= 0.0f)
         return false;
     const uint64_t total = _top_of(ed, ed->doc->line_count);
-    const double at =
-        (double)_top_of(ed, ed->at.top_line) + (double)ed->at.top_row + ed->at.top_frac;
+    size_t line, row;
+    _top(ed, &line, &row);
+    const double at = (double)_top_of(ed, line) + (double)row + ed->at.top_frac;
     *place = (UIScrollPlace){_view_rows(ed), (float)total,
                              total > 1 ? (float)(at / (double)(total - 1)) : 0.0f, WHEEL_ROWS};
     return place->total > place->view;
 }
 
-// The line holding the global row `row`, and the row in it.
+// The line holding the global row `row`, and the row in it: never one showing none, since the
+// search takes the last line whose top is at or above the row.
 static void _line_at_row(UIEditor* ed, uint64_t row, size_t* line, size_t* in) {
     _top_of(ed, ed->doc->line_count);
     size_t lo = 0, hi = ed->doc->line_count;
@@ -961,7 +1091,7 @@ static void _line_at_row(UIEditor* ed, uint64_t row, size_t* line, size_t* in) {
     }
     *line = lo;
     const uint64_t r = row - ed->at.tops[lo];
-    const size_t rows = _rows_of(ed, lo);
+    const size_t rows = _shown(ed, lo, true);
     *in = r < rows ? (size_t)r : rows - 1;
 }
 
@@ -984,25 +1114,30 @@ static void _scroll_by(UIElement* el, float rows) {
 
 // ---- Where things are
 
+// The row a point at height `y` is on, in the rows as last laid out: -1 above the text's first row,
+// 1 below its last, else 0 and (line, row).
+static int _row_at(UIEditor* ed, float y, size_t* line, size_t* row) {
+    float down = (y - ed->text.y) / ed->row + ed->at.top_frac;
+    _top(ed, line, row);
+    for (; down >= 1.0f; down -= 1.0f)
+        if (!_row_down(ed, line, row))
+            return 1;
+    for (; down < 0.0f; down += 1.0f)
+        if (!_row_up(ed, line, row))
+            return -1;
+    return 0;
+}
+
 // The offset a point at (x, y) is nearest, in the rows as last laid out.
 size_t ui_editor_offset_at(UIElement* el, float x, float y) {
     UIEditor* ed = _of(el);
     if (!ed || ed->row <= 0.0f)
         return 0;
-    float down = (y - ed->text.y) / ed->row + ed->at.top_frac;
     size_t line, row;
-    _top(ed, &line, &row);
-    for (; down >= 1.0f; down -= 1.0f) {
-        if (!_row_down(ed, &line, &row)) {
-            const Line l = _line_at(ed, line);
-            return l.at + l.len;
-        }
-    }
-    for (; down < 0.0f; down += 1.0f) {
-        if (!_row_up(ed, &line, &row))
-            return 0;
-    }
-    return _at_column(ed, line, row, (x - ed->text.x) / ed->cell);
+    const int where = _row_at(ed, y, &line, &row);
+    return where < 0   ? 0
+           : where > 0 ? ed->doc->length
+                       : _at_column(ed, line, row, (x - ed->text.x) / ed->cell);
 }
 
 bool ui_editor_point_of(UIElement* el, size_t offset, float* x, float* y) {
@@ -1031,7 +1166,7 @@ static size_t _row_down_from_top(UIEditor* ed, int down) {
     _top(ed, &line, &row);
     for (int k = 0; k < down && _row_down(ed, &line, &row); k++) {
     }
-    return text_doc_line_start(ed->doc, line) + _wrap_line(ed, line).starts[row];
+    return _row_offset(ed, line, row);
 }
 
 size_t ui_editor_top(const UIElement* el) {
@@ -1098,10 +1233,14 @@ static void _scroll_place(UIEditor* ed, size_t offset, float where) {
 // own rows: past them is the next line's top, so a view held to another's line never runs on into
 // lines below it.
 static void _scroll_line(UIEditor* ed, size_t line, float rows) {
-    ed->at.top_line = _held_line(ed, line);
+    const size_t held = line < ed->doc->line_count ? line : ed->doc->line_count - 1;
+    ed->at.top_line = _held_line(ed, held);
     ed->at.top_row = 0;
     ed->at.top_frac = 0.0f;
-    const float most = (float)_rows_of(ed, ed->at.top_line);
+    // A line a closed fold hides: the fold's row.
+    if (ed->at.top_line != held)
+        return;
+    const float most = (float)_shown(ed, ed->at.top_line, true);
     _scroll_rows(ed, rows < 0.0f ? 0.0f : rows < most ? rows : most);
 }
 
@@ -1144,6 +1283,83 @@ void ui_editor_scroll_place(UIElement* el, size_t offset, float where) {
 
 void ui_editor_scroll_line(UIElement* el, size_t line, float rows) {
     _pend(el, (Pending){.kind = PENDING_LINE, .top = {line, rows}});
+}
+
+// ---- Folds
+
+static int _by_fold_first(const void* a, const void* b) {
+    const size_t x = ((const UIEditorFold*)a)->first, y = ((const UIEditorFold*)b)->first;
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+
+void ui_editor_set_folds(UIElement* el, const UIEditorFold* folds, size_t count) {
+    UIEditor* ed = _of(el);
+    if (!ed) {
+        log_error("ui_editor_set_folds: not an editor showing a text");
+        return;
+    }
+    UIEditorFold* fresh = count ? malloc(count * sizeof(UIEditorFold)) : NULL;
+    if (count && (!folds || !fresh)) {
+        log_error(folds ? "ui_editor_set_folds: out of memory" : "ui_editor_set_folds: no folds");
+        free(fresh);
+        return;
+    }
+    if (count)
+        memcpy(fresh, folds, count * sizeof(UIEditorFold));
+    qsort(fresh, count, sizeof(UIEditorFold), _by_fold_first);
+    for (size_t i = 0; i < count; i++) {
+        const UIEditorFold* f = &fresh[i];
+        if (f->first > f->last || f->last >= ed->doc->line_count ||
+            (i && f->first <= fresh[i - 1].last)) {
+            log_error("ui_editor_set_folds: the fold over lines %zu to %zu %s", f->first, f->last,
+                      f->first > f->last || f->last >= ed->doc->line_count
+                          ? "is not lines of the text"
+                          : "overlaps another");
+            free(fresh);
+            return;
+        }
+    }
+    for (size_t i = 0; i < count; i++)
+        fresh[i].label = fresh[i].label ? safe_strdup(fresh[i].label) : NULL;
+    UIEditorPlace* at = &ed->at;
+    size_t touched = count ? fresh[0].first : SIZE_MAX;
+    if (at->fold_count && at->folds[0].first < touched)
+        touched = at->folds[0].first;
+    _folds_free(at->folds, at->fold_count);
+    at->folds = fresh;
+    at->fold_count = count;
+    if (touched != SIZE_MAX)
+        _shown_changed(at, touched);
+}
+
+size_t ui_editor_folds(const UIElement* el, const UIEditorFold** out) {
+    const UIEditor* ed = _seen(el);
+    if (out)
+        *out = ed ? ed->at.folds : NULL;
+    return ed ? ed->at.fold_count : 0;
+}
+
+static void _fold_open(UIEditorPlace* at, UIEditorFold* f, bool open) {
+    if (f->open != open)
+        _shown_changed(at, f->first);
+    f->open = open;
+}
+
+bool ui_editor_fold_open(UIElement* el, size_t line, bool open) {
+    UIEditor* ed = _of(el);
+    UIEditorFold* f = ed ? _fold_of(&ed->at, line) : NULL;
+    if (f)
+        _fold_open(&ed->at, f, open);
+    return f != NULL;
+}
+
+// The closed folds the carets stand in opened, so what is typed there is seen.
+static void _open_at_carets(UIEditor* ed) {
+    for (size_t i = 0; ed->at.fold_count && i < ed->at.sel_count; i++) {
+        UIEditorFold* f = _fold_of(&ed->at, text_doc_line_of(ed->doc, ed->at.sel[i].head));
+        if (f)
+            _fold_open(&ed->at, f, true);
+    }
 }
 
 // ---- Selections, public
@@ -1205,7 +1421,8 @@ static TextSelection _unit(const UIEditor* ed, size_t offset, int presses) {
 }
 
 // A click places a caret, a second one takes a word and a third a line; Shift extends the primary
-// selection and Alt adds a caret.
+// selection and Alt adds a caret. A press on a closed fold's row opens it, its caret on the fold's
+// first line.
 static void _press(const UISystem* ui, UIElement* el, UIRect content, float x, float y, int mods,
                    double time) {
     (void)ui;
@@ -1215,6 +1432,11 @@ static void _press(const UISystem* ui, UIElement* el, UIRect content, float x, f
         return;
     const int presses = ui_typing_press(&ed->presses, time, x, y, 3);
     const TextSelection u = _unit(ed, ui_editor_offset_at(el, x, y), presses);
+    size_t line, row;
+    UIEditorFold* fold =
+        ed->row > 0.0f && !_row_at(ed, y, &line, &row) ? _fold_of(&ed->at, line) : NULL;
+    if (fold)
+        _fold_open(&ed->at, fold, true);
     ed->grab_from = u.anchor;
     ed->grab_to = u.head;
     if (mods & GLFW_MOD_SHIFT) {
@@ -1340,7 +1562,7 @@ static size_t _lines_moved(UIEditor* ed, size_t offset, int count, int* want) {
 static size_t _row_start(UIEditor* ed, size_t offset) {
     size_t line, row;
     _place_of(ed, offset, &line, &row, NULL);
-    return text_doc_line_start(ed->doc, line) + _wrap_line(ed, line).starts[row];
+    return _row_offset(ed, line, row);
 }
 
 static size_t _row_end(UIEditor* ed, size_t offset) {
@@ -1756,9 +1978,10 @@ static void _copy(UIEditor* ed, const TextEdit* ranges, size_t n) {
 }
 
 // The text's own line ending, which typed and pasted line breaks are written as.
-// An edit over each selection, with no text yet, for the caller to fill and free; NULL out of
-// memory.
-static TextEdit* _caret_edits(const UIEditor* ed) {
+// An edit over each selection, with no text yet, for the caller to fill and free, any closed fold a
+// caret stands in opened first; NULL out of memory.
+static TextEdit* _caret_edits(UIEditor* ed) {
+    _open_at_carets(ed);
     TextEdit* e = calloc(ed->at.sel_count, sizeof(TextEdit));
     for (size_t i = 0; e && i < ed->at.sel_count; i++)
         e[i] = (TextEdit){_sel_min(&ed->at.sel[i]), _sel_max(&ed->at.sel[i]), "", 0};
@@ -2568,9 +2791,58 @@ static bool _on_row(const TextRange* range, const Line* l, size_t from, size_t t
     return true;
 }
 
+// A closed fold's row at `y`, with no number: the theme's fold colour from the gutter's left to the
+// editor's right, a selection reaching its lines over the text's part, its label from the text's
+// left edge in the line numbers' colour, and a caret on any of its lines at the row's start, drawn
+// when `caret` is not NULL.
+static void _fold_row(UIDrawList* dl, UIEditor* ed, const UIEditorFold* f, const UITheme* t,
+                      UIRect content, float y, const float* numbers, const float* sel_colour,
+                      UIEditorSelectionShape shape, const float* caret, float caret_w) {
+    vec4 fill = {t->editor_fold[0], t->editor_fold[1], t->editor_fold[2], t->editor_fold[3]};
+    if (fill[3] <= 0.0f)
+        glm_vec4_copy((vec4){sel_colour[0], sel_colour[1], sel_colour[2], sel_colour[3] / 3.0f},
+                      fill);
+    const float right = content.x + content.w;
+    ui_draw_quad(dl, (UIRect){content.x, y, right - content.x, ed->row}, fill);
+    const size_t from = text_doc_line_start(ed->doc, f->first);
+    const size_t to = text_doc_line_start(ed->doc, f->last + 1);
+    bool selected = false, held = false;
+    for (size_t k = _first_reaching(ed, from); k < ed->at.sel_count; k++) {
+        size_t lo, hi;
+        _drawn(ed, &ed->at.sel[k], shape, &lo, &hi);
+        if (lo > to)
+            break;
+        selected = selected || (lo < hi && lo < to && hi > from);
+        const size_t line = text_doc_line_of(ed->doc, ed->at.sel[k].head);
+        held = held || (line >= f->first && line <= f->last);
+    }
+    if (selected)
+        ui_draw_quad(dl, (UIRect){ed->text.x, y, right - ed->text.x, ed->row}, (float*)sel_colour);
+    char count[32];
+    const char* label = f->label;
+    if (!label) {
+        snprintf(count, sizeof(count), "%zu lines", f->last - f->first + 1);
+        label = count;
+    }
+    const size_t len = strlen(label);
+    const float base_px = roundf(y * ed->px) + (float)ed->face->ascent;
+    const float x_px = roundf(ed->text.x * ed->px);
+    int col = 0;
+    for (size_t i = 0; i < len;) {
+        const uint32_t cp = ui_typing_next(label, len, &i);
+        const int w = _width(cp, col, _tab(ed));
+        if (cp != ' ' && cp != '\t' && w > 0)
+            _glyph(dl, ed, cp, x_px + (float)col * (float)ed->face->cell_width, base_px, numbers);
+        col += w;
+    }
+    if (caret && held)
+        ui_draw_quad(dl, (UIRect){_snap(ed, ed->text.x), y, caret_w, ed->row}, (float*)caret);
+}
+
 // The rows in view: their text, the host's ranges, find's matches, the selections and the carets,
-// row by row. The seconds until it next changes of itself: at once while the budget has work left,
-// a line drawn came back uncoloured, or the atlas grew, which moves every glyph already drawn.
+// row by row, a closed fold's lines as its one row. The seconds until it next changes of itself: at
+// once while the budget has work left, a line drawn came back uncoloured, or the atlas grew, which
+// moves every glyph already drawn.
 static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect content,
                     bool focused, double now, bool blink) {
     UIEditor* ed = _of(el);
@@ -2602,14 +2874,16 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
 
     size_t line, row;
     _top(ed, &line, &row);
-    // Every range reaching the screenful of lines that could show; those of them that colour their
-    // text, which every character asks about; and those with a background, the `whole` filling
-    // whole lines first, then those banded behind their characters.
+    // Every range reaching the screenful of lines that could show, a closed fold one line; those of
+    // them that colour their text, which every character asks about; and those with a background,
+    // the `whole` filling whole lines first, then those banded behind their characters.
     TextRange ranges[RANGES_DRAWN * TEXT_DOC_LAYERS], colouring[RANGES_DRAWN * TEXT_DOC_LAYERS],
         backed[RANGES_DRAWN * TEXT_DOC_LAYERS];
+    size_t past = line;
+    for (size_t k = 0; k <= (size_t)ceilf(_view_rows(ed)) && past < doc->line_count; k++)
+        past = _next_shown(&ed->at, past);
     const size_t range_count =
-        _ranges_in(doc, text_doc_line_start(doc, line),
-                   text_doc_line_start(doc, line + (size_t)ceilf(_view_rows(ed)) + 1), ranges);
+        _ranges_in(doc, text_doc_line_start(doc, line), text_doc_line_start(doc, past), ranges);
     size_t colouring_count = 0, backed_count = 0;
     for (size_t k = 0; k < range_count; k++) {
         const UIEditorStyle* st = _style(t, ranges[k].style);
@@ -2632,6 +2906,18 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
     float y = ed->text.y - ed->at.top_frac * ed->row;
     bool uncoloured = false;
     while (y < ed->text.y + ed->text.h) {
+        const UIEditorFold* fold = _closed(&ed->at, line);
+        if (fold) {
+            _fold_row(dl, ed, fold, t, content, y, numbers, sel_colour, mode->selection,
+                      lit ? caret_colour : NULL, caret_w);
+            y += ed->row;
+            const size_t next = fold->last + 1;
+            if (y >= ed->text.y + ed->text.h || next >= doc->line_count)
+                break;
+            line = next;
+            row = 0;
+            continue;
+        }
         const Line l = _line_at(ed, line);
         const Rows rows = _wrap_line(ed, line);
         const TextSpan* spans = NULL;

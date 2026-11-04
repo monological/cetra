@@ -28445,6 +28445,19 @@ def run_ui_gate(workdir):
                      there with three rows' starts level with the first's; put
                      before a layout, it is taken at it; past the last line it
                      holds where a wheel run to the end does.
+      ui-editor-folds a closed fold (spec 14.16) is one row: one quad in
+                     theme.editor_fold from the gutter's left, its label's glyphs
+                     in the line numbers' colour and no number, line 40 the next
+                     row numbered 41 as when open, an open fold's lines each on
+                     its own row; a row move from line 9 lands on its first line
+                     and the next on line 40, a wheel's row puts it at the top,
+                     its row is its first line's start and an offset inside it is
+                     drawn there; a click opens it, the caret on its first line,
+                     and it closes again by line, its label a copy; a line put in
+                     among its lines joins it, taking them all out takes it, and
+                     typing in a closed fold opens it; an editor shown another
+                     text and back keeps its folds, a second has none; folds
+                     that overlap are refused.
       ui-editor-steps each action told with its step: typing joined into words
                      shares one; a group holds one over typing, a Backspace and
                      more typing, one undo takes the group back and one redo makes
@@ -29700,6 +29713,15 @@ def run_ui_gate(workdir):
                            "the last line as a wheel is")
     print(f"  ui-editor-scroll-line {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-scroll-line", ok)
+
+    ok, detail = doc_flags("editor-folds", 6, "a closed fold one row in the fold colour with its "
+                           "label and no number, the next line numbered as before; a row move, a "
+                           "wheel, a click and an offset inside it take it as one row; a click "
+                           "opens it; it moves with its lines and goes with them, typing in it "
+                           "opens it; kept in a text left, none on a second editor; overlaps "
+                           "refused")
+    print(f"  ui-editor-folds       {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-folds", ok)
 
     ok, detail = doc_flags("editor-steps", 7, "typing joined into words shares a step, a group "
                            "holds one over typing, a Backspace and more typing, and one undo takes "
