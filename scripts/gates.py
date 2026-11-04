@@ -28632,6 +28632,25 @@ def run_ui_gate(workdir):
                      parent's, a move into itself or under it, a pane's row, a move
                      into a pane with rows or into one of its rows, and a move to
                      another screen refused.
+      ui-hidden      a hidden element (spec 14.18): the middle of three panels 100
+                     wide with gaps of 10 hidden, the third 110 after the first and
+                     the row 210; of two growing, the other takes the whole row; the
+                     hidden panel's rect and its child's 0 by 0, and each standing
+                     where it stood once shown; a hidden editor and a filled panel
+                     drawing what the screen draws without them; a press and a
+                     wheel where a hidden editor stood reaching the pane round it;
+                     hiding the focused editor leaving the focus on nothing, a key
+                     typed then changing nothing; the focus refused a hidden editor
+                     and a field under a hidden panel; a held press and a held bar
+                     let go when hidden; an editor moved under a hidden panel
+                     letting go of the focus; Tab stepping over a hidden button; an
+                     editor scrolled to line 50 with two carets hidden five passes,
+                     its columns the same each pass, and shown with its top line,
+                     carets and wrapped rows kept, settled at once, where sized to
+                     nothing it has one column; a pane hidden mid-ease asking for no
+                     frame; a pane of rows hidden five passes building and freeing
+                     none and shown with the same rows; a root and a pane's row
+                     refused.
       ui-editor-set-doc an editor shown another text (spec 14.6): a text it has not
                      shown from its start; the text left no longer moving its
                      carets -- one at 3 in the new text stays there through an edit
@@ -29989,6 +30008,14 @@ def run_ui_gate(workdir):
                            "at the end, and the refusals")
     print(f"  ui-move               {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-move", ok)
+
+    ok, detail = doc_flags("hidden", 16, "a hidden element takes no room or gap, lays out empty "
+                           "and stands where it stood once shown; draws nothing; takes no press, "
+                           "wheel, key, Tab or focus, and lets go of a press, a bar and the focus; "
+                           "an editor keeps its carets, scroll and wraps, where sized to nothing "
+                           "it has one column; a pane neither eases nor builds rows; the refusals")
+    print(f"  ui-hidden             {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-hidden", ok)
 
     # ---- an editor shown another text (spec 14.6)
     ok, detail = doc_flags("set-doc", 9, "a text not shown from its start, the one left no longer "

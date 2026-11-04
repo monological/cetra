@@ -897,11 +897,17 @@ static float _share_len(const UIElement* el, int axis, float room) {
     return _at_most(el, axis, glm_max(floorf(el->size[axis] * room), 0.0f));
 }
 
+// Whether a child takes its place in its parent's flow: a backdrop stands outside it, and a hidden
+// child is not there at all.
+static bool _in_flow(const UIElement* c) {
+    return !c->fill && !c->hidden;
+}
+
 // Whether a child in the flow grows along `axis` and can take more room there: it is not at its
 // most.
 static bool _still_growing(const UIElement* c, int axis) {
     const float len = axis == 0 ? c->rect.w : c->rect.h;
-    return !c->fill && c->size_mode[axis] == UI_GROW &&
+    return _in_flow(c) && c->size_mode[axis] == UI_GROW &&
            !(c->max_size[axis] > 0.0f && len >= c->max_size[axis]);
 }
 
@@ -1012,7 +1018,7 @@ static bool _lines_up(const UIElement* el, int axis) {
 }
 
 static bool _on_line(const UIElement* c) {
-    return !c->fill && c->size_mode[1] != UI_GROW && c->size_mode[1] != UI_SHARE &&
+    return _in_flow(c) && c->size_mode[1] != UI_GROW && c->size_mode[1] != UI_SHARE &&
            c->baseline >= 0.0f;
 }
 
@@ -1056,7 +1062,7 @@ static float _baseline_of(const UISystem* ui, const UIElement* el, float line) {
         return line >= 0.0f ? pad[0] + line : -1.0f;
     const UIElement* first = NULL;
     for (size_t i = 0; i < el->child_count && !first; i++)
-        if (!el->children[i]->fill)
+        if (_in_flow(el->children[i]))
             first = el->children[i];
     if (!first || first->baseline < 0.0f)
         return -1.0f;
@@ -1076,6 +1082,8 @@ static float _baseline_of(const UISystem* ui, const UIElement* el, float line) {
  * modes being mutually recursive.
  */
 static void _measure(const UISystem* ui, UIElement* el, int axis) {
+    if (el->hidden)
+        return;
     for (size_t i = 0; i < el->child_count; i++)
         _measure(ui, el->children[i], axis);
 
@@ -1101,8 +1109,8 @@ static void _measure(const UISystem* ui, UIElement* el, int axis) {
         size_t counted = 0;
         for (size_t i = 0; i < el->child_count; i++) {
             UIElement* c = el->children[i];
-            if (c->fill)
-                continue; // a backdrop is outside the flow
+            if (!_in_flow(c))
+                continue;
             const float cl = *_len(&c->rect, axis);
             // On a row's line, a child reaches as far down as the line moves it.
             const float reach = cl + _drop(c, line);
@@ -1148,6 +1156,14 @@ static float _scroll_settle(UIElement* el, float content, float view) {
     return el->scroll;
 }
 
+// A hidden element and everything under it laid out as nothing on `axis`: no length, at `at`.
+static void _arrange_hidden(UIElement* el, int axis, float at) {
+    *_pos(&el->rect, axis) = at;
+    *_len(&el->rect, axis) = 0.0f;
+    for (size_t i = 0; i < el->child_count; i++)
+        _arrange_hidden(el->children[i], axis, at);
+}
+
 // Pass 2, top-down: `el` already has its final extent on `axis`; place the children along it,
 // expanding GROW into whatever is left over.
 static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis) {
@@ -1161,7 +1177,7 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
     // still laid out afterwards, so a backdrop can have children of its own.
     for (size_t i = 0; i < el->child_count; i++) {
         UIElement* c = el->children[i];
-        if (c->fill) {
+        if (c->fill && !c->hidden) {
             *_pos(&c->rect, axis) = *_pos(&screen, axis);
             *_len(&c->rect, axis) = *_len(&screen, axis);
             _arrange(ui, c, screen, axis);
@@ -1173,7 +1189,9 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
         const float line = _lines_up(el, axis) ? _line_of(el) : -1.0f;
         for (size_t i = 0; i < el->child_count; i++) {
             UIElement* c = el->children[i];
-            if (c->fill)
+            if (c->hidden)
+                _arrange_hidden(c, axis, in_pos);
+            if (!_in_flow(c))
                 continue;
             const float len = _cross_len(c, axis, in_len);
             *_len(&c->rect, axis) = len;
@@ -1207,7 +1225,7 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
 
     size_t counted = 0;
     for (size_t i = 0; i < el->child_count; i++)
-        counted += !el->children[i]->fill;
+        counted += _in_flow(el->children[i]);
     const float gaps = counted > 1 ? gap * (float)(counted - 1) : 0.0f;
 
     // A share is settled first, as a FIXED length is, so the growing children share what it leaves
@@ -1216,7 +1234,7 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
     size_t growing = 0;
     for (size_t i = 0; i < el->child_count; i++) {
         UIElement* c = el->children[i];
-        if (c->fill)
+        if (!_in_flow(c))
             continue;
         if (c->size_mode[axis] == UI_SHARE)
             *_len(&c->rect, axis) = _share_len(c, axis, in_len - gaps);
@@ -1268,7 +1286,9 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
 
     for (size_t i = 0; i < el->child_count; i++) {
         UIElement* c = el->children[i];
-        if (c->fill)
+        if (c->hidden)
+            _arrange_hidden(c, axis, cursor);
+        if (!_in_flow(c))
             continue;
         *_pos(&c->rect, axis) = cursor;
         cursor += *_len(&c->rect, axis) + gap;
@@ -1284,6 +1304,8 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
  * draws its text with ui_draw_text, which starts a line at each '\n' as they do.
  */
 static void _break_lines(const UISystem* ui, UIElement* el) {
+    if (el->hidden)
+        return;
     for (size_t i = 0; i < el->child_count; i++)
         _break_lines(ui, el->children[i]);
     const UIWidgetOps* ops = _ops(el);
@@ -1318,6 +1340,14 @@ static float _pane_view(const UISystem* ui, const UIElement* el);
 static bool _contains(const UIElement* el, const UIElement* target) {
     for (const UIElement* p = target; p; p = p->parent)
         if (p == el)
+            return true;
+    return false;
+}
+
+// Whether `el` is hidden or stands under a hidden element.
+static bool _hidden_in(const UIElement* el) {
+    for (const UIElement* p = el; p; p = p->parent)
+        if (p->hidden)
             return true;
     return false;
 }
@@ -1463,6 +1493,31 @@ void ui_move(UIElement* el, UIElement* parent, const UIElement* before) {
     parent->children[at] = el;
     parent->child_count++;
     el->parent = parent;
+    if (_hidden_in(el))
+        _forget(_screen_of(el)->ui, el);
+}
+
+void ui_set_hidden(UIElement* el, bool hidden) {
+    if (!el) {
+        log_error("ui_set_hidden: NULL element");
+        return;
+    }
+    const UIScreen* screen = _screen_of(el);
+    if (!screen) {
+        log_error("ui_set_hidden: an element taken out");
+        return;
+    }
+    if (!el->parent) {
+        log_error("ui_set_hidden: a screen's root; pop the screen instead");
+        return;
+    }
+    if (el->parent->rows) {
+        log_error("ui_set_hidden: a pane's row is the pane's to build and free");
+        return;
+    }
+    el->hidden = hidden;
+    if (hidden)
+        _forget(screen->ui, el);
 }
 
 // The rows [*lo, *hi) in view with the pane scrolled to `scroll`, and one either side.
@@ -1492,6 +1547,10 @@ static bool _rows_settle(UISystem* ui, const UIScreen* screen, UIElement* pane) 
         changed = true;
     }
     _rows_tops(ui, pane);
+    // A pane the last layout left no height -- one just shown, laid out empty while it was hidden
+    // -- keeps the rows it holds until a layout gives it one: its view is not known, not nothing.
+    if (!changed && pane->child_count > 0 && _pane_view(ui, pane) <= 0.0f)
+        return false;
     // In view where the pane is, and where it is easing to: a focus moved on faster than the
     // scroll eases finds the rows it moves onto built.
     int lo[2], hi[2];
@@ -1540,6 +1599,8 @@ static bool _rows_settle(UISystem* ui, const UIScreen* screen, UIElement* pane) 
 }
 
 static bool _settle_rows(UISystem* ui, const UIScreen* screen, UIElement* el) {
+    if (el->hidden)
+        return false;
     bool changed = el->rows ? _rows_settle(ui, screen, el) : false;
     for (size_t i = 0; i < el->child_count; i++)
         changed |= _settle_rows(ui, screen, el->children[i]);
@@ -1563,6 +1624,8 @@ static UIRect _content_rect(const UISystem* ui, const UIElement* el);
 
 // Every element with state of its own given its content rect, once the layout has placed it.
 static void _place_widgets(const UISystem* ui, UIElement* el) {
+    if (el->hidden)
+        return;
     for (size_t i = 0; i < el->child_count; i++)
         _place_widgets(ui, el->children[i]);
     const UIWidgetOps* ops = _ops(el);
@@ -1710,6 +1773,8 @@ static bool _bar(const UISystem* ui, const UIElement* el, UIScrollPlace* place, 
 static void _emit_pane(UISystem* ui, UIElement* el, const UIStyle* s);
 
 static void _emit(UISystem* ui, UIElement* el) {
+    if (el->hidden)
+        return;
     UIDrawList* dl = ui->dl;
     const UIState state = _state_of(el);
     const UIStyle s = _resolve(ui, el, state);
@@ -1879,8 +1944,11 @@ static float _ease_toward(float t, float target, float k, float snap) {
     return fabsf(target - t) < snap ? target : t;
 }
 
-// Eases `el` and its subtree; true while anything in it is still moving.
+// Eases `el` and its subtree; true while anything in it is still moving. A hidden one keeps its
+// weights and its scroll where they are, and eases on from there when shown.
 static bool _ease(UIElement* el, float dt) {
+    if (el->hidden)
+        return false;
     const float step = (UI_EASE_SECONDS > 0.0f) ? dt / UI_EASE_SECONDS : 1.0f;
     const float hover_target =
         (el->state == UI_STATE_HOVER || el->state == UI_STATE_ACTIVE) ? 1.0f : 0.0f;
@@ -1915,7 +1983,7 @@ static bool _ease(UIElement* el, float dt) {
  * backwards, for exactly the same reason.
  */
 static UIElement* _deepest_at(UIElement* el, float x, float y, bool (*claims)(const UIElement*)) {
-    if (!el || el->disabled)
+    if (!el || el->disabled || el->hidden)
         return NULL;
     const bool in = ui_rect_hit(el->rect, x, y);
     // A pane's content is under the pointer only where the pane shows it.
@@ -1972,6 +2040,8 @@ static UIElement* _pane_of(UIElement* el) {
 // Whether anything under `el` but `el` itself is drawn at the point: a pane's content only where
 // the pane shows it.
 static bool _over(const UIElement* el, float x, float y, bool is_root) {
+    if (el->hidden)
+        return false;
     if (!is_root && ui_rect_hit(el->rect, x, y))
         return true;
     if (el->kind == UI_SCROLL)
@@ -2052,7 +2122,8 @@ void ui_scroll_into_view(const UISystem* ui, UIElement* el) {
         log_error("ui_scroll_into_view: NULL system or element");
         return;
     }
-    _reveal(ui, el);
+    if (!_hidden_in(el))
+        _reveal(ui, el);
 }
 
 bool ui_pointer_over(const UISystem* ui, float x, float y) {
@@ -2067,7 +2138,7 @@ bool ui_pointer_over(const UISystem* ui, float x, float y) {
 }
 
 static void _gather(UIElement* el, UIElement** out, size_t* n, size_t cap) {
-    if (!el || *n >= cap)
+    if (!el || el->hidden || *n >= cap)
         return;
     if (el->focusable && !el->disabled)
         out[(*n)++] = el;
@@ -2828,6 +2899,10 @@ void ui_set_focus(UIScreen* screen, UIElement* el) {
         return;
     if (el && _screen_of(el) != screen) {
         log_error("ui_set_focus: not an element of this screen: another's, or taken out");
+        return;
+    }
+    if (el && _hidden_in(el)) {
+        log_error("ui_set_focus: an element hidden, or under a hidden one, holds no focus");
         return;
     }
     screen->focused = el;
