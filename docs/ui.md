@@ -400,6 +400,15 @@ colour for every state; while that colour's alpha is 0 they are the editor's tex
   moves what is on screen. `ui_editor_top_line` reads it exactly, the line and the rows into it with
   the part of a row, and `ui_editor_scroll_line` puts it there, held to the text's lines and that
   line's rows as a wheel's scroll is: one editor held to another glides with it (spec 14.15).
+  `ui_editor_top_row` reads the same top as rows from the text's start, every row shown above it
+  counted, and `ui_editor_scroll_row` puts it there (spec 14.19): two editors whose lines are
+  padded level show the same rows in the same order, and copying the count holds them together
+  where a line and its rows would land a row off for each filler one side has and the other lacks.
+  A double, as a text's rows pass a float's whole numbers long before its lines run out.
+- **The gutter is as wide as its text's line count's digits**, or as `ui_editor_set_gutter_digits`
+  asks if that is more (spec 14.19), so two editors on texts of different lengths keep the same
+  columns and wrap their common lines alike. It is the editor's, as its look is, and a change of
+  columns makes the rows guesses again, as a change of width does.
 - **A line edited within itself is wrapped again at once**, so typing moves no other line's rows.
 - **A budget in each draw** (192 KB a frame) wraps the guessed rows -- the lines an edit rewrote
   first, then any others round the text -- and walks a stateful highlighter on. Its draw returns a
@@ -443,6 +452,10 @@ click, the draw -- counts the rows a line *shows*, which may differ from the row
   its first line's fillers above its row and none of the lines it hides. `ui_editor_line_rows` is a
   line's own rows at the editor's columns, which a host padding two editors to each other compares,
   polling `ui_editor_columns` for when they change.
+  - Fillers on the text's line count stand under its last line (spec 14.19), for a change at the
+    end of a text with no line after it: counted after the own rows of the last line that shows,
+    so the scroll reaches them, with no caret on them, a move by rows stopping at the last line and
+    a click on them landing at the text's end. They stay under the last line through every edit.
 - **Both belong to the editor's place in its text**, not to the text: two editors on one text fold
   it apart, as two vim windows do, and a parked place keeps them. Through an edit each moves with
   its lines: a line kept is the one whose start the change left a line's start, a line put in among
@@ -466,9 +479,9 @@ its place in every text it has shown, as a vim window keeps a buffer's.
 - Keeping the place on the host (carets and a top with a version, mapped through `text_doc_map` on
   return) was rejected: every host would have written it.
 - **A place asked for before the editor is laid out on its text is held for that layout**
-  (`ui_editor_scroll_place`, `ui_editor_scroll_line`, `ui_editor_reveal`), since only then are its
-  rows and its height known: a pane made by a split is placed where the one it split was at its
-  first layout.
+  (`ui_editor_scroll_place`, `ui_editor_scroll_line`, `ui_editor_scroll_row`, `ui_editor_reveal`),
+  since only then are its rows and its height known: a pane made by a split is placed where the one
+  it split was at its first layout.
 - `ui_editor(parent, NULL)` makes an editor showing nothing, and `ui_editor_doc` says what one shows,
   so a host finds a pane's file from the pane.
 - **Each text shown gives the editor a new serial** (`ui_editor_serial`, private), never reused,
