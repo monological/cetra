@@ -28545,9 +28545,14 @@ def run_ui_gate(workdir):
                      lines with no last line ending, 2 on the line count drawn as 2
                      fills after line 19 with no glyph on their rows; counted to
                      the scroll's end, by a row put past it and by a wheel; G and a
-                     j stand on the last line, and a click on them lands at the
-                     text's end; the last line taken out, they stand under the new
-                     last; one past the line count left out.
+                     j stand on the last line, two rows down from the line before
+                     stop at the text's end, and a click on them lands there; the
+                     last line taken out, they stand under the new last; one past
+                     the line count left out; with a closed fold ending the text,
+                     the rows summed again when an edit or a new set of fillers
+                     moves the line counting them, a fold closed over the top
+                     putting it on the fold's row, and Home on a wrapped row of
+                     the fold's first line staying on that line.
       ui-editor-steps each action told with its step: typing joined into words
                      shares one; a group holds one over typing, a Backspace and
                      more typing, one undo takes the group back and one redo makes
@@ -29873,10 +29878,10 @@ def run_ui_gate(workdir):
     print(f"  ui-editor-gutter-digits {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-gutter-digits", ok)
 
-    ok, detail = doc_flags("editor-filler-end", 5, "fillers on the line count drawn under the "
+    ok, detail = doc_flags("editor-filler-end", 6, "fillers on the line count drawn under the "
                            "last line and counted to the scroll's end, no caret on them, a click "
-                           "there at the text's end, kept under a new last line, and one past "
-                           "the count left out")
+                           "there at the text's end, kept under a new last line, one past the "
+                           "count left out, and under a closed fold ending the text")
     print(f"  ui-editor-filler-end  {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-filler-end", ok)
 
