@@ -28439,6 +28439,12 @@ def run_ui_gate(workdir):
                      wrapped line's every row included; none on the line its end
                      starts; a selection drawn over it; a style without the flag
                      two cells behind two characters; zeroed, no such quad.
+      ui-editor-scroll-line the exact scroll (spec 14.15): after a wheel's 32.5
+                     rows, ui_editor_top_line gives the top line and its row with
+                     half a row more; ui_editor_scroll_line puts a second editor
+                     there with three rows' starts level with the first's; put
+                     before a layout, it is taken at it; past the last line it
+                     holds where a wheel run to the end does.
       ui-editor-steps each action told with its step: typing joined into words
                      shares one; a group holds one over typing, a Backspace and
                      more typing, one undo takes the group back and one redo makes
@@ -29687,6 +29693,13 @@ def run_ui_gate(workdir):
                            "it; a plain style bands its characters; a zeroed style draws nothing")
     print(f"  ui-editor-whole-lines {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-whole-lines", ok)
+
+    ok, detail = doc_flags("editor-scroll-line", 4, "the line at the top and the rows into it read "
+                           "after a wheel's 32.5 rows, put on a second editor with its rows level "
+                           "with the first's, put before a layout and taken at it, and held past "
+                           "the last line as a wheel is")
+    print(f"  ui-editor-scroll-line {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-scroll-line", ok)
 
     ok, detail = doc_flags("editor-steps", 7, "typing joined into words shares a step, a group "
                            "holds one over typing, a Backspace and more typing, and one undo takes "

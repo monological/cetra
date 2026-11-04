@@ -823,6 +823,86 @@ static int probe_editor_anchor(UISystem* ui) {
     return 0;
 }
 
+// The wheel turned over `el` by `rows` of its rows, down for more than 0.
+static void wheel_rows(UISystem* ui, const UIElement* el, float rows) {
+    ui_update(ui,
+              &(UIInput){.pointer_x = el->rect.x + 50.0f,
+                         .pointer_y = el->rect.y + 50.0f,
+                         .wheel_y = -rows / 3.0f},
+              1280.0f, 720.0f);
+}
+
+// Whether the rows starting at `offsets` stand as far down `a` as down `b`.
+static bool rows_level(UIElement* a, UIElement* b, const size_t* offsets, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        float xa = 0.0f, ya = 0.0f, xb = 0.0f, yb = 0.0f;
+        if (!ui_editor_point_of(a, offsets[i], &xa, &ya) ||
+            !ui_editor_point_of(b, offsets[i], &xb, &yb) ||
+            fabsf((ya - a->rect.y) - (yb - b->rect.y)) > 0.01f)
+            return false;
+    }
+    return true;
+}
+
+// The exact scroll: the line at the top and the rows into it, read from one editor and put on
+// another to line their rows up, put before a layout and taken at it, and held past the last line
+// as a wheel is.
+static int probe_editor_scroll_line(UISystem* ui) {
+    // 120 lines, every third long enough to wrap in 300 points, the last a short one.
+    static char text[120 * 128];
+    size_t len = 0;
+    for (int i = 0; i < 120; i++)
+        len += (size_t)snprintf(text + len, sizeof(text) - len, "line %03d%s\n", i,
+                                i % 3 ? ""
+                                      : " of a text whose lines are long enough to wrap in a "
+                                        "narrow editor, twice over");
+    TextDoc* doc = create_text_doc(text, len - 1);
+    UIElement* ed = editor_fixture(ui, doc, 300.0f, 150.0f);
+    UIElement* twin = ui_editor(ui_screen_root(ui_top(ui)), doc);
+    ui_set_size(twin, UI_FIXED, 300.0f, UI_FIXED, 150.0f);
+    editor_pass(ui);
+
+    wheel_rows(ui, ed, 32.5f);
+    editor_pass(ui);
+    float rows = 0.0f;
+    const size_t line = ui_editor_top_line(ed, &rows);
+    size_t top_line = 0, top_row = 0;
+    int cols = 0;
+    ui_editor_view_top(ed, &top_line, &top_row, &cols);
+    say_flag("editor-scroll-line", "read", "rows",
+             line == top_line && floorf(rows) == (float)top_row &&
+                 fabsf(rows - floorf(rows) - 0.5f) < 0.01f);
+    const size_t offsets[3] = {ui_editor_top(ed), text_doc_line_start(doc, line + 1),
+                               text_doc_line_start(doc, line + 2)};
+
+    ui_editor_scroll_line(twin, line, rows);
+    editor_pass(ui);
+    float twin_rows = 0.0f;
+    const size_t twin_line = ui_editor_top_line(twin, &twin_rows);
+    say_flag("editor-scroll-line", "set", "level",
+             twin_line == line && fabsf(twin_rows - rows) < 1e-4f &&
+                 rows_level(ed, twin, offsets, 3));
+
+    // A third editor, put before it was ever laid out.
+    UIElement* late = ui_editor(ui_screen_root(ui_top(ui)), doc);
+    ui_set_size(late, UI_FIXED, 300.0f, UI_FIXED, 150.0f);
+    ui_editor_scroll_line(late, line, rows);
+    editor_pass(ui);
+    say_flag("editor-scroll-line", "pending", "level", rows_level(ed, late, offsets, 3));
+
+    // Past the last line, against a wheel run to the end.
+    ui_editor_scroll_line(twin, doc->line_count + 10, 5.0f);
+    wheel_rows(ui, late, 100000.0f);
+    editor_pass(ui);
+    float held_rows = 0.0f, wheel_rows_at = 0.0f;
+    const size_t held = ui_editor_top_line(twin, &held_rows);
+    const size_t wheeled = ui_editor_top_line(late, &wheel_rows_at);
+    say_flag("editor-scroll-line", "held", "wheel",
+             held == doc->line_count - 1 && held == wheeled && held_rows == wheel_rows_at);
+    free_text_doc(doc);
+    return 0;
+}
+
 // ---- Keys
 
 static double g_key_time;
@@ -3358,6 +3438,8 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_editor_hit(ui);
     if (!strcmp(which, "editor-anchor"))
         return probe_editor_anchor(ui);
+    if (!strcmp(which, "editor-scroll-line"))
+        return probe_editor_scroll_line(ui);
     if (!strcmp(which, "editor-keys"))
         return probe_editor_keys(ui);
     if (!strcmp(which, "editor-carets"))
