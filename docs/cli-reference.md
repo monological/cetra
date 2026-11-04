@@ -1619,7 +1619,8 @@ and:
 
   `--editor-fold FIRST,LAST` (spec 14.16) folds the first pane's lines FIRST to LAST, numbered as
   the gutter numbers them, closed, through `ui_editor_set_folds`: one row in the theme's fold
-  colour saying how many lines it holds, opened by a click on it.
+  colour saying how many lines it holds, opened by a click on it. `--editor-filler LINE,ROWS` puts
+  ROWS filler rows above line LINE of the first pane, through `ui_editor_set_fillers`.
 
   `--editor` may be given up to eight times (spec 14.6), each file a text of its own with its own
   parse, and the editors are panes, the first opening on the first file:

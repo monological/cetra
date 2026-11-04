@@ -359,8 +359,9 @@ typedef struct UITheme {
     // border while it takes the keys. Its face is drawn from bitmaps made at the size shown, not
     // from `font`.
     UIStyle editor[UI_STATE_COUNT];
-    vec4 line_numbers; // the code editor's line numbers; alpha 0 = its text at 38%
-    vec4 editor_fold;  // behind a closed fold's row; alpha 0 = the selection colour at a third
+    vec4 line_numbers;  // the code editor's line numbers; alpha 0 = its text at 38%
+    vec4 editor_fold;   // behind a closed fold's row; alpha 0 = the selection colour at a third
+    vec4 editor_filler; // behind a filler row; alpha 0 = the editor's text colour at 4%
     struct GlyphCache* editor_face;                // borrowed; NULL draws no text
     float editor_size;                             // points; 0 = 13
     UIEditorStyle editor_styles[UI_EDITOR_STYLES]; // a span's or a range's style, by its index

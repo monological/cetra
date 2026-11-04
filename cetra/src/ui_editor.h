@@ -16,6 +16,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "text_doc.h"
 #include "ui.h"
@@ -64,6 +65,24 @@ void ui_editor_set_folds(UIElement* el, const UIEditorFold* folds, size_t count)
 size_t ui_editor_folds(const UIElement* el, const UIEditorFold** out);
 // The fold holding `line` opened or closed; false for none.
 bool ui_editor_fold_open(UIElement* el, size_t line, bool open);
+
+/*
+ * Filler rows: blank rows above a line, as a side-by-side diff pads the side with fewer so a line
+ * and its counterpart stand level. Like folds they are the editor's in the text it shows and move
+ * with their lines; a line taken out takes its fillers. A closed fold shows its first line's
+ * fillers above its row and none of its other lines'. No caret stands on one: a move by rows steps
+ * over them, and a click on one lands at the start of the line below.
+ */
+// Blank rows above a line, which no caret stands on.
+typedef struct UIEditorFiller {
+    size_t line;
+    uint32_t rows;
+} UIEditorFiller;
+// The fillers of the text the editor shows, replaced whole; a line named twice takes the last.
+void ui_editor_set_fillers(UIElement* el, const UIEditorFiller* fillers, size_t count);
+// The rows `line` wraps to at the editor's columns, fillers and folds aside: wrapped now when it
+// was a guess. 1 before the editor is laid out; 0 for a line past the text.
+size_t ui_editor_line_rows(UIElement* el, size_t line);
 
 /*
  * The editor leaves its text and shows `doc`, where it last was in it -- its carets, its scroll --
