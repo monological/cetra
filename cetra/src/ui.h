@@ -558,15 +558,16 @@ void ui_remove(UIElement* el);
 // field's text, the focus -- but moved into a hidden element or under one, it lets go of what the
 // UI held inside it, as hiding does. Refused by name: a screen's root, a `before` that is not
 // `parent`'s child, a move into `el` or under it, a pane's virtual row, a move into a pane with
-// rows or into one of its rows, which the pane frees, and a move to another screen.
+// rows or into one of its rows, which the pane frees, a move to another screen, and an element
+// taken out.
 void ui_move(UIElement* el, UIElement* parent, const UIElement* before);
 // `el` and everything under it hidden, or shown again. Hidden, it takes no room and no gap in its
 // parent, is neither laid out nor drawn nor eased, takes no press, wheel, hover or key, and holds
 // no focus; its rect and every rect under it are left 0 by 0 where it would start. It keeps
 // everything else -- an editor's carets, scroll and wrapped rows, a field's text, a pane's scroll
 // and rows -- until shown. Hiding lets go of the pressed element, a held bar and any screen's focus
-// inside it, left on nothing, as ui_remove does. Refused by name: a screen's root, a pane's virtual
-// row, and an element taken out.
+// inside it, left on nothing, as ui_remove does, and puts its hover and focus looks at rest.
+// Refused by name: a screen's root, a pane's virtual row, and an element taken out.
 void ui_set_hidden(UIElement* el, bool hidden);
 // Where a slider's track lies in the rect the last layout gave it, in window points: what a drag
 // is measured along, for a draw of its own (ui_set_draw) to put the track there too.
@@ -580,7 +581,8 @@ UIRect ui_slider_track(const UISystem* ui, const UIElement* el);
  * content has nothing to scroll.
  */
 UIElement* ui_scroll(UIElement* parent);
-// Scrolls every pane round `el` by the least that shows it whole, easing there.
+// Scrolls every pane round `el` by the least that shows it whole, easing there; nothing for an
+// element hidden or under a hidden one.
 void ui_scroll_into_view(const UISystem* ui, UIElement* el);
 
 /*

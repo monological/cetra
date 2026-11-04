@@ -414,8 +414,9 @@ struct UIRows {
     bool dirty; // the tops need summing again
     int* child_row;
     size_t child_row_capacity;
-    bool restart; // every child freed before the rows are built
-    int reveal;   // the row ui_scroll_to_row asked for, until it is built; -1 for none
+    bool restart;     // every child freed before the rows are built
+    int reveal;       // the row ui_scroll_to_row asked for, until it is built; -1 for none
+    bool hidden_last; // the last layout laid the pane out hidden, so its rect is no view
 };
 
 // What a built row changed since it was built holds in `child_row`: a row past any count, so the
@@ -1160,6 +1161,8 @@ static float _scroll_settle(UIElement* el, float content, float view) {
 static void _arrange_hidden(UIElement* el, int axis, float at) {
     *_pos(&el->rect, axis) = at;
     *_len(&el->rect, axis) = 0.0f;
+    if (el->rows)
+        el->rows->hidden_last = true;
     for (size_t i = 0; i < el->child_count; i++)
         _arrange_hidden(el->children[i], axis, at);
 }
@@ -1206,6 +1209,7 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
     // A pane's rows each at their own top, less the scroll.
     if (el->rows && axis == 1) {
         struct UIRows* r = el->rows;
+        r->hidden_last = false;
         // A row asked for is aimed at again from what is measured now, until it is built and so
         // measured itself: its place was an estimate's.
         if (r->reveal >= 0 && r->reveal < r->count) {
@@ -1429,26 +1433,44 @@ static void _pass_end(UISystem* ui) {
     }
 }
 
+// The screen of `el`, a child an app may take out or hide, or NULL, logged under `fn`'s name, for
+// none, an element taken out, a screen's root and a pane's row.
+static const UIScreen* _child_screen(const char* fn, const UIElement* el) {
+    const UIScreen* screen = el ? _screen_of(el) : NULL;
+    if (!el)
+        log_error("%s: NULL element", fn);
+    else if (!screen)
+        log_error("%s: an element taken out already", fn);
+    else if (!el->parent)
+        log_error("%s: a screen's root goes with its screen", fn);
+    else if (el->parent->rows)
+        log_error("%s: a pane's row is the pane's to build and free", fn);
+    else
+        return screen;
+    return NULL;
+}
+
 void ui_remove(UIElement* el) {
-    if (!el) {
-        log_error("ui_remove: NULL element");
+    const UIScreen* screen = _child_screen("ui_remove", el);
+    if (!screen)
         return;
-    }
-    const UIScreen* screen = _screen_of(el);
-    if (!screen) {
-        log_error("ui_remove: an element taken out already");
-        return;
-    }
-    if (!el->parent) {
-        log_error("ui_remove: a screen's root goes with its screen");
-        return;
-    }
-    if (el->parent->rows) {
-        log_error("ui_remove: a pane's row is the pane's to build and free");
-        return;
-    }
     _detach(el);
     _leave(screen->ui, el);
+}
+
+// `el`'s hover and focus weights and everything's under it at rest: hidden, nothing is hovered or
+// focused, and shown it should not fade out a look it lost while away.
+static void _rest_weights(UIElement* el) {
+    el->t_hover = el->t_focus = 0.0f;
+    for (size_t i = 0; i < el->child_count; i++)
+        _rest_weights(el->children[i]);
+}
+
+// What hiding `el`, or putting it under a hidden element, lets go of: whatever the UI held inside
+// it, and its weights.
+static void _hide_let_go(UISystem* ui, UIElement* el) {
+    _forget(ui, el);
+    _rest_weights(el);
 }
 
 void ui_move(UIElement* el, UIElement* parent, const UIElement* before) {
@@ -1472,7 +1494,12 @@ void ui_move(UIElement* el, UIElement* parent, const UIElement* before) {
         log_error("ui_move: an element does not move into itself or under itself");
         return;
     }
-    if (_screen_of(el) != _screen_of(parent)) {
+    const UIScreen* screen = _screen_of(el);
+    if (!screen) {
+        log_error("ui_move: an element taken out does not move");
+        return;
+    }
+    if (screen != _screen_of(parent)) {
         log_error("ui_move: an element stays on its screen, whose focus may be inside it");
         return;
     }
@@ -1494,30 +1521,16 @@ void ui_move(UIElement* el, UIElement* parent, const UIElement* before) {
     parent->child_count++;
     el->parent = parent;
     if (_hidden_in(el))
-        _forget(_screen_of(el)->ui, el);
+        _hide_let_go(screen->ui, el);
 }
 
 void ui_set_hidden(UIElement* el, bool hidden) {
-    if (!el) {
-        log_error("ui_set_hidden: NULL element");
+    const UIScreen* screen = _child_screen("ui_set_hidden", el);
+    if (!screen)
         return;
-    }
-    const UIScreen* screen = _screen_of(el);
-    if (!screen) {
-        log_error("ui_set_hidden: an element taken out");
-        return;
-    }
-    if (!el->parent) {
-        log_error("ui_set_hidden: a screen's root; pop the screen instead");
-        return;
-    }
-    if (el->parent->rows) {
-        log_error("ui_set_hidden: a pane's row is the pane's to build and free");
-        return;
-    }
     el->hidden = hidden;
     if (hidden)
-        _forget(screen->ui, el);
+        _hide_let_go(screen->ui, el);
 }
 
 // The rows [*lo, *hi) in view with the pane scrolled to `scroll`, and one either side.
@@ -1547,9 +1560,10 @@ static bool _rows_settle(UISystem* ui, const UIScreen* screen, UIElement* pane) 
         changed = true;
     }
     _rows_tops(ui, pane);
-    // A pane the last layout left no height -- one just shown, laid out empty while it was hidden
-    // -- keeps the rows it holds until a layout gives it one: its view is not known, not nothing.
-    if (!changed && pane->child_count > 0 && _pane_view(ui, pane) <= 0.0f)
+    // Just shown, a pane keeps the rows it holds until the layout gives it a view: the last one
+    // laid it out empty, which is no view of it. The settle after that layout frees and builds as
+    // ever.
+    if (r->hidden_last && !changed)
         return false;
     // In view where the pane is, and where it is easing to: a focus moved on faster than the
     // scroll eases finds the rows it moves onto built.

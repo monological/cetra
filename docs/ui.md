@@ -143,9 +143,8 @@ width keeps its columns and every wrapped row.
 - **Sizing to nothing is not hiding.** An element `UI_FIXED` 0 on both axes still takes a gap, still
   lays out and draws what is under it in a negative rect, and still eases; an editor so sized wraps
   its text at one column, a budget's work, and wraps it again at its width when it comes back.
-- **A pane of rows shown again keeps its rows.** The layout settles rows from the pane's last rect,
-  which a hidden pane's is the empty one; a pane the last layout left no height keeps what it holds
-  until a layout gives it one.
+- **Shown again, a pane of rows keeps the rows it held**, and an element's hover and focus looks
+  start at rest, since nothing hidden is hovered or focused.
 
 ## Focus, input and key routing
 
