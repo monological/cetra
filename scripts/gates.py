@@ -28433,6 +28433,12 @@ def run_ui_gate(workdir):
                      text's colour at 38% of its alpha; set to red, every number
                      is red and the code's glyphs keep their colour; zeroed once
                      more, the numbers are at 38% again.
+      ui-editor-whole-lines a range whose style has whole_lines (spec 14.15): one
+                     quad on each row of each line it reaches, from the text's
+                     left edge to the editor's right, the empty line's and the
+                     wrapped line's every row included; none on the line its end
+                     starts; a selection drawn over it; a style without the flag
+                     two cells behind two characters; zeroed, no such quad.
       ui-editor-steps each action told with its step: typing joined into words
                      shares one; a group holds one over typing, a Backspace and
                      more typing, one undo takes the group back and one redo makes
@@ -29674,6 +29680,13 @@ def run_ui_gate(workdir):
                            "keeps its colour, and at 38% again with it zeroed once more")
     print(f"  ui-editor-line-numbers {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-line-numbers", ok)
+
+    ok, detail = doc_flags("editor-whole-lines", 5, "a whole-line range fills each row of its lines "
+                           "from the text's left edge to the editor's right, an empty and a "
+                           "wrapped line included, not the line its end starts; a selection over "
+                           "it; a plain style bands its characters; a zeroed style draws nothing")
+    print(f"  ui-editor-whole-lines {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-whole-lines", ok)
 
     ok, detail = doc_flags("editor-steps", 7, "typing joined into words shares a step, a group "
                            "holds one over typing, a Backspace and more typing, and one undo takes "

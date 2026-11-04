@@ -2578,6 +2578,8 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
         if (!text_doc_line_spans(doc, line, &spans, &span_count) && doc->highlight)
             uncoloured = true;
         const size_t first_sel = _first_reaching(ed, l.at);
+        // The line's bytes with its line break, which a whole-line range must overlap to reach it.
+        const size_t line_end = l.at + l.len + (line + 1 < doc->line_count);
         for (; row < rows.count && y < ed->text.y + ed->text.h; row++, y += ed->row) {
             const size_t from = rows.starts[row];
             const size_t to = row + 1 < rows.count ? rows.starts[row + 1] : l.len;
@@ -2594,10 +2596,20 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
                 for (int k = 0; k < n; k++, nx += cell_px)
                     _glyph(dl, ed, (uint32_t)num[k], nx, base_px, numbers);
             }
-            // Backgrounds: the host's ranges, find's matches, then the selections over them.
+            // Backgrounds: the host's whole lines, its other ranges, find's matches, then the
+            // selections over them.
             for (size_t k = 0; k < range_count; k++) {
                 const UIEditorStyle* st = _style(t, ranges[k].style);
-                if (st->background[3] > 0.0f && _on_row(&ranges[k], &l, from, to, &a, &b))
+                if (st->whole_lines && st->background[3] > 0.0f && ranges[k].start < line_end &&
+                    ranges[k].end > l.at)
+                    ui_draw_quad(
+                        dl, (UIRect){ed->text.x, y, content.x + content.w - ed->text.x, ed->row},
+                        (float*)st->background);
+            }
+            for (size_t k = 0; k < range_count; k++) {
+                const UIEditorStyle* st = _style(t, ranges[k].style);
+                if (!st->whole_lines && st->background[3] > 0.0f &&
+                    _on_row(&ranges[k], &l, from, to, &a, &b))
                     _band(dl, ed, &l, rows, row, a, b, 0, y, ed->row, st->background);
             }
             for (size_t i = q.len && from >= q.len - 1 ? from - (q.len - 1) : 0;

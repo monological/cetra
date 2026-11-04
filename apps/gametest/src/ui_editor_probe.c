@@ -1867,6 +1867,118 @@ static int probe_editor_line_numbers(UISystem* ui) {
     return 0;
 }
 
+// A flat quad drawn, and where it is in the draw list.
+typedef struct {
+    UIRect r;
+    size_t at;
+} Fill;
+
+// The flat quads drawn in colour c, in the order drawn, up to `max`; how many there were.
+static size_t fills_in(const UISystem* ui, const float* c, Fill* out, size_t max) {
+    const UIDrawList* dl = ui_draw_list(ui);
+    size_t n = 0;
+    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
+        UIRect r;
+        vec4 colour;
+        int kind = 0;
+        ui_draw_list_quad(dl, i, &r, colour, &kind);
+        if (kind == 0 && same_colour(colour, c)) {
+            if (n < max)
+                out[n] = (Fill){r, i};
+            n++;
+        }
+    }
+    return n;
+}
+
+// A whole-line range fills every row of each line it reaches from the text's left edge to the
+// editor's right, an empty line and a wrapped line's every row among them; one ending at a line's
+// start does not reach that line; a selection draws over it; a style without the flag still bands
+// only its characters; a zeroed style draws nothing.
+static int probe_editor_whole_lines(UISystem* ui) {
+    // A short line, an empty one, one that wraps in 600 points, and a last.
+    char text[256];
+    size_t len = (size_t)snprintf(text, sizeof(text), "short\n\n");
+    for (int i = 0; i < 40; i++)
+        len += (size_t)snprintf(text + len, sizeof(text) - len, "word ");
+    len += (size_t)snprintf(text + len, sizeof(text) - len, "\nlast");
+    const size_t last_at = len - 4;
+    TextDoc* doc = create_text_doc(text, len);
+    UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
+    const UITheme before = *ui_theme(ui);
+    UITheme theme = before;
+    const vec4 red = {1.0f, 0.0f, 0.0f, 1.0f}, green = {0.0f, 1.0f, 0.0f, 1.0f};
+    theme.editor_styles[1] =
+        (UIEditorStyle){.background = {1.0f, 0.0f, 0.0f, 1.0f}, .whole_lines = true};
+    theme.editor_styles[2] = (UIEditorStyle){.background = {0.0f, 1.0f, 0.0f, 1.0f}};
+    ui_set_theme(ui, &theme);
+    // The first three lines whole, up to the last's start; the last's first two characters.
+    text_doc_set_ranges(doc, 0, 0, &(TextRange){0, last_at, 1}, 1);
+    text_doc_set_ranges(doc, 1, 0, &(TextRange){last_at, last_at + 2, 2}, 1);
+    ui_editor_set_selections(ed, &(TextSelection){1, 3}, 1);
+    editor_pass(ui);
+    const UITheme* t = ui_theme(ui);
+    vec4 sel = {t->selection[0], t->selection[1], t->selection[2], t->selection[3]};
+    if (sel[3] <= 0.0f)
+        glm_vec4_copy((vec4){0.25f, 0.45f, 0.85f, 0.45f}, sel);
+
+    float tx = 0.0f, y0 = 0.0f, x = 0.0f, y1 = 0.0f, y_last = 0.0f;
+    ui_editor_point_of(ed, 0, &tx, &y0);
+    ui_editor_point_of(ed, 1, &x, &y1);
+    const float cell = x - tx;
+    ui_editor_point_of(ed, 6, &x, &y1);
+    ui_editor_point_of(ed, last_at, &x, &y_last);
+    const float row = y1 - y0;
+    const int covered = (int)lroundf((y_last - y0) / row);
+    Fill reds[16];
+    const size_t red_count = fills_in(ui, red, reds, 16);
+    // One quad a row above the last line, each the same span from the text's left edge.
+    size_t above = 0;
+    bool rows = covered >= 4 && red_count <= 16;
+    for (size_t i = 0; rows && i < red_count; i++) {
+        if (reds[i].r.y >= y_last - 0.01f)
+            continue;
+        rows = fabsf(reds[i].r.x - tx) < 0.01f && fabsf(reds[i].r.w - reds[0].r.w) < 0.01f &&
+               fabsf(reds[i].r.y - (y0 + (float)above * row)) < 0.01f;
+        above++;
+    }
+    rows = rows && above == (size_t)covered && reds[0].r.w > 40.0f * cell &&
+           reds[0].r.x + reds[0].r.w <= ed->rect.x + ed->rect.w + 0.01f;
+    if (!rows)
+        fprintf(stderr, "editor-whole-lines: %zu red quads, %zu above the last line, %d rows\n",
+                red_count, above, covered);
+    say_flag("editor-whole-lines", "rows", "edge", rows);
+    bool ends = true;
+    for (size_t i = 0; i < red_count && i < 16; i++)
+        ends = ends && fabsf(reds[i].r.y - y_last) >= 0.01f;
+    say_flag("editor-whole-lines", "ends", "start", ends);
+    Fill sels[4];
+    const size_t sel_count = fills_in(ui, sel, sels, 4);
+    say_flag("editor-whole-lines", "under", "selection",
+             red_count > 0 && sel_count == 1 && fabsf(sels[0].r.y - y0) < 0.01f &&
+                 sels[0].at > reds[0].at);
+    const float plain = band_cells(ui, y_last, green, cell);
+    say_flag("editor-whole-lines", "plain", "cells", fabsf(plain - 2.0f) < 0.01f);
+
+    // The two styles zeroed: no fill as wide as a whole line, in any colour.
+    theme.editor_styles[1] = theme.editor_styles[2] = (UIEditorStyle){0};
+    ui_set_theme(ui, &theme);
+    editor_pass(ui);
+    const UIDrawList* dl = ui_draw_list(ui);
+    bool zero = red_count > 0;
+    for (size_t i = 0; zero && i < ui_draw_list_quad_count(dl); i++) {
+        UIRect r;
+        vec4 colour;
+        int kind = 0;
+        ui_draw_list_quad(dl, i, &r, colour, &kind);
+        zero = kind != 0 || fabsf(r.x - tx) >= 0.01f || fabsf(r.w - reds[0].r.w) >= 0.01f;
+    }
+    say_flag("editor-whole-lines", "zero", "none", zero);
+    ui_set_theme(ui, &before);
+    free_text_doc(doc);
+    return 0;
+}
+
 // Each action told with its step: typing joined into words shares one, a group holds one open over
 // any actions -- typing, a Backspace, more typing -- and one undo takes it all back. The same with
 // keep_undo off.
@@ -3272,6 +3384,8 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_editor_shapes(ui);
     if (!strcmp(which, "editor-line-numbers"))
         return probe_editor_line_numbers(ui);
+    if (!strcmp(which, "editor-whole-lines"))
+        return probe_editor_whole_lines(ui);
     if (!strcmp(which, "editor-steps"))
         return probe_editor_steps(ui);
     if (!strcmp(which, "vim-run"))
