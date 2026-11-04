@@ -106,11 +106,12 @@ field is refused by name: a field's text is `ui_field_set_text` and its hint
   an element sized to nothing, or narrower than the bar and its insets, has none, drawn or pressed
   (spec 14.17).
 
-### Removing and moving elements
+### Removing, moving and hiding elements
 
-`ui_remove(el)` takes an element out and `ui_move(el, parent, before)` moves it, which is all a
-host's panes need: a split is a row put in front of the pane with the pane moved into it, a close
-is a removal. `before` is the child of `parent` to go in front of, NULL for the end, as the DOM's
+`ui_remove(el)` takes an element out, `ui_move(el, parent, before)` moves it and
+`ui_set_hidden(el, hidden)` hides it, which is all a host's panes need: a split is a row put in
+front of the pane with the pane moved into it, a close is a removal, and a view a pane is not
+showing is hidden. `before` is the child of `parent` to go in front of, NULL for the end, as the DOM's
 `insertBefore`; an index was rejected because it has to say whether it counts the element itself.
 
 - **What the system or a screen held inside what goes is let go first** (`_forget`, which a pane's
@@ -124,10 +125,27 @@ is a removal. `before` is the child of `parent` to go in front of, NULL for the 
 - **An element knows its screen through its root** (`UIElement.screen`, set on a screen's root
   alone), and one taken out has none. That is what `ui_remove` refuses a second time, `ui_move`
   refuses to move and `ui_set_focus` refuses to focus, with an element of another screen.
-- **`ui_move` keeps everything the element holds**, focus included.
-- Both refuse a screen's root and a pane's virtual row. `ui_move` also refuses a move out of or into
-  a pane with rows or one of its rows (which the pane would free), into the element itself or under
-  it, and to another screen.
+- **`ui_move` keeps everything the element holds**, focus included, unless it moves into a hidden
+  element or under one.
+- All three refuse a screen's root and a pane's virtual row. `ui_move` also refuses a move out of or
+  into a pane with rows or one of its rows (which the pane would free), into the element itself or
+  under it, and to another screen.
+
+**A hidden element is out of the tree's every walk but its own keeping** (spec 14.18). It takes no
+room and no gap (`_in_flow`, which a `fill` backdrop shares), and the layout lays it and everything
+under it out 0 by 0 where it would start, so a host reading a rect sees nothing shown. It is not
+measured, its lines are not broken, a field's or an editor's place is not given, a pane's rows are
+neither built nor freed, and it is not drawn, eased, hit or gathered for Tab and the pad. Hiding
+lets go of what the UI held inside it (`_forget`), and nothing hidden can be focused or revealed.
+Everything it holds is kept: shown, the next layout places it, and an editor laid out at its old
+width keeps its columns and every wrapped row.
+
+- **Sizing to nothing is not hiding.** An element `UI_FIXED` 0 on both axes still takes a gap, still
+  lays out and draws what is under it in a negative rect, and still eases; an editor so sized wraps
+  its text at one column, a budget's work, and wraps it again at its width when it comes back.
+- **A pane of rows shown again keeps its rows.** The layout settles rows from the pane's last rect,
+  which a hidden pane's is the empty one; a pane the last layout left no height keeps what it holds
+  until a layout gives it one.
 
 ## Focus, input and key routing
 
@@ -138,7 +156,8 @@ keys, repeats and characters; `docs/architecture.md`, Input). It leaves `nav_*`,
 
 **Focus**: a press takes a text field's focus and the pointer passing over does not; a press on
 nothing in a screen that is not modal lets go. `ui_wants_keyboard` is what an app asks before
-taking a key itself.
+taking a key itself. `ui_set_focus` refuses an element hidden or under a hidden one, so no key
+reaches what is not shown.
 
 ### Key routing
 
