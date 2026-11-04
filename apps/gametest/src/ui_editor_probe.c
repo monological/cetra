@@ -764,6 +764,16 @@ static int probe_editor_hit(UISystem* ui) {
 
 // What holds the view where it is: an edit above it, a guess put right, and a new width all keep
 // the line at its top.
+// The wheel turned over `el` by `rows` of its rows, down for more than 0: a notch is the editor's
+// WHEEL_ROWS, 3.
+static void wheel_rows(UISystem* ui, const UIElement* el, float rows) {
+    ui_update(ui,
+              &(UIInput){.pointer_x = el->rect.x + 50.0f,
+                         .pointer_y = el->rect.y + 50.0f,
+                         .wheel_y = -rows / 3.0f},
+              1280.0f, 720.0f);
+}
+
 static int probe_editor_anchor(UISystem* ui) {
     // 300 lines, each a numbered sentence long enough to wrap in a narrow editor.
     static char text[300 * 128];
@@ -778,9 +788,8 @@ static int probe_editor_anchor(UISystem* ui) {
     // Down to line 150, by revealing it: every line above is still a guess.
     ui_editor_reveal(ed, text_doc_line_start(doc, 150));
     editor_pass(ui);
-    size_t line = 0, row = 0;
-    int cols = 0;
-    ui_editor_view_top(ed, &line, &row, &cols);
+    float rows = 0.0f;
+    const size_t line = ui_editor_top_line(ed, &rows);
     size_t want_len = 0;
     const char* top = text_doc_line(doc, line, &want_len);
     char want[128];
@@ -789,47 +798,31 @@ static int probe_editor_anchor(UISystem* ui) {
     text_doc_replace(doc, text_doc_line_start(doc, 10), text_doc_line_start(doc, 10),
                      "new\nnew\nnew\n", 12);
     editor_pass(ui);
-    size_t l2 = 0, r2 = 0;
-    int c2 = 0;
-    ui_editor_view_top(ed, &l2, &r2, &c2);
+    float r2 = 0.0f;
+    const size_t l2 = ui_editor_top_line(ed, &r2);
     size_t got_len = 0;
     const char* got = text_doc_line(doc, l2, &got_len);
     say_flag("editor-anchor", "edit", "kept",
-             l2 == line + 3 && r2 == row && got_len == want_len && !memcmp(got, want, want_len));
+             l2 == line + 3 && r2 == rows && got_len == want_len && !memcmp(got, want, want_len));
     // Every line above measured: clicking far above walks the rows to the top, wrapping each.
     ui_editor_offset_at(ed, 0.0f, -100000.0f);
     editor_pass(ui);
-    size_t l3 = 0, r3 = 0;
-    int c3 = 0;
-    ui_editor_view_top(ed, &l3, &r3, &c3);
+    float r3 = 0.0f;
+    const size_t l3 = ui_editor_top_line(ed, &r3);
+    const int c3 = ui_editor_columns(ed);
     say_flag("editor-anchor", "measured", "kept", l3 == l2 && r3 == r2);
     // A new width wraps every line again, and keeps the line.
     ui_set_size(ed, UI_FIXED, 320.0f, UI_FIXED, EDITOR_H);
     editor_pass(ui);
-    size_t l4 = 0, r4 = 0;
-    int c4 = 0;
-    ui_editor_view_top(ed, &l4, &r4, &c4);
-    say_flag("editor-anchor", "resize", "kept", l4 == l2 && c4 != c3);
+    float r4 = 0.0f;
+    const size_t l4 = ui_editor_top_line(ed, &r4);
+    say_flag("editor-anchor", "resize", "kept", l4 == l2 && ui_editor_columns(ed) != c3);
     // And the wheel moves it a row at a time.
-    ui_update(ui,
-              &(UIInput){.pointer_x = ed->rect.x + 50.0f,
-                         .pointer_y = ed->rect.y + 50.0f,
-                         .wheel_y = -1.0f},
-              1280.0f, 720.0f);
-    size_t l5 = 0, r5 = 0;
-    int c5 = 0;
-    ui_editor_view_top(ed, &l5, &r5, &c5);
+    wheel_rows(ui, ed, 3.0f);
+    float r5 = 0.0f;
+    const size_t l5 = ui_editor_top_line(ed, &r5);
     say_flag("editor-anchor", "wheel", "moved", l5 > l4 || (l5 == l4 && r5 > r4));
     return 0;
-}
-
-// The wheel turned over `el` by `rows` of its rows, down for more than 0.
-static void wheel_rows(UISystem* ui, const UIElement* el, float rows) {
-    ui_update(ui,
-              &(UIInput){.pointer_x = el->rect.x + 50.0f,
-                         .pointer_y = el->rect.y + 50.0f,
-                         .wheel_y = -rows / 3.0f},
-              1280.0f, 720.0f);
 }
 
 // Whether the rows starting at `offsets` stand as far down `a` as down `b`.
@@ -866,12 +859,15 @@ static int probe_editor_scroll_line(UISystem* ui) {
     editor_pass(ui);
     float rows = 0.0f;
     const size_t line = ui_editor_top_line(ed, &rows);
-    size_t top_line = 0, top_row = 0;
-    int cols = 0;
-    ui_editor_view_top(ed, &top_line, &top_row, &cols);
+    // The top row's start is on that line, at the row its wrap puts there.
+    size_t line_len = 0, starts[8];
+    int hang = 0;
+    const char* s = text_doc_line(doc, line, &line_len);
+    const size_t wrapped = ui_editor_wrap(s, line_len, ui_editor_columns(ed), 4, starts, 8, &hang);
+    const size_t row = (size_t)floorf(rows);
     say_flag("editor-scroll-line", "read", "rows",
-             line == top_line && floorf(rows) == (float)top_row &&
-                 fabsf(rows - floorf(rows) - 0.5f) < 0.01f);
+             row < wrapped && text_doc_line_start(doc, line) + starts[row] == ui_editor_top(ed) &&
+                 fabsf(rows - (float)row - 0.5f) < 0.01f);
     const size_t offsets[3] = {ui_editor_top(ed), text_doc_line_start(doc, line + 1),
                                text_doc_line_start(doc, line + 2)};
 
@@ -1170,9 +1166,8 @@ static int probe_editor_carets(UISystem* ui) {
     editor_pass(ui);
     press_drag(ui, ed->rect.x + ed->rect.w - 4.0f, ed->rect.y + 8.0f,
                ed->rect.x + ed->rect.w - 4.0f, ed->rect.y + 108.0f, 0);
-    size_t top = 0, top_row = 0;
-    int cols = 0;
-    ui_editor_view_top(ed, &top, &top_row, &cols);
+    float top_rows = 0.0f;
+    const size_t top = ui_editor_top_line(ed, &top_rows);
     press_drag(ui, ed->rect.x + 120.0f, ed->rect.y + 60.0f, ed->rect.x + 180.0f,
                ed->rect.y + 100.0f, 0);
     const TextSelection* s = NULL;
@@ -1834,13 +1829,18 @@ static int probe_border_fade(UISystem* ui) {
 // The selection {2, 5} on the first line drawn as each shape: three cells, four with the character
 // at its far end, and the line whole with its line break; the block caret over the character at
 // the head.
+// The colour the editor draws a selection in: the theme's, or with its alpha 0 the editor's own.
+static void selection_colour(const UISystem* ui, vec4 out) {
+    memcpy(out, ui_theme(ui)->selection, sizeof(vec4));
+    if (out[3] <= 0.0f)
+        glm_vec4_copy((vec4){0.25f, 0.45f, 0.85f, 0.45f}, out);
+}
+
 static int probe_editor_shapes(UISystem* ui) {
     TextDoc* doc = create_text_doc(SEAM_TEXT, strlen(SEAM_TEXT));
     UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
-    const UITheme* t = ui_theme(ui);
-    vec4 sel = {t->selection[0], t->selection[1], t->selection[2], t->selection[3]};
-    if (sel[3] <= 0.0f)
-        glm_vec4_copy((vec4){0.25f, 0.45f, 0.85f, 0.45f}, sel);
+    vec4 sel = {0.0f};
+    selection_colour(ui, sel);
     static const struct {
         const char* label;
         UIEditorSelectionShape shape;
@@ -1953,7 +1953,8 @@ typedef struct {
     size_t at;
 } Fill;
 
-// The flat quads drawn in colour c, in the order drawn, up to `max`; how many there were.
+// The flat quads drawn in colour c, any colour for NULL, in the order drawn, up to `max`; how many
+// there were.
 static size_t fills_in(const UISystem* ui, const float* c, Fill* out, size_t max) {
     const UIDrawList* dl = ui_draw_list(ui);
     size_t n = 0;
@@ -1962,7 +1963,7 @@ static size_t fills_in(const UISystem* ui, const float* c, Fill* out, size_t max
         vec4 colour;
         int kind = 0;
         ui_draw_list_quad(dl, i, &r, colour, &kind);
-        if (kind == 0 && same_colour(colour, c)) {
+        if (kind == 0 && (!c || same_colour(colour, c))) {
             if (n < max)
                 out[n] = (Fill){r, i};
             n++;
@@ -1987,20 +1988,19 @@ static int probe_editor_whole_lines(UISystem* ui) {
     UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
     const UITheme before = *ui_theme(ui);
     UITheme theme = before;
-    const vec4 red = {1.0f, 0.0f, 0.0f, 1.0f}, green = {0.0f, 1.0f, 0.0f, 1.0f};
-    theme.editor_styles[1] =
-        (UIEditorStyle){.background = {1.0f, 0.0f, 0.0f, 1.0f}, .whole_lines = true};
-    theme.editor_styles[2] = (UIEditorStyle){.background = {0.0f, 1.0f, 0.0f, 1.0f}};
+    vec4 red = {1.0f, 0.0f, 0.0f, 1.0f}, green = {0.0f, 1.0f, 0.0f, 1.0f};
+    theme.editor_styles[1] = (UIEditorStyle){.whole_lines = true};
+    theme.editor_styles[2] = (UIEditorStyle){0};
+    glm_vec4_copy(red, theme.editor_styles[1].background);
+    glm_vec4_copy(green, theme.editor_styles[2].background);
     ui_set_theme(ui, &theme);
     // The first three lines whole, up to the last's start; the last's first two characters.
     text_doc_set_ranges(doc, 0, 0, &(TextRange){0, last_at, 1}, 1);
     text_doc_set_ranges(doc, 1, 0, &(TextRange){last_at, last_at + 2, 2}, 1);
     ui_editor_set_selections(ed, &(TextSelection){1, 3}, 1);
     editor_pass(ui);
-    const UITheme* t = ui_theme(ui);
-    vec4 sel = {t->selection[0], t->selection[1], t->selection[2], t->selection[3]};
-    if (sel[3] <= 0.0f)
-        glm_vec4_copy((vec4){0.25f, 0.45f, 0.85f, 0.45f}, sel);
+    vec4 sel = {0.0f};
+    selection_colour(ui, sel);
 
     float tx = 0.0f, y0 = 0.0f, x = 0.0f, y1 = 0.0f, y_last = 0.0f;
     ui_editor_point_of(ed, 0, &tx, &y0);
@@ -2044,15 +2044,11 @@ static int probe_editor_whole_lines(UISystem* ui) {
     theme.editor_styles[1] = theme.editor_styles[2] = (UIEditorStyle){0};
     ui_set_theme(ui, &theme);
     editor_pass(ui);
-    const UIDrawList* dl = ui_draw_list(ui);
-    bool zero = red_count > 0;
-    for (size_t i = 0; zero && i < ui_draw_list_quad_count(dl); i++) {
-        UIRect r;
-        vec4 colour;
-        int kind = 0;
-        ui_draw_list_quad(dl, i, &r, colour, &kind);
-        zero = kind != 0 || fabsf(r.x - tx) >= 0.01f || fabsf(r.w - reds[0].r.w) >= 0.01f;
-    }
+    Fill fills[256];
+    const size_t fill_count = fills_in(ui, NULL, fills, 256);
+    bool zero = red_count > 0 && fill_count <= 256;
+    for (size_t i = 0; zero && i < fill_count; i++)
+        zero = fabsf(fills[i].r.x - tx) >= 0.01f || fabsf(fills[i].r.w - reds[0].r.w) >= 0.01f;
     say_flag("editor-whole-lines", "zero", "none", zero);
     ui_set_theme(ui, &before);
     free_text_doc(doc);

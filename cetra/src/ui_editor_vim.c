@@ -4977,7 +4977,7 @@ static bool _second(Ctx* c, uint32_t p, uint32_t k) {
         _reset(v);
         return true;
     }
-    // ]c and [c in normal mode alone, as gd: an operator can reach no other text. Any other key
+    // ]c and [c in normal mode alone, as Ctrl+]: an operator can reach no other text. Any other key
     // after ] or [ does nothing, as vim beeps at it.
     if (p == ']' || p == '[') {
         if (k == 'c' && !op)
