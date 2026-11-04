@@ -83,6 +83,8 @@ The app reads the UI's input through `ui_input_read` alone and keeps no pointer 
   `--vim-lookup` answers `gd`, `gD`, Ctrl+] and `K` as a host would, and `--vim-layout` answers `=`,
   `gq` and a new line's indent.
 - `--read-only` makes every file's text read-only, each refusal counted and said on the vim line.
+- `--editor-fold FIRST,LAST` folds the first pane's lines FIRST to LAST, as numbered, closed: the
+  test bed for the editor's folds.
 - `--editor` may be given up to eight times, and the editors are panes, the test bed for
   `ui_remove`, `ui_move` and `ui_editor_set_doc`: F8 splits the focused pane, F9 closes it from its
   own key, and F10 shows the next file in it where that pane last was. `--split-share F` gives the

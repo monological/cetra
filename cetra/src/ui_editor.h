@@ -41,6 +41,30 @@ size_t ui_editor_top_line(const UIElement* el, float* rows);
 // that line's rows as a wheel's scroll is. Before the editor is laid out on its text, taken at its
 // next layout.
 void ui_editor_scroll_line(UIElement* el, size_t line, float rows);
+
+/*
+ * Folds: runs of lines the editor shows as one row while closed, as vim's manual folds. They are
+ * the editor's in the text it shows, as its carets are, so two editors on one text fold it apart,
+ * and they move with their lines through every change: a line put in among a fold's joins it, and
+ * a fold whose lines are all taken out goes. A caret may stand on any line of a closed fold, and is
+ * drawn at the start of its row.
+ */
+// A run of lines the editor shows as one row while closed. `label` is that row's text, copied;
+// NULL for "N lines".
+typedef struct UIEditorFold {
+    size_t first, last;
+    bool open;
+    const char* label;
+} UIEditorFold;
+// The folds of the text the editor shows, replaced whole. They may not overlap or nest: a set that
+// does is refused and logged, and the folds stay as they were.
+void ui_editor_set_folds(UIElement* el, const UIEditorFold* folds, size_t count);
+// The folds as they stand, in order of their lines, open or closed; valid until they or the text
+// change.
+size_t ui_editor_folds(const UIElement* el, const UIEditorFold** out);
+// The fold holding `line` opened or closed; false for none.
+bool ui_editor_fold_open(UIElement* el, size_t line, bool open);
+
 /*
  * The editor leaves its text and shows `doc`, where it last was in it -- its carets, its scroll --
  * as a vim window goes back to a buffer, or from its start for a text it has not shown: one caret
