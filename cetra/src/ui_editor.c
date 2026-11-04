@@ -94,6 +94,23 @@ typedef struct Parked {
     struct Parked* next;
 } Parked;
 
+// A place asked of the view: an offset and how far down the view it stands, an offset to reveal, or
+// a line at the top and the rows scrolled into it.
+typedef struct {
+    enum { PENDING_NONE, PENDING_PLACE, PENDING_REVEAL, PENDING_LINE } kind;
+    union {
+        struct {
+            size_t offset;
+            float where;
+        } place;
+        size_t reveal;
+        struct {
+            size_t line;
+            float rows;
+        } top;
+    };
+} Pending;
+
 struct UIEditor {
     UIElement* el;
     TextDoc* doc;
@@ -101,12 +118,9 @@ struct UIEditor {
     UIEditorPlace at; // where it is in the text it shows
     Parked* parked;   // where it was in each text it left
     // A place asked for before the editor was laid out on the text it shows, whose rows and gutter
-    // it does not know yet: the offset, and how far down the view it stands; the offset to reveal;
-    // or the line at the top and the rows scrolled into it. Applied by the layout. `laid` is the
-    // serial the last layout placed it under.
-    enum { PENDING_NONE, PENDING_PLACE, PENDING_REVEAL, PENDING_LINE } pending;
-    size_t pending_offset, pending_line;
-    float pending_where, pending_rows;
+    // it does not know yet, applied by the layout. `laid` is the serial the last layout placed it
+    // under.
+    Pending pending;
     uint64_t laid;
     // As the last layout left it: pixels a point, a cell and a row in points, the face, where the
     // content and the text are, and the columns.
@@ -388,8 +402,12 @@ static int _column(const UIEditor* ed, const Line* l, Rows rows, size_t r, size_
 
 // The line and row at the view's top, the row held to the line's rows: an edit can leave the line
 // shorter than the row the view had scrolled to until the next layout.
+static size_t _held_line(const UIEditor* ed, size_t line) {
+    return line < ed->doc->line_count ? line : ed->doc->line_count - 1;
+}
+
 static void _top(UIEditor* ed, size_t* line, size_t* row) {
-    *line = ed->at.top_line < ed->doc->line_count ? ed->at.top_line : ed->doc->line_count - 1;
+    *line = _held_line(ed, ed->at.top_line);
     const size_t rows = _rows_of(ed, *line);
     *row = ed->at.top_row < rows ? ed->at.top_row : rows - 1;
 }
@@ -779,7 +797,7 @@ static bool _show(UIEditor* ed, TextDoc* doc) {
     ed->presses = (UITypingPresses){0};
     ed->grab_from = ed->grab_to = 0;
     ed->caret.moved = true;
-    ed->pending = PENDING_NONE;
+    ed->pending.kind = PENDING_NONE;
     if (!doc)
         return true;
     const bool back = _unpark(ed, doc);
@@ -867,9 +885,7 @@ static int _digits(size_t n) {
     return d < GUTTER_DIGITS ? GUTTER_DIGITS : d;
 }
 
-static void _reveal(UIEditor* ed, size_t offset);
-static void _scroll_place(UIEditor* ed, size_t offset, float where);
-static void _scroll_line(UIEditor* ed, size_t line, float rows);
+static void _take_pending(UIEditor* ed);
 
 // The layout's: the face at its size, the gutter, where the text goes and how many columns a row
 // holds; rows wrapped at other columns are guesses again.
@@ -911,13 +927,7 @@ static void _place(const UISystem* ui, UIElement* el, UIRect content) {
         ed->at.top_row = rows - 1;
     // A place asked for before the editor was laid out on this text.
     ed->laid = ed->serial;
-    if (ed->pending == PENDING_PLACE)
-        _scroll_place(ed, ed->pending_offset, ed->pending_where);
-    else if (ed->pending == PENDING_REVEAL)
-        _reveal(ed, ed->pending_offset);
-    else if (ed->pending == PENDING_LINE)
-        _scroll_line(ed, ed->pending_line, ed->pending_rows);
-    ed->pending = PENDING_NONE;
+    _take_pending(ed);
 }
 
 static float _view_rows(const UIEditor* ed) {
@@ -1010,11 +1020,9 @@ bool ui_editor_point_of(UIElement* el, size_t offset, float* x, float* y) {
     return true;
 }
 
-void ui_editor_view_top(const UIElement* el, size_t* line, size_t* row, int* columns) {
+int ui_editor_columns(const UIElement* el) {
     const UIEditor* ed = _seen(el);
-    *line = ed ? ed->at.top_line : 0;
-    *row = ed ? ed->at.top_row : 0;
-    *columns = ed ? ed->cols : 0;
+    return ed ? ed->cols : 0;
 }
 
 // The offset starting the row `down` rows below the view's top, held to the text's last row.
@@ -1090,49 +1098,52 @@ static void _scroll_place(UIEditor* ed, size_t offset, float where) {
 // own rows: past them is the next line's top, so a view held to another's line never runs on into
 // lines below it.
 static void _scroll_line(UIEditor* ed, size_t line, float rows) {
-    ed->at.top_line = line < ed->doc->line_count ? line : ed->doc->line_count - 1;
+    ed->at.top_line = _held_line(ed, line);
     ed->at.top_row = 0;
     ed->at.top_frac = 0.0f;
     const float most = (float)_rows_of(ed, ed->at.top_line);
     _scroll_rows(ed, rows < 0.0f ? 0.0f : rows < most ? rows : most);
 }
 
-void ui_editor_reveal(UIElement* el, size_t offset) {
+// The place asked for, if any, put now that the editor is laid out on its text.
+static void _take_pending(UIEditor* ed) {
+    const Pending p = ed->pending;
+    ed->pending.kind = PENDING_NONE;
+    switch (p.kind) {
+        case PENDING_PLACE:
+            _scroll_place(ed, p.place.offset, p.place.where);
+            break;
+        case PENDING_REVEAL:
+            _reveal(ed, p.reveal);
+            break;
+        case PENDING_LINE:
+            _scroll_line(ed, p.top.line, p.top.rows);
+            break;
+        case PENDING_NONE:
+            break;
+    }
+}
+
+// A place asked for: put at once when the editor is laid out on its text, else at its next layout.
+static void _pend(UIElement* el, Pending p) {
     UIEditor* ed = _of(el);
     if (!ed)
         return;
-    if (_laid_out(ed)) {
-        _reveal(ed, offset);
-    } else {
-        ed->pending = PENDING_REVEAL;
-        ed->pending_offset = offset;
-    }
+    ed->pending = p;
+    if (_laid_out(ed))
+        _take_pending(ed);
+}
+
+void ui_editor_reveal(UIElement* el, size_t offset) {
+    _pend(el, (Pending){.kind = PENDING_REVEAL, .reveal = offset});
 }
 
 void ui_editor_scroll_place(UIElement* el, size_t offset, float where) {
-    UIEditor* ed = _of(el);
-    if (!ed)
-        return;
-    if (_laid_out(ed)) {
-        _scroll_place(ed, offset, where);
-    } else {
-        ed->pending = PENDING_PLACE;
-        ed->pending_offset = offset;
-        ed->pending_where = where;
-    }
+    _pend(el, (Pending){.kind = PENDING_PLACE, .place = {offset, where}});
 }
 
 void ui_editor_scroll_line(UIElement* el, size_t line, float rows) {
-    UIEditor* ed = _of(el);
-    if (!ed)
-        return;
-    if (_laid_out(ed)) {
-        _scroll_line(ed, line, rows);
-    } else {
-        ed->pending = PENDING_LINE;
-        ed->pending_line = line;
-        ed->pending_rows = rows;
-    }
+    _pend(el, (Pending){.kind = PENDING_LINE, .top = {line, rows}});
 }
 
 // ---- Selections, public
@@ -2591,16 +2602,29 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
 
     size_t line, row;
     _top(ed, &line, &row);
-    // Every range reaching the screenful of lines that could show, and those of them that colour
-    // their text, which every character asks about.
-    TextRange ranges[RANGES_DRAWN * TEXT_DOC_LAYERS], colouring[RANGES_DRAWN * TEXT_DOC_LAYERS];
+    // Every range reaching the screenful of lines that could show; those of them that colour their
+    // text, which every character asks about; and those with a background, the `whole` filling
+    // whole lines first, then those banded behind their characters.
+    TextRange ranges[RANGES_DRAWN * TEXT_DOC_LAYERS], colouring[RANGES_DRAWN * TEXT_DOC_LAYERS],
+        backed[RANGES_DRAWN * TEXT_DOC_LAYERS];
     const size_t range_count =
         _ranges_in(doc, text_doc_line_start(doc, line),
                    text_doc_line_start(doc, line + (size_t)ceilf(_view_rows(ed)) + 1), ranges);
-    size_t colouring_count = 0;
-    for (size_t k = 0; k < range_count; k++)
-        if (_style(t, ranges[k].style)->text[3] > 0.0f)
+    size_t colouring_count = 0, backed_count = 0;
+    for (size_t k = 0; k < range_count; k++) {
+        const UIEditorStyle* st = _style(t, ranges[k].style);
+        if (st->text[3] > 0.0f)
             colouring[colouring_count++] = ranges[k];
+        if (st->whole_lines && st->background[3] > 0.0f)
+            backed[backed_count++] = ranges[k];
+    }
+    const size_t whole = backed_count;
+    for (size_t k = 0; k < range_count; k++) {
+        const UIEditorStyle* st = _style(t, ranges[k].style);
+        if (!st->whole_lines && st->background[3] > 0.0f)
+            backed[backed_count++] = ranges[k];
+    }
+    const float edge_w = content.x + content.w - ed->text.x;
 
     ui_push_clip(dl, content);
     const float cell_px = (float)ed->face->cell_width;
@@ -2615,8 +2639,14 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
         if (!text_doc_line_spans(doc, line, &spans, &span_count) && doc->highlight)
             uncoloured = true;
         const size_t first_sel = _first_reaching(ed, l.at);
-        // The line's bytes with its line break, which a whole-line range must overlap to reach it.
-        const size_t line_end = l.at + l.len + (line + 1 < doc->line_count);
+        // The whole-line ranges overlapping the line's bytes, its line break counted: their
+        // backgrounds go behind each of its rows.
+        const size_t line_end = text_doc_line_start(doc, line + 1);
+        const float* fills[RANGES_DRAWN * TEXT_DOC_LAYERS];
+        size_t fill_count = 0;
+        for (size_t k = 0; k < whole; k++)
+            if (backed[k].start < line_end && backed[k].end > l.at)
+                fills[fill_count++] = _style(t, backed[k].style)->background;
         for (; row < rows.count && y < ed->text.y + ed->text.h; row++, y += ed->row) {
             const size_t from = rows.starts[row];
             const size_t to = row + 1 < rows.count ? rows.starts[row + 1] : l.len;
@@ -2635,20 +2665,12 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
             }
             // Backgrounds: the host's whole lines, its other ranges, find's matches, then the
             // selections over them.
-            for (size_t k = 0; k < range_count; k++) {
-                const UIEditorStyle* st = _style(t, ranges[k].style);
-                if (st->whole_lines && st->background[3] > 0.0f && ranges[k].start < line_end &&
-                    ranges[k].end > l.at)
-                    ui_draw_quad(
-                        dl, (UIRect){ed->text.x, y, content.x + content.w - ed->text.x, ed->row},
-                        (float*)st->background);
-            }
-            for (size_t k = 0; k < range_count; k++) {
-                const UIEditorStyle* st = _style(t, ranges[k].style);
-                if (!st->whole_lines && st->background[3] > 0.0f &&
-                    _on_row(&ranges[k], &l, from, to, &a, &b))
-                    _band(dl, ed, &l, rows, row, a, b, 0, y, ed->row, st->background);
-            }
+            for (size_t f = 0; f < fill_count; f++)
+                ui_draw_quad(dl, (UIRect){ed->text.x, y, edge_w, ed->row}, (float*)fills[f]);
+            for (size_t k = whole; k < backed_count; k++)
+                if (_on_row(&backed[k], &l, from, to, &a, &b))
+                    _band(dl, ed, &l, rows, row, a, b, 0, y, ed->row,
+                          _style(t, backed[k].style)->background);
             for (size_t i = q.len && from >= q.len - 1 ? from - (q.len - 1) : 0;
                  q.len && i + q.len <= l.len && i < to; i++) {
                 if (i + q.len > from && _find_at(&q, l.s, l.len, i))
