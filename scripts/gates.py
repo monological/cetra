@@ -28487,6 +28487,17 @@ def run_ui_gate(workdir):
                      that overlap are refused; the standard mode's open-fold,
                      toggle-fold and close-fold act on the caret's fold, and do
                      nothing with no fold there.
+      ui-editor-fillers filler rows (spec 14.16): two above line 5 and one above a
+                     closed fold's first line are three quads in
+                     theme.editor_filler from the text's left edge to the
+                     editor's right, with no glyph on their rows; one above a
+                     line the fold hides is not drawn; a row move down from line
+                     4 lands on line 5 and from line 9 on the fold, up from line
+                     5 on line 4; a wheel's row from line 4 puts line 5 at the
+                     top at row 0, and line 5 put at 2 rows is its text's first
+                     row; a click on a filler lands at its line's start; the
+                     long line's rows as ui_editor_line_rows gives them are its
+                     rows as drawn.
       ui-editor-steps each action told with its step: typing joined into words
                      shares one; a group holds one over typing, a Backspace and
                      more typing, one undo takes the group back and one redo makes
@@ -29758,6 +29769,14 @@ def run_ui_gate(workdir):
                            "refused; open-fold, close-fold and toggle-fold by name")
     print(f"  ui-editor-folds       {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-folds", ok)
+
+    ok, detail = doc_flags("editor-fillers", 4, "filler rows above a line and above a closed "
+                           "fold's row in the filler colour with no number or text, none for a "
+                           "line the fold hides; a row move steps over them and the top's rows "
+                           "count them; a click on one lands at its line's start; a line's rows "
+                           "as asked are its rows as drawn")
+    print(f"  ui-editor-fillers     {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-fillers", ok)
 
     ok, detail = doc_flags("editor-steps", 7, "typing joined into words shares a step, a group "
                            "holds one over typing, a Backspace and more typing, and one undo takes "

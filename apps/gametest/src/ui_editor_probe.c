@@ -2279,6 +2279,107 @@ static int probe_editor_folds(UISystem* ui) {
     return 0;
 }
 
+// Filler rows above a line, in the theme's filler colour from the text's left edge and with no
+// number, and above a closed fold's row but not above a line it hides; a row move steps over them,
+// the view's rows into a line count them, a click on one lands at its line's start, and a line's
+// rows as asked are its rows as drawn.
+static int probe_editor_fillers(UISystem* ui) {
+    // 30 lines, the 20th long enough to wrap in 600 points.
+    static char text[30 * 200];
+    size_t len = 0;
+    for (int i = 0; i < 30; i++)
+        len += (size_t)snprintf(text + len, sizeof(text) - len, "line %02d%s\n", i,
+                                i == 20 ? " of a text long enough to wrap in an editor six "
+                                          "hundred points across, once over at the least, twice"
+                                        : "");
+    TextDoc* doc = create_text_doc(text, len - 1);
+    UIElement* ed = editor_fixture(ui, doc, 600.0f, 400.0f);
+    const UITheme before = *ui_theme(ui);
+    UITheme theme = before;
+    vec4 filler = {0.0f, 0.6f, 0.6f, 1.0f};
+    glm_vec4_copy(filler, theme.editor_filler);
+    ui_set_theme(ui, &theme);
+    const UIEditorFiller fillers[3] = {{5, 2}, {10, 1}, {11, 1}};
+    ui_editor_set_fillers(ed, fillers, 3);
+    ui_editor_set_folds(ed, &(UIEditorFold){10, 12, false, NULL}, 1);
+    ui_editor_scroll_line(ed, 3, 0.0f);
+    editor_pass(ui);
+    float tx = 0.0f, y3 = 0.0f, y4 = 0.0f, y5 = 0.0f, y10 = 0.0f, x = 0.0f;
+    ui_editor_point_of(ed, text_doc_line_start(doc, 3), &tx, &y3);
+    ui_editor_point_of(ed, text_doc_line_start(doc, 4), &x, &y4);
+    ui_editor_point_of(ed, text_doc_line_start(doc, 5), &x, &y5);
+    ui_editor_point_of(ed, text_doc_line_start(doc, 10), &x, &y10);
+    const float row = y4 - y3;
+    // Two filler rows above line 5, one above the fold's row and none for line 11 inside it.
+    Fill fills[8];
+    const size_t fill_n = fills_in(ui, filler, fills, 8);
+    const float want_y[3] = {y4 + row, y4 + 2.0f * row, y10 - row};
+    bool rows = fill_n == 3 && fabsf(y5 - (y4 + 3.0f * row)) < 0.01f;
+    for (size_t i = 0; rows && i < 3; i++)
+        rows = fabsf(fills[i].r.y - want_y[i]) < 0.01f && fabsf(fills[i].r.x - tx) < 0.01f &&
+               fabsf(fills[i].r.h - row) < 0.01f &&
+               fills[i].r.x + fills[i].r.w >= ed->rect.x + ed->rect.w - 20.0f;
+    UIRect glyphs[4];
+    for (size_t i = 0; rows && i < 3; i++)
+        rows = row_glyphs(ui, tx, want_y[i], row, true, glyphs, NULL, 4) == 0 &&
+               row_glyphs(ui, tx, want_y[i], row, false, glyphs, NULL, 4) == 0;
+    if (!rows)
+        fprintf(stderr, "editor-fillers: %zu filler quads, line 5 at %.2f, line 4 at %.2f\n",
+                fill_n, (double)y5, (double)y4);
+    say_flag("editor-fillers", "rows", "above", rows);
+
+    // A row down from line 4 lands on line 5 and from line 9 on the fold, up from line 5 on line 4;
+    // a wheel's row from line 4 at the top puts line 5's first filler there, and its rows count
+    // the fillers.
+    const size_t at4 = text_doc_line_start(doc, 4), at5 = text_doc_line_start(doc, 5);
+    const size_t at9 = text_doc_line_start(doc, 9), at10 = text_doc_line_start(doc, 10);
+    ui_editor_set_selections(ed, &(TextSelection){at4, at4}, 1);
+    ui_editor_apply(ed, UI_OP_MOVE, UI_MOTION_ROW_DOWN, 1);
+    bool walk = one_selection(ed, at5, at5);
+    ui_editor_apply(ed, UI_OP_MOVE, UI_MOTION_ROW_UP, 1);
+    walk = walk && one_selection(ed, at4, at4);
+    ui_editor_set_selections(ed, &(TextSelection){at9, at9}, 1);
+    ui_editor_apply(ed, UI_OP_MOVE, UI_MOTION_ROW_DOWN, 1);
+    walk = walk && one_selection(ed, at10, at10);
+    ui_editor_scroll_line(ed, 4, 0.0f);
+    editor_pass(ui);
+    wheel_rows(ui, ed, 1.0f);
+    float r1 = -1.0f;
+    const size_t l1 = ui_editor_top_line(ed, &r1);
+    ui_editor_scroll_line(ed, 5, 2.0f);
+    editor_pass(ui);
+    float r2 = -1.0f;
+    const size_t l2 = ui_editor_top_line(ed, &r2);
+    walk = walk && l1 == 5 && r1 == 0.0f && l2 == 5 && r2 == 2.0f && ui_editor_top(ed) == at5;
+    if (!walk)
+        fprintf(stderr, "editor-fillers: a wheel's row to %zu, %.2f; line 5 put at %zu, %.2f\n", l1,
+                (double)r1, l2, (double)r2);
+    say_flag("editor-fillers", "walk", "over", walk);
+
+    // A click on a filler row lands at the start of the line below it.
+    ui_editor_scroll_line(ed, 3, 0.0f);
+    editor_pass(ui);
+    press_drag(ui, tx + 40.0f, y4 + row * 1.5f, tx + 40.0f, y4 + row * 1.5f, 0);
+    say_flag("editor-fillers", "click", "line_start",
+             ui_editor_offset_at(ed, tx + 40.0f, y4 + row * 1.5f) == at5 &&
+                 one_selection(ed, at5, at5));
+
+    // Line 20's rows as asked, as drawn: from its first row to line 21's.
+    ui_editor_scroll_line(ed, 19, 0.0f);
+    editor_pass(ui);
+    float y20 = 0.0f, y21 = 0.0f;
+    ui_editor_point_of(ed, text_doc_line_start(doc, 20), &x, &y20);
+    ui_editor_point_of(ed, text_doc_line_start(doc, 21), &x, &y21);
+    const size_t asked = ui_editor_line_rows(ed, 20);
+    say_flag("editor-fillers", "line_rows", "drawn",
+             asked >= 2 && fabsf((y21 - y20) - (float)asked * row) < 0.01f &&
+                 ui_editor_line_rows(ed, 19) == 1 && ui_editor_line_rows(ed, 30) == 0);
+
+    ui_set_theme(ui, &before);
+    free_text_doc(doc);
+    return 0;
+}
+
 // Each action told with its step: typing joined into words shares one, a group holds one open over
 // any actions -- typing, a Backspace, more typing -- and one undo takes it all back. The same with
 // keep_undo off.
@@ -3704,6 +3805,8 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_editor_whole_lines(ui);
     if (!strcmp(which, "editor-folds"))
         return probe_editor_folds(ui);
+    if (!strcmp(which, "editor-fillers"))
+        return probe_editor_fillers(ui);
     if (!strcmp(which, "editor-steps"))
         return probe_editor_steps(ui);
     if (!strcmp(which, "vim-run"))

@@ -1742,6 +1742,7 @@ typedef struct EditorSheet {
     bool lookup;    // --vim-lookup: the vim mode's lookups answered, saying what they asked
     bool layout;    // --vim-layout: = and gq and new lines' indents answered
     int fold_first, fold_last; // --editor-fold: the first pane's lines folded, as numbered; 0 none
+    int filler_line, filler_rows; // --editor-filler: blank rows above a line, as numbered; 0 none
     // With --vim: the vim mode under the app's own, and a line under the editor saying its state,
     // with the line / ? and : are typed in after it -- its kind shown before it -- and what the
     // last such line came to, said until the next key; and the editor that asked for the line.
@@ -2294,6 +2295,9 @@ static bool build_editor(UISystem* ui, const char* const* paths, int count, bool
     if (s->fold_first > 0 && s->fold_last >= s->fold_first)
         ui_editor_set_folds(
             first, &(UIEditorFold){(size_t)s->fold_first - 1, (size_t)s->fold_last - 1}, 1);
+    if (s->filler_line > 0 && s->filler_rows > 0)
+        ui_editor_set_fillers(
+            first, &(UIEditorFiller){(size_t)s->filler_line - 1, (uint32_t)s->filler_rows}, 1);
     g_host_mode.parent = ui_editor_standard_mode();
     if (vim) {
         s->vim = create_ui_editor_vim();
@@ -3048,7 +3052,8 @@ static void usage(const char* argv0) {
             "          [--ui-enter] [--ui-text TEXT] [--ui-keys] [--gui-click] [--history] "
             "[--palette]\n"
             "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim] [--read-only]\n"
-            "          [--editor-fold FIRST,LAST] [--refuse-close] [--ui-borders]\n",
+            "          [--editor-fold FIRST,LAST] [--editor-filler LINE,ROWS] [--refuse-close]\n"
+            "          [--ui-borders]\n",
             argv0);
 }
 
@@ -3147,6 +3152,12 @@ int main(int argc, char** argv) {
             if (sscanf(argv[++i], "%d,%d", &g_editor_sheet.fold_first, &g_editor_sheet.fold_last) !=
                 2) {
                 fprintf(stderr, "canvas: --editor-fold takes FIRST,LAST\n");
+                return 2;
+            }
+        } else if (strcmp(argv[i], "--editor-filler") == 0 && more) {
+            if (sscanf(argv[++i], "%d,%d", &g_editor_sheet.filler_line,
+                       &g_editor_sheet.filler_rows) != 2) {
+                fprintf(stderr, "canvas: --editor-filler takes LINE,ROWS\n");
                 return 2;
             }
         } else if (strcmp(argv[i], "--split-share") == 0 && more) {
