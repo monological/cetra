@@ -636,14 +636,19 @@ static int probe_glyph_cache(void) {
 
 static GlyphCache* g_face;
 
-// An editor of a fixed size alone on a screen, its face the editor's own at 13 points.
-static UIElement* editor_fixture(UISystem* ui, TextDoc* doc, float w, float h) {
+// The editor's face its own at 13 points.
+static void editor_theme(UISystem* ui) {
     if (!g_face)
         g_face = create_glyph_cache(EDITOR_FONT, 13.0f);
     UITheme theme = *ui_theme(ui);
     theme.editor_face = g_face;
     theme.editor_size = 13.0f;
     ui_set_theme(ui, &theme);
+}
+
+// An editor of a fixed size alone on a screen, its face the editor's own at 13 points.
+static UIElement* editor_fixture(UISystem* ui, TextDoc* doc, float w, float h) {
+    editor_theme(ui);
     UIScreen* s = ui_screen(ui, "editor");
     ui_screen_set_modal(s, false);
     UIElement* ed = ui_editor(ui_screen_root(s), doc);
@@ -3806,6 +3811,283 @@ static int probe_ui_move(UISystem* ui) {
     return 0;
 }
 
+// ---- A hidden element (spec 14.18)
+
+// A screen of its own on top, alone, its children from the top: one scene of the probe.
+static UIScreen* hidden_scene(UISystem* ui, const char* name) {
+    ui_pop_all(ui);
+    UIScreen* s = ui_screen(ui, name);
+    ui_screen_set_modal(s, false);
+    ui_screen_root(s)->align_main = UI_ALIGN_START;
+    ui_push(ui, s);
+    return s;
+}
+
+// A panel `w` by `h`, without padding, in `parent`.
+static UIElement* fixed_panel(UIElement* parent, float w, float h) {
+    UIElement* p = ui_panel(parent);
+    ui_set_size(p, UI_FIXED, w, UI_FIXED, h);
+    for (int i = 0; i < 4; i++)
+        p->padding[i] = -1.0f;
+    return p;
+}
+
+// `lines` numbered lines, each long enough to wrap in an editor 300 wide.
+static TextDoc* hidden_text(int lines) {
+    static char text[200 * 96];
+    size_t len = 0;
+    for (int i = 0; i < lines && i < 200; i++)
+        len += (size_t)snprintf(text + len, sizeof(text) - len,
+                                "line %03d of a text whose lines wrap in a narrow editor\n", i);
+    return create_text_doc(text, len);
+}
+
+static UIElement* fixed_editor(UIElement* parent, TextDoc* doc, float w, float h) {
+    UIElement* ed = ui_editor(parent, doc);
+    ui_set_size(ed, UI_FIXED, w, UI_FIXED, h);
+    return ed;
+}
+
+// A hidden element takes no room and no gap, is neither laid out, drawn nor eased, takes no
+// pointer, key or focus, lets go of what the UI held inside it, keeps all it holds, and stands
+// where it stood once shown; a screen's root and a pane's row are refused. Sized to nothing
+// instead, an editor wraps at one column.
+static int probe_ui_hidden(UISystem* ui) {
+    editor_theme(ui);
+
+    // The flow: a row of three 100 wide with gaps of 10, the middle one holding a panel; a row 300
+    // wide of two growing.
+    UIScreen* s = hidden_scene(ui, "hidden-flow");
+    UIElement* root = ui_screen_root(s);
+    UIElement* row = ui_panel(root);
+    row->dir = UI_ROW;
+    row->spacing = 10.0f;
+    for (int i = 0; i < 4; i++)
+        row->padding[i] = -1.0f;
+    UIElement* p[3];
+    for (int i = 0; i < 3; i++)
+        p[i] = fixed_panel(row, 100.0f, 40.0f);
+    UIElement* inner = fixed_panel(p[1], 20.0f, 20.0f);
+    UIElement* grows = fixed_panel(root, 300.0f, 40.0f);
+    grows->dir = UI_ROW;
+    UIElement* g[2] = {ui_panel(grows), ui_panel(grows)};
+    for (int i = 0; i < 2; i++)
+        ui_set_size(g[i], UI_GROW, 0.0f, UI_FIXED, 40.0f);
+    UIElement* const all[] = {p[0], p[1], p[2], inner, g[0], g[1]};
+    editor_pass(ui);
+    UIRect was[6];
+    for (int i = 0; i < 6; i++)
+        was[i] = all[i]->rect;
+    ui_set_hidden(p[1], true);
+    ui_set_hidden(g[1], true);
+    editor_pass(ui);
+    say_flag("hidden", "gap", "none",
+             fabsf(p[2]->rect.x - p[0]->rect.x - 110.0f) < 0.01f &&
+                 fabsf(row->rect.w - 210.0f) < 0.01f);
+    say_flag("hidden", "grow", "whole", fabsf(g[0]->rect.w - 300.0f) < 0.01f);
+    say_flag("hidden", "empty", "rects",
+             p[1]->rect.w == 0.0f && p[1]->rect.h == 0.0f && inner->rect.w == 0.0f &&
+                 inner->rect.h == 0.0f);
+    ui_set_hidden(p[1], false);
+    ui_set_hidden(g[1], false);
+    editor_pass(ui);
+    bool stood = true;
+    for (int i = 0; i < 6; i++)
+        stood = stood && same_rect(all[i]->rect, was[i]);
+    say_flag("hidden", "shown", "stood", stood);
+
+    // Drawn: an editor and a panel with a fill, hidden, draw what the screen draws without them.
+    s = hidden_scene(ui, "hidden-drawn");
+    root = ui_screen_root(s);
+    ui_label(root, "kept");
+    TextDoc* doc = hidden_text(200);
+    UIElement* ed = fixed_editor(root, doc, 300.0f, 150.0f);
+    UIElement* filled = fixed_panel(root, 50.0f, 50.0f);
+    ui_set_style(filled, &(UIStyle){.bg = {1.0f, 0.0f, 0.0f, 1.0f}});
+    editor_pass(ui);
+    const size_t shown_quads = ui_draw_list_quad_count(ui_draw_list(ui));
+    ui_set_hidden(ed, true);
+    ui_set_hidden(filled, true);
+    editor_pass(ui);
+    const size_t hidden_quads = ui_draw_list_quad_count(ui_draw_list(ui));
+    const uint64_t hidden_sig = ui_draw_list_signature(ui_draw_list(ui));
+    ui_remove(ed);
+    ui_remove(filled);
+    editor_pass(ui);
+    say_flag("hidden", "drawn", "nothing",
+             hidden_quads < shown_quads &&
+                 hidden_quads == ui_draw_list_quad_count(ui_draw_list(ui)) &&
+                 hidden_sig == ui_draw_list_signature(ui_draw_list(ui)));
+
+    // The pointer: a press and a wheel where a hidden editor stood go to the pane round it.
+    s = hidden_scene(ui, "hidden-pointer");
+    root = ui_screen_root(s);
+    UIElement* pane = ui_scroll(root);
+    ui_set_size(pane, UI_FIXED, 300.0f, UI_FIXED, 150.0f);
+    ed = fixed_editor(pane, doc, 300.0f, 150.0f);
+    for (int i = 0; i < 30; i++)
+        ui_label(pane, "a line");
+    editor_pass(ui);
+    float x = 0.0f, y = 0.0f;
+    centre_of(ed, &x, &y);
+    ui_set_hidden(ed, true);
+    editor_pass(ui);
+    ui_update(ui, &(UIInput){.pointer_x = x, .pointer_y = y, .wheel_y = -1.0f}, 1280.0f, 720.0f);
+    const float wheeled = pane->scroll_target;
+    pointer_pass(ui, x, y, POINTER_PRESS, 0);
+    const UIElement *pressed = NULL, *bar = NULL, *seen = NULL;
+    ui_system_held(ui, &pressed, &bar, &seen);
+    pointer_pass(ui, x, y, POINTER_RELEASE, 0);
+    say_flag("hidden", "press", "behind",
+             wheeled > 0.0f && pressed != ed && ui_focused(s) != ed && ui_editor_top(ed) == 0);
+
+    // The focus: hiding the focused editor leaves it on nothing, and a key typed goes nowhere.
+    s = hidden_scene(ui, "hidden-focus");
+    root = ui_screen_root(s);
+    ed = fixed_editor(root, doc, 300.0f, 150.0f);
+    UIElement* button = ui_button(root, "pressed", count_press, NULL);
+    UIElement* field = ui_text_field(root, 0, NULL, NULL);
+    UIElement* holder = fixed_panel(root, 100.0f, 40.0f);
+    UIElement* under = ui_text_field(holder, 0, NULL, NULL);
+    ui_set_focus(s, ed);
+    editor_pass(ui);
+    const size_t length = text_doc_length(doc);
+    ui_set_hidden(ed, true);
+    const bool let_go = ui_focused(s) == NULL;
+    type(ui, "x");
+    say_flag("hidden", "focus", "nothing", let_go && text_doc_length(doc) == length);
+
+    // Refocused: refused on the hidden editor and on a field under a hidden panel.
+    ui_set_focus(s, field);
+    ui_set_focus(s, ed);
+    ui_set_hidden(holder, true);
+    ui_set_focus(s, under);
+    say_flag("hidden", "refocus", "refused", ui_focused(s) == field);
+
+    // Held: the press on a button, and an editor's bar, let go when each is hidden.
+    ui_set_hidden(ed, false);
+    editor_pass(ui);
+    centre_of(button, &x, &y);
+    pointer_pass(ui, x, y, POINTER_PRESS, 0);
+    ui_system_held(ui, &pressed, &bar, &seen);
+    const bool was_pressed = pressed == button;
+    ui_set_hidden(button, true);
+    ui_system_held(ui, &pressed, &bar, &seen);
+    const bool press_gone = pressed == NULL;
+    pointer_pass(ui, x, y, POINTER_RELEASE, 0);
+    const float bx = ed->rect.x + ed->rect.w - 5.0f, by = ed->rect.y + 10.0f;
+    pointer_pass(ui, bx, by, POINTER_PRESS, 0);
+    ui_system_held(ui, &pressed, &bar, &seen);
+    const bool was_held = bar == ed;
+    ui_set_hidden(ed, true);
+    ui_system_held(ui, &pressed, &bar, &seen);
+    pointer_pass(ui, bx, by + 20.0f, POINTER_RELEASE, 0);
+    say_flag("hidden", "held", "let_go",
+             was_pressed && press_gone && was_held && bar == NULL && g_presses == 0);
+
+    // Moved under a hidden panel, the focused editor lets go of the focus.
+    ui_set_hidden(ed, false);
+    ui_set_focus(s, ed);
+    ui_move(ed, holder, NULL);
+    say_flag("hidden", "move", "let_go", ed->parent == holder && ui_focused(s) == NULL);
+
+    // Tab steps over a hidden button.
+    s = hidden_scene(ui, "hidden-tab");
+    root = ui_screen_root(s);
+    UIElement* b[3];
+    for (int i = 0; i < 3; i++)
+        b[i] = ui_button(root, "tab", NULL, NULL);
+    ui_set_hidden(b[1], true);
+    editor_pass(ui);
+    ui_set_focus(s, b[0]);
+    key(ui, GLFW_KEY_TAB, 0);
+    say_flag("hidden", "tab", "over", ui_focused(s) == b[2]);
+
+    // Kept: an editor scrolled to line 50 with two carets, hidden five passes and shown, as it was
+    // and wrapped as it was; sized to nothing instead, it has one column.
+    s = hidden_scene(ui, "hidden-kept");
+    root = ui_screen_root(s);
+    ed = fixed_editor(root, doc, 300.0f, 150.0f);
+    for (int i = 0; i < 10 && !ui_editor_settled(ed); i++)
+        editor_pass(ui);
+    const size_t l50 = text_doc_line_start(doc, 50), l51 = text_doc_line_start(doc, 51);
+    const TextSelection carets[2] = {{l50, l50}, {l51 + 2, l51 + 5}};
+    ui_editor_set_selections(ed, carets, 2);
+    ui_editor_scroll_line(ed, 50, 0.0f);
+    editor_pass(ui);
+    const int cols = ui_editor_columns(ed);
+    ui_set_hidden(ed, true);
+    bool same_cols = true;
+    for (int i = 0; i < 5; i++) {
+        editor_pass(ui);
+        same_cols = same_cols && ui_editor_columns(ed) == cols;
+    }
+    ui_set_hidden(ed, false);
+    editor_pass(ui);
+    float rows = 0.0f;
+    const size_t top_line = ui_editor_top_line(ed, &rows);
+    const TextSelection* now = NULL;
+    const size_t n = ui_editor_selections(ed, &now, NULL);
+    const bool carets_kept = n == 2 && now[0].anchor == l50 && now[0].head == l50 &&
+                             now[1].anchor == l51 + 2 && now[1].head == l51 + 5;
+    if (!same_cols || top_line != 50 || rows != 0.0f || !carets_kept || !ui_editor_settled(ed))
+        fprintf(stderr, "hidden: kept %d columns of %d, top line %zu at %.2f, settled %d\n",
+                ui_editor_columns(ed), cols, top_line, (double)rows, ui_editor_settled(ed));
+    say_flag("hidden", "kept", "whole",
+             cols > 1 && same_cols && top_line == 50 && rows == 0.0f && carets_kept &&
+                 ui_editor_settled(ed));
+    ui_set_size(ed, UI_FIXED, 0.0f, UI_FIXED, 0.0f);
+    editor_pass(ui);
+    say_flag("hidden", "sized", "one", ui_editor_columns(ed) == 1);
+
+    // Still: a pane hidden while its scroll eases asks for no frame, and keeps its scroll.
+    s = hidden_scene(ui, "hidden-still");
+    root = ui_screen_root(s);
+    pane = ui_scroll(root);
+    ui_set_size(pane, UI_FIXED, 200.0f, UI_FIXED, 100.0f);
+    UIElement* last = NULL;
+    for (int i = 0; i < 40; i++)
+        last = ui_label(pane, "a line");
+    editor_pass(ui);
+    ui_scroll_into_view(ui, last);
+    const bool easing = ui_build(ui, 1280.0f, 720.0f, 0.001f);
+    const float held_at = pane->scroll;
+    ui_set_hidden(pane, true);
+    const bool moving = ui_build(ui, 1280.0f, 720.0f, 0.001f);
+    say_flag("hidden", "still", "nothing", easing && !moving && pane->scroll == held_at);
+
+    // Rows: a pane of virtual rows hidden five passes builds and frees none, and shown has the
+    // same rows; its row and the screen's root are refused.
+    s = hidden_scene(ui, "hidden-rows");
+    root = ui_screen_root(s);
+    UIElement* rows_pane = ui_scroll(root);
+    ui_set_size(rows_pane, UI_FIXED, 200.0f, UI_FIXED, 100.0f);
+    ui_scroll_set_rows(rows_pane, 50, 20.0f, build_row, NULL);
+    editor_pass(ui);
+    const unsigned builds = rows_pane->row_builds;
+    const size_t built = rows_pane->child_count;
+    UIElement* first = ui_scroll_find_row(rows_pane, 0);
+    ui_set_hidden(rows_pane, true);
+    bool none = true;
+    for (int i = 0; i < 5; i++) {
+        editor_pass(ui);
+        none = none && rows_pane->row_builds == builds && rows_pane->child_count == built;
+    }
+    ui_set_hidden(rows_pane, false);
+    editor_pass(ui);
+    if (!none || rows_pane->row_builds != builds || rows_pane->child_count != built)
+        fprintf(stderr, "hidden: %zu rows built in %u builds, %zu in %u shown, hidden kept %d\n",
+                built, builds, rows_pane->child_count, rows_pane->row_builds, none);
+    say_flag("hidden", "rows", "kept",
+             built > 0 && none && rows_pane->row_builds == builds &&
+                 rows_pane->child_count == built && ui_scroll_find_row(rows_pane, 0) == first);
+    ui_set_hidden(root, true);
+    ui_set_hidden(first, true);
+    say_flag("hidden", "refused", "root_row", !root->hidden && first && !first->hidden);
+    free_text_doc(doc);
+    return 0;
+}
+
 // ---- An editor shown another text (spec 14.6)
 
 static int probe_editor_set_doc(UISystem* ui) {
@@ -4015,6 +4297,8 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_ui_remove(ui);
     if (!strcmp(which, "move"))
         return probe_ui_move(ui);
+    if (!strcmp(which, "hidden"))
+        return probe_ui_hidden(ui);
     if (!strcmp(which, "set-doc"))
         return probe_editor_set_doc(ui);
     if (!strcmp(which, "vim-set-doc"))

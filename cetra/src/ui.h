@@ -428,6 +428,7 @@ struct UIElement {
     UIKeyFn on_key;                // ui_set_on_key
     void* on_key_user;             //   "
     struct ShaderProgram* program; // ui_set_element_program
+    bool hidden;                   // ui_set_hidden
 
     // SETTINGS: plain writes at any time.
     UIDir dir;           // how this element's CHILDREN are laid out
@@ -528,7 +529,8 @@ bool ui_on_stack(const UISystem* ui, const UIScreen* screen);
 UIElement* ui_focused(const UIScreen* screen);
 // Put them on `el`, an element of `screen`, as though navigated there: a menu that opens on its
 // first item. NULL leaves nothing focused, where the first press lands on the first element.
-// Refused by name for an element of another screen, or one taken out.
+// Refused by name for an element of another screen, one taken out, and one hidden or under a hidden
+// one.
 void ui_set_focus(UIScreen* screen, UIElement* el);
 // True while a modal screen is on the stack -- what the game gates its own
 // input on, and what input_set_suppressed is driven from.
@@ -553,10 +555,19 @@ void ui_remove(UIElement* el);
 // Takes `el` out of its parent and puts it under `parent`, just in front of `before`, one of
 // `parent`'s children, or at the end for NULL: a split puts a row in front of the pane it splits,
 // then the pane into the row. It keeps everything it holds -- an editor's carets and scroll, a
-// field's text, the focus. Refused by name: a screen's root, a `before` that is not `parent`'s
-// child, a move into `el` or under it, a pane's virtual row, a move into a pane with rows or into
-// one of its rows, which the pane frees, and a move to another screen.
+// field's text, the focus -- but moved into a hidden element or under one, it lets go of what the
+// UI held inside it, as hiding does. Refused by name: a screen's root, a `before` that is not
+// `parent`'s child, a move into `el` or under it, a pane's virtual row, a move into a pane with
+// rows or into one of its rows, which the pane frees, and a move to another screen.
 void ui_move(UIElement* el, UIElement* parent, const UIElement* before);
+// `el` and everything under it hidden, or shown again. Hidden, it takes no room and no gap in its
+// parent, is neither laid out nor drawn nor eased, takes no press, wheel, hover or key, and holds
+// no focus; its rect and every rect under it are left 0 by 0 where it would start. It keeps
+// everything else -- an editor's carets, scroll and wrapped rows, a field's text, a pane's scroll
+// and rows -- until shown. Hiding lets go of the pressed element, a held bar and any screen's focus
+// inside it, left on nothing, as ui_remove does. Refused by name: a screen's root, a pane's virtual
+// row, and an element taken out.
+void ui_set_hidden(UIElement* el, bool hidden);
 // Where a slider's track lies in the rect the last layout gave it, in window points: what a drag
 // is measured along, for a draw of its own (ui_set_draw) to put the track there too.
 UIRect ui_slider_track(const UISystem* ui, const UIElement* el);
