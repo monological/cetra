@@ -376,10 +376,14 @@ static size_t _filler_rows(const UIEditorPlace* at, size_t line) {
 }
 
 // The filler rows under the text's last line, the fillers on its line count, which the last line
-// that shows counts after its own; 0 for any other line. Sorted by line, they are the last fillers.
+// that shows counts after its own; 0 for any other line, one a closed fold hides among them. Sorted
+// by line, they are the last fillers.
 static size_t _under(const UIEditorPlace* at, size_t lines, size_t line) {
     const UIEditorFiller* end = at->filler_count ? &at->fillers[at->filler_count - 1] : NULL;
-    return end && end->line == lines && _next_shown(at, line) >= lines ? end->rows : 0;
+    if (!end || end->line != lines)
+        return 0;
+    const UIEditorFold* f = _closed(at, line);
+    return (!f || f->first == line) && (f ? f->last : line) + 1 >= lines ? end->rows : 0;
 }
 
 /*
@@ -401,10 +405,11 @@ static size_t _shown(UIEditor* ed, size_t line, bool wrap) {
     return fill + (wrap ? _wrap_line(ed, line).count : _estimate(ed, line));
 }
 
-// The row a line's own rows end at, where the fillers under the text begin on the last line that
-// shows: no caret stands at or past it.
-static size_t _own_end(UIEditor* ed, size_t line) {
-    return _shown(ed, line, true) - _under(&ed->at, ed->doc->line_count, line);
+// Whether (line, row) is one of the fillers under the text, past the last shown line's own rows,
+// where no caret stands.
+static bool _in_under(UIEditor* ed, size_t line, size_t row) {
+    const size_t under = _under(&ed->at, ed->doc->line_count, line);
+    return under && row + under >= _shown(ed, line, true);
 }
 
 // Wraps a guessed line for the budget: the bytes it read.
@@ -488,7 +493,7 @@ static bool _row_up(UIEditor* ed, size_t* line, size_t* row) {
 static bool _caret_row(UIEditor* ed, size_t* line, size_t* row, bool down) {
     if (down ? !_row_down(ed, line, row) : !_row_up(ed, line, row))
         return false;
-    if (*row >= _own_end(ed, *line))
+    if (_in_under(ed, *line, *row))
         return false;
     const size_t fill = _filler_rows(&ed->at, *line);
     if (*row >= fill)
@@ -539,7 +544,7 @@ static void _top(UIEditor* ed, size_t* line, size_t* row) {
 // The offset starting a row a line shows: its fillers and a closed fold's row, its row 0 past the
 // fillers, start at the line's start; the fillers under the text, at the text's end.
 static size_t _row_offset(UIEditor* ed, size_t line, size_t row) {
-    if (row >= _own_end(ed, line))
+    if (_in_under(ed, line, row))
         return ed->doc->length;
     const size_t at = text_doc_line_start(ed->doc, line);
     const size_t fill = _filler_rows(&ed->at, line);
@@ -550,7 +555,7 @@ static size_t _row_offset(UIEditor* ed, size_t line, size_t row) {
 // character, as a click there is, so the caret stays on that row. A filler row is the line's start,
 // a closed fold's row its first line's first row, and a filler under the text the text's end.
 static size_t _at_column(UIEditor* ed, size_t line, size_t row, float want) {
-    if (row >= _own_end(ed, line))
+    if (_in_under(ed, line, row))
         return ed->doc->length;
     const Line l = _line_at(ed, line);
     const size_t fill = _filler_rows(&ed->at, line);
@@ -1671,7 +1676,7 @@ static void _press(const UISystem* ui, UIElement* el, UIRect content, float x, f
     // On the fold's own row, past any fillers above it and before any under the text.
     size_t line, row;
     if (ed->row > 0.0f && !_row_at(ed, y, &line, &row) && _closed(&ed->at, line) &&
-        row >= _filler_rows(&ed->at, line) && row < _own_end(ed, line))
+        row >= _filler_rows(&ed->at, line) && !_in_under(ed, line, row))
         _fold_open(&ed->at, _fold_of(&ed->at, line), true);
     ed->grab_from = u.anchor;
     ed->grab_to = u.head;
