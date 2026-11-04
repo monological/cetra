@@ -445,11 +445,11 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
 - **A hidden element** -- spec 14.18, built, for pcb's panes: `ui_set_hidden`, an element taking no
   room and no gap, neither laid out, drawn nor eased, taking no press, wheel or key and holding no
   focus, and keeping everything it holds -- an editor's carets, scroll and wrapped rows among it --
-  until it is shown again (`docs/ui.md`, Removing, moving and hiding elements). pcb hides the views
-  a pane is not showing, which it sized to nothing: a view sized to nothing is still laid out,
-  drawn and pressed, so a hidden box took room from its padding and labels, a code editor beside a
-  schematic drew its scroll bar as a dot, and the two sides of a compared code pane could not have
-  a gap between them.
+  until it is shown again (`docs/ui.md`, Removing, moving and hiding elements). pcb would hide the
+  views a pane is not showing, which it sizes to nothing today: a view sized to nothing is still
+  laid out, drawn and pressed, so a hidden box took room from its padding and labels, a code editor
+  beside a schematic drew its scroll bar as a dot, and the two sides of a compared code pane cannot
+  have a gap between them.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the
