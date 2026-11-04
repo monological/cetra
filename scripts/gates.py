@@ -28519,12 +28519,13 @@ def run_ui_gate(workdir):
                      with a - alone puts it on its line, shorter than the +, and
                      no fill; with both styles zeroed, no quad ends at the text's
                      edge and no glyph stands in the gap.
-      ui-editor-bar-room no scroll bar without room for one (spec 14.17): of two
-                     editors in a row over a 200-line text, the first sized 0 by
-                     0 draws no quad left of itself and no fill a bar wide stands
-                     outside the second, which draws its thumb inside its rect;
-                     the first sized 4 by 150 draws no bar either, and a press
-                     inside it below where a thumb would stand scrolls neither.
+      ui-editor-bar-room a bar is drawn only inside its element, its insets
+                     included (spec 14.17): of two editors in a row over a
+                     200-line text, the second 300 by 150, every fill a bar wide
+                     stands inside the second less the insets, its thumb among
+                     them, with the first sized 0 by 0 and again 4 by 150; a press
+                     inside the narrow one below where a thumb would stand
+                     scrolls nothing.
       ui-editor-steps each action told with its step: typing joined into words
                      shares one; a group holds one over typing, a Backspace and
                      more typing, one undo takes the group back and one redo makes
@@ -29813,9 +29814,9 @@ def run_ui_gate(workdir):
     print(f"  ui-editor-gutter      {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-gutter", ok)
 
-    ok, detail = doc_flags("editor-bar-room", 4, "an editor sized to nothing draws no bar left of "
-                           "itself, one 4 points wide none and a press on it pages nothing; one "
-                           "with room draws its thumb inside its rect")
+    ok, detail = doc_flags("editor-bar-room", 4, "a bar only inside its element: an editor sized to "
+                           "nothing draws none, one 4 points wide none and a press on it pages "
+                           "nothing; one with room draws its thumb inside its insets")
     print(f"  ui-editor-bar-room    {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-bar-room", ok)
 

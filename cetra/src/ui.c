@@ -1667,13 +1667,11 @@ static float _scroll_max(const UISystem* ui, const UIElement* el) {
 bool ui_bar_place(UIRect rect, const UIScrollPlace* place, UIRect* track, UIRect* thumb) {
     if (place->total <= place->view || place->total <= 0.0f)
         return false;
-    if (rect.h <= 2.0f * UI_BAR_INSET || rect.w < UI_BAR_W + 2.0f * UI_BAR_INSET)
+    const UIRect in = ui_rect_inset(rect, UI_BAR_INSET, UI_BAR_INSET, UI_BAR_INSET, UI_BAR_INSET);
+    if (in.w < UI_BAR_W || in.h <= 0.0f)
         return false;
-    *track = (UIRect){rect.x + rect.w - UI_BAR_W - UI_BAR_INSET, rect.y + UI_BAR_INSET, UI_BAR_W,
-                      rect.h - 2.0f * UI_BAR_INSET};
-    float h = track->h * place->view / place->total;
-    const float floor = UI_BAR_MIN < track->h ? UI_BAR_MIN : track->h;
-    h = h < floor ? floor : h;
+    *track = (UIRect){in.x + in.w - UI_BAR_W, in.y, UI_BAR_W, in.h};
+    const float h = glm_max(track->h * place->view / place->total, glm_min(UI_BAR_MIN, track->h));
     *thumb = (UIRect){track->x, track->y + (track->h - h) * glm_clamp(place->at, 0.0f, 1.0f),
                       UI_BAR_W, h};
     return true;
@@ -1700,13 +1698,13 @@ static bool _scroll_place(const UISystem* ui, const UIElement* el, UIScrollPlace
 }
 
 /*
- * The bar of an element that scrolls: the track along its right edge and the thumb in it. False
- * while everything shows or the element has no room for one, when there is no bar. ONE definition,
- * read by the draw and by the press alike, for a pane and an editor both.
+ * The bar of an element that scrolls: where it is scrolled, the track along its right edge and the
+ * thumb in it. False when there is no bar. ONE definition, read by the draw and by the press alike,
+ * for a pane and an editor both.
  */
-static bool _bar(const UISystem* ui, const UIElement* el, UIRect* track, UIRect* thumb) {
-    UIScrollPlace place;
-    return _scroll_place(ui, el, &place) && ui_bar_place(el->rect, &place, track, thumb);
+static bool _bar(const UISystem* ui, const UIElement* el, UIScrollPlace* place, UIRect* track,
+                 UIRect* thumb) {
+    return _scroll_place(ui, el, place) && ui_bar_place(el->rect, place, track, thumb);
 }
 
 static void _emit_pane(UISystem* ui, UIElement* el, const UIStyle* s);
@@ -1755,8 +1753,9 @@ static void _emit(UISystem* ui, UIElement* el) {
                 const double wake = ops->draw(ui, el, &s, _content_in(el, &s),
                                               top && top->focused == el, ui->now, blink);
                 ui->caret_wake = wake < ui->caret_wake ? wake : ui->caret_wake;
+                UIScrollPlace place;
                 UIRect track, thumb;
-                if (_bar(ui, el, &track, &thumb))
+                if (_bar(ui, el, &place, &track, &thumb))
                     ui_draw_rounded(dl, thumb, UI_BAR_W * 0.5f, (float*)s.fg, NULL, 0.0f);
                 break;
             }
@@ -1865,8 +1864,9 @@ static void _emit_pane(UISystem* ui, UIElement* el, const UIStyle* s) {
             _emit(ui, c);
     }
     ui_pop_clip(dl);
+    UIScrollPlace place;
     UIRect track, thumb;
-    if (_bar(ui, el, &track, &thumb))
+    if (_bar(ui, el, &place, &track, &thumb))
         ui_draw_rounded(dl, thumb, UI_BAR_W * 0.5f, (float*)s->fg, NULL, 0.0f);
 }
 
@@ -2352,7 +2352,7 @@ static void _update(UISystem* ui, const UIInput* in, float width, float height) 
         UIElement* el = _scroller_at(top->root, in->pointer_x, in->pointer_y);
         UIScrollPlace place;
         UIRect track, thumb;
-        if (el && _scroll_place(ui, el, &place) && ui_bar_place(el->rect, &place, &track, &thumb) &&
+        if (el && _bar(ui, el, &place, &track, &thumb) &&
             in->pointer_x >= el->rect.x + el->rect.w - UI_BAR_HIT) {
             on_bar = true;
             if (in->pointer_y >= thumb.y && in->pointer_y < thumb.y + thumb.h) {
@@ -2367,8 +2367,9 @@ static void _update(UISystem* ui, const UIInput* in, float width, float height) 
     }
     if (ui->bar_drag) {
         UIElement* el = ui->bar_drag;
+        UIScrollPlace place;
         UIRect track, thumb;
-        if (!in->pointer_down || !_bar(ui, el, &track, &thumb))
+        if (!in->pointer_down || !_bar(ui, el, &place, &track, &thumb))
             ui->bar_drag = NULL;
         else
             _scroll_at(ui, el, ui_bar_at(track, thumb, in->pointer_y, ui->bar_grab));
