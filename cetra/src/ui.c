@@ -1667,6 +1667,8 @@ static float _scroll_max(const UISystem* ui, const UIElement* el) {
 bool ui_bar_place(UIRect rect, const UIScrollPlace* place, UIRect* track, UIRect* thumb) {
     if (place->total <= place->view || place->total <= 0.0f)
         return false;
+    if (rect.h <= 2.0f * UI_BAR_INSET || rect.w < UI_BAR_W + 2.0f * UI_BAR_INSET)
+        return false;
     *track = (UIRect){rect.x + rect.w - UI_BAR_W - UI_BAR_INSET, rect.y + UI_BAR_INSET, UI_BAR_W,
                       rect.h - 2.0f * UI_BAR_INSET};
     float h = track->h * place->view / place->total;
@@ -1699,8 +1701,8 @@ static bool _scroll_place(const UISystem* ui, const UIElement* el, UIScrollPlace
 
 /*
  * The bar of an element that scrolls: the track along its right edge and the thumb in it. False
- * while everything shows, when there is no bar. ONE definition, read by the draw and by the press
- * alike, for a pane and an editor both.
+ * while everything shows or the element has no room for one, when there is no bar. ONE definition,
+ * read by the draw and by the press alike, for a pane and an editor both.
  */
 static bool _bar(const UISystem* ui, const UIElement* el, UIRect* track, UIRect* thumb) {
     UIScrollPlace place;
