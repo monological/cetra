@@ -582,15 +582,12 @@ static bool _folded(const Ctx* c, size_t line, size_t* first, size_t* last) {
     return ui_editor_closed_fold(c->el, line, first, last);
 }
 
-// The closed folds the carets stand in opened: vim's foldOpenCursor.
-static void _open_folds(const Ctx* c) {
-    const TextSelection* s = NULL;
-    const size_t n = ui_editor_selections(c->el, &s, NULL);
-    for (size_t i = 0; i < n; i++) {
-        const size_t line = _lof(c, s[i].head);
-        if (_folded(c, line, NULL, NULL))
-            ui_editor_fold_open(c->el, line, true);
-    }
+// The line a move or a linewise act beside `line` works from: a closed fold's last line going
+// down, its first going up; `line` itself when no closed fold holds it.
+static size_t _fold_end(const Ctx* c, size_t line, bool down) {
+    size_t first = line, last = line;
+    _folded(c, line, &first, &last);
+    return down ? last : first;
 }
 
 // From inside a closed fold, a motion over words or a search going forward starts at the fold's
@@ -790,9 +787,8 @@ static bool _paragraph(const Ctx* c, size_t* off, int count, bool fwd, bool* inc
         for (bool first = true;; first = false) {
             if (!_empty(c, curr))
                 did_skip = true;
-            size_t fold_first = 0, fold_last = 0;
-            if (first && _folded(c, curr, &fold_first, &fold_last))
-                curr = fwd ? fold_last : fold_first;
+            if (first)
+                curr = _fold_end(c, curr, fwd);
             if (!first && did_skip && _empty(c, curr))
                 break;
             if (fwd ? curr + 1 >= _lines(c) : curr == 0) {
@@ -1483,16 +1479,19 @@ static Moved _to_line(const Ctx* c, size_t line) {
 // its last; false only from the last line itself, with somewhere to go: vim's count of lines past
 // the end takes what there is, and a count reaching the last line goes there whatever is folded.
 static bool _down(const Ctx* c, size_t line, size_t n, size_t* to) {
+    *to = line;
+    if (!n)
+        return true;
     const size_t lines = _lines(c);
-    size_t l = line, last = 0;
-    if (n && _folded(c, l, NULL, &last))
-        l = last;
-    if (n && l + 1 >= lines)
+    size_t l = _fold_end(c, line, true);
+    if (l + 1 >= lines)
         return false;
-    if (n && l + n >= lines - 1)
-        l = lines - 1;
+    if (l + n >= lines - 1 || !ui_editor_folds(c->el, NULL)) {
+        *to = l + n < lines - 1 ? l + n : lines - 1;
+        return true;
+    }
     for (; n && l + 1 < lines; n--)
-        l = _folded(c, l, NULL, &last) ? last + 1 : l + 1;
+        l = _fold_end(c, l, true) + 1;
     *to = l < lines ? l : lines - 1;
     return true;
 }
@@ -1500,18 +1499,18 @@ static bool _down(const Ctx* c, size_t line, size_t n, size_t* to) {
 // `n` lines up from `line`, held to the first, into *to, a closed fold one line and landing on its
 // first; false only from the first line itself.
 static bool _up(const Ctx* c, size_t line, size_t n, size_t* to) {
-    if (n && line == 0)
+    *to = line;
+    if (!n)
+        return true;
+    if (line == 0)
         return false;
-    size_t l = line, first = 0;
-    if (n > line) {
-        l = 0;
-    } else if (n) {
-        if (_folded(c, l, &first, NULL))
-            l = first;
-        for (; n && l > 0; n--)
-            if (--l > 0 && _folded(c, l, &first, NULL))
-                l = first;
+    if (n > line || !ui_editor_folds(c->el, NULL)) {
+        *to = n > line ? 0 : line - n;
+        return true;
     }
+    size_t l = _fold_end(c, line, false);
+    for (; n && l > 0; n--)
+        l = _fold_end(c, l - 1, false);
     *to = l;
     return true;
 }
@@ -2223,7 +2222,7 @@ static void _undo(Ctx* c, bool redo, int count) {
         _place(c, at, NULL, n, primary, true);
     // 'foldopen' has undo: a step taken lands in the open.
     if (any)
-        _open_folds(c);
+        ui_editor_fold_carets(c->el, 1);
     free(at);
 }
 
@@ -2241,7 +2240,12 @@ typedef struct {
 
 // Lines `first` to `last` whole, as a range.
 static Range _lines_range(const Ctx* c, size_t first, size_t last) {
-    return (Range){_ls(c, first), _lines_end(c, last), first, last, true, true, false};
+    return (Range){.lo = _ls(c, first),
+                   .hi = _lines_end(c, last),
+                   .first = first,
+                   .last = last,
+                   .lines = true,
+                   .ok = true};
 }
 
 // The range a motion makes from `from`, by vim's rules: a closed fold at either end is taken
@@ -2251,19 +2255,17 @@ static Range _lines_range(const Ctx* c, size_t first, size_t last) {
 // lines, when it began in its line's indent. A delete of such a range with nothing but blanks after
 // its end takes whole lines too.
 static Range _range(const Ctx* c, size_t from, const Moved* m, uint32_t op) {
-    Range r = {0, 0, 0, 0, m->lines, m->ok};
+    Range r = {.lines = m->lines, .ok = m->ok};
     if (!m->ok)
         return r;
     size_t lo = from < m->to ? from : m->to, hi = from < m->to ? m->to : from;
     bool inclusive = m->inclusive;
-    size_t fold_first = 0, fold_last = 0;
     if (!_in_visual(c) && (from < m->to || m->lines)) {
-        r.fold_start = _folded(c, _lof(c, lo), &fold_first, NULL);
+        r.fold_start = _folded(c, _lof(c, lo), NULL, NULL);
         if (r.fold_start)
-            lo = _ls(c, fold_first);
-        if ((hi > _ls(c, _lof(c, hi)) || inclusive || m->lines) &&
-            _folded(c, _lof(c, hi), NULL, &fold_last))
-            hi = _le(c, fold_last);
+            lo = _ls(c, _fold_end(c, _lof(c, lo), false));
+        if (hi > _ls(c, _lof(c, hi)) || inclusive || m->lines)
+            hi = _folded(c, _lof(c, hi), NULL, NULL) ? _le(c, _fold_end(c, _lof(c, hi), true)) : hi;
     }
     if (!r.lines) {
         const size_t hl = _lof(c, hi), ll = _lof(c, lo);
@@ -2835,10 +2837,8 @@ static bool _operate_on(Ctx* c, uint32_t op, const Carets* kp, const Range* r, c
         for (size_t i = 0; op == 'd' && i < n && i < k.count; i++) {
             if (!r[i].ok || !r[i].lines)
                 continue;
-            size_t line = _lof(c, at[i]), first = 0;
-            if (r[i].first >= _lines(c) && _folded(c, line, &first, NULL))
-                line = first;
-            at[i] = _first_nonblank(c, line);
+            const size_t line = _lof(c, at[i]);
+            at[i] = _first_nonblank(c, r[i].first >= _lines(c) ? _fold_end(c, line, false) : line);
         }
         _place(c, at, NULL, n, primary, true);
     }
@@ -2919,14 +2919,13 @@ static void _put_text(Ctx* c, const char* clip, RegKind kind, int width, bool af
     for (size_t i = 0; i < k.count; i++) {
         Change* x = &ch[i];
         const size_t head = k.sel[i].head;
-        size_t line = _lof(c, head), first = 0, last = 0;
+        size_t line = _lof(c, head);
         size_t n = 0;
         if (lines) {
             // Above: at the line's start. Below: at the next line's start, or, past a last line
             // with no line break of its own, after one put in front of the lines instead of
             // behind them. In a closed fold, above its first line or below its last.
-            if (_folded(c, line, &first, &last))
-                line = after ? last : first;
+            line = _fold_end(c, line, after);
             const bool past_last = after && line + 1 >= _lines(c) && !_ends_broken(c);
             const size_t at = !after ? _ls(c, line) : past_last ? _le(c, line) : _ls(c, line + 1);
             char* moved = past_last ? malloc(len + 1) : NULL;
@@ -3171,9 +3170,7 @@ static void _enter_insert(Ctx* c, uint32_t cmd, int count) {
         Carets k = _carets(c->el);
         Change* x = calloc(k.count ? k.count : 1, sizeof(Change));
         for (size_t i = 0; k.sel && x && i < k.count; i++) {
-            size_t line = _lof(c, k.sel[i].head), first = 0, last = 0;
-            if (_folded(c, line, &first, &last))
-                line = cmd == 'o' ? last : first;
+            const size_t line = _fold_end(c, _lof(c, k.sel[i].head), cmd == 'o');
             size_t ind = 0;
             char* indent = _indent_of(c, line, true, &ind);
             const char* nl = text_doc_newline(c->doc);
@@ -3183,15 +3180,20 @@ static void _enter_insert(Ctx* c, uint32_t cmd, int count) {
                 free(indent);
                 continue;
             }
-            if (cmd == 'o') {
+            // o puts its line in at the start of the line below where vim has one, so the change
+            // reads as a line put in above that one, never as the line it came from moving down:
+            // the two are the same bytes on an empty line, and a fold or a filler goes by which.
+            const bool below = cmd == 'o' && line + 1 < _lines(c);
+            if (cmd == 'o' && !below) {
                 memcpy(x[i].owned, nl, nl_len);
                 memcpy(x[i].owned + nl_len, indent, ind);
                 x[i].e = (TextEdit){_le(c, line), _le(c, line), x[i].owned, nl_len + ind};
                 x[i].within = nl_len + ind;
             } else {
+                const size_t at = _ls(c, below ? line + 1 : line);
                 memcpy(x[i].owned, indent, ind);
                 memcpy(x[i].owned + ind, nl, nl_len);
-                x[i].e = (TextEdit){_ls(c, line), _ls(c, line), x[i].owned, nl_len + ind};
+                x[i].e = (TextEdit){at, at, x[i].owned, nl_len + ind};
                 x[i].within = ind;
             }
             x[i].edits = true;
@@ -3225,7 +3227,7 @@ static void _enter_insert(Ctx* c, uint32_t cmd, int count) {
     v->insert_count = count ? count : 1;
     v->insert_from = v->key_count;
     _set_state(v, UI_VIM_INSERT);
-    _open_folds(c);
+    ui_editor_fold_carets(c->el, 1);
     _reset(v);
 }
 
@@ -3375,7 +3377,29 @@ static void _insert_move(Ctx* c, uint32_t k) {
         free(at);
         _free_carets(&kk);
     } else {
+        // Up in insert mode lands on a closed fold's last line, never its first, and the line typed
+        // on is never folded: the fold above each caret is opened first, and the move steps onto
+        // that line. A caret Down would take onto the empty line after a final line break stays:
+        // vim has no line there.
+        Carets was = _carets(c->el);
+        for (size_t i = 0; m == UI_MOTION_LINE_UP && was.sel && i < was.count; i++) {
+            const size_t line = _lof(c, was.sel[i].head);
+            if (line > 0 && _folded(c, line - 1, NULL, NULL))
+                ui_editor_set_fold_open(c->el, line - 1, true);
+        }
         ui_editor_apply(c->el, UI_OP_MOVE, m, 1);
+        Carets now = _carets(c->el);
+        bool held = false;
+        for (size_t i = 0; was.sel && now.sel && was.count == now.count && i < now.count; i++) {
+            if (text_doc_line_of(c->doc, now.sel[i].head) >= _lines(c)) {
+                now.sel[i] = was.sel[i];
+                held = true;
+            }
+        }
+        if (held)
+            ui_editor_set_carets(c->el, now.sel, now.want, now.count, now.primary);
+        _free_carets(&was);
+        _free_carets(&now);
     }
     _group(c, true);
     v->key_count = 0;
@@ -3650,6 +3674,34 @@ static void _show_block(Ctx* c) {
     free(s);
 }
 
+// A visual or visual line area begun takes a closed fold at either end whole, as vim's
+// foldAdjustVisual does when visual mode starts: its start to the fold's first line's start, its
+// end to the fold's last line's end, each area keeping which end is the cursor. Vim does it again
+// in its main loop, but only round a redraw, so not for keys typed ahead; the mode does not.
+static void _visual_folds(Ctx* c) {
+    if (!ui_editor_folds(c->el, NULL))
+        return;
+    Carets k = _carets(c->el);
+    bool moved = false;
+    for (size_t i = 0; i < k.count; i++) {
+        TextSelection* s = &k.sel[i];
+        size_t* start = s->anchor <= s->head ? &s->anchor : &s->head;
+        size_t* end = s->anchor <= s->head ? &s->head : &s->anchor;
+        const size_t lo = _folded(c, _lof(c, *start), NULL, NULL)
+                              ? _ls(c, _fold_end(c, _lof(c, *start), false))
+                              : *start;
+        const size_t hi = _folded(c, _lof(c, *end), NULL, NULL)
+                              ? _le(c, _fold_end(c, _lof(c, *end), true))
+                              : *end;
+        moved = moved || lo != *start || hi != *end;
+        *start = lo;
+        *end = hi;
+    }
+    if (moved)
+        ui_editor_set_carets(c->el, k.sel, k.want, k.count, k.primary);
+    _free_carets(&k);
+}
+
 // Into visual mode `to`: from normal mode the area begins at each cursor; from another visual mode
 // it keeps its ends, a block's being its corners.
 static void _visual(Ctx* c, UIEditorVimState to) {
@@ -3682,12 +3734,14 @@ static void _visual(Ctx* c, UIEditorVimState to) {
         _show_block(c);
     } else {
         ui_editor_set_carets(c->el, k.sel, k.want, k.count, k.primary);
+        if (was < UI_VIM_VISUAL)
+            _visual_folds(c);
     }
     _free_carets(&k);
 }
 
-// Out of visual mode, each cursor where its area's head was, on a character; a block's at its
-// head.
+// Out of visual mode, each cursor where its area's head was, on a character, wanting the column it
+// is at, as vim's Esc sets it; a block's at its head.
 static void _visual_leave(Ctx* c) {
     UIEditorVim* v = c->v;
     const bool block = v->state == UI_VIM_VISUAL_BLOCK;
@@ -3703,7 +3757,7 @@ static void _visual_leave(Ctx* c) {
     for (size_t i = 0; k.sel && at && i < k.count; i++)
         at[i] = k.sel[i].head;
     if (k.sel && at)
-        _place(c, at, k.want, k.count, k.primary, true);
+        _place(c, at, NULL, k.count, k.primary, true);
     free(at);
     _free_carets(&k);
 }
@@ -4929,16 +4983,18 @@ done:
 
 static bool _normal_key(Ctx* c, uint32_t k);
 
-// Every caret moved by a motion, each held onto a character.
 // Whether a motion that moved opens the closed fold it lands in, by vim's default 'foldopen' --
 // block,hor,mark,percent,quickfix,search,tag,undo: a move along the line, to a bracket or a
-// paragraph, %, and a search. A move by lines, G and gg open nothing.
-static bool _opens_fold(uint32_t prefix, uint32_t key) {
+// paragraph, % when it went to `another_line`, and a search. A move by lines, G, gg, |, ge, gE and
+// g_ open nothing.
+static bool _opens_fold(uint32_t prefix, uint32_t key, bool another_line) {
     if (prefix == 'g')
         return key == 'd' || key == 'D';
     if (prefix)
         return false;
     switch (key) {
+        case '%':
+            return another_line;
         case 'h':
         case 'l':
         case ' ':
@@ -4962,7 +5018,6 @@ static bool _opens_fold(uint32_t prefix, uint32_t key) {
         case 'T':
         case ';':
         case ',':
-        case '%':
         case '{':
         case '}':
         case 'n':
@@ -4979,30 +5034,17 @@ static bool _opens_fold(uint32_t prefix, uint32_t key) {
 // cursor is in, zc closes it, za turns it the other way; zR opens every fold and zM closes every
 // one. The cursors stay where they are.
 static void _fold_command(Ctx* c, uint32_t k) {
-    const UIEditorFold* f = NULL;
-    const size_t count = ui_editor_folds(c->el, &f);
     if (k == 'R' || k == 'M') {
+        const UIEditorFold* f = NULL;
+        const size_t count = ui_editor_folds(c->el, &f);
         for (size_t j = 0; j < count; j++)
-            ui_editor_fold_open(c->el, f[j].first, k == 'R');
-        return;
-    }
-    if (k != 'o' && k != 'O' && k != 'v' && k != 'c' && k != 'a')
-        return;
-    const TextSelection* s = NULL;
-    const size_t n = ui_editor_selections(c->el, &s, NULL);
-    size_t done = SIZE_MAX; // the first line of the fold last turned, so two cursors turn it once
-    for (size_t i = 0; i < n; i++) {
-        const size_t line = _lof(c, s[i].head);
-        for (size_t j = 0; j < count; j++) {
-            if (line < f[j].first || line > f[j].last || f[j].first == done)
-                continue;
-            done = f[j].first;
-            ui_editor_fold_open(c->el, line, k == 'a' ? !f[j].open : k != 'c');
-            break;
-        }
+            ui_editor_set_fold_open(c->el, f[j].first, k == 'R');
+    } else if (k == 'o' || k == 'O' || k == 'v' || k == 'c' || k == 'a') {
+        ui_editor_fold_carets(c->el, k == 'c' ? 0 : k == 'a' ? -1 : 1);
     }
 }
 
+// Every caret moved by a motion, each held onto a character.
 static bool _move(Ctx* c, uint32_t prefix, uint32_t key, uint32_t arg, int count0) {
     Carets k = _carets(c->el);
     size_t* at = calloc(k.count ? k.count : 1, sizeof(size_t));
@@ -5021,10 +5063,8 @@ static bool _move(Ctx* c, uint32_t prefix, uint32_t key, uint32_t arg, int count
         }
     }
     _place(c, at, k.want, k.count, k.primary, true);
-    // % opens one only from another line.
-    if (moved && _opens_fold(prefix, key) &&
-        (key != '%' || _lof(c, at[k.primary]) != _lof(c, k.sel[k.primary].head)))
-        _open_folds(c);
+    if (moved && _opens_fold(prefix, key, _lof(c, at[k.primary]) != _lof(c, k.sel[k.primary].head)))
+        ui_editor_fold_carets(c->el, 1);
     free(at);
     _free_carets(&k);
     return moved;

@@ -50,8 +50,8 @@ void ui_editor_scroll_line(UIElement* el, size_t line, float rows);
  * a fold whose lines are all taken out goes. A caret may stand on any line of a closed fold, and is
  * drawn at the start of its row.
  */
-// A run of lines the editor shows as one row while closed. `label` is that row's text, copied;
-// NULL for "N lines".
+// A run of lines the editor shows as one row while closed; a fold of one line shows its line,
+// closed or not. `label` is that row's text, copied; NULL for "N lines".
 typedef struct UIEditorFold {
     size_t first, last;
     bool open;
@@ -64,7 +64,7 @@ void ui_editor_set_folds(UIElement* el, const UIEditorFold* folds, size_t count)
 // change.
 size_t ui_editor_folds(const UIElement* el, const UIEditorFold** out);
 // The fold holding `line` opened or closed; false for none.
-bool ui_editor_fold_open(UIElement* el, size_t line, bool open);
+bool ui_editor_set_fold_open(UIElement* el, size_t line, bool open);
 
 /*
  * Filler rows: blank rows above a line, as a side-by-side diff pads the side with fewer so a line
@@ -82,7 +82,7 @@ typedef struct UIEditorFiller {
 void ui_editor_set_fillers(UIElement* el, const UIEditorFiller* fillers, size_t count);
 // The rows `line` wraps to at the editor's columns, fillers and folds aside: wrapped now when it
 // was a guess. 1 before the editor is laid out; 0 for a line past the text.
-size_t ui_editor_line_rows(UIElement* el, size_t line);
+size_t ui_editor_line_rows(const UIElement* el, size_t line);
 
 /*
  * The editor leaves its text and shows `doc`, where it last was in it -- its carets, its scroll --

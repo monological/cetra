@@ -405,10 +405,16 @@ click, the draw -- counts the rows a line *shows*, which may differ from the row
 - **Folds** (`ui_editor_set_folds`) are runs of lines a host makes, none overlapping or nested. A
   closed one is one row: `theme.editor_fold` (alpha 0: the selection colour at a third) from the
   gutter to the editor's right, its label or "N lines" in the line numbers' colour, no number, the
-  lines after it keeping theirs. A caret may stand on any of its lines and is drawn at the row's
-  start; a row move takes the fold as one row; a click on it, or typing or pasting at a caret in
-  it, opens it. Reveals and scrolls to an offset or line in it go to its row. The standard mode
-  has `open-fold`, `close-fold` and `toggle-fold`, bound to no key.
+  lines after it keeping theirs. A fold of one line shows its line, closed or not, as vim's
+  `'foldminlines'` has it.
+  - A caret may stand on any of a closed fold's lines and is drawn at the row's start. A row move
+    and a line move take the fold as one; Home, End and the row's deletes act on the caret's own
+    line.
+  - A click on the fold's row opens it, and so does any edit at a caret in it (typing, pasting, a
+    delete, an indent), unless the text is read-only and nothing will change.
+  - Reveals and scrolls to an offset or line in it go to its row, and opening one by a command
+    brings the caret into view. The ranges it hides wholly are not among the ones drawn.
+  - The standard mode has `open-fold`, `close-fold` and `toggle-fold`, bound to no key.
 - **Filler rows** (`ui_editor_set_fillers`) are blank rows above a line, `theme.editor_filler`
   (alpha 0: the text's colour at 4%) from the text's left edge, with no number, text or range. A row
   of a line counts from its first filler, so `ui_editor_top_line` and `ui_editor_scroll_line` count
@@ -512,10 +518,12 @@ tag objects.
 **Over the host's folds it is vim over manual folds** (spec 14.16), held to vim by `ui-vim-folds`,
 each case's folds made by `:A,Bfold` in vim and `ui_editor_set_folds` in the mode.
 - `zo`, `zO`, `zv`, `zc`, `za`, `zR` and `zM` open and close them; the person makes none.
-- `j`, `k`, `+`, `-`, `_` and the doubled operators count a closed fold as one line, from its last
-  line going down and onto its first going up; `G` and `gg` land inside one without opening it.
+- `j`, `k`, `+`, `-`, `_`, insert mode's arrows and the doubled operators count a closed fold as
+  one line, from its last line going down and onto its first going up; `G` and `gg` land inside
+  one without opening it.
 - An operator takes a closed fold at either end whole, so `x` and `dd` there delete the fold; it
-  starts at the fold's first line, where undo puts the cursor back.
+  starts at the fold's first line, where undo puts the cursor back. A visual or visual line area
+  takes a fold whole where it begins, as vim's does when visual mode starts; a block does not.
 - Word motions, `{` `}` and searches start from a closed fold's edge, never finding a match inside
   the one the cursor is in.
 - Vim's default `'foldopen'` opens the fold a cursor lands in after a move along the line, `%` from
@@ -523,7 +531,8 @@ each case's folds made by `:A,Bfold` in vim and `ui_editor_set_folds` in the mod
   linewise put go below a closed fold's last line or above its first.
 - `gj` and `gk` take a fold as one row, as the editor's row moves do, but keep no column a `j`
   before them wanted, and at the text's first and last rows go to its start and end where vim's do
-  nothing: an older difference, with or without folds.
+  nothing, folds or none. `b` from a closed fold at the text's start moves nowhere, where vim's
+  moves to the fold's start though it fails.
 
 **Undo goes by vim's units**: a command is one step and so is an insert from `i` to Esc, held by
 `text_doc_group`. A host keeping its own timeline takes `u` and Ctrl+R through
