@@ -19,7 +19,7 @@
 #include "cetra/internal/text_doc_edit.h"    // the editor's half of the text, which the arms drive
 #include "cetra/internal/ui_editor_hooks.h"  // the editor's wrapping and where it put things
 #include "cetra/internal/ui_hooks.h"         // what a system holds
-#include "cetra/internal/ui_internal.h"      // ui_system_engine, for the clipboard
+#include "cetra/internal/ui_internal.h"      // ui_system_engine, for the clipboard; the bar's sizes
 #include "cetra/text.h"
 #include "cetra/text_doc.h"
 #include "cetra/ui_editor.h"
@@ -2502,24 +2502,29 @@ static int probe_editor_gutter(UISystem* ui) {
     return 0;
 }
 
-// How many fills a bar wide stand outside `rect`.
-static size_t bars_outside(const UISystem* ui, UIRect rect) {
-    const UIDrawList* dl = ui_draw_list(ui);
-    size_t n = 0;
-    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
-        UIRect r;
-        vec4 colour;
-        int kind = 0;
-        ui_draw_list_quad(dl, i, &r, colour, &kind);
-        if (kind != 1 && fabsf(r.w - UI_BAR_W) < 0.01f && !ui_rect_hit(rect, r.x, r.y))
-            n++;
+// The fills a bar wide drawn wholly inside `rect` less the bar's insets, and those that are not;
+// all of them false past 256 fills.
+static bool bars_in(const UISystem* ui, UIRect rect, size_t* in, size_t* out) {
+    Fill fills[256];
+    const size_t n = fills_in(ui, NULL, fills, 256);
+    const UIRect inner =
+        ui_rect_inset(rect, UI_BAR_INSET, UI_BAR_INSET, UI_BAR_INSET, UI_BAR_INSET);
+    *in = *out = 0;
+    for (size_t i = 0; i < n && i < 256; i++) {
+        const UIRect r = fills[i].r;
+        if (fabsf(r.w - UI_BAR_W) >= 0.01f)
+            continue;
+        const bool inside = r.x >= inner.x - 0.01f && r.y >= inner.y - 0.01f &&
+                            r.x + r.w <= inner.x + inner.w + 0.01f &&
+                            r.y + r.h <= inner.y + inner.h + 0.01f;
+        *(inside ? in : out) += 1;
     }
-    return n;
+    return n <= 256;
 }
 
-// An element with no room for a bar draws none and takes no press on one: an editor sized to
-// nothing draws nothing left of itself, as one 4 points wide draws no bar and a press on its edge
-// pages nothing; one with room draws its thumb inside itself.
+// A bar is drawn only inside its element, its insets included: an editor sized to nothing draws
+// none, nor does one 4 points wide, where a press on its edge pages nothing; one with room draws
+// its thumb inside itself.
 static int probe_editor_bar_room(UISystem* ui) {
     static char text[200 * 16];
     size_t len = 0;
@@ -2533,50 +2538,31 @@ static int probe_editor_bar_room(UISystem* ui) {
     ui_set_size(shown, UI_FIXED, 300.0f, UI_FIXED, 150.0f);
     editor_pass(ui);
 
-    const UIDrawList* dl = ui_draw_list(ui);
-    size_t left = 0;
-    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
-        UIRect r;
-        vec4 colour;
-        ui_draw_list_quad(dl, i, &r, colour, NULL);
-        left += r.x < hidden->rect.x - 0.01f;
-    }
-    const size_t outside = bars_outside(ui, shown->rect);
-    if (left || outside)
-        fprintf(stderr, "editor-bar-room: %zu quads left of the hidden editor, %zu bars outside\n",
-                left, outside);
-    say_flag("editor-bar-room", "none", "quads", left == 0 && outside == 0);
-
-    // The thumb: a bar wide, inside the editor's right edge.
-    size_t thumbs = 0;
-    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
-        UIRect r;
-        vec4 colour;
-        int kind = 0;
-        ui_draw_list_quad(dl, i, &r, colour, &kind);
-        thumbs += kind != 1 && fabsf(r.w - UI_BAR_W) < 0.01f &&
-                  ui_rect_hit(shown->rect, r.x, r.y) &&
-                  r.x + r.w <= shown->rect.x + shown->rect.w + 0.01f;
-    }
-    say_flag("editor-bar-room", "room", "thumb", thumbs >= 1);
+    // Every bar the one with room's, its thumb inside it.
+    size_t in = 0, out = 0;
+    const bool counted = bars_in(ui, shown->rect, &in, &out);
+    if (out)
+        fprintf(stderr, "editor-bar-room: %zu bars outside the editor with room\n", out);
+    say_flag("editor-bar-room", "none", "outside", counted && out == 0);
+    say_flag("editor-bar-room", "room", "thumb", counted && in >= 1);
 
     ui_set_size(hidden, UI_FIXED, 4.0f, UI_FIXED, 150.0f);
     editor_pass(ui);
-    const size_t narrow = bars_outside(ui, shown->rect);
-    if (narrow)
-        fprintf(stderr, "editor-bar-room: %zu bars outside the editor with room\n", narrow);
-    say_flag("editor-bar-room", "narrow", "none", narrow == 0);
+    const bool narrow = bars_in(ui, shown->rect, &in, &out);
+    if (out)
+        fprintf(stderr, "editor-bar-room: %zu bars outside the editor with room, one narrow\n",
+                out);
+    say_flag("editor-bar-room", "narrow", "none", narrow && out == 0);
 
     // A press inside it, below where a thumb would stand: with a bar there it would page.
     const UIRect at = hidden->rect;
     pointer_pass(ui, at.x + 1.0f, at.y + at.h - 20.0f, POINTER_PRESS, 0);
     pointer_pass(ui, at.x + 1.0f, at.y + at.h - 20.0f, POINTER_RELEASE, 0);
     editor_pass(ui);
-    const size_t tops[2] = {ui_editor_top(hidden), ui_editor_top(shown)};
-    if (tops[0] || tops[1])
-        fprintf(stderr, "editor-bar-room: a press scrolled the editors to %zu and %zu\n", tops[0],
-                tops[1]);
-    say_flag("editor-bar-room", "press", "still", tops[0] == 0 && tops[1] == 0);
+    const size_t top = ui_editor_top(hidden);
+    if (top)
+        fprintf(stderr, "editor-bar-room: a press scrolled the narrow editor to %zu\n", top);
+    say_flag("editor-bar-room", "press", "still", top == 0);
     free_text_doc(doc);
     return 0;
 }
