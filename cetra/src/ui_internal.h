@@ -30,7 +30,8 @@ typedef struct UIScrollPlace {
 } UIScrollPlace;
 
 // A bar's track along `rect`'s right edge and its thumb: the thumb's length the share in view and
-// its place the share scrolled. False while everything shows, when there is no bar.
+// its place the share scrolled. False while everything shows, or while the element has no room for
+// a bar.
 bool ui_bar_place(UIRect rect, const UIScrollPlace* place, UIRect* track, UIRect* thumb);
 // Where a thumb taken `grab` below its top and held at `y` puts the view, 0..1 along.
 float ui_bar_at(UIRect track, UIRect thumb, float y, float grab);
