@@ -376,7 +376,9 @@ colour for every state; while that colour's alpha is 0 they are the editor's tex
   than a row, later rows hung at the line's indent. Only the rows in view are wrapped and drawn;
   every other line's rows are a guess from its length.
 - **The scroll is held to a line and a row of it**, so a guess put right, or an edit above, never
-  moves what is on screen.
+  moves what is on screen. `ui_editor_top_line` reads it exactly, the line and the rows into it with
+  the part of a row, and `ui_editor_scroll_line` puts it there, held to the text's lines and that
+  line's rows as a wheel's scroll is: one editor held to another glides with it (spec 14.15).
 - **A line edited within itself is wrapped again at once**, so typing moves no other line's rows.
 - **A budget in each draw** (192 KB a frame) wraps the guessed rows -- the lines an edit rewrote
   first, then any others round the text -- and walks a stateful highlighter on. Its draw returns a
@@ -388,6 +390,10 @@ colour for every state; while that colour's alpha is 0 they are the editor's tex
 - **Several carets from the start**: the selections are a sorted list, merged where they meet, the
   last made the primary.
 - **Find** is `ui_editor_find`, its matches lit in view.
+- **A range whose style has `whole_lines`** (spec 14.15) fills every row of each line it reaches,
+  its line break counted, from the text's left edge to the editor's right, an empty line included.
+  It is drawn under every other background, so a selection shows over it; its text colour and
+  underline still go by its bytes.
 
 What `ui.c` calls on it is `ui_editor_ops` (`ui_internal.h`); what the vim mode reaches of it is
 the private `ui_editor_internal.h` (an edit at every caret as one action, carets with wanted columns,
@@ -406,7 +412,8 @@ its place in every text it has shown, as a vim window keeps a buffer's.
 - Keeping the place on the host (carets and a top with a version, mapped through `text_doc_map` on
   return) was rejected: every host would have written it.
 - **A place asked for before the editor is laid out on its text is held for that layout**
-  (`ui_editor_scroll_place`, `ui_editor_reveal`), since only then are its rows and its height known:
+  (`ui_editor_scroll_place`, `ui_editor_scroll_line`, `ui_editor_reveal`), since only then are its
+  rows and its height known:
   a pane made by a split is placed where the one it split was at its first layout.
 - `ui_editor(parent, NULL)` makes an editor showing nothing, and `ui_editor_doc` says what one shows,
   so a host finds a pane's file from the pane.
@@ -499,6 +506,12 @@ Easy to get backwards:
   a comment line or in a C comment or quotes passed over, none on the cursor's line) and Ctrl+] and
   `K` do nothing. Under an operator `gd` is always characterwise exclusive, where vim's takes the
   kind of the motion before it: the one difference kept.
+- `ui_editor_vim_set_change` answers `]c` and `[c` (spec 14.15), vim's next and previous change,
+  with a direction and a count, in normal mode with no operator; the host may go into another text.
+  `]` and `[` wait for a second key: any other is taken and nothing done, and after an operator the
+  operator is let go, since a host answering in another text can be no motion. Out of diff mode vim
+  does the same, held by the oracle with no host. In visual mode `]` does nothing, where vim's `]c`
+  beeps and keeps the area.
 - `ui_editor_vim_set_indent` answers `=` for a whole run of lines at once -- a column each, worked
   down the run as vim's `indentexpr` is asked a line at a time, so `=` is one edit however many
   lines it takes -- and, as a run of one, the indent of every line `o`, `O` or Enter makes and of
