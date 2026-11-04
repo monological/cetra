@@ -2380,6 +2380,123 @@ static int probe_editor_fillers(UISystem* ui) {
     return 0;
 }
 
+// The glyphs on the row from `y` whose centres stand in the gutter's gap, between the numbers and
+// the text at `tx`: a sign. Up to `max` into `out`, with their colours; how many.
+static size_t gap_glyphs(const UISystem* ui, float tx, float cell, float y, float row, UIRect* out,
+                         vec4* colours, size_t max) {
+    UIRect left[8];
+    vec4 left_colours[8];
+    const size_t n = row_glyphs(ui, tx, y, row, true, left, left_colours, 8);
+    size_t k = 0;
+    for (size_t i = 0; i < n && i < 8; i++) {
+        if (left[i].x + left[i].w * 0.5f < tx - 2.0f * cell)
+            continue;
+        if (k < max) {
+            out[k] = left[i];
+            glm_vec4_copy(left_colours[i], colours[k]);
+        }
+        k++;
+    }
+    return k;
+}
+
+// A range's style marks the gutter of each line it reaches: a fill on every row from the gutter's
+// left to the text, drawn under the number, and a sign in the gap after the number on the line's
+// first row only, in the text's plain colour; a sign alone draws no fill; a zeroed style neither.
+static int probe_editor_gutter(UISystem* ui) {
+    char text[512];
+    size_t len = (size_t)snprintf(text, sizeof(text), "short\n");
+    const size_t long_at = len;
+    for (int i = 0; i < 40; i++)
+        len += (size_t)snprintf(text + len, sizeof(text) - len, "word ");
+    const size_t minus_at = len + 1;
+    len += (size_t)snprintf(text + len, sizeof(text) - len, "\nminus\nlast");
+    TextDoc* doc = create_text_doc(text, len);
+    UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
+    const UITheme before = *ui_theme(ui);
+    UITheme theme = before;
+    vec4 red = {1.0f, 0.0f, 0.0f, 1.0f};
+    theme.editor_styles[1] = (UIEditorStyle){.sign = '+'};
+    glm_vec4_copy(red, theme.editor_styles[1].gutter);
+    theme.editor_styles[2] = (UIEditorStyle){.sign = '-'};
+    ui_set_theme(ui, &theme);
+    text_doc_set_ranges(doc, 0, 0, &(TextRange){long_at, minus_at - 1, 1}, 1);
+    text_doc_set_ranges(doc, 1, 0, &(TextRange){minus_at, minus_at + 2, 2}, 1);
+    editor_pass(ui);
+    float tx = 0.0f, y0 = 0.0f, x = 0.0f, y_long = 0.0f, y_minus = 0.0f;
+    ui_editor_point_of(ed, 0, &tx, &y0);
+    ui_editor_point_of(ed, 1, &x, &y0);
+    const float cell = x - tx;
+    ui_editor_point_of(ed, long_at, &x, &y_long);
+    ui_editor_point_of(ed, minus_at, &x, &y_minus);
+    const float row = y_long - y0;
+    const int long_rows = (int)lroundf((y_minus - y_long) / row);
+
+    // One red quad a row of the long line, from the gutter's left to the text, before its number.
+    Fill reds[8];
+    const size_t red_count = fills_in(ui, red, reds, 8);
+    bool fill = long_rows >= 2 && red_count == (size_t)long_rows;
+    for (size_t i = 0; fill && i < red_count; i++)
+        fill = fabsf(reds[i].r.y - (y_long + (float)i * row)) < 0.01f &&
+               fabsf(reds[i].r.h - row) < 0.01f && fabsf(reds[i].r.x + reds[i].r.w - tx) < 0.01f &&
+               reds[i].r.x < tx - 4.5f * cell;
+    const UIDrawList* dl = ui_draw_list(ui);
+    size_t number_at = SIZE_MAX;
+    for (size_t i = 0; i < ui_draw_list_quad_count(dl) && number_at == SIZE_MAX; i++) {
+        UIRect r;
+        vec4 colour;
+        int kind = 0;
+        ui_draw_list_quad(dl, i, &r, colour, &kind);
+        if (kind == 1 && r.x + r.w * 0.5f < tx - 2.0f * cell && r.y + r.h * 0.5f >= y_long &&
+            r.y + r.h * 0.5f < y_long + row)
+            number_at = i;
+    }
+    fill = fill && number_at != SIZE_MAX && reds[0].at < number_at;
+    if (!fill)
+        fprintf(stderr, "editor-gutter: %zu red quads for %d rows\n", red_count, long_rows);
+    say_flag("editor-gutter", "fill", "under", fill);
+
+    // The + on the long line's first row only, in the text's colour; the - on its line, shorter.
+    UIRect code[1], plus[2], minus[2], none[2];
+    vec4 code_colour[1], plus_colour[2], minus_colour[2], none_colour[2];
+    row_glyphs(ui, tx, y0, row, false, code, code_colour, 1);
+    const size_t plus_n = gap_glyphs(ui, tx, cell, y_long, row, plus, plus_colour, 2);
+    size_t later = 0;
+    for (int r = 1; r < long_rows; r++)
+        later += gap_glyphs(ui, tx, cell, y_long + (float)r * row, row, none, none_colour, 2);
+    const size_t minus_n = gap_glyphs(ui, tx, cell, y_minus, row, minus, minus_colour, 2);
+    const size_t short_n = gap_glyphs(ui, tx, cell, y0, row, none, none_colour, 2);
+    // The - alone fills nothing: no quad on its row ends at the text's edge.
+    Fill any[256];
+    const size_t any_n = fills_in(ui, NULL, any, 256);
+    bool bare = any_n <= 256;
+    for (size_t i = 0; bare && i < any_n; i++)
+        bare = fabsf(any[i].r.y - y_minus) >= 0.01f || fabsf(any[i].r.x + any[i].r.w - tx) >= 0.01f;
+    const bool sign = plus_n == 1 && later == 0 && minus_n == 1 && short_n == 0 && bare &&
+                      same_colour(plus_colour[0], code_colour[0]) &&
+                      same_colour(minus_colour[0], code_colour[0]) && plus[0].h > minus[0].h;
+    if (!sign)
+        fprintf(stderr, "editor-gutter: + %zu, on later rows %zu, - %zu, on the short line %zu\n",
+                plus_n, later, minus_n, short_n);
+    say_flag("editor-gutter", "sign", "first_row", sign);
+
+    // Zeroed, neither: no quad reaching the text from the left and no glyph in the gap.
+    theme.editor_styles[1] = theme.editor_styles[2] = (UIEditorStyle){0};
+    ui_set_theme(ui, &theme);
+    editor_pass(ui);
+    Fill all[256];
+    const size_t all_n = fills_in(ui, NULL, all, 256);
+    bool zero = all_n <= 256;
+    for (size_t i = 0; zero && i < all_n; i++)
+        zero = fabsf(all[i].r.x + all[i].r.w - tx) >= 0.01f;
+    for (int r = 0; zero && r < long_rows + 3; r++)
+        zero = gap_glyphs(ui, tx, cell, y0 + (float)r * row, row, none, none_colour, 2) == 0;
+    say_flag("editor-gutter", "zero", "none", zero);
+    ui_set_theme(ui, &before);
+    free_text_doc(doc);
+    return 0;
+}
+
 // Each action told with its step: typing joined into words shares one, a group holds one open over
 // any actions -- typing, a Backspace, more typing -- and one undo takes it all back. The same with
 // keep_undo off.
@@ -3807,6 +3924,8 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_editor_folds(ui);
     if (!strcmp(which, "editor-fillers"))
         return probe_editor_fillers(ui);
+    if (!strcmp(which, "editor-gutter"))
+        return probe_editor_gutter(ui);
     if (!strcmp(which, "editor-steps"))
         return probe_editor_steps(ui);
     if (!strcmp(which, "vim-run"))

@@ -3062,10 +3062,15 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
             backed[backed_count++] = ranges[k];
     }
     const size_t whole = backed_count;
+    // And those that mark the gutter of the lines they reach, with a fill or a sign.
+    TextRange marking[RANGES_DRAWN * TEXT_DOC_LAYERS];
+    size_t marking_count = 0;
     for (size_t k = 0; k < range_count; k++) {
         const UIEditorStyle* st = _style(t, ranges[k].style);
         if (!st->whole_lines && st->background[3] > 0.0f)
             backed[backed_count++] = ranges[k];
+        if (st->gutter[3] > 0.0f || st->sign)
+            marking[marking_count++] = ranges[k];
     }
     const float edge_w = content.x + content.w - ed->text.x;
 
@@ -3110,6 +3115,19 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
         for (size_t k = 0; k < whole; k++)
             if (backed[k].start < line_end && backed[k].end > l.at)
                 fills[fill_count++] = _style(t, backed[k].style)->background;
+        // The ranges reaching it the same way mark its gutter: their fills behind each of its rows,
+        // and the last one's sign on its first.
+        const float* gutters[RANGES_DRAWN * TEXT_DOC_LAYERS];
+        size_t gutter_count = 0;
+        uint32_t sign = 0;
+        for (size_t k = 0; k < marking_count; k++) {
+            const UIEditorStyle* st = _style(t, marking[k].style);
+            if (marking[k].start >= line_end || marking[k].end <= l.at)
+                continue;
+            if (st->gutter[3] > 0.0f)
+                gutters[gutter_count++] = st->gutter;
+            sign = st->sign ? st->sign : sign;
+        }
         for (; row < rows.count && y < ed->text.y + ed->text.h; row++, y += ed->row) {
             const size_t from = rows.starts[row];
             const size_t to = row + 1 < rows.count ? rows.starts[row + 1] : l.len;
@@ -3117,14 +3135,21 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
             const float base_px = roundf(y * ed->px) + (float)ed->face->ascent;
             const size_t row_to = l.at + to;
             size_t a, b;
-            // The line's number, on its first row.
+            // The gutter's marks under the line's number, on its first row, then its sign in the
+            // gap after the number.
+            for (size_t g = 0; g < gutter_count; g++)
+                ui_draw_quad(dl, (UIRect){content.x, y, ed->text.x - content.x, ed->row},
+                             (float*)gutters[g]);
             if (row == 0) {
                 char num[24];
                 const int n = snprintf(num, sizeof(num), "%zu", line + 1);
-                float nx =
-                    roundf(content.x * ed->px) + (float)(_digits(doc->line_count) - n) * cell_px;
+                const float gutter_px = roundf(content.x * ed->px);
+                const int digits = _digits(doc->line_count);
+                float nx = gutter_px + (float)(digits - n) * cell_px;
                 for (int k = 0; k < n; k++, nx += cell_px)
                     _glyph(dl, ed, (uint32_t)num[k], nx, base_px, numbers);
+                if (sign)
+                    _glyph(dl, ed, sign, gutter_px + (float)digits * cell_px, base_px, fg);
             }
             // Backgrounds: the host's whole lines, its other ranges, find's matches, then the
             // selections over them.

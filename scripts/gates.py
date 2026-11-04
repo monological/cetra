@@ -28498,6 +28498,14 @@ def run_ui_gate(workdir):
                      row; a click on a filler lands at its line's start; the
                      long line's rows as ui_editor_line_rows gives them are its
                      rows as drawn.
+      ui-editor-gutter gutter marks (spec 14.16): a style with a red gutter fill and
+                     a + over a line wrapping to several rows draws one red quad a
+                     row from left of the numbers to the text's left edge, the
+                     first before the line's number; the + in the gap after the
+                     number on its first row only, in the text's colour; a style
+                     with a - alone puts it on its line, shorter than the +, and
+                     no fill; with both styles zeroed, no quad ends at the text's
+                     edge and no glyph stands in the gap.
       ui-editor-steps each action told with its step: typing joined into words
                      shares one; a group holds one over typing, a Backspace and
                      more typing, one undo takes the group back and one redo makes
@@ -29777,6 +29785,13 @@ def run_ui_gate(workdir):
                            "as asked are its rows as drawn")
     print(f"  ui-editor-fillers     {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-fillers", ok)
+
+    ok, detail = doc_flags("editor-gutter", 3, "a range's gutter fill on every row of its line "
+                           "from the gutter's left to the text, under the number; its sign in the "
+                           "gap on the line's first row only, in the text's colour, a sign alone "
+                           "drawing no fill; a zeroed style neither")
+    print(f"  ui-editor-gutter      {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-gutter", ok)
 
     ok, detail = doc_flags("editor-steps", 7, "typing joined into words shares a step, a group "
                            "holds one over typing, a Backspace and more typing, and one undo takes "
