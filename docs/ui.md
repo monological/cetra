@@ -404,7 +404,9 @@ colour for every state; while that colour's alpha is 0 they are the editor's tex
   counted, and `ui_editor_scroll_row` puts it there (spec 14.19): two editors whose lines are
   padded level show the same rows in the same order, and copying the count holds them together
   where a line and its rows would land a row off for each filler one side has and the other lacks.
-  A double, as a text's rows pass a float's whole numbers long before its lines run out.
+  A double, as a text's rows pass a float's whole numbers long before its lines run out. The count
+  holds them only once each has wrapped the rows above its top: a side still guessing a line's
+  rows from its length stands off by the difference until its budget wraps them.
 - **The gutter is as wide as its text's line count's digits**, or as `ui_editor_set_gutter_digits`
   asks if that is more (spec 14.19), so two editors on texts of different lengths keep the same
   columns and wrap their common lines alike. It is the editor's, as its look is, and a change of
