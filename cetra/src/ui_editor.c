@@ -1532,11 +1532,16 @@ static size_t _word_end(UIEditor* ed, size_t offset) {
 }
 
 // `count` rows up or down from `offset`, at the column `*want`, which is set from the offset when
-// it is -1: so a caret moved through a short row comes back to its column.
+// it is -1: so a caret moved through a short row comes back to its column. A caret in a closed fold
+// keeps the column it has in its line, though it is drawn at the fold's start.
 static size_t _rows_moved(UIEditor* ed, size_t offset, int count, int* want) {
     size_t line, row;
     int col;
     _place_of(ed, offset, &line, &row, &col);
+    if (*want < 0 && _closed(&ed->at, text_doc_line_of(ed->doc, offset))) {
+        const Line l = _line(ed, offset);
+        col = _col_after(l.s, l.len, 0, offset - l.at, 0, _tab(ed));
+    }
     if (*want < 0)
         *want = col;
     for (int k = 0; k < (count < 0 ? -count : count); k++) {
@@ -2409,6 +2414,37 @@ static bool _run_select_all(UIElement* el, void* user) {
     return true;
 }
 
+// The fold each caret stands in opened (`how` 1), closed (0) or turned the other way (-1), once
+// however many carets stand in it; false when none stands in one.
+static bool _fold_carets(UIElement* el, int how) {
+    UIEditor* ed = _of(el);
+    if (!ed)
+        return false;
+    const UIEditorFold* done = NULL;
+    for (size_t i = 0; i < ed->at.sel_count; i++) {
+        UIEditorFold* f = _fold_of(&ed->at, text_doc_line_of(ed->doc, ed->at.sel[i].head));
+        if (f && f != done)
+            _fold_open(&ed->at, f, how < 0 ? !f->open : how > 0);
+        done = f ? f : done;
+    }
+    return done != NULL;
+}
+
+static bool _run_open_fold(UIElement* el, void* user) {
+    (void)user;
+    return _fold_carets(el, 1);
+}
+
+static bool _run_close_fold(UIElement* el, void* user) {
+    (void)user;
+    return _fold_carets(el, 0);
+}
+
+static bool _run_toggle_fold(UIElement* el, void* user) {
+    (void)user;
+    return _fold_carets(el, -1);
+}
+
 // A command that applies an operator over a motion at every caret.
 #define STEP(name, description, op, motion)     \
     {                                           \
@@ -2489,6 +2525,10 @@ static const UIEditorCommand COMMANDS[] = {
     {"single-caret", "Keep only the primary caret", _run_single, NULL},
     {"find-next", "Select the next match", _run_find_next, NULL},
     {"find-previous", "Select the previous match", _run_find_previous, NULL},
+    {"open-fold", "Open the fold each caret stands in", _run_open_fold, NULL},
+    {"close-fold", "Close the fold each caret stands in", _run_close_fold, NULL},
+    {"toggle-fold", "Open the fold each caret stands in, or close it if open", _run_toggle_fold,
+     NULL},
 };
 
 #undef STEP
@@ -3083,6 +3123,16 @@ void ui_editor_scroll_rows(UIElement* el, float rows) {
     UIEditor* ed = _of(el);
     if (ed)
         _scroll_rows(ed, rows);
+}
+
+bool ui_editor_closed_fold(const UIElement* el, size_t line, size_t* first, size_t* last) {
+    const UIEditor* ed = _seen(el);
+    const UIEditorFold* f = ed ? _closed(&ed->at, line) : NULL;
+    if (f && first)
+        *first = f->first;
+    if (f && last)
+        *last = f->last;
+    return f != NULL;
 }
 
 const UIWidgetOps ui_editor_ops = {
