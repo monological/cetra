@@ -309,6 +309,8 @@ typedef struct UIEditorStyle {
     vec4 background;
     vec4 underline;
     bool whole_lines; // background behind every row of each line the range reaches, edge to edge
+    vec4 gutter;   // behind the gutter on every row of each line the range reaches; alpha 0 = none
+    uint32_t sign; // drawn in the gutter's gap on the first row of each line it reaches; 0 = none
 } UIEditorStyle;
 
 #define UI_EDITOR_STYLES 32
