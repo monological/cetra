@@ -100,10 +100,10 @@ typedef struct Parked {
     struct Parked* next;
 } Parked;
 
-// A place asked of the view: an offset and how far down the view it stands, an offset to reveal, or
-// a line at the top and the rows scrolled into it.
+// A place asked of the view: an offset and how far down the view it stands, an offset to reveal, a
+// line at the top and the rows scrolled into it, or the rows from the text's start to the top.
 typedef struct {
-    enum { PENDING_NONE, PENDING_PLACE, PENDING_REVEAL, PENDING_LINE } kind;
+    enum { PENDING_NONE, PENDING_PLACE, PENDING_REVEAL, PENDING_LINE, PENDING_ROW } kind;
     union {
         struct {
             size_t offset;
@@ -114,6 +114,7 @@ typedef struct {
             size_t line;
             float rows;
         } top;
+        double rows;
     };
 } Pending;
 
@@ -134,6 +135,7 @@ struct UIEditor {
     GlyphCache* face;
     UIRect content, text;
     int cols;
+    int gutter_digits; // ui_editor_set_gutter_digits: the gutter's digits at least; 0 its text's
     // A run of presses, and the unit the last took, which a drag extends by.
     UITypingPresses presses;
     size_t grab_from, grab_to;
@@ -373,22 +375,36 @@ static size_t _filler_rows(const UIEditorPlace* at, size_t line) {
     return lo < at->filler_count && at->fillers[lo].line == line ? at->fillers[lo].rows : 0;
 }
 
+// The filler rows under the text's last line, the fillers on its line count, which the last line
+// that shows counts after its own; 0 for any other line. Sorted by line, they are the last fillers.
+static size_t _under(const UIEditorPlace* at, size_t lines, size_t line) {
+    const UIEditorFiller* end = at->filler_count ? &at->fillers[at->filler_count - 1] : NULL;
+    return end && end->line == lines && _next_shown(at, line) >= lines ? end->rows : 0;
+}
+
 /*
  * The rows a line shows, which every walk of the rows counts by: its fillers, then a closed fold's
  * first line one, its row, and the fold's other lines none at all; any other line its wrapped rows,
- * a guess while `wrap` is false and it is not wrapped yet. A row of a line counts from its first
- * filler. A line a closed fold hides is never wrapped for drawing.
+ * a guess while `wrap` is false and it is not wrapped yet; and the last line that shows, the
+ * fillers under the text after them. A row of a line counts from its first filler. A line a closed
+ * fold hides is never wrapped for drawing.
  */
 static size_t _shown(UIEditor* ed, size_t line, bool wrap) {
     const UIEditorFold* f = _closed(&ed->at, line);
     if (f && f->first != line)
         return 0;
-    const size_t fill = _filler_rows(&ed->at, line);
+    const size_t fill = _filler_rows(&ed->at, line) + _under(&ed->at, ed->doc->line_count, line);
     if (f)
         return fill + 1;
     if (ed->at.rows[line])
         return fill + ed->at.rows[line];
     return fill + (wrap ? _wrap_line(ed, line).count : _estimate(ed, line));
+}
+
+// The row a line's own rows end at, where the fillers under the text begin on the last line that
+// shows: no caret stands at or past it.
+static size_t _own_end(UIEditor* ed, size_t line) {
+    return _shown(ed, line, true) - _under(&ed->at, ed->doc->line_count, line);
 }
 
 // Wraps a guessed line for the budget: the bytes it read.
@@ -468,9 +484,11 @@ static bool _row_up(UIEditor* ed, size_t* line, size_t* row) {
 }
 
 // A caret's move a row down or up, over a line's filler rows at a step, which no caret stands on;
-// false with no row of a line's own that way.
+// false with no row of a line's own that way, as from the last line onto the fillers under it.
 static bool _caret_row(UIEditor* ed, size_t* line, size_t* row, bool down) {
     if (down ? !_row_down(ed, line, row) : !_row_up(ed, line, row))
+        return false;
+    if (*row >= _own_end(ed, *line))
         return false;
     const size_t fill = _filler_rows(&ed->at, *line);
     if (*row >= fill)
@@ -519,8 +537,10 @@ static void _top(UIEditor* ed, size_t* line, size_t* row) {
 }
 
 // The offset starting a row a line shows: its fillers and a closed fold's row, its row 0 past the
-// fillers, start at the line's start.
+// fillers, start at the line's start; the fillers under the text, at the text's end.
 static size_t _row_offset(UIEditor* ed, size_t line, size_t row) {
+    if (row >= _own_end(ed, line))
+        return ed->doc->length;
     const size_t at = text_doc_line_start(ed->doc, line);
     const size_t fill = _filler_rows(&ed->at, line);
     return row <= fill ? at : at + _wrap_line(ed, line).starts[row - fill];
@@ -528,8 +548,10 @@ static size_t _row_offset(UIEditor* ed, size_t line, size_t row) {
 
 // The offset on (line, row) nearest column `want`; past a wrapped row's end, before its last
 // character, as a click there is, so the caret stays on that row. A filler row is the line's start,
-// and a closed fold's row its first line's first row.
+// a closed fold's row its first line's first row, and a filler under the text the text's end.
 static size_t _at_column(UIEditor* ed, size_t line, size_t row, float want) {
+    if (row >= _own_end(ed, line))
+        return ed->doc->length;
     const Line l = _line_at(ed, line);
     const size_t fill = _filler_rows(&ed->at, line);
     if (row < fill)
@@ -1103,6 +1125,12 @@ static int _digits(size_t n) {
     return d < GUTTER_DIGITS ? GUTTER_DIGITS : d;
 }
 
+// The digits the gutter holds: its text's line count's, or the more the editor was asked for.
+static int _gutter_digits(const UIEditor* ed) {
+    const int own = _digits(ed->doc->line_count);
+    return ed->gutter_digits > own ? ed->gutter_digits : own;
+}
+
 static void _take_pending(UIEditor* ed);
 
 // The layout's: the face at its size, the gutter, where the text goes and how many columns a row
@@ -1127,7 +1155,7 @@ static void _place(const UISystem* ui, UIElement* el, UIRect content) {
         ed->row = size * 1.3f;
     }
     ed->content = content;
-    const float gutter = (float)(_digits(ed->doc->line_count) + GUTTER_GAP) * ed->cell;
+    const float gutter = (float)(_gutter_digits(ed) + GUTTER_GAP) * ed->cell;
     ed->text.x = _snap(ed, content.x + gutter);
     ed->text.y = _snap(ed, content.y);
     ed->text.w = content.x + content.w - UI_BAR_W - UI_BAR_INSET - ed->text.x;
@@ -1148,6 +1176,13 @@ static float _view_rows(const UIEditor* ed) {
     return ed->row > 0.0f ? ed->text.h / ed->row : 0.0f;
 }
 
+// The view's top in rows from the text's start, with the part of the top row scrolled past.
+static double _top_row(UIEditor* ed) {
+    size_t line, row;
+    _top(ed, &line, &row);
+    return (double)_top_of(ed, line) + (double)row + ed->at.top_frac;
+}
+
 // Where the view is in the text's rows, the last row at the top being all the way along; false
 // while the whole text shows.
 static bool _scroll(const UIElement* el, UIScrollPlace* place) {
@@ -1155,9 +1190,7 @@ static bool _scroll(const UIElement* el, UIScrollPlace* place) {
     if (!ed || ed->row <= 0.0f)
         return false;
     const uint64_t total = _top_of(ed, ed->doc->line_count);
-    size_t line, row;
-    _top(ed, &line, &row);
-    const double at = (double)_top_of(ed, line) + (double)row + ed->at.top_frac;
+    const double at = _top_row(ed);
     *place = (UIScrollPlace){_view_rows(ed), (float)total,
                              total > 1 ? (float)(at / (double)(total - 1)) : 0.0f, WHEEL_ROWS};
     return place->total > place->view;
@@ -1181,15 +1214,25 @@ static void _line_at_row(UIEditor* ed, uint64_t row, size_t* line, size_t* in) {
     *in = r < rows ? (size_t)r : rows - 1;
 }
 
+// The text's last row from its start: as far as the view's top goes, as a wheel's scroll stops.
+static double _last_row(UIEditor* ed) {
+    const uint64_t total = _top_of(ed, ed->doc->line_count);
+    return (double)(total ? total - 1 : 0);
+}
+
+// The view's top put `rows` rows from the text's start, held to the first row and the last.
+static void _scroll_row(UIEditor* ed, double rows) {
+    const double last = _last_row(ed);
+    rows = rows < 0.0 ? 0.0 : rows > last ? last : rows;
+    _line_at_row(ed, (uint64_t)rows, &ed->at.top_line, &ed->at.top_row);
+    ed->at.top_frac = (float)(rows - floor(rows));
+}
+
 // The view put `at` the way along its rows: the bar's thumb held there.
 static void _scroll_to(UIElement* el, float at) {
     UIEditor* ed = _of(el);
-    if (!ed)
-        return;
-    const uint64_t total = _top_of(ed, ed->doc->line_count);
-    const double row = (double)at * (double)(total ? total - 1 : 0);
-    _line_at_row(ed, (uint64_t)row, &ed->at.top_line, &ed->at.top_row);
-    ed->at.top_frac = (float)(row - floor(row));
+    if (ed)
+        _scroll_row(ed, (double)at * _last_row(ed));
 }
 
 static void _scroll_by(UIElement* el, float rows) {
@@ -1353,6 +1396,9 @@ static void _take_pending(UIEditor* ed) {
         case PENDING_LINE:
             _scroll_line(ed, p.top.line, p.top.rows);
             break;
+        case PENDING_ROW:
+            _scroll_row(ed, p.rows);
+            break;
         case PENDING_NONE:
             break;
     }
@@ -1378,6 +1424,25 @@ void ui_editor_scroll_place(UIElement* el, size_t offset, float where) {
 
 void ui_editor_scroll_line(UIElement* el, size_t line, float rows) {
     _pend(el, (Pending){.kind = PENDING_LINE, .top = {line, rows}});
+}
+
+double ui_editor_top_row(const UIElement* el) {
+    UIEditor* ed = _seen(el);
+    return ed ? _top_row(ed) : 0.0;
+}
+
+void ui_editor_scroll_row(UIElement* el, double rows) {
+    _pend(el, (Pending){.kind = PENDING_ROW, .rows = rows});
+}
+
+void ui_editor_set_gutter_digits(UIElement* el, int digits) {
+    UIEditor* ed = el && el->kind == UI_EDITOR ? el->editor : NULL;
+    if (!ed || digits < 0) {
+        log_error(ed ? "ui_editor_set_gutter_digits: digits below 0"
+                     : "ui_editor_set_gutter_digits: not an editor");
+        return;
+    }
+    ed->gutter_digits = digits;
 }
 
 // ---- Folds
@@ -1503,20 +1568,24 @@ void ui_editor_set_fillers(UIElement* el, const UIEditorFiller* fillers, size_t 
     if (count)
         qsort(given, count, sizeof(Given), _by_line_then_given);
     // The last given for each line, which is the one before another line's, but those of no rows;
-    // those past the text's lines are sorted last, and left out.
+    // those on the line count stand under the last line, and those past it are sorted last, and
+    // left out.
+    const size_t lines = ed->doc->line_count;
     size_t kept = 0, i = 0;
-    for (; i < count && given[i].f.line < ed->doc->line_count; i++)
+    for (; i < count && given[i].f.line <= lines; i++)
         if ((i + 1 == count || given[i + 1].f.line != given[i].f.line) && given[i].f.rows)
             fresh[kept++] = given[i].f;
     if (i < count)
-        log_error("ui_editor_set_fillers: fillers past the text's last line are left out");
+        log_error("ui_editor_set_fillers: fillers past the text's line count are left out");
     free(given);
-    // The rows from the first filler line, old or new, are summed again.
+    // The rows from the first filler line, old or new, are summed again: for those under the text,
+    // from the last line that shows, which counts them.
     UIEditorPlace* at = &ed->at;
+    const size_t last_shown = _prev_shown(at, lines);
     if (at->filler_count)
-        _tops_from(at, at->fillers[0].line);
+        _tops_from(at, at->fillers[0].line < lines ? at->fillers[0].line : last_shown);
     if (kept)
-        _tops_from(at, fresh[0].line);
+        _tops_from(at, fresh[0].line < lines ? fresh[0].line : last_shown);
     free(at->fillers);
     at->fillers = fresh;
     at->filler_count = kept;
@@ -1599,10 +1668,10 @@ static void _press(const UISystem* ui, UIElement* el, UIRect content, float x, f
         return;
     const int presses = ui_typing_press(&ed->presses, time, x, y, 3);
     const TextSelection u = _unit(ed, ui_editor_offset_at(el, x, y), presses);
-    // On the fold's own row, past any fillers above it.
+    // On the fold's own row, past any fillers above it and before any under the text.
     size_t line, row;
     if (ed->row > 0.0f && !_row_at(ed, y, &line, &row) && _closed(&ed->at, line) &&
-        row >= _filler_rows(&ed->at, line))
+        row >= _filler_rows(&ed->at, line) && row < _own_end(ed, line))
         _fold_open(&ed->at, _fold_of(&ed->at, line), true);
     ed->grab_from = u.anchor;
     ed->grab_to = u.head;
@@ -3134,16 +3203,21 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
             break;
         row -= fill;
         const UIEditorFold* fold = _closed(&ed->at, line);
+        size_t own = 1; // the line's own rows, the fillers under the text after them
         if (fold) {
-            if (_fold_row(dl, ed, fold, content, y, fold_fill, numbers, sel_colour,
-                          mode->selection) &&
-                lit)
-                ui_draw_quad(dl, (UIRect){_snap(ed, ed->text.x), y, caret_w, ed->row},
-                             caret_colour);
-            y += ed->row;
+            if (row == 0) {
+                if (_fold_row(dl, ed, fold, content, y, fold_fill, numbers, sel_colour,
+                              mode->selection) &&
+                    lit)
+                    ui_draw_quad(dl, (UIRect){_snap(ed, ed->text.x), y, caret_w, ed->row},
+                                 caret_colour);
+                y += ed->row;
+                row = 1;
+            }
         } else {
             const Line l = _line_at(ed, line);
             const Rows rows = _wrap_line(ed, line);
+            own = rows.count;
             const TextSpan* spans = NULL;
             size_t span_count = 0;
             if (!text_doc_line_spans(doc, line, &spans, &span_count) && doc->highlight)
@@ -3186,7 +3260,7 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
                     char num[24];
                     const int n = snprintf(num, sizeof(num), "%zu", line + 1);
                     const float gutter_px = roundf(content.x * ed->px);
-                    const int digits = _digits(doc->line_count);
+                    const int digits = _gutter_digits(ed);
                     float nx = gutter_px + (float)(digits - n) * cell_px;
                     for (int k = 0; k < n; k++, nx += cell_px)
                         _glyph(dl, ed, (uint32_t)num[k], nx, base_px, numbers);
@@ -3263,6 +3337,11 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
             }
         }
         const size_t next = _next_shown(&ed->at, line);
+        // Under the last line, the fillers on the line count, from the row the view starts on.
+        if (next >= doc->line_count)
+            for (size_t r = row > own ? row - own : 0, under = _filler_rows(&ed->at, next);
+                 r < under && y < bottom; r++, y += ed->row)
+                ui_draw_quad(dl, (UIRect){ed->text.x, y, edge_w, ed->row}, filler);
         if (y >= bottom || next >= doc->line_count)
             break;
         line = next;

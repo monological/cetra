@@ -4118,6 +4118,285 @@ static int probe_ui_hidden(UISystem* ui) {
     return 0;
 }
 
+// ---- Two editors row for row (spec 14.19)
+
+#define TOP_FILL_LINE  40
+#define TOP_FILL_ROWS  3
+#define TOP_FOLD_FIRST 60
+#define TOP_FOLD_LAST  90
+
+// The rows above `line` in the top-row case's editor, counted from the rows each line wraps to
+// with its fillers and its closed fold by hand: what ui_editor_top_row is held to.
+static double rows_above(const UIElement* ed, size_t line) {
+    double rows = line > TOP_FILL_LINE ? TOP_FILL_ROWS : 0;
+    for (size_t i = 0; i < line; i++)
+        rows += i == TOP_FOLD_FIRST                        ? 1.0
+                : i > TOP_FOLD_FIRST && i <= TOP_FOLD_LAST ? 0.0
+                                                           : (double)ui_editor_line_rows(ed, i);
+    return rows;
+}
+
+// The view's top as rows from the text's start: 0 at the start; a line's top the rows above it,
+// fillers and a closed fold's one row counted, and the part; put back as read, on a filler, on the
+// fold's row, on a wrapped line's second row and with a part; held to the first row and the last as
+// a wheel is; asked before a layout, taken at it; and two editors, one line wrapping to more rows
+// than its counterpart and fillers on the other side making them up, put at the same row, drawing
+// the lines after the pair level.
+static int probe_editor_top_row(UISystem* ui) {
+    static char text[200 * 96];
+    size_t len = 0;
+    for (int i = 0; i < 200; i++)
+        len += (size_t)snprintf(text + len, sizeof(text) - len, "line %03d%s\n", i,
+                                i % 4 == 1 ? " of a text whose lines wrap in a narrow editor, "
+                                             "some of them twice over at the least"
+                                           : "");
+    TextDoc* doc = create_text_doc(text, len - 1);
+    UIElement* ed = editor_fixture(ui, doc, 300.0f, 220.0f);
+    ui_editor_set_fillers(ed, &(UIEditorFiller){TOP_FILL_LINE, TOP_FILL_ROWS}, 1);
+    ui_editor_set_folds(ed, &(UIEditorFold){TOP_FOLD_FIRST, TOP_FOLD_LAST, false, NULL}, 1);
+    for (int i = 0; i < 10 && !ui_editor_settled(ed); i++)
+        editor_pass(ui);
+    say_flag("editor-top-row", "start", "zero", ui_editor_top_row(ed) == 0.0);
+
+    // Line 100, below the fillers and the fold, half a row in.
+    ui_editor_scroll_line(ed, 100, 0.5f);
+    const double at100 = ui_editor_top_row(ed), want100 = rows_above(ed, 100) + 0.5;
+    if (at100 != want100)
+        fprintf(stderr, "editor-top-row: line 100 at row %.2f, the rows above it %.2f\n", at100,
+                want100);
+    say_flag("editor-top-row", "count", "above",
+             ui_editor_line_rows(ed, 45) >= 2 && at100 == want100);
+
+    // Put and read back: a filler's row, the fold's row, line 45's second row, and that with a
+    // part.
+    const double trips[4] = {rows_above(ed, TOP_FILL_LINE) + 1.0, rows_above(ed, TOP_FOLD_FIRST),
+                             rows_above(ed, 45) + 1.0, rows_above(ed, 45) + 1.25};
+    bool trip = true;
+    for (int i = 0; i < 4; i++) {
+        ui_editor_scroll_row(ed, trips[i]);
+        const double back = ui_editor_top_row(ed);
+        if (back != trips[i])
+            fprintf(stderr, "editor-top-row: put at %.2f, read back %.2f\n", trips[i], back);
+        trip = trip && back == trips[i];
+    }
+    float into = 0.0f;
+    ui_editor_scroll_row(ed, rows_above(ed, TOP_FOLD_FIRST));
+    trip = trip && ui_editor_top_line(ed, &into) == TOP_FOLD_FIRST && into == 0.0f;
+    say_flag("editor-top-row", "trip", "same", trip);
+
+    // Past the last row, where a wheel run to the end stops; below 0, at 0.
+    ui_editor_scroll_row(ed, 1e9);
+    const double end = ui_editor_top_row(ed);
+    ui_editor_scroll_row(ed, 0.0);
+    editor_pass(ui);
+    wheel_rows(ui, ed, 1e6f);
+    const double wheeled = ui_editor_top_row(ed);
+    ui_editor_scroll_row(ed, -5.0);
+    say_flag("editor-top-row", "held", "wheel",
+             end == rows_above(ed, 200) - 1.0 && wheeled == end && ui_editor_top_row(ed) == 0.0);
+
+    // Asked of a second editor before it was laid out, taken at its first layout.
+    UIElement* late = fixed_editor(ui_screen_root(ui_top(ui)), doc, 300.0f, 220.0f);
+    ui_editor_scroll_row(late, 10.5);
+    const double before = ui_editor_top_row(late);
+    editor_pass(ui);
+    say_flag("editor-top-row", "pending", "taken",
+             before == 0.0 && ui_editor_top_row(late) == 10.5);
+    free_text_doc(doc);
+
+    // Level: line 4 wraps on the left, and the right pads its short line 4 out with fillers above
+    // line 5; at the same top row, lines 5 and 6 stand at the same height on both.
+    static const char* const four = "line 4 of a text whose lines wrap in a narrow editor, some "
+                                    "of them twice over at the least";
+    char left_text[512], right_text[256];
+    size_t ln = 0, rn = 0;
+    for (int i = 0; i < 10; i++) {
+        ln += (size_t)snprintf(left_text + ln, sizeof(left_text) - ln, "%s\n",
+                               i == 4 ? four : "line");
+        rn += (size_t)snprintf(right_text + rn, sizeof(right_text) - rn, "line\n");
+    }
+    TextDoc* left_doc = create_text_doc(left_text, ln);
+    TextDoc* right_doc = create_text_doc(right_text, rn);
+    UIElement* root = ui_screen_root(scene_alone(ui, "top-row-level"));
+    root->dir = UI_ROW;
+    UIElement* left = fixed_editor(root, left_doc, 300.0f, 220.0f);
+    UIElement* right = fixed_editor(root, right_doc, 300.0f, 220.0f);
+    editor_pass(ui);
+    const size_t wrapped = ui_editor_line_rows(left, 4);
+    ui_editor_set_fillers(right, &(UIEditorFiller){5, (uint32_t)(wrapped - 1)}, 1);
+    ui_editor_scroll_row(left, 2.0);
+    ui_editor_scroll_row(right, ui_editor_top_row(left));
+    editor_pass(ui);
+    bool level = wrapped >= 2;
+    for (size_t line = 5; level && line <= 6; line++) {
+        float lx = 0.0f, ly = 0.0f, rx = 0.0f, ry = 0.0f;
+        level = ui_editor_point_of(left, text_doc_line_start(left_doc, line), &lx, &ly) &&
+                ui_editor_point_of(right, text_doc_line_start(right_doc, line), &rx, &ry) &&
+                fabsf(ly - ry) < 0.01f;
+        if (!level)
+            fprintf(stderr, "editor-top-row: line %zu at %.2f on the left, %.2f on the right\n",
+                    line, (double)ly, (double)ry);
+    }
+    say_flag("editor-top-row", "level", "lines", level);
+    free_text_doc(left_doc);
+    free_text_doc(right_doc);
+    return 0;
+}
+
+// The x of line 1's number from the editor's left edge, the first glyph left of the text.
+static float number_x(const UISystem* ui, UIElement* ed) {
+    float tx = 0.0f, y = 0.0f, x = 0.0f, y1 = 0.0f;
+    ui_editor_point_of(ed, 0, &tx, &y);
+    ui_editor_point_of(ed, text_doc_line_start(ui_editor_doc(ed), 1), &x, &y1);
+    Glyph g[1];
+    return row_glyphs(ui, ed->rect.x, tx, y, y1 - y, g, 1) ? g[0].r.x - ed->rect.x : NAN;
+}
+
+// The gutter as wide as the digits asked: a text of 9 lines asked for 4 has the columns of one of
+// 1000 in the same width, its numbers right-aligned in the wider gutter; 0, or fewer than the
+// text's own, gives the text's own; and a change makes the rows guesses the budget wraps again.
+static int probe_editor_gutter_digits(UISystem* ui) {
+    TextDoc* nine = create_text_doc("1\n2\n3\n4\n5\n6\n7\n8\n9", 17);
+    static char lots[1000 * 2];
+    for (int i = 0; i < 1000; i++)
+        memcpy(lots + i * 2, "x\n", 2);
+    TextDoc* thousand = create_text_doc(lots, sizeof(lots) - 1);
+    UIElement* ed = editor_fixture(ui, nine, 300.0f, 150.0f);
+    UIElement* wide = fixed_editor(ui_screen_root(ui_top(ui)), thousand, 300.0f, 150.0f);
+    editor_pass(ui);
+    const int own = ui_editor_columns(ed);
+    const float own_x = number_x(ui, ed);
+    ui_editor_set_gutter_digits(ed, 4);
+    editor_pass(ui);
+    say_flag("editor-gutter-digits", "columns", "wide",
+             ui_editor_columns(ed) == ui_editor_columns(wide) && ui_editor_columns(ed) < own);
+    const float x = number_x(ui, ed), wide_x = number_x(ui, wide);
+    if (fabsf(x - wide_x) >= 0.01f)
+        fprintf(stderr, "editor-gutter-digits: line 1's number at %.2f, beside 1000 lines' %.2f\n",
+                (double)x, (double)wide_x);
+    say_flag("editor-gutter-digits", "numbers", "right",
+             fabsf(x - wide_x) < 0.01f && x > own_x + 0.01f);
+    ui_editor_set_gutter_digits(ed, 0);
+    editor_pass(ui);
+    const bool zero = ui_editor_columns(ed) == own;
+    ui_editor_set_gutter_digits(ed, 2);
+    editor_pass(ui);
+    say_flag("editor-gutter-digits", "own", "kept", zero && ui_editor_columns(ed) == own);
+
+    // A text too long for one frame's budget: settled, then asked for 7 digits, guessed again.
+    static char big[4000 * 100];
+    size_t len = 0;
+    for (int i = 0; i < 4000; i++)
+        len += (size_t)snprintf(big + len, sizeof(big) - len,
+                                "line %04d of a long text whose lines wrap in a narrow editor, "
+                                "more than once over\n",
+                                i);
+    TextDoc* long_doc = create_text_doc(big, len);
+    UIElement* far = fixed_editor(ui_screen_root(ui_top(ui)), long_doc, 300.0f, 150.0f);
+    for (int i = 0; i < 20 && !ui_editor_settled(far); i++)
+        editor_pass(ui);
+    const bool settled = ui_editor_settled(far);
+    const int cols = ui_editor_columns(far);
+    ui_editor_set_gutter_digits(far, 7);
+    editor_pass(ui);
+    const bool guessed = !ui_editor_settled(far) && ui_editor_columns(far) < cols;
+    for (int i = 0; i < 20 && !ui_editor_settled(far); i++)
+        editor_pass(ui);
+    say_flag("editor-gutter-digits", "wrapped", "again",
+             settled && guessed && ui_editor_settled(far));
+    free_text_doc(nine);
+    free_text_doc(thousand);
+    free_text_doc(long_doc);
+    return 0;
+}
+
+// Fillers under the last line, of a text with no last line ending: drawn after it with no number,
+// counted in its rows to the scroll's end, where no caret stands, a click on them landing at the
+// text's end; under the new last line once the last is taken out; and one past the line count left
+// out.
+static int probe_editor_filler_end(UISystem* ui) {
+    char text[256];
+    size_t len = 0;
+    for (int i = 0; i < 20; i++)
+        len += (size_t)snprintf(text + len, sizeof(text) - len, "line %02d\n", i);
+    TextDoc* doc = create_text_doc(text, len - 1);
+    UIEditorVim* vim = create_ui_editor_vim();
+    UIElement* ed = vim_fixture(ui, doc, vim, 0);
+    const UITheme before = *ui_theme(ui);
+    UITheme theme = before;
+    vec4 filler = {0.0f, 0.6f, 0.6f, 1.0f};
+    glm_vec4_copy(filler, theme.editor_filler);
+    ui_set_theme(ui, &theme);
+
+    // Past the line count: left out, so the last row is line 19's.
+    ui_editor_set_fillers(ed, &(UIEditorFiller){21, 1}, 1);
+    ui_editor_scroll_row(ed, 1000.0);
+    editor_pass(ui);
+    const bool past = ui_editor_top_row(ed) == 19.0 && fills_in(ui, filler, NULL, 0) == 0;
+
+    // Two under line 19, seen from line 10: two filler fills after it, nothing on their rows.
+    ui_editor_set_fillers(ed, &(UIEditorFiller){20, 2}, 1);
+    ui_editor_scroll_line(ed, 10, 0.0f);
+    editor_pass(ui);
+    float tx = 0.0f, y18 = 0.0f, y19 = 0.0f, x = 0.0f;
+    ui_editor_point_of(ed, text_doc_line_start(doc, 18), &tx, &y18);
+    ui_editor_point_of(ed, text_doc_line_start(doc, 19), &x, &y19);
+    const float row = y19 - y18;
+    Fill fills[4];
+    const size_t n = fills_in(ui, filler, fills, 4);
+    bool under = n == 2;
+    for (size_t i = 0; under && i < 2; i++)
+        under = fabsf(fills[i].r.y - (y19 + (float)(i + 1) * row)) < 0.01f &&
+                fabsf(fills[i].r.x - tx) < 0.01f &&
+                row_glyphs(ui, -INFINITY, INFINITY, fills[i].r.y, row, NULL, 0) == 0;
+    if (!under)
+        fprintf(stderr, "editor-filler-end: %zu filler fills, line 19 at %.2f\n", n, (double)y19);
+    say_flag("editor-filler-end", "under", "drawn", under);
+
+    // Counted to the scroll's end, by a row put past it and by a wheel run there, in an editor too
+    // short to show every row.
+    const float click_y = y19 + row * 1.5f;
+    ui_set_size(ed, UI_FIXED, 600.0f, UI_FIXED, 120.0f);
+    editor_pass(ui);
+    ui_editor_scroll_row(ed, 1000.0);
+    const double end = ui_editor_top_row(ed);
+    ui_editor_scroll_row(ed, 0.0);
+    editor_pass(ui);
+    wheel_rows(ui, ed, 1000.0f);
+    editor_pass(ui);
+    if (end != 21.0 || ui_editor_top_row(ed) != 21.0 || fills_in(ui, filler, NULL, 0) != 1)
+        fprintf(stderr, "editor-filler-end: the end at row %.2f, wheeled to %.2f, %zu fills\n", end,
+                ui_editor_top_row(ed), fills_in(ui, filler, NULL, 0));
+    say_flag("editor-filler-end", "rows", "counted",
+             end == 21.0 && ui_editor_top_row(ed) == 21.0 && fills_in(ui, filler, NULL, 0) == 1);
+
+    // G and a j past it stand on the last line; a click under it is at the text's end.
+    ui_set_size(ed, UI_FIXED, 600.0f, UI_FIXED, 300.0f);
+    vim_keys(ui, "Gj");
+    const TextSelection* sel = NULL;
+    ui_editor_selections(ed, &sel, NULL);
+    const bool on_last = text_doc_line_of(doc, sel[0].head) == 19;
+    ui_editor_scroll_line(ed, 10, 0.0f);
+    editor_pass(ui);
+    say_flag("editor-filler-end", "caret", "last_line",
+             on_last && ui_editor_offset_at(ed, tx + 20.0f, click_y) == text_doc_length(doc));
+
+    // Line 19 taken out with the line ending before it: the fillers under line 18.
+    text_doc_replace(doc, text_doc_line_start(doc, 19) - 1, text_doc_length(doc), "", 0);
+    ui_editor_scroll_line(ed, 10, 0.0f);
+    editor_pass(ui);
+    const size_t moved_n = fills_in(ui, filler, fills, 4);
+    ui_editor_scroll_row(ed, 1000.0);
+    say_flag("editor-filler-end", "moved", "under",
+             doc->line_count == 19 && moved_n == 2 && fabsf(fills[0].r.y - (y18 + row)) < 0.01f &&
+                 ui_editor_top_row(ed) == 20.0);
+    say_flag("editor-filler-end", "past", "left_out", past);
+    ui_set_theme(ui, &before);
+    free_ui_editor_vim(vim);
+    free_text_doc(doc);
+    return 0;
+}
+
 // ---- An editor shown another text (spec 14.6)
 
 static int probe_editor_set_doc(UISystem* ui) {
@@ -4309,6 +4588,12 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_editor_gutter(ui);
     if (!strcmp(which, "editor-bar-room"))
         return probe_editor_bar_room(ui);
+    if (!strcmp(which, "editor-top-row"))
+        return probe_editor_top_row(ui);
+    if (!strcmp(which, "editor-gutter-digits"))
+        return probe_editor_gutter_digits(ui);
+    if (!strcmp(which, "editor-filler-end"))
+        return probe_editor_filler_end(ui);
     if (!strcmp(which, "editor-steps"))
         return probe_editor_steps(ui);
     if (!strcmp(which, "vim-run"))

@@ -42,6 +42,19 @@ size_t ui_editor_top_line(const UIElement* el, float* rows);
 // that line's rows as a wheel's scroll is. Before the editor is laid out on its text, taken at its
 // next layout.
 void ui_editor_scroll_line(UIElement* el, size_t line, float rows);
+// The view's top as rows from the text's start, every row the editor shows above it counted --
+// fillers, a closed fold's one row, each line's wrapped rows, guessed for a line not wrapped yet --
+// and the part of the top row scrolled past: 1041.25 is a quarter of the way down the 1042nd row.
+// 0 for anything not an editor showing a text.
+double ui_editor_top_row(const UIElement* el);
+// The view put with its top `rows` rows from the text's start, as ui_editor_top_row counts them,
+// held to the text's rows as a wheel's scroll is; a row inside a closed fold's lines is the fold's.
+// Before the editor is laid out on its text, taken at its next layout.
+void ui_editor_scroll_row(UIElement* el, double rows);
+// The line numbers' gutter as wide as `digits` digits at least, so two editors on texts of
+// different lengths keep the same columns; 0, the default, as many as its own text's line count
+// has.
+void ui_editor_set_gutter_digits(UIElement* el, int digits);
 
 /*
  * Folds: runs of lines the editor shows as one row while closed, as vim's manual folds. They are
@@ -71,14 +84,17 @@ bool ui_editor_set_fold_open(UIElement* el, size_t line, bool open);
  * and its counterpart stand level. Like folds they are the editor's in the text it shows and move
  * with their lines; a line taken out takes its fillers. A closed fold shows its first line's
  * fillers above its row and none of its other lines'. No caret stands on one: a move by rows steps
- * over them, and a click on one lands at the start of the line below.
+ * over them, and a click on one lands at the start of the line below. Fillers on the text's line
+ * count stand under its last line, and stay there whatever the line count becomes: a move by rows
+ * stops at the last line, and a click on them lands at the text's end.
  */
-// Blank rows above a line, which no caret stands on.
+// Blank rows above a line, or under the last for the line count, which no caret stands on.
 typedef struct UIEditorFiller {
     size_t line;
     uint32_t rows;
 } UIEditorFiller;
-// The fillers of the text the editor shows, replaced whole; a line named twice takes the last.
+// The fillers of the text the editor shows, replaced whole; a line named twice takes the last, and
+// one past the line count is left out and logged.
 void ui_editor_set_fillers(UIElement* el, const UIEditorFiller* fillers, size_t count);
 // The rows `line` wraps to at the editor's columns, fillers and folds aside: wrapped now when it
 // was a guess. 1 before the editor is laid out; 0 for a line past the text.
@@ -91,7 +107,8 @@ size_t ui_editor_line_rows(const UIElement* el, size_t line);
  * through every change as it moves an editor's carets, until the text or the editor is freed. Its
  * mode, find's query and its look stay. NULL shows nothing, as a text freed first does; the text it
  * shows already changes nothing. A place asked for before the editor is laid out on a text --
- * ui_editor_scroll_place, ui_editor_scroll_line, ui_editor_reveal -- is taken at its next layout.
+ * ui_editor_scroll_place, ui_editor_scroll_line, ui_editor_scroll_row, ui_editor_reveal -- is taken
+ * at its next layout.
  */
 void ui_editor_set_doc(UIElement* el, TextDoc* doc);
 // The text the editor shows; NULL for none, for anything not an editor, and once the text is freed.

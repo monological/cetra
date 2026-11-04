@@ -28526,6 +28526,28 @@ def run_ui_gate(workdir):
                      them, with the first sized 0 by 0 and again 4 by 150; a press
                      inside the narrow one below where a thumb would stand
                      scrolls nothing.
+      ui-editor-top-row the view's top as rows from the text's start (spec 14.19):
+                     0 at the start; line 100 half a row in is the rows above it,
+                     3 fillers and a closed fold's one row among them, and 0.5;
+                     ui_editor_scroll_row reads back as put on a filler, on the
+                     fold's row, on a wrapped line's second row and with a part;
+                     held past the end where a wheel run there stops, and at 0;
+                     asked before a layout, taken at it; two editors side by
+                     side, a line wrapping on one and fillers making it up on the
+                     other, put at the same row, drawing the next lines level.
+      ui-editor-gutter-digits the gutter as wide as the digits asked (spec 14.19): a
+                     text of 9 lines asked for 4 has the columns of one of 1000 in
+                     the same width, its line 1 number where that text's stands;
+                     0, or fewer than its own, gives its own columns; asked for 7
+                     on a text too long for one frame's budget, its rows guesses
+                     again, settled after.
+      ui-editor-filler-end fillers under the last line (spec 14.19): on a text of 20
+                     lines with no last line ending, 2 on the line count drawn as 2
+                     fills after line 19 with no glyph on their rows; counted to
+                     the scroll's end, by a row put past it and by a wheel; G and a
+                     j stand on the last line, and a click on them lands at the
+                     text's end; the last line taken out, they stand under the new
+                     last; one past the line count left out.
       ui-editor-steps each action told with its step: typing joined into words
                      shares one; a group holds one over typing, a Backspace and
                      more typing, one undo takes the group back and one redo makes
@@ -29838,6 +29860,25 @@ def run_ui_gate(workdir):
                            "nothing; one with room draws its thumb inside its insets")
     print(f"  ui-editor-bar-room    {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-bar-room", ok)
+
+    ok, detail = doc_flags("editor-top-row", 6, "the top as rows from the text's start, fillers "
+                           "and a closed fold's row counted, put back as read, held as a wheel is, "
+                           "taken at a layout when asked before, and two sides level at one row")
+    print(f"  ui-editor-top-row     {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-top-row", ok)
+
+    ok, detail = doc_flags("editor-gutter-digits", 4, "a short text asked for 4 digits with a long "
+                           "text's columns and numbers, its own for 0 or fewer, and a change's "
+                           "rows guessed again and settled")
+    print(f"  ui-editor-gutter-digits {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-gutter-digits", ok)
+
+    ok, detail = doc_flags("editor-filler-end", 5, "fillers on the line count drawn under the "
+                           "last line and counted to the scroll's end, no caret on them, a click "
+                           "there at the text's end, kept under a new last line, and one past "
+                           "the count left out")
+    print(f"  ui-editor-filler-end  {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-filler-end", ok)
 
     ok, detail = doc_flags("editor-steps", 7, "typing joined into words shares a step, a group "
                            "holds one over typing, a Backspace and more typing, and one undo takes "
