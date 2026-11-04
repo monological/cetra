@@ -386,7 +386,8 @@ colour for every state; while that colour's alpha is 0 they are the editor's tex
   which idle mode turns into the frames that finish them. At 10 MB a keystroke costs 0.11 ms, 0.50
   at 100 carets; Enter 0.20 at one caret and 6.5 at 100; a jump 0.12.
 - **Its geometry is settled by the layout pass**, and its scroll bar is the pane's, driven through
-  the editor's scroll calls.
+  the editor's scroll calls. An editor or a pane with no room for a bar has none, drawn or
+  pressed: one sized to nothing, or narrower than the bar and its insets (spec 14.17).
 - **Several carets from the start**: the selections are a sorted list, merged where they meet, the
   last made the primary.
 - **Find** is `ui_editor_find`, its matches lit in view.

@@ -66,7 +66,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 | 9 | What the panes and the fonts need of the UI | **Built** | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
 
-Specs 14.7 and 14.9 to 14.16 are the smaller changes pcb's window asked for, listed under "Not
+Specs 14.7 and 14.9 to 14.17 are the smaller changes pcb's window asked for, listed under "Not
 among the nine". Spec 14.8 was not asked for by pcb: a headless run waits for the textures its
 start-up asked for before frame 1 (`docs/architecture.md`, Render Pipeline), which `pcb render`
 gets for free.
@@ -437,6 +437,11 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
   and a stronger colour beside a changed line's number. The changed words within a line needed
   nothing new: a plain range over them on the layer that holds the line. Folds the person makes
   (`zf`, `zd`, `foldmethod`) and nested folds are left out: the host makes them.
+- **No scroll bar without room for one** -- spec 14.17, built, from a stray dot in pcb 6.5's
+  window: an editor or a scrolling pane sized to nothing, or narrower than a bar, draws no scroll
+  bar and takes no press on one. pcb sizes the views a pane is not showing to nothing to keep their
+  state, and a code editor kept that way beside a schematic drew its thumb as a dot in the gap
+  before the pane. A way to leave an element out of the layout altogether is not needed for it.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the
