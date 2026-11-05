@@ -144,6 +144,11 @@ struct UIEditor {
     int digits;        // the gutter's digits as the last layout gave it, which the draw numbers by
     uint64_t scrolls;  // ui_editor_scrolls
     uint64_t wraps;    // ui_editor_wraps
+    // ui_editor_link: the editor it is held to, whether it leads the pair, and the layout that last
+    // placed it, which the second of the pair placed compares with its own.
+    UIEditor* partner;
+    bool leads;
+    uint64_t placed;
     // A run of presses, and the unit the last took, which a drag extends by.
     UITypingPresses presses;
     size_t grab_from, grab_to;
@@ -644,10 +649,19 @@ static int _rows_down(UIEditor* ed, size_t line, size_t row, int limit) {
     return -1;
 }
 
+// A scroll asked of the view, by the host or by the editor itself: counted, and the editor leads
+// the pair it is linked in. Never by a layout, which only takes what was asked before it.
+static void _asked(UIEditor* ed) {
+    ed->scrolls++;
+    ed->leads = true;
+    if (ed->partner)
+        ed->partner->leads = false;
+}
+
 // The view scrolled by rows from its top as held, so a fold closed over the top since the last
 // layout scrolls from its row.
 static void _scroll_rows(UIEditor* ed, float delta) {
-    ed->scrolls++;
+    _asked(ed);
     _top(ed, &ed->at.top_line, &ed->at.top_row);
     float t = ed->at.top_frac + delta;
     while (t >= 1.0f) {
@@ -1082,6 +1096,11 @@ static bool _show(UIEditor* ed, TextDoc* doc) {
     ed->grab_from = ed->grab_to = 0;
     ed->caret.moved = true;
     ed->pending.kind = PENDING_NONE;
+    // Another text follows its partner to where it stands, until a scroll is asked of it.
+    if (ed->partner) {
+        ed->leads = false;
+        ed->partner->leads = true;
+    }
     if (!doc)
         return true;
     const bool back = _unpark(ed, doc);
@@ -1137,9 +1156,17 @@ void ui_editor_set_doc(UIElement* el, TextDoc* doc) {
         log_error("ui_editor_set_doc: out of memory, so the editor shows nothing");
 }
 
+// The editor's pair let go of, on both sides.
+static void _unlink(UIEditor* ed) {
+    if (ed->partner)
+        ed->partner->partner = NULL;
+    ed->partner = NULL;
+}
+
 void ui_editor_free(UIEditor* ed) {
     if (!ed)
         return;
+    _unlink(ed);
     if (ed->doc)
         text_doc_remove_view(ed->doc, ed);
     _place_free(&ed->at);
@@ -1173,6 +1200,7 @@ static int _gutter_digits(const UIEditor* ed) {
 }
 
 static void _take_pending(UIEditor* ed);
+static void _hold(UIEditor* ed);
 
 // The layout's: the face at its size, the gutter, where the text goes and how many columns a row
 // holds; rows wrapped at other columns or tab stops are guesses again.
@@ -1213,6 +1241,9 @@ static void _place(const UISystem* ui, UIElement* el, UIRect content) {
     // A place asked for before the editor was laid out on this text.
     ed->laid = ed->serial;
     _take_pending(ed);
+    // Placed by this layout: the second of a pair placed holds the two together.
+    ed->placed = ui_system_layouts(ui);
+    _hold(ed);
 }
 
 static float _view_rows(const UIEditor* ed) {
@@ -1277,7 +1308,7 @@ static void _scroll_to(UIElement* el, float at) {
     UIEditor* ed = _of(el);
     if (!ed)
         return;
-    ed->scrolls++;
+    _asked(ed);
     _scroll_row(ed, (double)at * _last_row(ed));
 }
 
@@ -1384,6 +1415,39 @@ static void _exact(UIEditor* ed, size_t line, double row) {
         ed->at.exact = l;
 }
 
+// The view's top as ui_editor_top_row counts it, the rows above it exact.
+static double _exact_top_row(UIEditor* ed) {
+    size_t line, row;
+    _top(ed, &line, &row);
+    _exact(ed, line, INFINITY);
+    return _top_row(ed);
+}
+
+// The view's top put `rows` exact rows from the text's start, as ui_editor_scroll_row puts it.
+static void _exact_scroll_row(UIEditor* ed, double rows) {
+    _exact(ed, ed->doc->line_count, rows);
+    _scroll_row(ed, rows);
+}
+
+/*
+ * A pair held row for row, by the second of it this layout places: both then have this layout's
+ * columns, gutters and places asked, so the follower is put at the leader's exact row, as
+ * ui_editor_scroll_row would put it, whenever the two differ. Not a scroll asked, so it leads
+ * nothing. Done in the layout because that is where rows change -- new columns, a fold turned,
+ * fillers set, the budget's wraps -- and the draw follows it: a host copying the row between two
+ * layouts draws a frame with the two apart whenever the second layout moves the leader.
+ */
+static void _hold(UIEditor* ed) {
+    UIEditor* other = ed->partner;
+    if (!other || !other->doc || other->ui != ed->ui || other->placed != ed->placed)
+        return;
+    UIEditor* lead = other->leads ? other : ed;
+    UIEditor* follow = lead == ed ? other : ed;
+    const double rows = _exact_top_row(lead);
+    if (_exact_top_row(follow) != rows)
+        _exact_scroll_row(follow, rows);
+}
+
 static void _reveal(UIEditor* ed, size_t offset) {
     offset = offset > ed->doc->length ? ed->doc->length : offset;
     size_t line, row, top_line, top_row;
@@ -1450,8 +1514,7 @@ static void _take_pending(UIEditor* ed) {
             _scroll_line(ed, p.top.line, p.top.rows);
             break;
         case PENDING_ROW:
-            _exact(ed, ed->doc->line_count, p.rows);
-            _scroll_row(ed, p.rows);
+            _exact_scroll_row(ed, p.rows);
             break;
         case PENDING_NONE:
             break;
@@ -1459,12 +1522,12 @@ static void _take_pending(UIEditor* ed) {
 }
 
 // A place asked for: put at once when the editor is laid out on its text, else at its next layout,
-// a scroll counted either way when it is asked.
+// asked either way when it is asked.
 static void _pend(UIElement* el, Pending p) {
     UIEditor* ed = _of(el);
     if (!ed)
         return;
-    ed->scrolls++;
+    _asked(ed);
     ed->pending = p;
     if (_laid_out(ed))
         _take_pending(ed);
@@ -1486,10 +1549,7 @@ double ui_editor_top_row(const UIElement* el) {
     UIEditor* ed = _seen(el);
     if (!ed)
         return 0.0;
-    size_t line, row;
-    _top(ed, &line, &row);
-    _exact(ed, line, INFINITY);
-    return _top_row(ed);
+    return _exact_top_row(ed);
 }
 
 void ui_editor_scroll_row(UIElement* el, double rows) {
@@ -1499,6 +1559,32 @@ void ui_editor_scroll_row(UIElement* el, double rows) {
 uint64_t ui_editor_scrolls(const UIElement* el) {
     const UIEditor* ed = _seen(el);
     return ed ? ed->scrolls : 0;
+}
+
+void ui_editor_link(UIElement* el, UIElement* other) {
+    UIEditor* ed = el && el->kind == UI_EDITOR ? el->editor : NULL;
+    UIEditor* to = other && other->kind == UI_EDITOR ? other->editor : NULL;
+    if (!ed || (other && !to)) {
+        log_error("ui_editor_link: not an editor");
+        return;
+    }
+    if (to == ed) {
+        log_error("ui_editor_link: an editor linked to itself");
+        return;
+    }
+    _unlink(ed);
+    if (!to)
+        return;
+    _unlink(to);
+    ed->partner = to;
+    to->partner = ed;
+    ed->leads = false;
+    to->leads = true;
+}
+
+UIElement* ui_editor_linked(const UIElement* el) {
+    const UIEditor* ed = el && el->kind == UI_EDITOR ? el->editor : NULL;
+    return ed && ed->partner ? ed->partner->el : NULL;
 }
 
 void ui_editor_set_gutter_digits(UIElement* el, int digits) {
@@ -1582,11 +1668,25 @@ static void _fold_open(UIEditorPlace* at, UIEditorFold* f, bool open) {
         _top_onto_fold(at);
 }
 
+/*
+ * A fold of the editor's turned, and the fold of the same index on its partner with it while the
+ * two hold as many: a host sets a pair's folds in pairs, the i-th of each over counterpart lines.
+ * With counts apart, as after an edit took a fold's lines out on one side and before the host sets
+ * them again, the partner's are left alone. Pairing by lines would need the two texts' lines
+ * mapped, which is the host's to do. The partner's turn goes no further.
+ */
+static void _fold_turn(UIEditor* ed, UIEditorFold* f, bool open) {
+    _fold_open(&ed->at, f, open);
+    UIEditor* other = ed->partner;
+    if (other && other->doc && other->at.fold_count == ed->at.fold_count)
+        _fold_open(&other->at, &other->at.folds[f - ed->at.folds], open);
+}
+
 bool ui_editor_set_fold_open(UIElement* el, size_t line, bool open) {
     UIEditor* ed = _of(el);
     UIEditorFold* f = ed ? _fold_of(&ed->at, line) : NULL;
     if (f)
-        _fold_open(&ed->at, f, open);
+        _fold_turn(ed, f, open);
     return f != NULL;
 }
 
@@ -1597,7 +1697,7 @@ static bool _fold_carets(UIEditor* ed, int how) {
     for (size_t i = 0; ed->at.fold_count && i < ed->at.sel_count; i++) {
         UIEditorFold* f = _fold_of(&ed->at, text_doc_line_of(ed->doc, ed->at.sel[i].head));
         if (f && f != done)
-            _fold_open(&ed->at, f, how < 0 ? !f->open : how > 0);
+            _fold_turn(ed, f, how < 0 ? !f->open : how > 0);
         done = f ? f : done;
     }
     return done != NULL;
@@ -1763,7 +1863,7 @@ static void _press(const UISystem* ui, UIElement* el, UIRect content, float x, f
     size_t line, row;
     if (ed->row > 0.0f && !_row_at(ed, y, &line, &row) && _closed(&ed->at, line) &&
         row >= _filler_rows(&ed->at, line))
-        _fold_open(&ed->at, _fold_of(&ed->at, line), true);
+        _fold_turn(ed, _fold_of(&ed->at, line), true);
     ed->grab_from = u.anchor;
     ed->grab_to = u.head;
     if (mods & GLFW_MOD_SHIFT) {

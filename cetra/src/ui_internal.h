@@ -15,6 +15,9 @@ struct Engine;
 
 // The engine a UI system was made with, for the clipboard and the screen's scale.
 struct Engine* ui_system_engine(const UISystem* ui);
+// The layouts a system has run so far: two elements a place saw under the same count were placed
+// by one layout.
+uint64_t ui_system_layouts(const UISystem* ui);
 
 // The bar: its width, its inset from the element's edge, its shortest thumb, and the strip along
 // the element's right edge a press lands on it from.

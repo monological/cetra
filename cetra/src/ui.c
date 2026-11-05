@@ -93,6 +93,7 @@ struct UISystem {
     // to read them. A list through UIElement.removed_next, empty outside a pass.
     int passes;
     UIElement* removed;
+    uint64_t layouts; // ui_system_layouts
 };
 
 // How close an eased scroll comes before it is there: a tenth of a point, under any pixel.
@@ -553,6 +554,10 @@ UIElement* ui_editor(UIElement* parent, TextDoc* doc) {
 
 Engine* ui_system_engine(const UISystem* ui) {
     return ui ? ui->engine : NULL;
+}
+
+uint64_t ui_system_layouts(const UISystem* ui) {
+    return ui ? ui->layouts : 0;
 }
 
 void ui_system_held(const UISystem* ui, const UIElement** pressed, const UIElement** bar,
@@ -1650,6 +1655,7 @@ static void _place_widgets(const UISystem* ui, UIElement* el) {
 void ui_layout(UIScreen* screen, float width, float height) {
     if (!screen || !screen->root || !screen->ui)
         return;
+    screen->ui->layouts++;
     _pass_begin(screen->ui);
     const UIRect full = {0.0f, 0.0f, width, height};
     // A pane of rows decides what to build from where the last layout left it, so the rows it
