@@ -55,7 +55,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 
 | # | Item | Status | First needed by pcb's step | Spec |
 |---|------|--------|----------------------------|------|
-| 1 | The 2D canvas | **Built**; images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0 |
+| 1 | The 2D canvas | **Built**, with caps, joins and dashes; images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0, 14.22 |
 | 2 | Idle mode: drawing only when something changed | **Built**, for frames that draw no 3D scene | 6 | 14.1 |
 | 3 | Skipping the 3D scene pass when no 3D view is shown | Not started; includes a still 3D view drawn on demand | 8, the 3D view | |
 | 4 | Drawing the 3D scene into part of the window | Not started | 8 | |
@@ -102,6 +102,12 @@ colour only), a layer's coverage resolved by max before it paints, text as glyph
 several views of one canvas, and two tags a shape, a net and an object, whose state (colour, pick
 outline, dim, hidden, raised) is a table write. `canvas_generation` tells idle mode when to draw.
 
+**Built in spec 14.22** (`docs/canvas.md`, Strokes): a stroke's cap, join and dash on its paint, as
+PDF has them. Dashes are pieces of the stroke drawn per pixel, a pattern carried through a
+polyline's points and across tile cuts and stretched round a closed shape, its corners joined where
+a dash runs through them; under `Canvas.dash_min_px` a pattern is drawn as its average. A solid
+shape's record and pixels are as they were.
+
 **What pcb has to know:**
 - **Where shapes of one layer overlap in different colours, which colour shows is not defined**,
   beyond a raised shape winning. pcb gives shapes that overlap one colour, or raises the one that
@@ -114,6 +120,9 @@ outline, dim, hidden, raised) is a table write. `canvas_generation` tells idle m
   passes a layer would. Invisible at 1x.
 - **Buffer textures are not yet checked on Linux and Windows.** They are core in GL 3.1, below the
   4.1 the engine requires, so the risk is a driver's bug.
+- **A stroke's cap, join and dash are the paint's**, baked into the records when the shape is added:
+  a ghost is dashed by its paint, a dashed rectangle is one `canvas_edit_box` whose pattern runs
+  round it, and changing a stroke is an edit.
 
 **Left for later**, each with a need named:
 - **Images and datasheet pages**, with the texture residency they need, for pcb's step 10. A record
@@ -123,7 +132,6 @@ outline, dim, hidden, raised) is a table write. `canvas_generation` tells idle m
   the canvas's earcut.
 - **Glyphs beyond ASCII on the canvas**, with a dense glyph index: its glyph table holds 128
   codepoints, though the font's atlas holds more since item 5.
-- **Dashed lines**, for schematic buses and courtyards.
 - **A transparent view background**, for the canvas over the 3D view (items 3 and 4).
 - **One target shared by several canvases**, should pcb draw two canvases in one window.
 

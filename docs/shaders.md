@@ -246,7 +246,10 @@ chain's defaults (what is on, what is lazily allocated) are in
     about a third of its strength. A fading screen fades a border with its fill.
     `canvas-ui-borders` holds it.
 - **2D canvas:** `canvas_vert/frag` (one instance of a unit quad per record: segments, arcs,
-  circles, boxes, a fill's outer edge ramp, glyphs, outline rings), `canvas_fill_vert/frag` (a
+  circles, boxes, a fill's outer edge ramp, glyphs, outline rings; a dashed record is 64 bytes, its
+  pattern in attribute 3 on the dashed store's own vertex array, and the vertex stage resolves each
+  end of a segment or arc to a cap, a cut, an open corner or a join, `CANVAS_END_*`, which one
+  fragment function draws), `canvas_fill_vert/frag` (a
   polygon's triangles and their inner ramp), `canvas_composite_frag` (a view's rectangle into the
   frame, opaque), over `include/canvas_constants.glsl`, `include/canvas_paint.glsl` (the view, the
   tables, a shape's colour through its tags) and `include/canvas_pass.glsl` (the layer resolve's

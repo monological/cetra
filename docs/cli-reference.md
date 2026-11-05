@@ -1516,8 +1516,12 @@ mapping into a single-sample target of its own, every edge antialiased by its ex
 leaves the window's multisampling off. It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`,
 and:
 - `--sheet NAME` picks what is drawn: `shapes` (the default), `areas`, `polygons`, `ramp`, `thin`,
-  `long`, `long-short`, `glyphs`, `tags`, `overlap`, `symbol` or `board`. Each is laid out in
-  millimetres and drawn in nanometres, pcb's units.
+  `long`, `long-short`, `glyphs`, `tags`, `overlap`, `symbol`, `board`, `strokes` (caps and joins)
+  or `dashes` (spec 14.22). Each is laid out in millimetres and drawn in nanometres, pcb's units.
+- `--dash LENGTH,GAP` (mm), `--cap round|butt|square` and `--join round|mitre|bevel` give every
+  paint a sheet makes that stroke, its fills' and its text's too, which the canvas leaves as they
+  are; what a sheet sets on a paint itself stands. `--sheet symbol --dash 0.5,0.5 --cap butt --join
+  mitre` draws the symbol as pcb's ghost would. `--dash-min-px PX` sets `Canvas.dash_min_px`.
 - `--view X,Y,WIDTH` centres the view on (X, Y) mm and shows WIDTH mm across it, in place of the
   sheet's own framing. `--offset UNITS` moves the whole sheet, and the view with it, that many units
   from the origin: `--offset 1099511627776` (2^40) is what `canvas-translation` draws at.

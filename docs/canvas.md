@@ -21,7 +21,45 @@ board (`docs/eda-roadmap.md`); `apps/canvas` is its test bed. The shaders are li
 - **`canvas_generation`** adds the tag table's writes to the canvas's own, so idle mode can tell
   when a canvas needs drawing.
 
-## Nine things easy to get backwards
+## Strokes
+
+A stroke is drawn as PDF's is, by three things on its paint (`CanvasPaint`, spec 14.22): its cap,
+its join and its dash. A paint of zeros is round, round and solid.
+
+- **Caps** (`CanvasCap`: round, butt, square) end a segment, an arc and an open polyline, and every
+  dash. A square end is flat half the width past the end point. A closed shape has no ends but its
+  dashes'.
+- **Joins** (`CanvasJoin`: round, mitre, bevel) turn a polyline's points, every point of a stroked
+  polygon's rings, and a stroked box's corners when its corner radius is 0. A mitre longer than four
+  widths, a turn whose cosine is under -0.875, is drawn as a bevel; a turn back on itself is round.
+  Each segment draws its own side of a corner, its own body to its end inside the turn and up to
+  the bisector outside it, half a pixel past it within the neighbour's width, so the two meet with
+  no seam.
+- **Dashes** (`CanvasDash`: length, gap and phase, in units) cut the stroke into pieces, each a
+  piece of the stroke with the cap at its ends and the join at a corner inside it. A corner in a gap
+  is drawn by nothing; whether a corner lies inside a dash is decided once, in double, for both
+  segments that meet there.
+
+| Shape | Its pattern starts |
+|---|---|
+| Segment | at `a` |
+| Polyline | at its first point, carried through every point |
+| Arc | at its own `a`, whichever way round it goes |
+| Circle | at its rightmost point, counter-clockwise |
+| Stroked box | at the middle of its bottom side, counter-clockwise |
+| Stroked polygon | each ring at its first point |
+
+- **A closed shape's pattern is stretched** to the nearest whole number of periods round it, so its
+  dashes meet themselves where it closes.
+- **Fills and text take no cap, join or dash.**
+- **A dashed shape too fine to draw as dashes** -- a dash or a gap under `Canvas.dash_min_px`, 0.5
+  by default -- is drawn solid at its pattern's average, the dash's share of the period, as an
+  opacity: its pixels keep the rank their coverage gives, so a raised ghost still shows over what
+  it crosses.
+- **A dashed shape costs a 64-byte record** in a store of its own, its pattern after the shape's
+  record; a solid one stays 48 bytes, and a solid round line writes no joins.
+
+## Ten things easy to get backwards
 
 1. **Coordinates are int64 units (pcb's nanometres) and never become floats until they are a
    distance from the view.** A record holds int32 offsets from its tile's origin, the tile table adds
@@ -64,6 +102,9 @@ board (`docs/eda-roadmap.md`); `apps/canvas` is its test bed. The shaders are li
    (`font_pen_step`, `docs/ui.md`), so its size and turn ride the record. A canvas draws with at most
    four fonts (`CANVAS_FONT_MAX`), a texture unit each, and cuts at the font's true edge
    (`Font.sdf_edge`), half a code under stb's stated value because stb truncates each field texel.
+10. **A stroke is baked into its records.** The edit lays the paint's cap, join and dash along the
+    shape in double, so changing one is an edit of the shape, not a write to a table as a tag's
+    colour is.
 
 ## Triangulation
 

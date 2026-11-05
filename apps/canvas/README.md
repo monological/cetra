@@ -28,8 +28,14 @@ Every flag, and what each probe prints, is in `docs/cli-reference.md`, "The othe
 
 `--sheet NAME` picks what is drawn. Each is laid out in millimetres and drawn in nanometres, pcb's
 units: `shapes` (the default), `areas`, `polygons`, `ramp`, `thin`, `long`, `long-short`,
-`glyphs`, `tags`, `overlap`, a `symbol` of an integrated circuit with turned pin names, and a
-two-layer `board` with a ground plane, a highlighted net, a picked pad and a removed trace.
+`glyphs`, `tags`, `overlap`, a `symbol` of an integrated circuit with turned pin names, a
+two-layer `board` with a ground plane, a highlighted net, a picked pad and a removed trace, and
+`strokes` and `dashes`, a cell a cap, join or dash pattern, each with its area in closed form.
+
+- `--dash LENGTH,GAP` (mm), `--cap round|butt|square` and `--join round|mitre|bevel` stroke every
+  paint a sheet makes so; what a sheet sets on a paint itself stands. `--sheet symbol --dash
+  0.5,0.5 --cap butt --join mitre` draws the symbol as pcb's ghost would. `--dash-min-px PX` sets
+  the size under which a dash pattern is drawn as its average.
 
 - `--view`, `--offset`, `--mirror` and `--tile-shift` move, mirror and re-tile what a sheet draws:
   `--offset 1099511627776` puts the whole sheet 2^40 units from the origin, which is what
