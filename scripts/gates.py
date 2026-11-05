@@ -28590,8 +28590,11 @@ def run_ui_gate(workdir):
                      pass leaves the left at its row, lines 101 and 102 level; a
                      row asked of the right before its first layout on a text
                      just shown taken by one layout, the left placed before it
-                     and after; ui_editor_scroll_row, a wheel, the bar's thumb
-                     and a key on the left each make it lead; a line asked of
+                     and after; the leader's rows above its top changed with no
+                     scroll asked, by fillers set and by a narrower width, the
+                     follower following; ui_editor_scroll_row, a wheel, the
+                     bar's thumb and a key on the left each make it lead; a line
+                     asked of
                      the left before its layout, then a row of the right, both at
                      the right's; the left moved counts no scroll and does not
                      lead; the left shown another text follows the right's row;
@@ -28604,9 +28607,10 @@ def run_ui_gate(workdir):
                      each: open-fold and close-fold run at a caret on the left, a
                      ui_editor_set_fold_open on the right, a press on the left's
                      fold row, typing at a caret in the right's fold, and vim's
-                     zM and zo; none with two folds on one side; a set of folds on
-                     one leaves the other's; a fold closed above the top, the two
-                     level after one pass.
+                     zM and zo; none with two folds on one side, from either side,
+                     the right's third among them; a set of folds on one leaves
+                     the other's; a fold closed above the leader's top by a set
+                     of its own, the follower at its row after one pass.
       ui-editor-steps each action told with its step: typing joined into words
                      shares one; a group holds one over typing, a Backspace and
                      more typing, one undo takes the group back and one redo makes
@@ -29964,8 +29968,9 @@ def run_ui_gate(workdir):
     print(f"  ui-editor-scrolls     {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-scrolls", ok)
 
-    ok, detail = doc_flags("editor-link", 9, "two linked editors level at every layout, in either "
-                           "order in the tree, led by the last asked a scroll and never by a "
+    ok, detail = doc_flags("editor-link", 10, "two linked editors level at every layout, in "
+                           "either order in the tree and with no scroll asked, led by the last "
+                           "asked a scroll and never by a "
                            "layout or the hold, another text following, hidden ones held to "
                            "nothing, a freed one let go, and links making no pair refused")
     print(f"  ui-editor-link        {'PASS' if ok else 'FAIL'}  {detail}")
