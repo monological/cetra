@@ -506,8 +506,10 @@ them alike, and the pair keeps them so.
 - **A fold turned on either turns the fold of the same index on the other**, whatever turned it --
   a command, a vim `z` key, a click, the host's `ui_editor_set_fold_open`, an edit opening it at a
   caret -- while the two hold as many folds: a host sets them in pairs, the i-th of each over
-  counterpart lines. With counts apart, between an edit taking a fold away on one side and the
-  host setting them again, a turn turns none on the other. Pairing by lines was rejected: the two
+  counterpart lines. The other takes the state the fold took, whether or not it changed, so a pair
+  the host set apart comes together at the next turn and vim's `zM` closes both. With counts
+  apart, between an edit taking a fold away on one side and the host setting them again, a turn
+  turns none on the other. Pairing by lines was rejected: the two
   texts' lines are the host's to map. `ui_editor_set_folds` sets only its own editor's.
 - **Hidden, removed, freed**: an editor hidden or taken out is not placed, so neither side of its
   pair is held to the other until it is shown; the lead is kept. One freed lets its partner go.
