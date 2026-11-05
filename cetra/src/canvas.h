@@ -158,13 +158,26 @@ uint64_t canvas_generation(const Canvas* canvas);
  */
 
 /*
- * A stroke drawn in dashes, in units: `length` drawn, then `gap` left, over and
- * over, the shape starting `phase` into that pattern. Solid when length or gap
- * is 0. A dash's ends are flat, square across the stroke, along the radius on
- * a curve; the pattern runs on past a shape's ends as though it went straight
- * on, so a round end shows as far as a dash reaches it. A closed shape's
- * pattern, phase and all, is stretched to the nearest whole number of periods
- * round it, one at least, so its dashes meet where it closes. Where it starts:
+ * How a stroke is drawn, as PDF's graphics state has it: its ends, its corners
+ * and its dashes. Each is the paint's, and baked into the shape's records when
+ * it is added. A paint of zeros is round, round and solid.
+ *
+ * CAPS end a segment, an arc and an open polyline, and every dash; a closed
+ * shape has no ends but its dashes'. A butt end stops at the end point and a
+ * square one half the stroke's width past it, square across the stroke, along
+ * the radius on a curve and along the tangent past an arc's end.
+ *
+ * JOINS turn a polyline's points between two segments, every point of a
+ * stroked polygon's rings, and a stroked box's corners when its corner radius
+ * is 0. A mitre is the two outer edges run on to where they meet; past four
+ * widths from the corner it is cut off square at half the width, a bevel, as
+ * SVG has it.
+ *
+ * DASHES cut the stroke into pieces along its length, each drawn with the cap
+ * at its ends and the join at a corner inside it; a corner in a gap draws
+ * nothing. A closed shape's pattern, phase and all, is stretched to the nearest
+ * whole number of periods round it, one at least, so its dashes meet where it
+ * closes. Where it starts:
  *   segment   at a, toward b
  *   polyline  at its first point, carried on through every point
  *   arc       at a, toward b, whichever way round it goes
@@ -172,9 +185,22 @@ uint64_t canvas_generation(const Canvas* canvas);
  *   box       at the middle of its bottom side in its own frame, counter-
  *             clockwise
  *   polygon   each ring at its first point, in the order given
- * A fill and text are never dashed, nor a segment from a point to itself. The
- * pattern is baked into the shape's records when it is added.
+ * A fill and text are never dashed, nor a segment from a point to itself.
  */
+typedef enum CanvasCap {
+    CANVAS_CAP_ROUND,
+    CANVAS_CAP_BUTT,   // flat at the end point
+    CANVAS_CAP_SQUARE, // flat half the width past it
+} CanvasCap;
+
+typedef enum CanvasJoin {
+    CANVAS_JOIN_ROUND,
+    CANVAS_JOIN_MITRE, // the outer edges met in a point; a bevel past four widths
+    CANVAS_JOIN_BEVEL, // that point cut off
+} CanvasJoin;
+
+// `length` drawn, then `gap` left, over and over, in units, the shape starting
+// `phase` into the pattern. Solid when length or gap is 0.
 typedef struct CanvasDash {
     int64_t length;
     int64_t gap;
@@ -186,21 +212,21 @@ typedef struct CanvasPaint {
     uint16_t style;
     uint32_t net;    // 0 = none
     uint32_t object; // 0 = none; what canvas_edit_remove_object removes by
+    CanvasCap cap;   // a stroke's ends and its dashes'
+    CanvasJoin join; // a stroke's corners
     CanvasDash dash; // {0} = solid
 } CanvasPaint;
 
-// A line `width` wide between two points, its ends round unless flat.
+// A line `width` wide between two points.
 typedef struct CanvasSegment {
     CanvasPaint paint;
     CanvasPoint a, b;
     int64_t width;
-    bool flat_ends;
 } CanvasSegment;
 
 // A line `width` wide along a circle of `radius` from a to b, counter-clockwise
 // unless clockwise, the shorter way unless major -- as SVG and pcb state one. A
-// radius shorter than half the chord is taken as half the chord. Its ends are
-// round unless flat.
+// radius shorter than half the chord is taken as half the chord.
 typedef struct CanvasArc {
     CanvasPaint paint;
     CanvasPoint a, b;
@@ -208,7 +234,6 @@ typedef struct CanvasArc {
     int64_t width;
     bool clockwise;
     bool major;
-    bool flat_ends;
 } CanvasArc;
 
 // Filled when stroke is 0, otherwise a ring `stroke` wide centred on the radius.
@@ -231,7 +256,7 @@ typedef struct CanvasBox {
     double angle;
 } CanvasBox;
 
-// Segments through `count` points with round ends, so they join round.
+// Segments through `count` points, joined at each.
 typedef struct CanvasPolyline {
     CanvasPaint paint;
     const CanvasPoint* points;
@@ -243,7 +268,7 @@ typedef struct CanvasPolyline {
 // An outline and the holes in it: the outline is the points up to the first
 // hole's start, and each hole runs from its start to the next one's or the
 // end, each a ring in either winding. Filled when stroke is 0, its edges
-// antialiased; otherwise every ring drawn `stroke` wide with round joins.
+// antialiased; otherwise every ring drawn `stroke` wide, joined at each point.
 typedef struct CanvasPolygon {
     CanvasPaint paint;
     const CanvasPoint* points;
@@ -303,9 +328,9 @@ void free_canvas_edit(CanvasEdit* edit);
 
 // Each is refused by name, and leaves the edit as it was, for a shape with no
 // layer, a negative width or stroke, a width, radius or size of 2^30 units or
-// more, a dash whose length or gap is negative or 2^30 units or more, no
-// extent, or one cut into more than 65536 pieces at the tile grid -- and a
-// shape refused part way is taken out whole.
+// more, a cap or a join that is none of its kind, a dash whose length or gap is
+// negative or 2^30 units or more, no extent, or one cut into more than 65536
+// pieces at the tile grid -- and a shape refused part way is taken out whole.
 //
 // Segments, arcs and polygons are cut at the tile grid and so drawn wherever
 // the view is. A circle, a box and a string are kept whole in their anchor's
