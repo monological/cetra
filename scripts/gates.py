@@ -31203,6 +31203,44 @@ def run_canvas_gate(workdir):
                      colour, which they do only if the edge's coverage counts once; each
                      within 2 codes. The border stands 20 codes or more off the backdrop,
                      so a box drawing nothing cannot pass.
+      canvas-caps    the strokes sheet (spec 14.22): a segment and an arc each capped round, butt
+                     and square, their areas in closed form within 0.03 px per pixel of edge, as
+                     canvas-areas. A round cap adds a disc, a square one the width squared.
+      canvas-joins   two legs at a right angle and at 25 degrees and a box with square corners,
+                     each joined round, mitre and bevel, their areas in closed form within 0.03; a
+                     pixel just inside the right angle's mitre point white and the same pixel
+                     past its bevel's cut black, within 2 codes. The 25-degree mitre's point
+                     reaches past four widths, so it is drawn as its bevel, and its area says so.
+      canvas-dash-areas the dashes sheet: each cell's coverage against its closed form, within
+                     0.03 -- a butt bar ending on a dash's end, the same round, each dash a
+                     capsule; two legs at a right angle with the corner in a gap and the far end
+                     in a dash, whose pattern begun again at the corner would cover half a dash
+                     more; the same with the corner in a dash and mitred, that dash turning it
+                     square; a ring, a butt arc, a box and a polygon over the same square from the
+                     middle of its bottom side, its corners in gaps; and a circle, a box and a
+                     polygon filled in a dashed paint, each its solid area. A fill and text never
+                     take a dash.
+      canvas-dash-places pixels inside the first dash and the first gap of the bar, the arc, a
+                     clockwise arc from its own a, the ring from its rightmost point, the box and
+                     the polygon from the middle of the bottom side: each white or black within 2
+                     codes. Each kind's pattern starts where the contract says.
+      canvas-dash-world the bar centred in views 8 mm and 4 mm across: along its middle row,
+                     three dashes each within a pixel of 0.2 mm in pixels, 20 and then 40. A
+                     dash is a length on the board, not on the screen.
+      canvas-dash-twins the dashes sheet 2^40 units from the origin against it at the origin,
+                     0 px; mirrored against it flipped, and with 65 um tiles against the default
+                     ones, each within a code -- every piece cut at the grid carries its place
+                     along the shape across the cut; and the string in a dashed paint against
+                     the same one plain a whole number of pixels along, 0 px.
+      canvas-dash-solid the dashes sheet under --dash-min-px 30: in the 8 mm view, where a dash
+                     is 20 px, the bar is one run of half white within 2 codes along its middle
+                     row, the pattern's average strength with no dash showing; in the 4 mm view,
+                     where it is 40 px, three dashes. The threshold is in pixels and is the
+                     setting's doing.
+      canvas-dash-tags a dashed bar in an object tagged red, its first dash red within 2 codes;
+                     and one whose object was removed in the same edit, its cell black.
+      canvas-dash-refused a segment whose dash gap is negative and an arc whose dash is 2^30
+                     units: each refused by name in the log, and their cell black.
       canvas-budget  both views of the board split at 1920x1080 points, a framebuffer of
                      3840x2160 on this machine, each frame's canvas draws timed between two
                      glFinish calls: the median under 6 ms. A timing arm: the bound is this
@@ -31691,6 +31729,186 @@ def run_canvas_gate(workdir):
                       f"the border {ring} codes off the backdrop (want 20 or more)")
     print(f"  canvas-ui-borders   {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-ui-borders", ok)
+
+    # ---- strokes and dashes (spec 14.22)
+    def kind(probe, name):
+        return {cell: tokens for (sheet, cell), tokens in probe.items() if sheet == name}
+
+    def areas_of(path, cells):
+        cov = _canvas_coverage(path)
+        rows, worst = [], 0.0
+        for name, tokens in sorted(cells.items()):
+            (x0, y0, x1, y1), m = _canvas_cell(tokens)
+            got = float(cov[y0:y1, x0:x1].sum())
+            per_edge = (got - m["area"]) / m["edge"]
+            worst = max(worst, abs(per_edge))
+            rows.append(f"{name} {got:.1f}/{m['area']:.1f} ({per_edge:+.4f})")
+        return worst, rows
+
+    def wrong_places(path, cells):
+        img = _ppm_array(path)
+        wrong = []
+        for name, tokens in sorted(cells.items()):
+            x, y, want = int(tokens[0]), int(tokens[1]), int(tokens[3], 16)
+            got = img[y, x]
+            if not _rgb_near(got, want, 2):
+                wrong.append(f"{name} {int(got[0]):02x}{int(got[1]):02x}{int(got[2]):02x} "
+                             f"(want {want:06x})")
+        return wrong
+
+    def bar_runs(path, probe):
+        # The runs of white along the bar's middle row, as (start, length) in pixels: over 0.75,
+        # which a bar drawn at its pattern's average of a half never reaches.
+        (x0, y0, x1, y1), _ = _canvas_cell(probe[("dashes", "bar")])
+        row = _canvas_coverage(path)[(y0 + y1) // 2, x0:x1] > 0.75
+        edges = np.flatnonzero(np.diff(np.concatenate(([0], row.astype(np.int8), [0]))))
+        return [(int(a), int(b - a)) for a, b in zip(edges[0::2], edges[1::2])]
+
+    strokes, probe = _canvas_run(workdir, "strokes", "--sheet", "strokes")
+    cells = kind(probe, "strokes")
+    caps = {n: t for n, t in cells.items() if n.startswith(("segment-", "arc-"))}
+    joins = {n: t for n, t in cells.items() if n not in caps}
+    if not strokes or len(caps) != 6:
+        ok, detail = False, f"the app failed or printed {len(caps)} cells (want 6)"
+    else:
+        worst, rows = areas_of(strokes, caps)
+        ok = worst <= 0.03
+        detail = f"worst {worst:.4f} px of edge (want <= 0.03): " + ", ".join(rows)
+    print(f"  canvas-caps         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-caps", ok)
+
+    places = kind(probe, "strokes-at")
+    if not strokes or len(joins) != 9 or len(places) != 2:
+        ok, detail = False, (f"the app failed or printed {len(joins)} cells and {len(places)} "
+                             f"places (want 9 and 2)")
+    else:
+        worst, rows = areas_of(strokes, joins)
+        wrong = wrong_places(strokes, places)
+        ok = worst <= 0.03 and not wrong
+        detail = (f"worst {worst:.4f} px of edge (want <= 0.03), "
+                  + (f"places wrong: {', '.join(wrong)}; " if wrong else "both places right; ")
+                  + ", ".join(rows))
+    print(f"  canvas-joins        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-joins", ok)
+
+    dashes, probe = _canvas_run(workdir, "dashes", "--sheet", "dashes")
+    cells = kind(probe, "dashes")
+    if not dashes or len(cells) != 11:
+        ok, detail = False, f"the app failed or printed {len(cells)} cells (want 11)"
+    else:
+        worst, rows = areas_of(dashes, cells)
+        ok = worst <= 0.03
+        detail = f"worst {worst:.4f} px of edge (want <= 0.03): " + ", ".join(rows)
+    print(f"  canvas-dash-areas   {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-dash-areas", ok)
+
+    places = {n: t for n, t in kind(probe, "dashes-at").items() if n != "tagged-dash"}
+    if not dashes or len(places) != 12:
+        ok, detail = False, f"the app failed or printed {len(places)} places (want 12)"
+    else:
+        wrong = wrong_places(dashes, places)
+        ok = not wrong
+        detail = ("12 places each white or black within 2 codes" if ok
+                  else "wrong: " + ", ".join(wrong))
+    print(f"  canvas-dash-places  {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-dash-places", ok)
+
+    # The bar centred in views 8 mm and 4 mm across; its dashes are 0.2 mm (the sheet's DASH_ON).
+    seen = {}
+    for across in (8, 4):
+        path, near = _canvas_run(workdir, f"dashes_{across}mm", "--sheet", "dashes", "--view",
+                                 f"-3.25,1.6,{across}")
+        if path and ("dashes", "bar") in near:
+            seen[across] = (bar_runs(path, near), _ppm_array(path).shape[1] / across * 0.2)
+    if len(seen) != 2:
+        ok, detail = False, "a run failed"
+    else:
+        ok = all(len(runs) == 3 and all(abs(n - want) <= 1.0 for _, n in runs)
+                 for runs, want in seen.values())
+        detail = "; ".join(f"{across} mm across: {len(runs)} dashes of "
+                           f"{', '.join(str(n) for _, n in runs)} px (want 3 of {want:.0f} within 1)"
+                           for across, (runs, want) in seen.items())
+    print(f"  canvas-dash-world   {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-dash-world", ok)
+
+    far, _ = _canvas_run(workdir, "dashes_far", "--sheet", "dashes", "--offset", str(1 << 40))
+    mirrored, _ = _canvas_run(workdir, "dashes_mirror", "--sheet", "dashes", "--mirror")
+    tiny, _ = _canvas_run(workdir, "dashes_tiny", "--sheet", "dashes", "--tile-shift", "16")
+    texts = kind(probe, "dashes-text")
+    if not dashes or not far or not mirrored or not tiny or len(texts) != 2:
+        ok, detail = False, "a run failed or printed no strings"
+    else:
+        far_ae, _ = compare(dashes, far)
+        a, b = _ppm_array(dashes), _ppm_array(mirrored)
+        mirror_peak = float(np.abs(a[:, ::-1] - b).max())
+        _, tiles_pae = compare(dashes, tiny)
+        (px0, py0, px1, py1), _ = _canvas_cell(texts["plain"])
+        (dx0, dy0, dx1, dy1), _ = _canvas_cell(texts["dashed"])
+        plain_text, dashed_text = a[py0:py1, px0:px1], a[dy0:dy1, dx0:dx1]
+        text_differ = int(np.any(plain_text != dashed_text, axis=2).sum())
+        ink = float(plain_text[..., 0].sum() / 255.0)
+        ok = (far_ae == 0 and mirror_peak <= 1.0 and round(tiles_pae * 255) <= 1
+              and text_differ == 0 and ink > 100.0)
+        detail = (f"2^40 units off {far_ae} px (want 0), mirrored peak {mirror_peak:.0f} code(s) "
+                  f"and 65 um tiles {tiles_pae * 255:.0f} (want <= 1 each), the dashed string "
+                  f"{text_differ} px from the plain one (want 0, {ink:.0f} px^2 of ink)")
+    print(f"  canvas-dash-twins   {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-dash-twins", ok)
+
+    # dash_min_px at 30 px: the 8 mm view's 20 px dashes are drawn solid at the pattern's average,
+    # the 4 mm view's 40 px ones still dashed.
+    avg, avg_probe = _canvas_run(workdir, "dashes_min_8mm", "--sheet", "dashes", "--view",
+                                 "-3.25,1.6,8", "--dash-min-px", "30")
+    still, still_probe = _canvas_run(workdir, "dashes_min_4mm", "--sheet", "dashes", "--view",
+                                     "-3.25,1.6,4", "--dash-min-px", "30")
+    if not avg or not still or ("dashes", "bar") not in avg_probe:
+        ok, detail = False, "a run failed"
+    else:
+        runs = bar_runs(avg, avg_probe)
+        (x0, y0, x1, y1), _ = _canvas_cell(avg_probe[("dashes", "bar")])
+        row = _ppm_array(avg)[(y0 + y1) // 2, x0:x1, 0]
+        lit = row[row > 64.0]
+        inside = lit[1:-1] if len(lit) > 2 else lit
+        dashed = len(bar_runs(still, still_probe))
+        flat = len(inside) > 0 and float(np.abs(inside - 127.5).max()) <= 2.0
+        ok = not runs and flat and len(lit) >= 90 and dashed == 3
+        detail = (f"20 px dashes: {len(lit)} px of the bar's row lit, "
+                  f"{inside.min():.0f}..{inside.max():.0f} inside (want one run, half white "
+                  f"within 2 codes); 40 px dashes: {dashed} (want 3)" if len(inside)
+                  else "the bar drew nothing")
+    print(f"  canvas-dash-solid   {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-dash-solid", ok)
+
+    places = kind(probe, "dashes-at")
+    empty = kind(probe, "dashes-empty")
+    if not dashes or "tagged-dash" not in places or "removed" not in empty:
+        ok, detail = False, "the app failed or printed no tagged dash"
+    else:
+        wrong = wrong_places(dashes, {"tagged-dash": places["tagged-dash"]})
+        (x0, y0, x1, y1), _ = _canvas_cell(empty["removed"])
+        left = float(_ppm_array(dashes)[y0:y1, x0:x1].max())
+        ok = not wrong and left == 0.0
+        detail = (("the tagged dash its object's red within 2 codes" if not wrong
+                   else "wrong: " + ", ".join(wrong))
+                  + f", the removed bar's cell peak {left:.0f} (want 0)")
+    print(f"  canvas-dash-tags    {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-dash-tags", ok)
+
+    said = _canvas_shot(os.path.join(workdir, "canvas_dashes_log.ppm"), 2, "--sheet", "dashes",
+                        log=True) or ""
+    refusals = ("a segment whose dash gap is -1 is refused",
+                "a arc whose dash length is 1073741824 is refused")
+    named = [r for r in refusals if r in said]
+    if not dashes or "refused" not in empty:
+        ok, detail = False, "the app failed or printed no refused cell"
+    else:
+        (x0, y0, x1, y1), _ = _canvas_cell(empty["refused"])
+        left = float(_ppm_array(dashes)[y0:y1, x0:x1].max())
+        ok = len(named) == 2 and left == 0.0
+        detail = (f"{len(named)} of 2 refusals named in the log, the cell's peak {left:.0f} "
+                  f"(want both, and 0)")
+    print(f"  canvas-dash-refused {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-dash-refused", ok)
 
     _, probe = _canvas_run(workdir, "budget", "--sheet", "board", "--split", "--budget", "-W",
                            "1920", "-H", "1080", "-f", "30")

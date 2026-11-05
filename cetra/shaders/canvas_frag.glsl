@@ -59,8 +59,10 @@ float freeEnd(float out_, float across, float hw, uint cut, uint butt, uint squa
  * A corner of a polyline, which each of its two segments draws its own side of: the segment's
  * body run on past its end and cut at the corner's bisector, where the neighbour's begins, their
  * outer edges meeting in a mitre's point. Each draws on half a pixel past the bisector, as a piece
- * does past a cut: the two edges' ramps there would otherwise each give the seam half its
- * coverage, and the layer's max would show a line. A bevel cuts the point off along the line
+ * does past a cut, but only within the neighbour's width: the two edges' ramps there would
+ * otherwise each give the seam half its coverage, and the layer's max would show a line, while
+ * past the neighbour's outer edge the half pixel would stand off the mitre's point as a speck of
+ * a third of a pixel's coverage. A bevel cuts the point off along the line
  * through the two outer edges' ends; a round corner is the round end the two share. `q` is the
  * place from the corner, `o` the way out of the segment there and `w` the way the stroke goes on,
  * in the segment's frame.
@@ -68,7 +70,8 @@ float freeEnd(float out_, float across, float hw, uint cut, uint butt, uint squa
 float joinedEnd(float body, vec2 q, vec2 o, vec2 w, float hw, uint join) {
     if (join == CANVAS_STROKE_ROUND)
         return dot(q, o) > 0.0 ? length(q) - hw : body;
-    float d = max(body, dot(q, normalize(o + w)) - CUT_OVERLAP);
+    float past = dot(q, normalize(o + w));
+    float d = max(body, min(past, max(past - CUT_OVERLAP, abs(cross2(w, q)) - hw)));
     if (join == CANVAS_STROKE_BEVEL) {
         // The outer side is the one the stroke turns away from: the right of both ways for a
         // turn to the left, and the left for one to the right.
