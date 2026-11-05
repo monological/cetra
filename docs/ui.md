@@ -420,9 +420,9 @@ colour for every state; while that colour's alpha is 0 they are the editor's tex
   `_scroll_place`, `_scroll_line` and `_scroll_row`, each counted when asked, and every scroll the
   editor makes itself -- a wheel's, the bar's, a mode's, the reveal after an action, a drag past
   the view's edge -- whether or not the view moves. An edit, a fold, rows settling and a layout
-  move the view by none. It is the editor's, kept across the texts it shows: two editors held
-  together lead by whichever count changed, where comparing each side's top with the last frame's
-  takes a side laid out a frame late for one the person moved.
+  move the view by none. It is the editor's, kept across the texts it shows. A linked pair (below)
+  leads by the same counting, taken where each scroll is counted, where comparing each side's top
+  with the last frame's takes a side laid out a frame late for one the person moved.
 - **The gutter is as wide as its text's line count's digits**, or as `ui_editor_set_gutter_digits`
   asks if that is more (spec 14.19), so two editors on texts of different lengths keep the same
   columns and wrap their common lines alike. It is the editor's, as its look is, and a change of
@@ -484,6 +484,38 @@ click, the draw -- counts the rows a line *shows*, which may differ from the row
   it apart, as two vim windows do, and a parked place keeps them. Through an edit each moves with
   its lines: a line kept is the one whose start the change left a line's start, a line put in among
   a fold's lines joins it, and a fold or a filler whose lines are all taken out goes.
+
+**Linked editors** (spec 14.21). `ui_editor_link(el, other)` holds two editors together row for row
+and fold for fold, as a split diff's two sides are: the host pads them level with fillers and folds
+them alike, and the pair keeps them so.
+- **The one a scroll was last asked of leads**: the lead is taken where `ui_editor_scrolls` counts
+  a scroll, so the editor knows at that moment, never at a layout taking a place asked before it,
+  and never by the hold below. Two scrolled between layouts, the later leads; in one input pass
+  that is the keys' reveal, as the bar and the wheel come before the keys. `other` leads when they
+  are linked, and an editor shown another text follows until a scroll is asked of it, so a side
+  shown a new text comes to where the other stands.
+- **The rows are held at every layout, by the second of the pair placed**: by then both have their
+  columns, gutters and places asked, so the follower stands at the leader's `ui_editor_top_row`,
+  as `ui_editor_scroll_row` would put it, held to its own rows. Every layout and not only after a
+  scroll, since rows change at a layout -- new columns, fillers set, a fold turned, the budget's
+  wraps -- and the draw follows the layout. A host copying the row between two layouts draws a
+  frame with the two apart whenever the second moves the leader. The cost: a press on the follower
+  in the same input pass as a wheel on the leader lands on the rows of the last layout. Each
+  editor carries the count of the layout that placed it (`ui_system_layouts`, private), which is
+  how the second knows the pair is whole, in either order in the tree.
+- **A fold turned on either turns the fold of the same index on the other**, whatever turned it --
+  a command, a vim `z` key, a click, the host's `ui_editor_set_fold_open`, an edit opening it at a
+  caret -- while the two hold as many folds: a host sets them in pairs, the i-th of each over
+  counterpart lines. With counts apart, between an edit taking a fold away on one side and the
+  host setting them again, a turn turns none on the other. Pairing by lines was rejected: the two
+  texts' lines are the host's to map. `ui_editor_set_folds` sets only its own editor's.
+- **Hidden, removed, freed**: an editor hidden or taken out is not placed, so neither side of its
+  pair is held to the other until it is shown; the lead is kept. One freed lets its partner go.
+  Two on different screens are never placed by one layout, so only their folds pair.
+- **The editor's, not the text's**, kept across the texts it shows as its look is, and a pair
+  rather than an object: each editor holds its partner, linking one already linked lets its
+  partner go, and NULL lets go. Making the folds and fillers, the gutter digits, which side has
+  the keys and when to link stay the host's.
 
 What `ui.c` calls on it is `ui_editor_ops` (`ui_internal.h`); what the vim mode reaches of it is
 the private `ui_editor_internal.h` (an edit at every caret as one action, carets with wanted columns,
