@@ -31217,13 +31217,18 @@ def run_canvas_gate(workdir):
                      in a dash, whose pattern begun again at the corner would cover half a dash
                      more; the same with the corner in a dash and mitred, that dash turning it
                      square; a ring, a butt arc, a box and a polygon over the same square from the
-                     middle of its bottom side, its corners in gaps; and a circle, a box and a
-                     polygon filled in a dashed paint, each its solid area. A fill and text never
-                     take a dash.
+                     middle of its bottom side, its corners in gaps; a mitred square polygon from
+                     a corner whose pattern is stretched from 9.14 periods to 9; and a circle, a
+                     box and a polygon filled in a dashed paint, each its solid area. A fill and
+                     text never take a dash.
       canvas-dash-places pixels inside the first dash and the first gap of the bar, the arc, a
                      clockwise arc from its own a, the ring from its rightmost point, the box and
                      the polygon from the middle of the bottom side: each white or black within 2
-                     codes. Each kind's pattern starts where the contract says.
+                     codes. Each kind's pattern starts where the contract says. And a pixel in
+                     the stretched square's mitre at its first point, black: a closed path's
+                     last segment comes to that point a hair past a whole period, and deciding
+                     there on its own whether it lay in a dash drew its half of a join no dash
+                     runs through.
       canvas-dash-world the bar centred in views 8 mm and 4 mm across: along its middle row,
                      three dashes each within a pixel of 0.2 mm in pixels, 20 and then 40. A
                      dash is a length on the board, not on the screen.
@@ -31793,8 +31798,8 @@ def run_canvas_gate(workdir):
 
     dashes, probe = _canvas_run(workdir, "dashes", "--sheet", "dashes")
     cells = kind(probe, "dashes")
-    if not dashes or len(cells) != 11:
-        ok, detail = False, f"the app failed or printed {len(cells)} cells (want 11)"
+    if not dashes or len(cells) != 12:
+        ok, detail = False, f"the app failed or printed {len(cells)} cells (want 12)"
     else:
         worst, rows = areas_of(dashes, cells)
         ok = worst <= 0.03
@@ -31803,12 +31808,12 @@ def run_canvas_gate(workdir):
     note("canvas-dash-areas", ok)
 
     places = {n: t for n, t in kind(probe, "dashes-at").items() if n != "tagged-dash"}
-    if not dashes or len(places) != 12:
-        ok, detail = False, f"the app failed or printed {len(places)} places (want 12)"
+    if not dashes or len(places) != 13:
+        ok, detail = False, f"the app failed or printed {len(places)} places (want 13)"
     else:
         wrong = wrong_places(dashes, places)
         ok = not wrong
-        detail = ("12 places each white or black within 2 codes" if ok
+        detail = ("13 places each white or black within 2 codes" if ok
                   else "wrong: " + ", ".join(wrong))
     print(f"  canvas-dash-places  {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-dash-places", ok)

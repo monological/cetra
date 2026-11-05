@@ -1708,6 +1708,21 @@ static void sheet_dashes(SheetContext* ctx) {
                                        .radius = MM(0.5),
                                        .width = MM(w)});
     dashes_box(ctx, "dashes-empty", "refused", c);
+
+    // A mitred square polygon from a corner, in a pattern that fits round it 9.14 times and is
+    // stretched to 9: its first point is where its last gap ends and its first dash begins, so no
+    // join is drawn there, though its last segment comes to it a hair past a whole period.
+    c = CELL(5, 2);
+    CanvasPaint closing = paint;
+    closing.dash = (CanvasDash){MM(0.2), MM(0.15), 0};
+    closing.join = CANVAS_JOIN_MITRE;
+    const CanvasPoint loop[4] = {AT(c, -0.4, -0.4), AT(c, 0.4, -0.4), AT(c, 0.4, 0.4),
+                                 AT(c, -0.4, 0.4)};
+    canvas_edit_polygon(
+        edit, &(CanvasPolygon){.paint = closing, .points = loop, .count = 4, .stroke = MM(w)});
+    const double closing_on = 3.2 * 0.2 / 0.35; // the dashes' length round it, stretched
+    cell_area(ctx, "dashes", "closing", c, closing_on * w, 2.0 * (closing_on + 9.0 * w));
+    cell_at(ctx, "dashes-at", "closing-corner", AT(c, -0.42, -0.405), 0x000000);
 #undef AT
 #undef CELL
 }
