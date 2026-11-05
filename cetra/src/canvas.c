@@ -645,11 +645,13 @@ void canvas_apply(Canvas* canvas, CanvasEdit* edit) {
                             }
                             p->item.record.p[3] = slot;
                         }
-                        const bool dashed = (p->item.record.u[0] >> 6 & CANVAS_FLAG_DASHED) != 0u;
-                        refused += dashed ? !_add(d, CANVAS_DASHES, p->layer, p->tx, p->ty, p->min,
-                                                  p->max, &p->item)
-                                          : !_add(d, CANVAS_SHAPES, p->layer, p->tx, p->ty, p->min,
-                                                  p->max, &p->item.record);
+                        // A store's items are its kind's first bytes of the piece's.
+                        const int store =
+                            (canvas_record_flags(p->item.record.u[0]) & CANVAS_FLAG_DASHED) != 0u
+                                ? CANVAS_DASHES
+                                : CANVAS_SHAPES;
+                        refused +=
+                            !_add(d, store, p->layer, p->tx, p->ty, p->min, p->max, &p->item);
                     }
                     break;
                 case CANVAS_STEP_ADD_FILLS:
