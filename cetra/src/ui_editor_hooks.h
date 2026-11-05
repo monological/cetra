@@ -30,5 +30,7 @@ bool ui_editor_settled(const UIElement* el);
 // The lines the editor has wrapped so far, the same line again included; one it hands back from
 // the last wrap not counted.
 uint64_t ui_editor_wraps(const UIElement* el);
+// The editor `el` is linked to (ui_editor_link); NULL for none and for anything not an editor.
+UIElement* ui_editor_linked(const UIElement* el);
 
 #endif // _UI_EDITOR_HOOKS_H_

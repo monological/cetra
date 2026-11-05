@@ -56,6 +56,13 @@ void ui_editor_scroll_row(UIElement* el, double rows);
 // the reveal after an action, a drag past the view's edge -- whether or not the view moves. An
 // edit, a fold, rows settling and a layout count none. Kept across the texts the editor shows.
 uint64_t ui_editor_scrolls(const UIElement* el);
+// `el` held to `other` row for row and fold for fold, as a split diff's two sides are: at every
+// layout placing both, the one a scroll was last asked of leads and the other stands at its
+// ui_editor_top_row; a fold turned on either turns the fold of the same index on the other while
+// the two hold as many. `other` leads until a scroll is asked of `el`, and an editor shown another
+// text follows until one is asked of it. A pair: linking an editor already linked lets its partner
+// go, and NULL lets `el`'s go. The editor's, kept across the texts it shows; freed, it lets go.
+void ui_editor_link(UIElement* el, UIElement* other);
 // The line numbers' gutter as wide as `digits` digits at least, so two editors on texts of
 // different lengths keep the same columns; 0, the default, as many as its own text's line count
 // has.

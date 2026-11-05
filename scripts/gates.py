@@ -28584,6 +28584,29 @@ def run_ui_gate(workdir):
                      a layout counted then and not when taken; none for an edit
                      above the view, a fold closed over the top and opened, a
                      layout at another width and the budget settling.
+      ui-editor-link two editors linked (spec 14.21), side by side on 200 lines,
+                     the left's line 40 wrapping to three rows and two fillers on
+                     the right making them up: the right wheeled 100.5 rows, one
+                     pass leaves the left at its row, lines 101 and 102 level; a
+                     row asked of the right before its first layout on a text
+                     just shown taken by one layout, the left placed before it
+                     and after; ui_editor_scroll_row, a wheel, the bar's thumb
+                     and a key on the left each make it lead; a line asked of
+                     the left before its layout, then a row of the right, both at
+                     the right's; the left moved counts no scroll and does not
+                     lead; the left shown another text follows the right's row;
+                     hidden, each holds the other to nothing until shown; the
+                     right freed lets the left go, and a third linked then a
+                     fourth lets the third go; linked to itself or a panel,
+                     refused; NULL lets both sides go.
+      ui-editor-link-folds a fold turned on one of a linked pair turns the fold of
+                     the same index on the other (spec 14.21), of three closed on
+                     each: open-fold and close-fold run at a caret on the left, a
+                     ui_editor_set_fold_open on the right, a press on the left's
+                     fold row, typing at a caret in the right's fold, and vim's
+                     zM and zo; none with two folds on one side; a set of folds on
+                     one leaves the other's; a fold closed above the top, the two
+                     level after one pass.
       ui-editor-steps each action told with its step: typing joined into words
                      shares one; a group holds one over typing, a Backspace and
                      more typing, one undo takes the group back and one redo makes
@@ -29940,6 +29963,19 @@ def run_ui_gate(workdir):
                            "an edit, a fold, a layout or the budget")
     print(f"  ui-editor-scrolls     {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-scrolls", ok)
+
+    ok, detail = doc_flags("editor-link", 9, "two linked editors level at every layout, in either "
+                           "order in the tree, led by the last asked a scroll and never by a "
+                           "layout or the hold, another text following, hidden ones held to "
+                           "nothing, a freed one let go, and links making no pair refused")
+    print(f"  ui-editor-link        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-link", ok)
+
+    ok, detail = doc_flags("editor-link-folds", 8, "a fold turned on one side turned on the other "
+                           "by a command, a call, a click, an edit and vim's z keys, none with "
+                           "counts apart, a set of folds one side's own, and the two level after")
+    print(f"  ui-editor-link-folds  {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-link-folds", ok)
 
     ok, detail = doc_flags("editor-steps", 7, "typing joined into words shares a step, a group "
                            "holds one over typing, a Backspace and more typing, and one undo takes "
