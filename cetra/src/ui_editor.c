@@ -67,11 +67,13 @@ typedef struct UIEditorPlace {
     int* want;
     size_t sel_count, sel_capacity, primary;
     // Each line's rows at the editor's columns, 0 while not wrapped, and the rows above each line,
-    // good up to tops_good. Above `exact` no line that shows is a guess.
+    // good up to tops_good, and the tab stops the rows were wrapped at. Above `exact` no line that
+    // shows is a guess.
     uint32_t* rows;
     uint64_t* tops;
     size_t line_capacity, tops_capacity, tops_good;
     size_t exact;
+    int tab;
     // The folds, in order of their lines and none overlapping, each label the place's own copy; and
     // the fillers, in order of their lines, one at most a line, none of no rows.
     UIEditorFold* folds;
@@ -94,12 +96,12 @@ typedef struct UIEditorPlace {
     bool colouring;
 } UIEditorPlace;
 
-// A place parked on a text the editor left: a view of the text's own, and the columns and tab
-// stops its rows were wrapped at. `doc` is NULL once the text is freed.
+// A place parked on a text the editor left: a view of the text's own, and the columns its rows were
+// wrapped at. `doc` is NULL once the text is freed.
 typedef struct Parked {
     UIEditorPlace at;
     TextDoc* doc;
-    int cols, tab;
+    int cols;
     struct Parked* next;
 } Parked;
 
@@ -133,11 +135,11 @@ struct UIEditor {
     Pending pending;
     uint64_t laid;
     // As the last layout left it: pixels a point, a cell and a row in points, the face, where the
-    // content and the text are, and the columns and tab stops the rows are wrapped at.
+    // content and the text are, and the columns.
     float px, cell, row;
     GlyphCache* face;
     UIRect content, text;
-    int cols, tab;
+    int cols;
     int gutter_digits; // ui_editor_set_gutter_digits: the gutter's digits at least; 0 its text's
     int digits;        // the gutter's digits as the last layout gave it, which the draw numbers by
     uint64_t scrolls;  // ui_editor_scrolls
@@ -293,14 +295,11 @@ static size_t _estimate(const UIEditor* ed, size_t line) {
     return len / (size_t)ed->cols + 1;
 }
 
-// The rows above every line from `line` on are to be summed again.
+// The rows above every line from `line` on are to be summed again, and any of those lines may show
+// a guess: the exact mark, which only a walk wrapping the guesses raises, comes down with them.
 static void _tops_from(UIEditorPlace* at, size_t line) {
     if (at->tops_good > line)
         at->tops_good = line;
-}
-
-// A line from `line` on may show a guess: it was rewritten, or a fold hiding it opened.
-static void _exact_from(UIEditorPlace* at, size_t line) {
     if (at->exact > line)
         at->exact = line;
 }
@@ -308,24 +307,32 @@ static void _exact_from(UIEditorPlace* at, size_t line) {
 static const UIEditorFold* _closed(const UIEditorPlace* at, size_t line);
 
 // A line's rows, wrapped now unless it was the last wrapped and has not changed since; a count
-// that was a guess, or has changed, is put right. A line a closed fold holds shows the same rows
-// whatever it wraps to, so the sums stand.
+// that was a guess, or has changed, is put right either way, as new columns may have made it a
+// guess since. A line a closed fold holds shows the same rows whatever it wraps to, so the sums
+// stand.
 static Rows _wrap_line(UIEditor* ed, size_t line) {
-    if (ed->wrapped_line == line && ed->wrapped_version == ed->doc->version &&
-        ed->wrapped_cols == ed->cols && ed->wrapped_tab == _tab(ed))
-        return (Rows){ed->starts, ed->wrapped_count, ed->wrapped_hang};
-    ed->wraps++;
-    size_t len = 0;
-    const char* s = text_doc_line(ed->doc, line, &len);
-    int hang = 0;
-    size_t n = ui_editor_wrap(s, len, ed->cols, _tab(ed), ed->starts, ed->starts_capacity, &hang);
-    if (n > ed->starts_capacity) {
-        if (!grow_array((void**)&ed->starts, &ed->starts_capacity, n, sizeof(size_t), 64))
-            n = ed->starts_capacity;
-        else
-            n = ui_editor_wrap(s, len, ed->cols, _tab(ed), ed->starts, ed->starts_capacity, &hang);
+    if (ed->wrapped_line != line || ed->wrapped_version != ed->doc->version ||
+        ed->wrapped_cols != ed->cols || ed->wrapped_tab != _tab(ed)) {
+        ed->wraps++;
+        size_t len = 0;
+        const char* s = text_doc_line(ed->doc, line, &len);
+        int hang = 0;
+        const int tab = _tab(ed);
+        size_t n = ui_editor_wrap(s, len, ed->cols, tab, ed->starts, ed->starts_capacity, &hang);
+        if (n > ed->starts_capacity) {
+            if (!grow_array((void**)&ed->starts, &ed->starts_capacity, n, sizeof(size_t), 64))
+                n = ed->starts_capacity;
+            else
+                n = ui_editor_wrap(s, len, ed->cols, tab, ed->starts, ed->starts_capacity, &hang);
+        }
+        ed->wrapped_line = line;
+        ed->wrapped_version = ed->doc->version;
+        ed->wrapped_cols = ed->cols;
+        ed->wrapped_tab = tab;
+        ed->wrapped_count = n ? n : 1;
+        ed->wrapped_hang = hang;
     }
-    const uint32_t count = (uint32_t)(n ? n : 1);
+    const uint32_t count = (uint32_t)ed->wrapped_count;
     if (ed->at.rows[line] != count) {
         const size_t was = ed->at.rows[line] ? ed->at.rows[line] : _estimate(ed, line);
         if (was != count && !_closed(&ed->at, line))
@@ -334,13 +341,7 @@ static Rows _wrap_line(UIEditor* ed, size_t line) {
             ed->at.guessed--;
         ed->at.rows[line] = count;
     }
-    ed->wrapped_line = line;
-    ed->wrapped_version = ed->doc->version;
-    ed->wrapped_cols = ed->cols;
-    ed->wrapped_tab = _tab(ed);
-    ed->wrapped_count = count;
-    ed->wrapped_hang = hang;
-    return (Rows){ed->starts, count, hang};
+    return (Rows){ed->starts, count, ed->wrapped_hang};
 }
 
 // The fold holding `line`; NULL for none.
@@ -907,8 +908,10 @@ static void _shift_lines(UIEditorPlace* at, size_t count, const Shift* s) {
                 (old - first - removed) * sizeof(uint32_t));
     memset(&at->rows[first], 0, inserted * sizeof(uint32_t));
     at->guessed += inserted;
-    _tops_from(at, first);
-    _exact_from(at, first);
+    // From a closed fold's first line when the change starts inside it: cut to that one line, the
+    // fold no longer closes, and the line shows the rows it wraps to.
+    const UIEditorFold* holding = _closed(at, first);
+    _tops_from(at, holding ? holding->first : first);
     // The line counting the fillers under the text may stand above the change, before it and after.
     _tops_from_under(at, old);
     // The budget's lines below the change move with their lines, those it rewrote go, and the new
@@ -1031,8 +1034,7 @@ static void _park(UIEditor* ed) {
     if (ed->doc)
         text_doc_remove_view(ed->doc, ed);
     if (p) {
-        *p = (Parked){
-            .at = ed->at, .doc = ed->doc, .cols = ed->cols, .tab = ed->tab, .next = ed->parked};
+        *p = (Parked){.at = ed->at, .doc = ed->doc, .cols = ed->cols, .next = ed->parked};
         ed->parked = p;
         text_doc_add_view(p->doc, &(TextDocView){.view = p,
                                                  .changed = _parked_changed,
@@ -1060,7 +1062,6 @@ static bool _unpark(UIEditor* ed, TextDoc* doc) {
             ed->at = p->at;
             if (p->cols != ed->cols)
                 _rows_guessed(&ed->at, doc->line_count);
-            ed->tab = p->tab;
             free(p);
             return true;
         }
@@ -1098,8 +1099,6 @@ static bool _show(UIEditor* ed, TextDoc* doc) {
         _rows_guessed(&ed->at, lines);
     }
     ed->doc = doc;
-    if (!back)
-        ed->tab = _tab(ed);
     text_doc_add_view(doc, &(TextDocView){.view = ed,
                                           .element = ed->el,
                                           .changed = _view_changed,
@@ -1205,10 +1204,10 @@ static void _place(const UISystem* ui, UIElement* el, UIRect content) {
     ed->text.h = content.y + content.h - ed->text.y;
     int cols = (int)floorf(ed->text.w / ed->cell);
     cols = cols < 1 ? 1 : cols;
-    if (cols != ed->cols || _tab(ed) != ed->tab) {
+    if (cols != ed->cols || _tab(ed) != ed->at.tab) {
         _rows_guessed(&ed->at, ed->doc->line_count);
         ed->cols = cols;
-        ed->tab = _tab(ed);
+        ed->at.tab = _tab(ed);
     }
     _top(ed, &ed->at.top_line, &ed->at.top_row);
     // A place asked for before the editor was laid out on this text.
@@ -1361,25 +1360,26 @@ size_t ui_editor_top_line(const UIElement* el, float* rows) {
 }
 
 // Whether the last layout placed the editor on the text it shows: its rows, columns and gutter are
-// that text's. Before then, where a view goes is asked of the next layout.
+// that text's, wrapped at its tab stops as they stand. Before then, where a view goes is asked of
+// the next layout.
 static bool _laid_out(const UIEditor* ed) {
-    return ed->row > 0.0f && ed->laid == ed->serial;
+    return ed->row > 0.0f && ed->laid == ed->serial && ed->at.tab == _tab(ed);
 }
 
 /*
  * Every line that shows from the mark up to `line`, or up to and through the one holding the
- * global row `row` if that comes first, wrapped where it was a guess, so the rows above a place are
- * the rows it wraps to and two editors on texts that stand level agree on every row. A line a
- * closed fold hides shows none and is left a guess. The mark keeps a second ask from walking the
- * lines again. Rows wrapped before the layout gives the columns would be wrapped at the wrong ones.
+ * global row `row` if that comes first, wrapped where it was a guess as _shown wraps one, so the
+ * rows above a place are the rows it wraps to and two editors on texts that stand level agree on
+ * every row. A closed fold's lines show its one row whatever they wrap to and are left guesses.
+ * The mark keeps a second ask from walking the lines again. Rows wrapped before the layout gives
+ * the columns and the tab stops would be wrapped at the wrong ones.
  */
 static void _exact(UIEditor* ed, size_t line, double row) {
     if (!_laid_out(ed))
         return;
     size_t l = ed->at.exact;
     for (; l < line && (double)_top_of(ed, l) <= row; l = _next_shown(&ed->at, l))
-        if (!ed->at.rows[l] && !_closed(&ed->at, l))
-            _wrap_line(ed, l);
+        _shown(ed, l, true);
     if (l > ed->at.exact)
         ed->at.exact = l;
 }
@@ -1552,13 +1552,10 @@ void ui_editor_set_folds(UIElement* el, const UIEditorFold* folds, size_t count)
     }
     for (size_t i = 0; i < count; i++)
         fresh[i].label = fresh[i].label ? safe_strdup(fresh[i].label) : NULL;
-    // The rows from the first fold line, old or new, are summed again, and the lines the old hid
-    // may show guesses.
+    // The rows from the first fold line, old or new, are summed again.
     UIEditorPlace* at = &ed->at;
-    if (at->fold_count) {
+    if (at->fold_count)
         _tops_from(at, at->folds[0].first);
-        _exact_from(at, at->folds[0].first);
-    }
     if (count)
         _tops_from(at, fresh[0].first);
     const bool was_folded = _closed(at, at->top_line) != NULL;
@@ -1579,8 +1576,6 @@ size_t ui_editor_folds(const UIElement* el, const UIEditorFold** out) {
 static void _fold_open(UIEditorPlace* at, UIEditorFold* f, bool open) {
     if (f->open != open)
         _tops_from(at, f->first);
-    if (open)
-        _exact_from(at, f->first);
     const bool closing = f->open && !open;
     f->open = open;
     if (closing)
