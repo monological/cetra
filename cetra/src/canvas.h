@@ -130,7 +130,8 @@ typedef struct Canvas {
     float text_min_px;  // a string whose em is smaller is not drawn, nor one too small for
                         // its font's distance field to hold a pixel's edge ramp
     float shape_min_px; // a shape spanning less is not drawn; 0 = every shape
-    float dash_min_px;  // a dashed shape whose dash or gap spans fewer pixels is drawn solid
+    float dash_min_px;  // a dashed shape whose dash or gap spans fewer pixels is drawn solid,
+                        // at its pattern's average strength
 } Canvas;
 
 // Made with no GL; the GL objects are made at the first draw. `desc` may be
