@@ -4838,20 +4838,16 @@ typedef struct {
     size_t wrapped; // the rows the left's line 40 wraps to
 } Pair;
 
-// The pair 300 by 220 in a row on a screen of their own, the right first in the tree when
-// `right_first`: two fillers above the right's line 41 make up the rows the left's line 40 wraps to
-// past its counterpart's one, so standing level is a count of rows and not a line.
-static Pair pair_scene(UISystem* ui, bool right_first) {
+// The pair 300 by 220 in a row on a screen of their own, the left first: two fillers above the
+// right's line 41 make up the rows the left's line 40 wraps to past its counterpart's one, so
+// standing level is a count of rows and not a line.
+static Pair pair_scene(UISystem* ui) {
     editor_theme(ui);
-    UIScreen* s = scene_alone(ui, right_first ? "link-right-first" : "link");
-    UIElement* root = ui_screen_root(s);
+    UIElement* root = ui_screen_root(scene_alone(ui, "link"));
     root->dir = UI_ROW;
     Pair p = {{side_text(true), side_text(false)}, NULL, NULL, 0};
-    if (right_first)
-        p.right = fixed_editor(root, p.docs[1], 300.0f, 220.0f);
     p.left = fixed_editor(root, p.docs[0], 300.0f, 220.0f);
-    if (!right_first)
-        p.right = fixed_editor(root, p.docs[1], 300.0f, 220.0f);
+    p.right = fixed_editor(root, p.docs[1], 300.0f, 220.0f);
     editor_pass(ui);
     p.wrapped = ui_editor_line_rows(p.left, 40);
     ui_editor_set_fillers(p.right, &(UIEditorFiller){41, (uint32_t)(p.wrapped - 1)}, 1);
@@ -4873,19 +4869,14 @@ static bool pair_at(const Pair* p, double want) {
     return l == want && r == want;
 }
 
-// A row asked of the right before it is laid out on a text just shown, taken by one layout: the
-// left stands at it, placed before the right or after it.
-static bool pair_order(UISystem* ui, bool right_first) {
-    Pair p = pair_scene(ui, right_first);
-    TextDoc* again = side_text(false);
-    ui_editor_set_doc(p.right, again);
-    ui_editor_scroll_row(p.right, 120.0);
-    const double before = ui_editor_top_row(p.left);
+// The right shown `doc` and asked `row` before it is laid out on it, taken by one layout: the left
+// stands at it, wherever it is in the tree.
+static bool pair_order(UISystem* ui, const Pair* p, TextDoc* doc, double row) {
+    ui_editor_set_doc(p->right, doc);
+    ui_editor_scroll_row(p->right, row);
+    const double before = ui_editor_top_row(p->left);
     layout_only(ui);
-    const bool ok = before != 120.0 && pair_at(&p, 120.0);
-    pair_free(&p);
-    free_text_doc(again);
-    return ok;
+    return before != row && pair_at(p, row);
 }
 
 // Two editors linked: held row for row at every layout by whichever a scroll was last asked of,
@@ -4893,7 +4884,7 @@ static bool pair_order(UISystem* ui, bool right_first) {
 // editor shown another text following; hidden ones held to nothing until shown; freed, let go;
 // and links that make no pair refused.
 static int probe_editor_link(UISystem* ui) {
-    Pair p = pair_scene(ui, false);
+    Pair p = pair_scene(ui);
     // The right wheeled down past the pair, a part of a row in.
     wheel_rows(ui, p.right, 100.5f);
     editor_pass(ui);
@@ -4905,12 +4896,34 @@ static int probe_editor_link(UISystem* ui) {
     say_flag("editor-link", "level", "rows",
              p.wrapped == 3 && wheeled == 100.5 && pair_at(&p, wheeled) &&
                  rows_level(p.left, p.right, at_left, at_right, 2));
-    pair_free(&p);
 
-    say_flag("editor-link", "order", "taken", pair_order(ui, false) && pair_order(ui, true));
+    // The left placed first, then the right moved before it.
+    TextDoc* again = side_text(false);
+    const bool left_first = pair_order(ui, &p, again, 120.0);
+    ui_move(p.right, ui_screen_root(ui_top(ui)), p.left);
+    say_flag("editor-link", "order", "taken", left_first && pair_order(ui, &p, p.docs[1], 60.0));
+
+    // The leader's rows above its top changed with no scroll asked: fillers set above the right's,
+    // then the left leading and made narrower, its line 40 wrapping to more rows. The follower
+    // follows each, so the hold took no lead.
+    ui_editor_scroll_row(p.right, 50.0);
+    editor_pass(ui);
+    ui_editor_set_fillers(p.right,
+                          (const UIEditorFiller[]){{10, 4}, {41, (uint32_t)(p.wrapped - 1)}}, 2);
+    editor_pass(ui);
+    bool unasked = pair_at(&p, 54.0);
+    ui_editor_scroll_row(p.left, 70.0);
+    editor_pass(ui);
+    ui_set_size(p.left, UI_FIXED, 200.0f, UI_FIXED, 220.0f);
+    editor_pass(ui);
+    const double resized = ui_editor_top_row(p.left);
+    unasked = resized > 70.0 && pair_at(&p, resized) && unasked;
+    say_flag("editor-link", "unasked", "follows", unasked);
+    pair_free(&p);
+    free_text_doc(again);
 
     // Each way of scrolling the left, from the right leading at row 30 or 0.
-    p = pair_scene(ui, false);
+    p = pair_scene(ui);
     ui_set_focus(ui_top(ui), p.left);
     ui_editor_scroll_row(p.right, 30.0);
     editor_pass(ui);
@@ -5036,21 +5049,16 @@ static void pair_folds(const Pair* p) {
     ui_editor_set_folds(p->right, folds, 3);
 }
 
-// A caret put on `line` of the editor's text.
-static void caret_on(UIElement* ed, size_t line) {
-    const size_t at = text_doc_line_start(ui_editor_doc(ed), line);
-    ui_editor_set_selections(ed, &(TextSelection){at, at}, 1);
-}
-
 // A fold turned on one of a pair turns the fold of the same index on the other, whatever turned
-// it: a command, a call, a click, an edit, vim's z keys; none while their counts differ; a set of
-// folds on one leaves the other's alone; and a fold closed above the top leaves the two level.
+// it: a command, a call, a click, an edit, vim's z keys; none while their counts differ, either
+// way; a set of folds on one leaves the other's alone; and a fold closed above the leader's top
+// alone moves the follower to its row.
 static int probe_editor_link_folds(UISystem* ui) {
-    Pair p = pair_scene(ui, false);
+    Pair p = pair_scene(ui);
     pair_folds(&p);
     editor_pass(ui);
 
-    caret_on(p.left, 65);
+    caret_at(p.left, text_doc_line_start(p.docs[0], 65));
     ui_editor_run(p.left, "open-fold");
     bool command = opens_are(p.right, false, true, false);
     ui_editor_run(p.left, "close-fold");
@@ -5079,7 +5087,7 @@ static int probe_editor_link_folds(UISystem* ui) {
     // the app focused takes no keys in its first.
     ui_set_focus(ui_top(ui), p.right);
     editor_pass(ui);
-    caret_on(p.right, 125);
+    caret_at(p.right, text_doc_line_start(p.docs[1], 125));
     type(ui, "x");
     say_flag("editor-link-folds", "edit", "turned",
              opens_are(p.right, true, false, true) && opens_are(p.left, true, false, true));
@@ -5091,45 +5099,49 @@ static int probe_editor_link_folds(UISystem* ui) {
     editor_pass(ui);
     vim_keys(ui, "zM");
     bool zm = opens_are(p.left, false, false, false) && opens_are(p.right, false, false, false);
-    caret_on(p.left, 65);
+    caret_at(p.left, text_doc_line_start(p.docs[0], 65));
     vim_keys(ui, "zo");
     say_flag("editor-link-folds", "vim", "turned",
              zm && opens_are(p.left, false, true, false) && opens_are(p.right, false, true, false));
     ui_editor_set_mode(p.left, NULL);
     free_ui_editor_vim(vim);
 
-    // Two folds on the left, three on the right: a turn on either turns none on the other.
+    // Two folds on the left, three on the right, the right's second open from zo: a turn on either
+    // turns none on the other -- the left's first opened, the right's first handed its own closed
+    // state, and the right's third, which the left has none of, opened.
     const UIEditorFold two[2] = {{10, 20, false, NULL}, {60, 80, false, NULL}};
     ui_editor_set_folds(p.left, two, 2);
     ui_editor_set_fold_open(p.left, 10, true);
-    ui_editor_set_fold_open(p.right, 60, false);
+    const bool right_kept = opens_are(p.right, false, true, false);
+    ui_editor_set_fold_open(p.right, 10, false);
+    ui_editor_set_fold_open(p.right, 130, true);
     const UIEditorFold* lf = NULL;
     ui_editor_folds(p.left, &lf);
     say_flag("editor-link-folds", "counts", "none",
-             opens_are(p.right, false, false, false) && lf[0].open && !lf[1].open);
+             right_kept && opens_are(p.right, false, true, true) && lf[0].open && !lf[1].open);
 
     // Three set on the left again, open: the right's as they were.
     const UIEditorFold open_three[3] = {
         {10, 20, true, NULL}, {60, 80, true, NULL}, {120, 150, true, NULL}};
     ui_editor_set_folds(p.left, open_three, 3);
     say_flag("editor-link-folds", "set", "own",
-             opens_are(p.right, false, false, false) && opens_are(p.left, true, true, true));
+             opens_are(p.right, false, true, true) && opens_are(p.left, true, true, true));
 
-    // Both open, the right leading at line 160, the left's second fold closed above the top.
+    // Both open, the right leading at line 160; the right's second closed by a set of its own,
+    // which turns none on the left: the left follows to the right's fewer rows, a line further on.
     ui_editor_set_folds(p.right, open_three, 3);
     ui_editor_scroll_line(p.right, 160, 0.0f);
     editor_pass(ui);
-    ui_editor_set_fold_open(p.left, 60, false);
+    const UIEditorFold second_shut[3] = {
+        {10, 20, true, NULL}, {60, 80, false, NULL}, {120, 150, true, NULL}};
+    ui_editor_set_folds(p.right, second_shut, 3);
     editor_pass(ui);
-    const size_t at_left[2] = {text_doc_line_start(p.docs[0], 161),
-                               text_doc_line_start(p.docs[0], 162)};
-    const size_t at_right[2] = {text_doc_line_start(p.docs[1], 161),
-                                text_doc_line_start(p.docs[1], 162)};
-    float into = -1.0f;
+    float into = -1.0f, left_into = -1.0f;
+    const size_t right_top = ui_editor_top_line(p.right, &into);
+    const size_t left_top = ui_editor_top_line(p.left, &left_into);
     say_flag("editor-link-folds", "level", "rows",
-             ui_editor_top_line(p.right, &into) == 160 &&
-                 ui_editor_top_row(p.left) == ui_editor_top_row(p.right) &&
-                 rows_level(p.left, p.right, at_left, at_right, 2));
+             right_top == 160 && left_top < 160 && opens_are(p.left, true, true, true) &&
+                 ui_editor_top_row(p.left) == ui_editor_top_row(p.right));
     pair_free(&p);
     return 0;
 }

@@ -144,10 +144,11 @@ struct UIEditor {
     int digits;        // the gutter's digits as the last layout gave it, which the draw numbers by
     uint64_t scrolls;  // ui_editor_scrolls
     uint64_t wraps;    // ui_editor_wraps
-    // ui_editor_link: the editor it is held to, whether it leads the pair, and the layout that last
-    // placed it, which the second of the pair placed compares with its own.
+    // ui_editor_link: the editor it is held to; when it last took the lead, of every editor's
+    // takings, so the later of a pair leads; and the layout that last placed it, which the second
+    // of the pair placed compares with its own.
     UIEditor* partner;
-    bool leads;
+    uint64_t led;
     uint64_t placed;
     // A run of presses, and the unit the last took, which a drag extends by.
     UITypingPresses presses;
@@ -649,13 +650,20 @@ static int _rows_down(UIEditor* ed, size_t line, size_t row, int limit) {
     return -1;
 }
 
+// Leads taken so far, by every editor; the UI is the main thread's.
+static uint64_t g_leads;
+
+// The editor takes the lead of the pair it is, or will be, linked in: the later taking leads, so
+// each taking touches one editor.
+static void _lead(UIEditor* ed) {
+    ed->led = ++g_leads;
+}
+
 // A scroll asked of the view, by the host or by the editor itself: counted, and the editor leads
 // the pair it is linked in. Never by a layout, which only takes what was asked before it.
 static void _asked(UIEditor* ed) {
     ed->scrolls++;
-    ed->leads = true;
-    if (ed->partner)
-        ed->partner->leads = false;
+    _lead(ed);
 }
 
 // The view scrolled by rows from its top as held, so a fold closed over the top since the last
@@ -1097,10 +1105,8 @@ static bool _show(UIEditor* ed, TextDoc* doc) {
     ed->caret.moved = true;
     ed->pending.kind = PENDING_NONE;
     // Another text follows its partner to where it stands, until a scroll is asked of it.
-    if (ed->partner) {
-        ed->leads = false;
-        ed->partner->leads = true;
-    }
+    if (ed->partner)
+        _lead(ed->partner);
     if (!doc)
         return true;
     const bool back = _unpark(ed, doc);
@@ -1438,10 +1444,11 @@ static void _exact_scroll_row(UIEditor* ed, double rows) {
  * layouts draws a frame with the two apart whenever the second layout moves the leader.
  */
 static void _hold(UIEditor* ed) {
+    // Only _place stamps an editor, and only one showing a text.
     UIEditor* other = ed->partner;
-    if (!other || !other->doc || other->ui != ed->ui || other->placed != ed->placed)
+    if (!other || other->ui != ed->ui || other->placed != ed->placed)
         return;
-    UIEditor* lead = other->leads ? other : ed;
+    UIEditor* lead = other->led > ed->led ? other : ed;
     UIEditor* follow = lead == ed ? other : ed;
     const double rows = _exact_top_row(lead);
     if (_exact_top_row(follow) != rows)
@@ -1521,8 +1528,8 @@ static void _take_pending(UIEditor* ed) {
     }
 }
 
-// A place asked for: put at once when the editor is laid out on its text, else at its next layout,
-// asked either way when it is asked.
+// A place asked for: put at once when the editor is laid out on its text, else at its next layout;
+// counted and led by when it is asked either way, so the layout taking it later counts nothing.
 static void _pend(UIElement* el, Pending p) {
     UIEditor* ed = _of(el);
     if (!ed)
@@ -1578,8 +1585,7 @@ void ui_editor_link(UIElement* el, UIElement* other) {
     _unlink(to);
     ed->partner = to;
     to->partner = ed;
-    ed->leads = false;
-    to->leads = true;
+    _lead(to);
 }
 
 UIElement* ui_editor_linked(const UIElement* el) {
@@ -1673,7 +1679,9 @@ static void _fold_open(UIEditorPlace* at, UIEditorFold* f, bool open) {
  * two hold as many: a host sets a pair's folds in pairs, the i-th of each over counterpart lines.
  * With counts apart, as after an edit took a fold's lines out on one side and before the host sets
  * them again, the partner's are left alone. Pairing by lines would need the two texts' lines
- * mapped, which is the host's to do. The partner's turn goes no further.
+ * mapped, which is the host's to do. The partner is handed the state the fold took, turned or not,
+ * so a pair set apart comes together at the next turn and a `zM` closes both. The partner's turn
+ * goes no further.
  */
 static void _fold_turn(UIEditor* ed, UIEditorFold* f, bool open) {
     _fold_open(&ed->at, f, open);
