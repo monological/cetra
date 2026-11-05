@@ -670,6 +670,18 @@ static void editor_pass(UISystem* ui) {
     ui_build(ui, 1280.0f, 720.0f, 1.0f);
 }
 
+// Passes, `passes` at most, until the editor's budget has nothing left; whether it has nothing.
+static bool settle(UISystem* ui, const UIElement* ed, int passes) {
+    for (int i = 0; i < passes && !ui_editor_settled(ed); i++)
+        editor_pass(ui);
+    return ui_editor_settled(ed);
+}
+
+// The x of the middle of an element's scroll bar.
+static float bar_x(const UIElement* el) {
+    return el->rect.x + el->rect.w - UI_BAR_INSET - UI_BAR_W * 0.5f;
+}
+
 static void say_flag(const char* which, const char* label, const char* key, bool ok) {
     printf("ui %s %s %s %d\n", which, label, key, ok ? 1 : 0);
 }
@@ -4025,8 +4037,7 @@ static void hidden_tab(UISystem* ui) {
 static void hidden_kept(UISystem* ui, TextDoc* doc) {
     UIElement* ed =
         fixed_editor(ui_screen_root(scene_alone(ui, "hidden-kept")), doc, 300.0f, 150.0f);
-    for (int i = 0; i < 10 && !ui_editor_settled(ed); i++)
-        editor_pass(ui);
+    settle(ui, ed, 10);
     const size_t l50 = text_doc_line_start(doc, 50), l51 = text_doc_line_start(doc, 51);
     const TextSelection carets[2] = {{l50, l50}, {l51 + 2, l51 + 5}};
     ui_editor_set_selections(ed, carets, 2);
@@ -4206,8 +4217,7 @@ static int probe_editor_top_row(UISystem* ui) {
     UIElement* ed = editor_fixture(ui, doc, 300.0f, 220.0f);
     ui_editor_set_fillers(ed, &(UIEditorFiller){TOP_FILL_LINE, TOP_FILL_ROWS}, 1);
     ui_editor_set_folds(ed, &(UIEditorFold){TOP_FOLD_FIRST, TOP_FOLD_LAST, false, NULL}, 1);
-    for (int i = 0; i < 10 && !ui_editor_settled(ed); i++)
-        editor_pass(ui);
+    settle(ui, ed, 10);
     say_flag("editor-top-row", "start", "zero", ui_editor_top_row(ed) == 0.0);
 
     // Line 100, below the fillers and the fold, half a row in.
@@ -4308,17 +4318,12 @@ static int probe_editor_gutter_digits(UISystem* ui) {
                                 i);
     TextDoc* long_doc = create_text_doc(big, len);
     UIElement* far = fixed_editor(ui_screen_root(ui_top(ui)), long_doc, 300.0f, 150.0f);
-    for (int i = 0; i < 20 && !ui_editor_settled(far); i++)
-        editor_pass(ui);
-    const bool settled = ui_editor_settled(far);
+    const bool settled = settle(ui, far, 20);
     const int cols = ui_editor_columns(far);
     ui_editor_set_gutter_digits(far, 7);
     editor_pass(ui);
     const bool guessed = !ui_editor_settled(far) && ui_editor_columns(far) < cols;
-    for (int i = 0; i < 20 && !ui_editor_settled(far); i++)
-        editor_pass(ui);
-    say_flag("editor-gutter-digits", "wrapped", "again",
-             settled && guessed && ui_editor_settled(far));
+    say_flag("editor-gutter-digits", "wrapped", "again", settled && guessed && settle(ui, far, 20));
     free_text_doc(nine);
     free_text_doc(thousand);
     free_text_doc(long_doc);
@@ -4517,8 +4522,7 @@ static int probe_editor_rows_kept(UISystem* ui) {
     TextDoc* doc = kept_text();
     TextDoc* other = kept_text();
     UIElement* ed = editor_fixture(ui, doc, 300.0f, 220.0f);
-    for (int i = 0; i < 10 && !ui_editor_settled(ed); i++)
-        editor_pass(ui);
+    settle(ui, ed, 10);
     const uint64_t settled = ui_editor_wraps(ed);
     size_t total = 0;
     for (int pass = 0; pass < 2; pass++)
@@ -4552,9 +4556,7 @@ static int probe_editor_rows_kept(UISystem* ui) {
              ui_editor_wraps(ed) == narrowed + 1 && narrow == wrapped_rows(ed, 146, 4) &&
                  narrow > wide);
     // Settled there, then 8 columns between tab stops.
-    for (int i = 0; i < 10 && !ui_editor_settled(ed); i++)
-        editor_pass(ui);
-    const bool before = ui_editor_settled(ed);
+    const bool before = settle(ui, ed, 10);
     doc->tab_width = 8;
     layout_only(ui);
     const bool guessed = !ui_editor_settled(ed);
@@ -4652,8 +4654,7 @@ static int probe_editor_exact_rows(UISystem* ui) {
     UIElement* root = ui_screen_root(scene_alone(ui, "exact-rows"));
     root->dir = UI_ROW;
     UIElement* settled = fixed_editor(root, doc, 300.0f, 220.0f);
-    for (int i = 0; i < 10 && !ui_editor_settled(settled); i++)
-        editor_pass(ui);
+    settle(ui, settled, 10);
 
     UIElement* fresh = fresh_editor(ui, doc);
     ui_editor_scroll_line(settled, 300, 0.0f);
@@ -4678,7 +4679,7 @@ static int probe_editor_exact_rows(UISystem* ui) {
     // The thumb pressed at the top of its track and held half way down, with no draw.
     UIElement* dragged = fresh_editor(ui, doc);
     const uint64_t before = ui_editor_wraps(dragged);
-    const float bx = dragged->rect.x + dragged->rect.w - UI_BAR_INSET - UI_BAR_W * 0.5f;
+    const float bx = bar_x(dragged);
     const float mid_y = dragged->rect.y + dragged->rect.h * 0.5f;
     pointer_pass(ui, bx, dragged->rect.y + UI_BAR_INSET + 1.0f, POINTER_PRESS, 0);
     pointer_pass(ui, bx, mid_y, POINTER_HOLD, 0);
@@ -4703,11 +4704,41 @@ static int probe_editor_exact_rows(UISystem* ui) {
                 above, (unsigned long long)folded_wraps);
     say_flag("editor-exact-rows", "folded", "guessed", above == 1201.0 && folded_wraps <= 200);
 
+    // Lines 101 to 199 taken out, the fold cut to line 100 alone, which no longer closes: its own 6
+    // rows above the top, now line 201, where the fold's row was, though the change starts below
+    // it.
+    TextDoc* cut = word_rows_text();
+    UIElement* collapsed = fresh_editor(ui, cut);
+    ui_editor_set_folds(collapsed, &(UIEditorFold){100, 199, false, NULL}, 1);
+    ui_editor_scroll_line(collapsed, 300, 0.0f);
+    const double before_cut = ui_editor_top_row(collapsed);
+    text_doc_replace(cut, text_doc_line_start(cut, 101), text_doc_line_start(cut, 200), "", 0);
+    float cut_into = 0.0f;
+    const size_t cut_top = ui_editor_top_line(collapsed, &cut_into);
+    const double after_cut = ui_editor_top_row(collapsed);
+    if (after_cut != 1206.0)
+        fprintf(stderr, "editor-exact-rows: the fold cut to a line, the top at row %.2f\n",
+                after_cut);
+    say_flag("editor-exact-rows", "collapsed", "shown",
+             before_cut == 1201.0 && cut_top == 201 && after_cut == 1206.0);
+
+    // The fold opened after a walk passed it: its lines wrapped by the next ask.
+    UIElement* opened = fresh_editor(ui, doc);
+    ui_editor_set_folds(opened, &(UIEditorFold){100, 199, false, NULL}, 1);
+    ui_editor_scroll_line(opened, 300, 0.0f);
+    const double shut = ui_editor_top_row(opened);
+    ui_editor_set_fold_open(opened, 100, true);
+    const double open_row = ui_editor_top_row(opened);
+    if (open_row != 1800.0)
+        fprintf(stderr, "editor-exact-rows: the fold opened, the top at row %.2f\n", open_row);
+    say_flag("editor-exact-rows", "opened", "wrapped", shut == 1201.0 && open_row == 1800.0);
+
     const uint64_t asked = ui_editor_wraps(fresh) + ui_editor_wraps(other);
     const double again = ui_editor_top_row(fresh);
     ui_editor_scroll_row(other, at);
     say_flag("editor-exact-rows", "again", "none",
              again == want && ui_editor_wraps(fresh) + ui_editor_wraps(other) == asked);
+    free_text_doc(cut);
     free_text_doc(doc);
     return 0;
 }
@@ -4748,7 +4779,7 @@ static int probe_editor_scrolls(UISystem* ui) {
     ui_editor_scroll_row(ed, 0.0);
     n = ui_editor_scrolls(ed);
     editor_pass(ui);
-    const float bx = ed->rect.x + ed->rect.w - UI_BAR_INSET - UI_BAR_W * 0.5f;
+    const float bx = bar_x(ed);
     pointer_pass(ui, bx, ed->rect.y + UI_BAR_INSET + 1.0f, POINTER_PRESS, 0);
     own = one_more(ed, &n) && own;
     pointer_pass(ui, bx, ed->rect.y + ed->rect.h * 0.5f, POINTER_HOLD, 0);
@@ -4775,8 +4806,7 @@ static int probe_editor_scrolls(UISystem* ui) {
     editor_pass(ui);
     ui_editor_set_fold_open(ed, 95, true);
     ui_set_size(ed, UI_FIXED, 260.0f, UI_FIXED, 150.0f);
-    for (int i = 0; i < 10 && !ui_editor_settled(ed); i++)
-        editor_pass(ui);
+    settle(ui, ed, 10);
     const size_t top = ui_editor_top_line(ed, &rows);
     if (ui_editor_scrolls(ed) != n)
         fprintf(stderr, "editor-scrolls: %llu scrolls counted with none asked, the top at %zu\n",

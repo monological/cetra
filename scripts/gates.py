@@ -28572,8 +28572,11 @@ def run_ui_gate(workdir):
                      first ask as one settled does, and ui_editor_scroll_row at
                      the settled one's row puts its top on the same line and row;
                      the bar dragged half way wraps 8 lines at most; a closed
-                     fold's 100 lines left guesses, the rest above wrapped; a
-                     second ask wraps none.
+                     fold's 100 lines left guesses, the rest above wrapped; the
+                     fold cut to its first line by a change below it, that
+                     line's own rows counted; the fold opened after a walk passed
+                     it, its lines wrapped by the next ask; a second ask wraps
+                     none.
       ui-editor-scrolls the scrolls asked of the view counted (spec 14.20): one for
                      each of ui_editor_reveal, _scroll_place, _scroll_line and
                      _scroll_row; one for a wheel's step, each pass of the bar
@@ -29925,9 +29928,10 @@ def run_ui_gate(workdir):
     print(f"  ui-editor-fillers-read {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-fillers-read", ok)
 
-    ok, detail = doc_flags("editor-exact-rows", 5, "a text just shown counts the rows above its "
+    ok, detail = doc_flags("editor-exact-rows", 7, "a text just shown counts the rows above its "
                            "top and above a row put as a settled one does, the bar wraps none, a "
-                           "closed fold's lines stay guesses, and a second ask wraps nothing")
+                           "closed fold's lines stay guesses until it is cut to a line or opened, "
+                           "and a second ask wraps nothing")
     print(f"  ui-editor-exact-rows  {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-exact-rows", ok)
 
