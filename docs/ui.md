@@ -410,8 +410,9 @@ colour for every state; while that colour's alpha is 0 they are the editor's tex
     shows above the top, or above the row asked, counts the rows it wraps to, a guess wrapped
     first, so two editors on texts that stand level agree on every row whichever has settled. A
     line a closed fold hides shows none and is left a guess. A mark below which no line is a guess,
-    lowered by a change or a fold opened and put back to the start by new columns or tab stops,
-    means a later ask wraps only the lines past it.
+    lowered wherever the rows above a line are summed again -- a change, a fold, a count put right
+    -- and put back to the start by new columns or tab stops, means a later ask wraps only the
+    lines past it.
   - The cost is the first ask after a jump into a large text, which wraps everything above the
     place at once rather than over the frames the budget would take. The bar and the wheel still
     scroll on the guesses, so a drag through a large text wraps none of it.
