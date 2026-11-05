@@ -43,14 +43,19 @@ size_t ui_editor_top_line(const UIElement* el, float* rows);
 // next layout.
 void ui_editor_scroll_line(UIElement* el, size_t line, float rows);
 // The view's top as rows from the text's start, every row the editor shows above it counted --
-// fillers, a closed fold's one row, each line's wrapped rows, guessed for a line not wrapped yet --
-// and the part of the top row scrolled past: 1041.25 is a quarter of the way down the 1042nd row.
-// 0 for anything not an editor showing a text.
+// fillers, a closed fold's one row, each line's wrapped rows, a guessed line wrapped first once the
+// editor is laid out on its text -- and the part of the top row scrolled past: 1041.25 is a quarter
+// of the way down the 1042nd row. 0 for anything not an editor showing a text.
 double ui_editor_top_row(const UIElement* el);
 // The view put with its top `rows` rows from the text's start, as ui_editor_top_row counts them,
 // held to the text's rows as a wheel's scroll is; a row inside a closed fold's lines is the fold's.
 // Before the editor is laid out on its text, taken at its next layout.
 void ui_editor_scroll_row(UIElement* el, double rows);
+// The scrolls asked of the view so far: one for each ui_editor_reveal, _scroll_place, _scroll_line
+// and _scroll_row when asked, and each the editor makes itself -- a wheel's, the bar's, a mode's,
+// the reveal after an action, a drag past the view's edge -- whether or not the view moves. An
+// edit, a fold, rows settling and a layout count none. Kept across the texts the editor shows.
+uint64_t ui_editor_scrolls(const UIElement* el);
 // The line numbers' gutter as wide as `digits` digits at least, so two editors on texts of
 // different lengths keep the same columns; 0, the default, as many as its own text's line count
 // has.
@@ -96,6 +101,9 @@ typedef struct UIEditorFiller {
 // The fillers of the text the editor shows, replaced whole; a line named twice takes the last, and
 // one past the line count is left out and logged.
 void ui_editor_set_fillers(UIElement* el, const UIEditorFiller* fillers, size_t count);
+// The fillers as they stand, in order of their lines, one at most a line and none of no rows, those
+// under the text last; valid until they or the text change. 0, and NULL, for none.
+size_t ui_editor_fillers(const UIElement* el, const UIEditorFiller** out);
 // The rows `line` wraps to at the editor's columns, fillers and folds aside: wrapped now when it
 // was a guess. 1 before the editor is laid out; 0 for a line past the text.
 size_t ui_editor_line_rows(const UIElement* el, size_t line);
