@@ -122,18 +122,18 @@ static CanvasPiece* _piece(CanvasPiece* piece, int shift, const CanvasPaint* pai
     piece->layer = paint->layer;
     piece->tx = _tile_of(anchor.x, shift);
     piece->ty = _tile_of(anchor.y, shift);
-    piece->record.p[0] = _rel(anchor.x, piece->tx, shift);
-    piece->record.p[1] = _rel(anchor.y, piece->ty, shift);
-    piece->record.u[0] = canvas_record_head(kind, flags, paint->style);
-    piece->record.u[1] = paint->net;
-    piece->record.u[2] = paint->object;
+    piece->item.record.p[0] = _rel(anchor.x, piece->tx, shift);
+    piece->item.record.p[1] = _rel(anchor.y, piece->ty, shift);
+    piece->item.record.u[0] = canvas_record_head(kind, flags, paint->style);
+    piece->item.record.u[1] = paint->net;
+    piece->item.record.u[2] = paint->object;
     return piece;
 }
 
 // A two-point piece's second point.
 static void _piece_b(CanvasPiece* piece, int shift, CanvasPoint b) {
-    piece->record.p[2] = _rel(b.x, piece->tx, shift);
-    piece->record.p[3] = _rel(b.y, piece->ty, shift);
+    piece->item.record.p[2] = _rel(b.x, piece->tx, shift);
+    piece->item.record.p[3] = _rel(b.y, piece->ty, shift);
 }
 
 // The flags on the ends of piece k of n of a shape that was split.
@@ -150,16 +150,6 @@ static void _bound(CanvasPiece* piece, int64_t x0, int64_t y0, int64_t x1, int64
     piece->max[1] = (y0 > y1 ? y0 : y1) + grow;
 }
 
-static bool _paint_ok(const CanvasEdit* edit, const CanvasPaint* paint, const char* what) {
-    if (!edit)
-        return false;
-    if (!paint->layer) {
-        log_error("canvas: a %s with no layer is refused", what);
-        return false;
-    }
-    return true;
-}
-
 static bool _length_ok(int64_t v, const char* what, const char* field) {
     if (v < 0 || v >= CANVAS_LENGTH_MAX) {
         log_error("canvas: a %s whose %s is %lld is refused (0 to %lld)", what, field, (long long)v,
@@ -167,6 +157,59 @@ static bool _length_ok(int64_t v, const char* what, const char* field) {
         return false;
     }
     return true;
+}
+
+static bool _paint_ok(const CanvasEdit* edit, const CanvasPaint* paint, const char* what) {
+    if (!edit)
+        return false;
+    if (!paint->layer) {
+        log_error("canvas: a %s with no layer is refused", what);
+        return false;
+    }
+    return _length_ok(paint->dash.length, what, "dash length") &&
+           _length_ok(paint->dash.gap, what, "dash gap");
+}
+
+/*
+ * Dashes. Each piece of a dashed shape carries the pattern and its place in it
+ * at the piece's own a, worked out here in double from the distance along the
+ * whole shape: so the pattern carries on through a polyline's points and
+ * across the cuts at the tile grid, and the place a record holds is a float
+ * under one period however long the path.
+ */
+
+// A pattern as it is laid along a path: its dash and gap, and its place at the
+// path's current point, in units; `on` 0 for a solid shape.
+typedef struct Dash {
+    double on, off, place;
+} Dash;
+
+// The paint's pattern from its phase. Round a closed path `around` units long
+// it is stretched to the nearest whole number of periods, one at least, so its
+// dashes meet themselves where it closes; 0 for an open path.
+static Dash _dash(const CanvasPaint* paint, double around) {
+    if (paint->dash.length <= 0 || paint->dash.gap <= 0)
+        return (Dash){0};
+    Dash d = {(double)paint->dash.length, (double)paint->dash.gap, (double)paint->dash.phase};
+    if (around > 0.0) {
+        const double k = around / (fmax(1.0, round(around / (d.on + d.off))) * (d.on + d.off));
+        d.on *= k, d.off *= k, d.place *= k;
+    }
+    return d;
+}
+
+// A piece dashed, `place` into the pattern at its a, the place growing toward
+// its b or, `back`, toward its a.
+static void _dash_piece(CanvasPiece* piece, const Dash* dash, double place, bool back) {
+    if (dash->on <= 0.0)
+        return;
+    const double period = dash->on + dash->off;
+    double at = fmod(place, period);
+    at += at < 0.0 ? period : 0.0;
+    piece->item.dash[0] = (float)dash->on;
+    piece->item.dash[1] = (float)dash->off;
+    piece->item.dash[2] = (float)at;
+    piece->item.record.u[0] |= (CANVAS_FLAG_DASHED | (back ? CANVAS_FLAG_DASH_BACK : 0u)) << 6;
 }
 
 static int64_t _abs64(int64_t v) {
@@ -182,10 +225,14 @@ static size_t _pieces_for(double span, int shift) {
     return n < 1.0 ? 1 : (size_t)n;
 }
 
+// A segment's pieces, each `dash` taking its place along from where the piece
+// starts, and `dash` moved on to b; one from a point to itself is solid, its dot
+// being no length to dash.
 static bool _segment(CanvasEdit* edit, const CanvasPaint* paint, CanvasPoint a, CanvasPoint b,
-                     int64_t width, bool flat_ends) {
+                     int64_t width, bool flat_ends, Dash* dash) {
     const int shift = edit->tile_shift;
     const int64_t dx = b.x - a.x, dy = b.y - a.y;
+    const double length = hypot((double)dx, (double)dy);
     const size_t n =
         _pieces_for((double)(_abs64(dx) > _abs64(dy) ? _abs64(dx) : _abs64(dy)), shift);
     if (n == 0) {
@@ -209,10 +256,13 @@ static bool _segment(CanvasEdit* edit, const CanvasPaint* paint, CanvasPoint a, 
         CanvasPiece* piece = _piece(&pieces[k], shift, paint, from, CANVAS_KIND_SEGMENT,
                                     _end_flags(k, n, flat_ends));
         _piece_b(piece, shift, to);
-        piece->record.f[0] = (float)((double)width * 0.5);
+        piece->item.record.f[0] = (float)((double)width * 0.5);
         _bound(piece, from.x, from.y, to.x, to.y, half);
+        if (length > 0.0)
+            _dash_piece(piece, dash, dash->place + length * (double)k / (double)n, false);
         from = to;
     }
+    dash->place += length;
     return _commit(edit, n);
 }
 
@@ -227,19 +277,32 @@ void canvas_edit_segment(CanvasEdit* edit, const CanvasSegment* segment) {
         return;
     }
     const EditMark mark = _mark(edit);
-    if (!_segment(edit, &segment->paint, segment->a, segment->b, segment->width,
-                  segment->flat_ends))
+    Dash dash = _dash(&segment->paint, 0.0);
+    if (!_segment(edit, &segment->paint, segment->a, segment->b, segment->width, segment->flat_ends,
+                  &dash))
         _rollback(edit, mark);
 }
 
-// A polyline's segments, round-joined; false, with some of them added, when
-// one is refused.
+// A polyline's segments, round-joined, one pattern carried through every point
+// and stretched round a closed one; false, with some of them added, when one is
+// refused. A repeated point adds nothing to a dashed line, where its dot would
+// show in a gap: only a line of nothing but one point is its dot.
 static bool _polyline(CanvasEdit* edit, const CanvasPaint* paint, const CanvasPoint* points,
                       size_t count, int64_t width, bool closed) {
     const size_t segments = closed ? count : count - 1;
-    for (size_t i = 0; i < segments; i++)
-        if (!_segment(edit, paint, points[i], points[(i + 1) % count], width, false))
+    double around = 0.0;
+    for (size_t i = 0; i < segments; i++) {
+        const CanvasPoint a = points[i], b = points[(i + 1) % count];
+        around += hypot((double)(b.x - a.x), (double)(b.y - a.y));
+    }
+    Dash dash = _dash(paint, closed ? around : 0.0);
+    for (size_t i = 0; i < segments; i++) {
+        const CanvasPoint a = points[i], b = points[(i + 1) % count];
+        if (dash.on > 0.0 && around > 0.0 && a.x == b.x && a.y == b.y)
+            continue;
+        if (!_segment(edit, paint, a, b, width, false, &dash))
             return false;
+    }
     return true;
 }
 
@@ -330,6 +393,9 @@ void canvas_edit_arc(CanvasEdit* edit, const CanvasArc* arc) {
     if (!pieces)
         return;
     const int64_t half = (arc->width + 1) / 2;
+    // The pattern from the arc's own a, which a clockwise one's records hold as their b.
+    const Dash dash = _dash(&arc->paint, 0.0);
+    const double length = r * sweep;
     CanvasPoint from = a;
     for (size_t k = 0; k < n; k++) {
         CanvasPoint to = b;
@@ -345,14 +411,17 @@ void canvas_edit_arc(CanvasEdit* edit, const CanvasArc* arc) {
         // the float small however far the canvas is from its origin.
         const double mx = ((double)from.x + (double)to.x) * 0.5;
         const double my = ((double)from.y + (double)to.y) * 0.5;
-        piece->record.f[0] = (float)((double)arc->width * 0.5);
-        piece->record.f[1] = (float)(cx - mx);
-        piece->record.f[2] = (float)(cy - my);
-        piece->record.f[3] = (float)r;
+        piece->item.record.f[0] = (float)((double)arc->width * 0.5);
+        piece->item.record.f[1] = (float)(cx - mx);
+        piece->item.record.f[2] = (float)(cy - my);
+        piece->item.record.f[3] = (float)r;
         double box[4];
         _arc_bound(cx, cy, r, start + sweep * (double)k / (double)n, sweep / (double)n, box);
         _bound(piece, (int64_t)floor(box[0]), (int64_t)floor(box[1]), (int64_t)ceil(box[2]),
                (int64_t)ceil(box[3]), half);
+        const double into = length * (double)k / (double)n;
+        _dash_piece(piece, &dash, dash.place + (arc->clockwise ? length - into : into),
+                    arc->clockwise);
         from = to;
     }
     _commit(edit, n);
@@ -373,10 +442,14 @@ void canvas_edit_circle(CanvasEdit* edit, const CanvasCircle* circle) {
         return;
     const int shift = edit->tile_shift;
     _piece(piece, shift, &circle->paint, circle->centre, CANVAS_KIND_CIRCLE, 0);
-    piece->record.p[2] = (int32_t)circle->radius;
-    piece->record.p[3] = (int32_t)circle->stroke;
+    piece->item.record.p[2] = (int32_t)circle->radius;
+    piece->item.record.p[3] = (int32_t)circle->stroke;
     const int64_t reach = circle->radius + (circle->stroke + 1) / 2;
     _bound(piece, circle->centre.x, circle->centre.y, circle->centre.x, circle->centre.y, reach);
+    if (circle->stroke > 0) {
+        const Dash dash = _dash(&circle->paint, TURN * (double)circle->radius);
+        _dash_piece(piece, &dash, dash.place, false);
+    }
     _commit(edit, 1);
 }
 
@@ -395,17 +468,24 @@ void canvas_edit_box(CanvasEdit* edit, const CanvasBox* box) {
         return;
     const int shift = edit->tile_shift;
     _piece(piece, shift, &box->paint, box->centre, CANVAS_KIND_BOX, 0);
-    piece->record.p[2] = (int32_t)box->stroke;
-    piece->record.f[0] = (float)((double)box->size_x * 0.5);
-    piece->record.f[1] = (float)((double)box->size_y * 0.5);
-    piece->record.f[2] = (float)box->corner;
-    piece->record.f[3] = (float)box->angle;
+    piece->item.record.p[2] = (int32_t)box->stroke;
+    piece->item.record.f[0] = (float)((double)box->size_x * 0.5);
+    piece->item.record.f[1] = (float)((double)box->size_y * 0.5);
+    piece->item.record.f[2] = (float)box->corner;
+    piece->item.record.f[3] = (float)box->angle;
     const double c = fabs(cos(box->angle)), s = fabs(sin(box->angle));
     const double hx = (double)box->size_x * 0.5, hy = (double)box->size_y * 0.5;
     const int64_t ex = (int64_t)ceil(c * hx + s * hy) + (box->stroke + 1) / 2;
     const int64_t ey = (int64_t)ceil(s * hx + c * hy) + (box->stroke + 1) / 2;
     piece->min[0] = box->centre.x - ex, piece->max[0] = box->centre.x + ex;
     piece->min[1] = box->centre.y - ey, piece->max[1] = box->centre.y + ey;
+    if (box->stroke > 0) {
+        // Round its outline, the corner held to the half sizes as the shader holds it.
+        const double corner = fmin((double)box->corner, fmin(hx, hy));
+        const Dash dash =
+            _dash(&box->paint, 4.0 * (hx - corner) + 4.0 * (hy - corner) + TURN * corner);
+        _dash_piece(piece, &dash, dash.place, false);
+    }
     _commit(edit, 1);
 }
 
@@ -639,8 +719,8 @@ static bool _polygon_edge(CanvasEdit* edit, const CanvasPaint* paint, CanvasPoin
         // Anchored where its middle is, so both ends are within a tile of it.
         const CanvasPoint mid = {p.x + (q.x - p.x) / 2, p.y + (q.y - p.y) / 2};
         CanvasPiece* piece = _piece(&pieces[made++], shift, paint, mid, CANVAS_KIND_EDGE, flags);
-        piece->record.p[0] = _rel(p.x, piece->tx, shift);
-        piece->record.p[1] = _rel(p.y, piece->ty, shift);
+        piece->item.record.p[0] = _rel(p.x, piece->tx, shift);
+        piece->item.record.p[1] = _rel(p.y, piece->ty, shift);
         _piece_b(piece, shift, q);
         _bound(piece, p.x, p.y, q.x, q.y, 1);
     }
@@ -890,11 +970,11 @@ void canvas_edit_text(CanvasEdit* edit, const CanvasText* text) {
         CanvasPiece* piece =
             _piece(&pieces[i], shift, &text->paint, text->anchor, CANVAS_KIND_GLYPH, flags);
         piece->font = font;
-        piece->record.p[2] = glyphs[i].codepoint;
-        piece->record.f[0] = (float)(glyphs[i].pen - ax);
-        piece->record.f[1] = (float)-ay;
-        piece->record.f[2] = (float)text->size;
-        piece->record.f[3] = (float)text->angle;
+        piece->item.record.p[2] = glyphs[i].codepoint;
+        piece->item.record.f[0] = (float)(glyphs[i].pen - ax);
+        piece->item.record.f[1] = (float)-ay;
+        piece->item.record.f[2] = (float)text->size;
+        piece->item.record.f[3] = (float)text->angle;
         const double x = glyphs[i].pen - ax;
         lo[0] = fmin(lo[0], x + g->x0 * em), hi[0] = fmax(hi[0], x + g->x1 * em);
         lo[1] = fmin(lo[1], -ay - g->y1 * em), hi[1] = fmax(hi[1], -ay - g->y0 * em);

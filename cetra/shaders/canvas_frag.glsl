@@ -20,6 +20,7 @@ flat in vec4 vOutline;
 flat in float vRaised;
 flat in vec4 vShape;
 flat in vec4 vEnds;
+flat in vec4 vDash;
 in vec2 vLocal;
 
 out vec4 FragColor;
@@ -151,6 +152,69 @@ float boxDistance() {
     return hs > 0.0 ? abs(d) - hs : d;
 }
 
+/*
+ * Dashes. A dashed shape's distance is the larger of its own and its dash's: how far outside its
+ * dash the fragment's place along the shape lies, negative inside, so each dash is the shape cut
+ * square across at its two ends. The place runs on past an open shape's ends as though it went
+ * straight on, which keeps a round end where a dash reaches it, and on through the half pixel
+ * past a cut, so both pieces give a pixel there the same coverage.
+ */
+
+// How far outside its dash a place `s` pixels along from the record's a lies, along the path.
+float dashDistance(float s) {
+    float m = mod((vFlags & CANVAS_FLAG_DASH_BACK) != 0u ? vDash.z - s : vDash.z + s, vDash.y);
+    return m < vDash.x ? -min(m, vDash.x - m) : min(m - vDash.x, vDash.y - m);
+}
+
+// The place along a box's outline from the middle of its bottom side, counter-clockwise: each
+// side, then each quarter-circle corner, its turn times its radius.
+float boxPlace() {
+    vec2 p = vLocal;
+    float c = vShape.z;
+    float a = vShape.x - c, b = vShape.y - c, q = 0.25 * TAU * c;
+    vec2 k = abs(p) - vec2(a, b);
+    if (k.x > 0.0 && k.y > 0.0) {
+        vec2 o = p - sign(p) * vec2(a, b); // from the corner's centre
+        float phi = atan(o.y, o.x);
+        if (p.y < 0.0)
+            return p.x > 0.0 ? a + c * (phi + 0.25 * TAU)
+                             : 3.0 * a + 3.0 * q + 4.0 * b + c * (phi + 0.5 * TAU);
+        return p.x > 0.0 ? a + q + 2.0 * b + c * phi
+                         : 3.0 * a + 2.0 * q + 2.0 * b + c * (phi - 0.25 * TAU);
+    }
+    if (k.y > k.x) {
+        if (p.y > 0.0)
+            return 2.0 * a + 2.0 * q + 2.0 * b - p.x;
+        return p.x >= 0.0 ? p.x : 4.0 * (a + b + q) + p.x;
+    }
+    return p.x > 0.0 ? a + q + b + p.y : 3.0 * a + 3.0 * q + 3.0 * b - p.y;
+}
+
+// The fragment's place along a dashed shape in pixels from the record's a, and how much a length
+// on the centreline spans at the fragment's own distance from a curve's centre, so a dash's ends
+// lie along the radius.
+vec2 dashPlace() {
+    if (vKind == CANVAS_KIND_SEGMENT)
+        return vec2(vLocal.x, 1.0);
+    if (vKind == CANVAS_KIND_CIRCLE) {
+        float t = atan(vLocal.y, vLocal.x);
+        return vec2(vShape.x * (t < 0.0 ? t + TAU : t), length(vLocal) / vShape.x);
+    }
+    if (vKind == CANVAS_KIND_ARC) {
+        float r = vShape.x, sweep = vShape.z;
+        vec2 s = vEnds.xy, e = vEnds.zw, p = vLocal;
+        float t = atan(cross2(s, p), dot(s, p));
+        t = t < 0.0 ? t + TAU : t;
+        if (t <= sweep)
+            return vec2(r * t, length(p) / r);
+        // Past an end, straight on along its tangent.
+        if (t - sweep < TAU - t)
+            return vec2(r * sweep + dot(p - e * r, vec2(-e.y, e.x)), 1.0);
+        return vec2(-dot(p - s * r, vec2(s.y, -s.x)), 1.0);
+    }
+    return vec2(boxPlace(), 1.0);
+}
+
 void main() {
     float d;
     if (vKind == CANVAS_KIND_SEGMENT)
@@ -165,6 +229,10 @@ void main() {
         d = glyphDistance();
     else
         d = boxDistance();
+    if (vDash.y > 0.0) {
+        vec2 place = dashPlace();
+        d = max(d, dashDistance(place.x) * place.y);
+    }
     // An outline is a ring uRing.x to uRing.y pixels outside the shape. Its inner ramp starts at
     // least half a pixel out, where the shape's own ends, so a pixel is the shape's or the ring's
     // and never both.

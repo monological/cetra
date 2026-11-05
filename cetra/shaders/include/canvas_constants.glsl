@@ -22,6 +22,8 @@
 #define CANVAS_FLAG_CUT_A 4u   // end a is where a longer shape was split: no cap, no ramp
 #define CANVAS_FLAG_CUT_B 8u   // end b likewise
 #define CANVAS_FLAG_MIRROR 16u // a glyph of mirrored text, flipped across its anchor's line
+#define CANVAS_FLAG_DASHED 32u // the record carries a dash pattern after it
+#define CANVAS_FLAG_DASH_BACK 64u // the pattern runs from b: a clockwise arc, its ends swapped
 
 // The glyph table (canvas_vert.glsl's uGlyphs): CANVAS_GLYPH_CODEPOINTS entries a font, two
 // texels each, for each of the CANVAS_FONT_MAX fonts a canvas draws with. Codepoint 0 draws

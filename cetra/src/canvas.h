@@ -130,6 +130,7 @@ typedef struct Canvas {
     float text_min_px;  // a string whose em is smaller is not drawn, nor one too small for
                         // its font's distance field to hold a pixel's edge ramp
     float shape_min_px; // a shape spanning less is not drawn; 0 = every shape
+    float dash_min_px;  // a dashed shape whose dash or gap spans fewer pixels is drawn solid
 } Canvas;
 
 // Made with no GL; the GL objects are made at the first draw. `desc` may be
@@ -155,11 +156,37 @@ uint64_t canvas_generation(const Canvas* canvas);
 /*
  * Shapes. Each starts with what it is drawn with and what it belongs to.
  */
+
+/*
+ * A stroke drawn in dashes, in units: `length` drawn, then `gap` left, over and
+ * over, the shape starting `phase` into that pattern. Solid when length or gap
+ * is 0. A dash's ends are flat, square across the stroke, along the radius on
+ * a curve; the pattern runs on past a shape's ends as though it went straight
+ * on, so a round end shows as far as a dash reaches it. A closed shape's
+ * pattern, phase and all, is stretched to the nearest whole number of periods
+ * round it, one at least, so its dashes meet where it closes. Where it starts:
+ *   segment   at a, toward b
+ *   polyline  at its first point, carried on through every point
+ *   arc       at a, toward b, whichever way round it goes
+ *   circle    at its rightmost point, counter-clockwise
+ *   box       at the middle of its bottom side in its own frame, counter-
+ *             clockwise
+ *   polygon   each ring at its first point, in the order given
+ * A fill and text are never dashed, nor a segment from a point to itself. The
+ * pattern is baked into the shape's records when it is added.
+ */
+typedef struct CanvasDash {
+    int64_t length;
+    int64_t gap;
+    int64_t phase;
+} CanvasDash;
+
 typedef struct CanvasPaint {
     CanvasLayer* layer;
     uint16_t style;
     uint32_t net;    // 0 = none
     uint32_t object; // 0 = none; what canvas_edit_remove_object removes by
+    CanvasDash dash; // {0} = solid
 } CanvasPaint;
 
 // A line `width` wide between two points, its ends round unless flat.
@@ -276,8 +303,9 @@ void free_canvas_edit(CanvasEdit* edit);
 
 // Each is refused by name, and leaves the edit as it was, for a shape with no
 // layer, a negative width or stroke, a width, radius or size of 2^30 units or
-// more, no extent, or one cut into more than 65536 pieces at the tile grid --
-// and a shape refused part way is taken out whole.
+// more, a dash whose length or gap is negative or 2^30 units or more, no
+// extent, or one cut into more than 65536 pieces at the tile grid -- and a
+// shape refused part way is taken out whole.
 //
 // Segments, arcs and polygons are cut at the tile grid and so drawn wherever
 // the view is. A circle, a box and a string are kept whole in their anchor's
