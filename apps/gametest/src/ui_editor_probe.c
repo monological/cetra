@@ -4903,15 +4903,19 @@ static int probe_editor_link(UISystem* ui) {
     ui_move(p.right, ui_screen_root(ui_top(ui)), p.left);
     say_flag("editor-link", "order", "taken", left_first && pair_order(ui, &p, p.docs[1], 60.0));
 
-    // The leader's rows above its top changed with no scroll asked: fillers set above the right's,
+    // The leader's rows above its top changed with no scroll asked: fillers set above the right's
+    // twice, a layout after each, so a lead the hold took at the first would show at the second;
     // then the left leading and made narrower, its line 40 wrapping to more rows. The follower
-    // follows each, so the hold took no lead.
+    // follows each.
+    const uint32_t pad = (uint32_t)(p.wrapped - 1);
     ui_editor_scroll_row(p.right, 50.0);
     editor_pass(ui);
-    ui_editor_set_fillers(p.right,
-                          (const UIEditorFiller[]){{10, 4}, {41, (uint32_t)(p.wrapped - 1)}}, 2);
-    editor_pass(ui);
+    ui_editor_set_fillers(p.right, (const UIEditorFiller[]){{10, 4}, {41, pad}}, 2);
+    layout_only(ui);
     bool unasked = pair_at(&p, 54.0);
+    ui_editor_set_fillers(p.right, (const UIEditorFiller[]){{10, 4}, {20, 3}, {41, pad}}, 3);
+    layout_only(ui);
+    unasked = pair_at(&p, 57.0) && unasked;
     ui_editor_scroll_row(p.left, 70.0);
     editor_pass(ui);
     ui_set_size(p.left, UI_FIXED, 200.0f, UI_FIXED, 220.0f);
