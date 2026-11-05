@@ -298,9 +298,9 @@ Canvas* create_canvas(Engine* engine, const CanvasDesc* desc) {
     canvas->engine = engine;
     canvas->data = data;
     canvas->text_min_px = 3.0f;
-    // Finer than two pixels on and two off, dashes beat against the pixel grid and crawl as the
-    // view pans; drawn solid, a dashed line zoomed out keeps its weight.
-    canvas->dash_min_px = 2.0f;
+    // Under half a pixel a dash or a gap cannot be drawn as one: pixel centres land inside it or
+    // not at random, and the line flickers as the view moves.
+    canvas->dash_min_px = 0.5f;
     data->tile_shift = shift;
     data->tags = desc && desc->tags ? desc->tags : create_canvas_tags();
     data->owns_tags = !(desc && desc->tags);

@@ -24,6 +24,23 @@
 #define CANVAS_FLAG_MIRROR 16u // a glyph of mirrored text, flipped across its anchor's line
 #define CANVAS_FLAG_DASHED 32u // the record carries a dash pattern after it
 #define CANVAS_FLAG_DASH_BACK 64u // the pattern runs from b: a clockwise arc, its ends swapped
+#define CANVAS_FLAG_SQUARE_A 128u // end a is square: flat half the width past it
+#define CANVAS_FLAG_SQUARE_B 256u // end b likewise
+
+// A segment's joins, in its fourth measure (canvas_record.h): the join at a, at b, and which ends
+// are joined; a box's join, in its fourth point; a dashed record's cap, in its pattern's fourth.
+// The codes are canvas.h's CanvasCap and CanvasJoin.
+#define CANVAS_JOIN_AT_A 3u   // the join at a
+#define CANVAS_JOIN_AT_B 12u  // at b, shifted two
+#define CANVAS_JOINED_A 16u   // a is a corner, the segment before it in the second measure
+#define CANVAS_JOINED_B 32u   // b likewise, the segment after it in the third
+#define CANVAS_DASHED_A 64u   // corner a lies inside a dash, which runs on round it
+#define CANVAS_DASHED_B 128u  // corner b likewise
+#define CANVAS_STROKE_ROUND 0u
+#define CANVAS_STROKE_BUTT 1u   // a cap
+#define CANVAS_STROKE_SQUARE 2u // a cap
+#define CANVAS_STROKE_MITRE 1u  // a join
+#define CANVAS_STROKE_BEVEL 2u  // a join
 
 // The glyph table (canvas_vert.glsl's uGlyphs): CANVAS_GLYPH_CODEPOINTS entries a font, two
 // texels each, for each of the CANVAS_FONT_MAX fonts a canvas draws with. Codepoint 0 draws

@@ -58,15 +58,26 @@
 
 #define MM(v) ((int64_t)llround((v) * 1e6))
 
-// --dash: every paint a sheet makes dashed, its fills and text among them, which the canvas
-// leaves solid. A sheet's own dash stands when it gives one.
+// --dash, --cap and --join: every paint a sheet makes stroked so, its fills and text among them,
+// which the canvas leaves as they are. A sheet's own dash stands when it gives one.
 static CanvasDash g_dash;
+static int g_cap = -1, g_join = -1; // -1: the sheet's own
+
+// A paint with butt ends.
+static CanvasPaint butt(CanvasPaint paint) {
+    paint.cap = CANVAS_CAP_BUTT;
+    return paint;
+}
 
 #define DASHED_EDIT(kind, Shape)                                      \
     static void dashed_##kind(CanvasEdit* edit, const Shape* shape) { \
         Shape copy = *shape;                                          \
         if (g_dash.length && !copy.paint.dash.length)                 \
             copy.paint.dash = g_dash;                                 \
+        if (g_cap >= 0)                                               \
+            copy.paint.cap = (CanvasCap)g_cap;                        \
+        if (g_join >= 0)                                              \
+            copy.paint.join = (CanvasJoin)g_join;                     \
         canvas_edit_##kind(edit, &copy);                              \
     }
 DASHED_EDIT(segment, CanvasSegment)
@@ -160,11 +171,10 @@ static void sheet_shapes(SheetContext* ctx) {
         canvas_edit_segment(
             edit, &(CanvasSegment){
                       .paint = cu, .a = AT(x, 5.0), .b = AT(x + 1.4, 7.0), .width = MM(widths[i])});
-        canvas_edit_segment(edit, &(CanvasSegment){.paint = cu,
+        canvas_edit_segment(edit, &(CanvasSegment){.paint = butt(cu),
                                                    .a = AT(x + 0.8, 5.0),
                                                    .b = AT(x + 1.6, 5.6),
-                                                   .width = MM(widths[i]),
-                                                   .flat_ends = true});
+                                                   .width = MM(widths[i])});
     }
 
     // Arcs: a quarter, a major arc, a clockwise one, flat ends, a half turn.
@@ -186,12 +196,11 @@ static void sheet_shapes(SheetContext* ctx) {
                                        .radius = MM(1.0),
                                        .width = MM(0.25),
                                        .clockwise = true});
-    canvas_edit_arc(edit, &(CanvasArc){.paint = bl,
+    canvas_edit_arc(edit, &(CanvasArc){.paint = butt(bl),
                                        .a = AT(-1.0, 1.5),
                                        .b = AT(-2.0, 2.5),
                                        .radius = MM(1.0),
-                                       .width = MM(0.4),
-                                       .flat_ends = true});
+                                       .width = MM(0.4)});
     canvas_edit_arc(edit, &(CanvasArc){.paint = bl,
                                        .a = AT(1.0, 2.0),
                                        .b = AT(3.0, 2.0),
@@ -340,23 +349,21 @@ static void sheet_areas(SheetContext* ctx) {
     c = CELL(3, 1);
     const CanvasPoint ba = {c.x - MM(0.5 * 0.9396926207859084), c.y + MM(0.5 * 0.3420201433256687)};
     const CanvasPoint bb = {c.x + MM(0.5 * 0.9396926207859084), c.y - MM(0.5 * 0.3420201433256687)};
-    canvas_edit_segment(
-        edit,
-        &(CanvasSegment){.paint = paint, .a = ba, .b = bb, .width = MM(0.2), .flat_ends = true});
+    canvas_edit_segment(edit,
+                        &(CanvasSegment){.paint = butt(paint), .a = ba, .b = bb, .width = MM(0.2)});
     PROBE("bar", c, "len %.6f w %.6f", hypot((double)(bb.x - ba.x), (double)(bb.y - ba.y)) * s,
           MM(0.2) * s);
 
     // Three quarters of a circle with flat ends, clockwise from south round to east: an arc of
     // more than half a turn, whose flat ends' inner ramp is measured only near each end.
     c = CELL(4, 0);
-    canvas_edit_arc(edit, &(CanvasArc){.paint = paint,
+    canvas_edit_arc(edit, &(CanvasArc){.paint = butt(paint),
                                        .a = {c.x, c.y - MM(0.5)},
                                        .b = {c.x + MM(0.5), c.y},
                                        .radius = MM(0.5),
                                        .width = MM(0.1),
                                        .clockwise = true,
-                                       .major = true,
-                                       .flat_ends = true});
+                                       .major = true});
     PROBE("flat-arc", c, "r %.6f w %.6f sweep %.9f", MM(0.5) * s, MM(0.1) * s, 4.71238898038469);
 #undef PROBE
 #undef CELL
@@ -1391,40 +1398,42 @@ static void sheet_board(SheetContext* ctx) {
 }
 
 /*
- * The dashes sheet (spec 14.22): white on black, a cell a case, each dashed by
- * its own paint, in millimetres. A cell with an area in closed form prints its
- * box, its area and its edge's length, in pixels; a place a dash or a gap must
- * cover prints the colour it wants; the strings and the cells that must stay
- * empty print their boxes alone.
+ * The strokes and dashes sheets (spec 14.22): white on black, a cell a case,
+ * each stroked by its own paint, in millimetres. A cell with an area in closed
+ * form prints its box, 0.6 mm each way, its area and its edge's length, in
+ * pixels; a place that must be white or black prints the colour it wants; the
+ * strings and the cells that must stay empty print their boxes alone.
  */
 #define DASH_ON  0.2
 #define DASH_OFF 0.2
 #define DASH_W   0.05
+#define CELL_MM  0.6
 
 static const double DASH_TURN = 6.283185307179586;
 
-static void dashes_area(const SheetContext* ctx, const char* name, CanvasPoint centre,
-                        double area_mm2, double edge_mm) {
+static void cell_area(const SheetContext* ctx, const char* sheet, const char* name,
+                      CanvasPoint centre, double area_mm2, double edge_mm) {
     if (!ctx->probe)
         return;
     const double px = ppu_px(ctx) * 1e6; // pixels a millimetre
-    probe_cell(ctx, "dashes", name, centre, MM(0.75));
+    probe_cell(ctx, sheet, name, centre, MM(CELL_MM));
     printf(" area %.6f edge %.6f\n", area_mm2 * px * px, edge_mm * px);
 }
 
-static void dashes_at(const SheetContext* ctx, const char* name, CanvasPoint p, uint32_t rgb) {
+static void cell_at(const SheetContext* ctx, const char* kind, const char* name, CanvasPoint p,
+                    uint32_t rgb) {
     if (!ctx->probe)
         return;
     double x, y;
     fb_of(ctx, p, &x, &y);
-    printf("canvas dashes-at %s %ld %ld want %06x\n", name, lround(x), lround(y), rgb);
+    printf("canvas %s %s %ld %ld want %06x\n", kind, name, lround(x), lround(y), rgb);
 }
 
 static void dashes_box(const SheetContext* ctx, const char* kind, const char* name,
                        CanvasPoint centre) {
     if (!ctx->probe)
         return;
-    probe_cell(ctx, kind, name, centre, MM(0.75));
+    probe_cell(ctx, kind, name, centre, MM(CELL_MM));
     printf("\n");
 }
 
@@ -1433,122 +1442,239 @@ static CanvasPoint dashes_around(CanvasPoint o, double mm, double angle) {
     return (CanvasPoint){o.x + MM(mm * cos(angle)), o.y + MM(mm * sin(angle))};
 }
 
+// A polyline of two legs `width` wide meeting at `corner`, the first `in` long along +x into it
+// and the second `out` long turning `turn` radians to the left out of it, its ends butt: its area
+// is its legs' lengths times its width, less what its join takes off the mitre's point.
+static void strokes_bend(const SheetContext* ctx, CanvasPaint paint, CanvasPoint corner, double in,
+                         double out, double turn, double width) {
+    const CanvasPoint legs[3] = {{corner.x - MM(in), corner.y},
+                                 corner,
+                                 {corner.x + MM(out * cos(turn)), corner.y + MM(out * sin(turn))}};
+    paint.cap = CANVAS_CAP_BUTT;
+    canvas_edit_polyline(
+        ctx->edit,
+        &(CanvasPolyline){.paint = paint, .points = legs, .count = 3, .width = MM(width)});
+}
+
+// What a join of `turn` radians takes off a mitre's point, in mm^2, a half width `h`: the kite
+// between the two outer edges' ends and the point, less what the join keeps of it -- a bevel its
+// triangle, a round join its sector. A mitre past four widths is drawn as a bevel.
+static double strokes_cut(CanvasJoin join, double turn, double h) {
+    const double kite = h * h * tan(turn * 0.5);
+    if (join == CANVAS_JOIN_MITRE && cos(turn) >= -0.875)
+        return 0.0;
+    return kite - (join == CANVAS_JOIN_ROUND ? 0.5 * h * h * turn : 0.5 * h * h * sin(turn));
+}
+
+static void sheet_strokes(SheetContext* ctx) {
+    CanvasEdit* edit = ctx->edit;
+    const CanvasPaint white = white_paint(ctx->canvas);
+    static const char* const CAPS[3] = {"round", "butt", "square"};
+    static const char* const JOINS[3] = {"round", "mitre", "bevel"};
+    char name[32];
+#define CELL(i, j) \
+    ((CanvasPoint){MM(-3.2 + 1.6 * (i)) + ctx->offset, MM(1.6 - 1.6 * (j)) + ctx->offset})
+#define AT(c, dx, dy) ((CanvasPoint){(c).x + MM(dx), (c).y + MM(dy)})
+
+    // A segment 0.8 long and 0.2 wide, and an arc of radius 0.4 through 1.5 radians 0.15 wide,
+    // each capped three ways: a round cap adds a disc, a square one the width squared.
+    for (int k = 0; k < 3; k++) {
+        CanvasPaint paint = white;
+        paint.cap = (CanvasCap)k;
+        const double cap_area[3] = {DASH_TURN * 0.25, 0.0, 2.0}; // in half widths squared
+        CanvasPoint c = CELL(k, 0);
+        canvas_edit_segment(edit, &(CanvasSegment){.paint = paint,
+                                                   .a = AT(c, -0.4, 0.0),
+                                                   .b = AT(c, 0.4, 0.0),
+                                                   .width = MM(0.2)});
+        snprintf(name, sizeof(name), "segment-%s", CAPS[k]);
+        cell_area(ctx, "strokes", name, c, 0.8 * 0.2 + cap_area[k] * 0.2 * 0.2 * 0.5,
+                  2.0 * (0.8 + 0.2));
+        c = k < 2 ? CELL(3 + k, 0) : CELL(0, 1);
+        const CanvasPoint o = AT(c, -0.2, -0.2);
+        canvas_edit_arc(edit, &(CanvasArc){.paint = paint,
+                                           .a = AT(o, 0.4, 0.0),
+                                           .b = AT(o, 0.4 * cos(1.5), 0.4 * sin(1.5)),
+                                           .radius = MM(0.4),
+                                           .width = MM(0.15)});
+        snprintf(name, sizeof(name), "arc-%s", CAPS[k]);
+        cell_area(ctx, "strokes", name, c, 0.4 * 1.5 * 0.15 + cap_area[k] * 0.15 * 0.15 * 0.5,
+                  2.0 * (0.4 * 1.5 + 0.15));
+    }
+
+    // Two legs of 0.5 at a right angle and at 25 degrees, 0.15 wide, joined three ways: past four
+    // widths the sharp one's mitre is its bevel.
+    const double h = 0.075, sharp = DASH_TURN * 0.5 - 25.0 / 360.0 * DASH_TURN;
+    for (int k = 0; k < 3; k++) {
+        CanvasPaint paint = white;
+        paint.join = (CanvasJoin)k;
+        CanvasPoint c = CELL(1 + k, 1);
+        strokes_bend(ctx, paint, AT(c, 0.2, -0.3), 0.5, 0.5, DASH_TURN * 0.25, 0.15);
+        snprintf(name, sizeof(name), "right-%s", JOINS[k]);
+        cell_area(ctx, "strokes", name, c, 0.15 - strokes_cut((CanvasJoin)k, DASH_TURN * 0.25, h),
+                  2.0 * 1.15);
+        c = k < 1 ? CELL(4, 1) : CELL(k - 1, 2);
+        strokes_bend(ctx, paint, AT(c, 0.2, 0.0), 0.5, 0.5, sharp, 0.15);
+        snprintf(name, sizeof(name), "sharp-%s", JOINS[k]);
+        cell_area(ctx, "strokes", name, c, 0.15 - strokes_cut((CanvasJoin)k, sharp, h), 2.0 * 1.15);
+    }
+    // Just inside the right angle's mitre point, which a bevel cuts off.
+    cell_at(ctx, "strokes-at", "mitre-point", AT(CELL(2, 1), 0.2 + 0.055, -0.3 - 0.055), 0xffffff);
+    cell_at(ctx, "strokes-at", "bevel-cut", AT(CELL(3, 1), 0.2 + 0.055, -0.3 - 0.055), 0x000000);
+
+    // A box 0.8 by 0.6 with square corners, stroked 0.1, joined three ways.
+    for (int k = 0; k < 3; k++) {
+        CanvasPaint paint = white;
+        paint.join = (CanvasJoin)k;
+        const CanvasPoint c = CELL(2 + k, 2);
+        canvas_edit_box(edit, &(CanvasBox){.paint = paint,
+                                           .centre = c,
+                                           .size_x = MM(0.8),
+                                           .size_y = MM(0.6),
+                                           .stroke = MM(0.1)});
+        const double corners[3] = {0.01 - DASH_TURN * 0.125 * 0.01, 0.0, 0.005};
+        snprintf(name, sizeof(name), "box-%s", JOINS[k]);
+        cell_area(ctx, "strokes", name, c, 0.28 - corners[k], 4.0 * (0.8 + 0.6));
+    }
+#undef AT
+#undef CELL
+}
+
 static void sheet_dashes(SheetContext* ctx) {
     CanvasEdit* edit = ctx->edit;
     CanvasPaint paint = white_paint(ctx->canvas);
     const CanvasPaint solid = paint;
     paint.dash = (CanvasDash){MM(DASH_ON), MM(DASH_OFF), 0};
+    paint.cap = CANVAS_CAP_BUTT;
     // The pattern half a gap on from a dash's end: a box's corners in the middle of gaps.
     CanvasPaint shifted = paint;
     shifted.dash.phase = MM(DASH_ON + DASH_OFF * 0.5);
     const double period = DASH_ON + DASH_OFF, w = DASH_W;
 #define CELL(i, j) \
-    ((CanvasPoint){MM(-3.2 + 1.6 * (i)) + ctx->offset, MM(1.6 - 1.6 * (j)) + ctx->offset})
+    ((CanvasPoint){MM(-3.25 + 1.3 * (i)) + ctx->offset, MM(1.6 - 1.6 * (j)) + ctx->offset})
 #define AT(c, dx, dy) ((CanvasPoint){(c).x + MM(dx), (c).y + MM(dy)})
 
-    // Three periods less a gap, flat ended: it ends on a dash's end.
+    // Three periods less a gap, butt ended: it ends on a dash's end.
     CanvasPoint c = CELL(0, 0);
-    const CanvasSegment bar = {.paint = paint,
-                               .a = AT(c, -0.5, 0.0),
-                               .b = AT(c, 0.5, 0.0),
-                               .width = MM(w),
-                               .flat_ends = true};
+    const CanvasSegment bar = {
+        .paint = paint, .a = AT(c, -0.5, 0.0), .b = AT(c, 0.5, 0.0), .width = MM(w)};
     canvas_edit_segment(edit, &bar);
-    dashes_area(ctx, "bar", c, 3.0 * DASH_ON * w, 6.0 * (DASH_ON + w));
-    dashes_at(ctx, "bar-dash", AT(c, -0.5 + DASH_ON * 0.5, 0.0), 0xffffff);
-    dashes_at(ctx, "bar-gap", AT(c, -0.5 + DASH_ON + DASH_OFF * 0.5, 0.0), 0x000000);
+    cell_area(ctx, "dashes", "bar", c, 3.0 * DASH_ON * w, 6.0 * (DASH_ON + w));
+    cell_at(ctx, "dashes-at", "bar-dash", AT(c, -0.5 + DASH_ON * 0.5, 0.0), 0xffffff);
+    cell_at(ctx, "dashes-at", "bar-gap", AT(c, -0.5 + DASH_ON + DASH_OFF * 0.5, 0.0), 0x000000);
+
+    // The same round: each dash a capsule, its ends past the dash's length.
+    c = CELL(1, 0);
+    CanvasSegment round_bar = bar;
+    round_bar.paint.cap = CANVAS_CAP_ROUND;
+    round_bar.a = AT(c, -0.5, 0.0), round_bar.b = AT(c, 0.5, 0.0);
+    canvas_edit_segment(edit, &round_bar);
+    cell_area(ctx, "dashes", "round-bar", c, 3.0 * (DASH_ON * w + DASH_TURN * w * w / 8.0),
+              3.0 * (2.0 * DASH_ON + DASH_TURN * w * 0.5));
 
     // Two legs at a right angle, the corner in the middle of a gap and the far end in the middle
-    // of a dash, which keeps its round end: the pattern carried round the corner. Begun again
-    // there, the second leg would start on a dash.
-    c = CELL(1, 0);
+    // of a dash: the pattern carried round the corner. Begun again there, the second leg would
+    // start on a dash.
+    c = CELL(2, 0);
     const double leg1 = period + DASH_ON + DASH_OFF * 0.5,
                  leg2 = DASH_OFF * 0.5 + period + DASH_ON * 0.5;
     const CanvasPoint legs[3] = {AT(c, -0.35, -0.3), AT(c, -0.35 + leg1, -0.3),
                                  AT(c, -0.35 + leg1, -0.3 + leg2)};
     canvas_edit_polyline(
         edit, &(CanvasPolyline){.paint = paint, .points = legs, .count = 3, .width = MM(w)});
-    dashes_area(ctx, "carried", c, 3.5 * DASH_ON * w + DASH_TURN * w * w / 16.0,
-                7.0 * (DASH_ON + w));
+    cell_area(ctx, "dashes", "carried", c, 3.5 * DASH_ON * w, 7.0 * (DASH_ON + w));
+
+    // The corner in the middle of a dash, mitred: that dash turns the corner square, its two
+    // halves' lengths along the centreline times the width.
+    c = CELL(3, 0);
+    const double half_dash = DASH_ON * 0.5;
+    const CanvasPoint bend[3] = {AT(c, -0.25, -0.25), AT(c, -0.25 + period + half_dash, -0.25),
+                                 AT(c, -0.25 + period + half_dash, -0.25 + half_dash + period)};
+    CanvasPaint mitred = paint;
+    mitred.join = CANVAS_JOIN_MITRE;
+    canvas_edit_polyline(
+        edit, &(CanvasPolyline){.paint = mitred, .points = bend, .count = 3, .width = MM(w)});
+    cell_area(ctx, "dashes", "corner", c, 3.0 * DASH_ON * w, 6.0 * (DASH_ON + w));
 
     // A ring, its pattern stretched to six whole periods round it.
-    c = CELL(2, 0);
+    c = CELL(4, 0);
     canvas_edit_circle(
         edit, &(CanvasCircle){.paint = paint, .centre = c, .radius = MM(0.4), .stroke = MM(w)});
     const double round_mm = DASH_TURN * 0.4, periods = round(round_mm / period);
     const double on = round_mm / periods * DASH_ON / period, off = round_mm / periods - on;
-    dashes_area(ctx, "ring", c, round_mm * w * DASH_ON / period, 2.0 * periods * (on + w));
-    dashes_at(ctx, "ring-dash", dashes_around(c, 0.4, on * 0.5 / 0.4), 0xffffff);
-    dashes_at(ctx, "ring-gap", dashes_around(c, 0.4, (on + off * 0.5) / 0.4), 0x000000);
+    cell_area(ctx, "dashes", "ring", c, round_mm * w * DASH_ON / period, 2.0 * periods * (on + w));
+    cell_at(ctx, "dashes-at", "ring-dash", dashes_around(c, 0.4, on * 0.5 / 0.4), 0xffffff);
+    cell_at(ctx, "dashes-at", "ring-gap", dashes_around(c, 0.4, (on + off * 0.5) / 0.4), 0x000000);
 
-    // An arc two periods less a gap long, flat ended, counter-clockwise from a.
-    c = CELL(3, 0);
+    // An arc two periods less a gap long, butt ended, counter-clockwise from a.
+    c = CELL(5, 0);
     CanvasPoint o = AT(c, -0.25, -0.2);
     canvas_edit_arc(edit, &(CanvasArc){.paint = paint,
                                        .a = dashes_around(o, 0.5, 0.0),
                                        .b = dashes_around(o, 0.5, 1.2),
                                        .radius = MM(0.5),
-                                       .width = MM(w),
-                                       .flat_ends = true});
-    dashes_area(ctx, "arc", c, 2.0 * DASH_ON * w, 4.0 * (DASH_ON + w));
-    dashes_at(ctx, "arc-dash", dashes_around(o, 0.5, DASH_ON * 0.5 / 0.5), 0xffffff);
-    dashes_at(ctx, "arc-gap", dashes_around(o, 0.5, (DASH_ON + DASH_OFF * 0.5) / 0.5), 0x000000);
+                                       .width = MM(w)});
+    cell_area(ctx, "dashes", "arc", c, 2.0 * DASH_ON * w, 4.0 * (DASH_ON + w));
+    cell_at(ctx, "dashes-at", "arc-dash", dashes_around(o, 0.5, DASH_ON * 0.5 / 0.5), 0xffffff);
+    cell_at(ctx, "dashes-at", "arc-gap", dashes_around(o, 0.5, (DASH_ON + DASH_OFF * 0.5) / 0.5),
+            0x000000);
 
     // A clockwise arc two periods long, its pattern from its own a: from its record's a the first
     // dash and gap would trade places.
-    c = CELL(4, 0);
+    c = CELL(0, 1);
     o = AT(c, -0.2, -0.3);
     canvas_edit_arc(edit, &(CanvasArc){.paint = paint,
                                        .a = dashes_around(o, 0.5, 1.6),
                                        .b = dashes_around(o, 0.5, 0.0),
                                        .radius = MM(0.5),
                                        .width = MM(w),
-                                       .clockwise = true,
-                                       .flat_ends = true});
-    dashes_at(ctx, "back-dash", dashes_around(o, 0.5, 1.6 - DASH_ON * 0.5 / 0.5), 0xffffff);
-    dashes_at(ctx, "back-gap", dashes_around(o, 0.5, 1.6 - (DASH_ON + DASH_OFF * 0.5) / 0.5),
-              0x000000);
+                                       .clockwise = true});
+    cell_at(ctx, "dashes-at", "back-dash", dashes_around(o, 0.5, 1.6 - DASH_ON * 0.5 / 0.5),
+            0xffffff);
+    cell_at(ctx, "dashes-at", "back-gap",
+            dashes_around(o, 0.5, 1.6 - (DASH_ON + DASH_OFF * 0.5) / 0.5), 0x000000);
 
     // A box and a polygon over the same square, its sides two periods with its corners in the
     // middle of gaps, from the middle of the bottom side: eight dashes, two a side.
-    c = CELL(0, 1);
+    c = CELL(1, 1);
     canvas_edit_box(
         edit,
         &(CanvasBox){
             .paint = shifted, .centre = c, .size_x = MM(0.8), .size_y = MM(0.8), .stroke = MM(w)});
-    dashes_area(ctx, "box", c, 8.0 * DASH_ON * w, 16.0 * (DASH_ON + w));
-    dashes_at(ctx, "box-dash", AT(c, 0.2, -0.4), 0xffffff);
-    dashes_at(ctx, "box-gap", AT(c, 0.0, -0.4), 0x000000);
-    c = CELL(1, 1);
+    cell_area(ctx, "dashes", "box", c, 8.0 * DASH_ON * w, 16.0 * (DASH_ON + w));
+    cell_at(ctx, "dashes-at", "box-dash", AT(c, 0.2, -0.4), 0xffffff);
+    cell_at(ctx, "dashes-at", "box-gap", AT(c, 0.0, -0.4), 0x000000);
+    c = CELL(2, 1);
     const CanvasPoint square[5] = {AT(c, 0.0, -0.4), AT(c, 0.4, -0.4), AT(c, 0.4, 0.4),
                                    AT(c, -0.4, 0.4), AT(c, -0.4, -0.4)};
     canvas_edit_polygon(
         edit, &(CanvasPolygon){.paint = shifted, .points = square, .count = 5, .stroke = MM(w)});
-    dashes_area(ctx, "polygon", c, 8.0 * DASH_ON * w, 16.0 * (DASH_ON + w));
-    dashes_at(ctx, "polygon-dash", AT(c, 0.2, -0.4), 0xffffff);
-    dashes_at(ctx, "polygon-gap", AT(c, 0.0, -0.4), 0x000000);
+    cell_area(ctx, "dashes", "polygon", c, 8.0 * DASH_ON * w, 16.0 * (DASH_ON + w));
+    cell_at(ctx, "dashes-at", "polygon-dash", AT(c, 0.2, -0.4), 0xffffff);
+    cell_at(ctx, "dashes-at", "polygon-gap", AT(c, 0.0, -0.4), 0x000000);
 
     // Fills in a dashed paint, each its solid self.
-    c = CELL(2, 1);
-    canvas_edit_circle(edit, &(CanvasCircle){.paint = paint, .centre = c, .radius = MM(0.4)});
-    dashes_area(ctx, "fill-circle", c, DASH_TURN * 0.5 * 0.16, DASH_TURN * 0.4);
     c = CELL(3, 1);
+    canvas_edit_circle(edit, &(CanvasCircle){.paint = paint, .centre = c, .radius = MM(0.4)});
+    cell_area(ctx, "dashes", "fill-circle", c, DASH_TURN * 0.5 * 0.16, DASH_TURN * 0.4);
+    c = CELL(4, 1);
     canvas_edit_box(
         edit, &(CanvasBox){.paint = paint, .centre = c, .size_x = MM(0.8), .size_y = MM(0.6)});
-    dashes_area(ctx, "fill-box", c, 0.48, 2.8);
-    c = CELL(4, 1);
+    cell_area(ctx, "dashes", "fill-box", c, 0.48, 2.8);
+    c = CELL(5, 1);
     const CanvasPoint triangle[3] = {AT(c, -0.4, -0.4), AT(c, 0.4, -0.4), AT(c, 0.0, 0.4)};
     canvas_edit_polygon(edit, &(CanvasPolygon){.paint = paint, .points = triangle, .count = 3});
-    dashes_area(ctx, "fill-polygon", c, 0.32, 0.8 + 2.0 * hypot(0.4, 0.8));
+    cell_area(ctx, "dashes", "fill-polygon", c, 0.32, 0.8 + 2.0 * hypot(0.4, 0.8));
 
-    // One string plain and one in a dashed paint, a whole number of pixels apart.
+    // One string plain and one in a dashed paint, a whole number of pixels apart, each within its
+    // cell.
     for (int k = 0; k < 2; k++) {
         c = CELL(k, 2);
         canvas_edit_text(edit, &(CanvasText){.paint = k ? paint : solid,
                                              .font = ctx->font,
                                              .string = "Dash 0.5",
                                              .anchor = c,
-                                             .size = MM(0.35),
+                                             .size = MM(0.25),
                                              .align_x = CANVAS_ALIGN_CENTRE,
                                              .align_y = CANVAS_ALIGN_MIDDLE});
         dashes_box(ctx, "dashes-text", k ? "dashed" : "plain", c);
@@ -1565,7 +1691,7 @@ static void sheet_dashes(SheetContext* ctx) {
         canvas_edit_segment(edit, &tagged);
     }
     canvas_edit_remove_object(edit, 8);
-    dashes_at(ctx, "tagged-dash", AT(CELL(2, 2), -0.5 + DASH_ON * 0.5, 0.0), 0xff0000);
+    cell_at(ctx, "dashes-at", "tagged-dash", AT(CELL(2, 2), -0.5 + DASH_ON * 0.5, 0.0), 0xff0000);
     dashes_box(ctx, "dashes-empty", "removed", CELL(3, 2));
 
     // A segment whose gap is negative and an arc whose dash is 2^30 units, each refused.
@@ -1608,6 +1734,7 @@ static const Sheet SHEETS[] = {
     {"overlap", sheet_overlap, {0.0, 0.0}, 8.0, 0x000000ffu},
     {"tags", sheet_tags, {0.0, 0.0}, 9.0, 0x000000ffu},
     {"board", sheet_board, {0.0, 0.0}, 66.0, 0x001023ffu},
+    {"strokes", sheet_strokes, {0.0, 0.0}, 8.0, 0x000000ffu},
     {"dashes", sheet_dashes, {0.0, 0.0}, 8.0, 0x000000ffu},
 };
 
@@ -3277,7 +3404,8 @@ static void usage(const char* argv0) {
             "[--palette]\n"
             "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim] [--read-only]\n"
             "          [--editor-fold FIRST,LAST] [--editor-filler LINE,ROWS] [--refuse-close]\n"
-            "          [--ui-borders] [--dash LENGTH,GAP (mm)] [--dash-min-px PX]\n",
+            "          [--ui-borders] [--dash LENGTH,GAP (mm)] [--dash-min-px PX]\n"
+            "          [--cap round|butt|square] [--join round|mitre|bevel]\n",
             argv0);
 }
 
@@ -3416,6 +3544,22 @@ int main(int argc, char** argv) {
                 return 2;
             }
             g_dash = (CanvasDash){MM(on), MM(off), 0};
+        } else if ((strcmp(argv[i], "--cap") == 0 || strcmp(argv[i], "--join") == 0) && more) {
+            // round, then butt or mitre, then square or bevel: the order of CanvasCap and
+            // CanvasJoin.
+            const bool cap = strcmp(argv[i], "--cap") == 0;
+            const char* const* names = cap ? (const char* const[]){"round", "butt", "square"}
+                                           : (const char* const[]){"round", "mitre", "bevel"};
+            const char* name = argv[++i];
+            int kind = -1;
+            for (int k = 0; k < 3; k++)
+                kind = strcmp(name, names[k]) == 0 ? k : kind;
+            if (kind < 0) {
+                fprintf(stderr, "canvas: %s takes %s, %s or %s\n", cap ? "--cap" : "--join",
+                        names[0], names[1], names[2]);
+                return 2;
+            }
+            *(cap ? &g_cap : &g_join) = kind;
         } else if (strcmp(argv[i], "--dash-min-px") == 0 && more) {
             dash_min_px = (float)atof(argv[++i]);
         } else {

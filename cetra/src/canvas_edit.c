@@ -136,10 +136,18 @@ static void _piece_b(CanvasPiece* piece, int shift, CanvasPoint b) {
     piece->item.record.p[3] = _rel(b.y, piece->ty, shift);
 }
 
-// The flags on the ends of piece k of n of a shape that was split.
-static uint32_t _end_flags(size_t k, size_t n, bool flat_ends) {
-    uint32_t flags = k == 0 ? (flat_ends ? CANVAS_FLAG_FLAT_A : 0u) : CANVAS_FLAG_CUT_A;
-    return flags | (k + 1 == n ? (flat_ends ? CANVAS_FLAG_FLAT_B : 0u) : CANVAS_FLAG_CUT_B);
+// An end's flag for its cap: none for round.
+static uint32_t _cap_flag(CanvasCap cap, uint32_t butt, uint32_t square) {
+    return cap == CANVAS_CAP_BUTT ? butt : cap == CANVAS_CAP_SQUARE ? square : 0u;
+}
+
+// The flags on the ends of piece k of n of a shape that was split, its own two
+// ends capped `at_a` and `at_b`.
+static uint32_t _end_flags(size_t k, size_t n, CanvasCap at_a, CanvasCap at_b) {
+    const uint32_t a =
+        k == 0 ? _cap_flag(at_a, CANVAS_FLAG_FLAT_A, CANVAS_FLAG_SQUARE_A) : CANVAS_FLAG_CUT_A;
+    return a | (k + 1 == n ? _cap_flag(at_b, CANVAS_FLAG_FLAT_B, CANVAS_FLAG_SQUARE_B)
+                           : CANVAS_FLAG_CUT_B);
 }
 
 static void _bound(CanvasPiece* piece, int64_t x0, int64_t y0, int64_t x1, int64_t y1,
@@ -164,6 +172,11 @@ static bool _paint_ok(const CanvasEdit* edit, const CanvasPaint* paint, const ch
         return false;
     if (!paint->layer) {
         log_error("canvas: a %s with no layer is refused", what);
+        return false;
+    }
+    if ((unsigned)paint->cap > CANVAS_CAP_SQUARE || (unsigned)paint->join > CANVAS_JOIN_BEVEL) {
+        log_error("canvas: a %s whose cap is %d and join %d is refused", what, (int)paint->cap,
+                  (int)paint->join);
         return false;
     }
     return _length_ok(paint->dash.length, what, "dash length") &&
@@ -198,9 +211,20 @@ static Dash _dash(const CanvasPaint* paint, double around) {
     return d;
 }
 
+// Whether `place` lies strictly inside a dash of the pattern.
+static bool _in_dash(const Dash* dash, double place) {
+    if (dash->on <= 0.0)
+        return false;
+    const double period = dash->on + dash->off;
+    double at = fmod(place, period);
+    at += at < 0.0 ? period : 0.0;
+    return at > 0.0 && at < dash->on;
+}
+
 // A piece dashed, `place` into the pattern at its a, the place growing toward
-// its b or, `back`, toward its a.
-static void _dash_piece(CanvasPiece* piece, const Dash* dash, double place, bool back) {
+// its b or, `back`, toward its a, its dashes ended with the paint's cap.
+static void _dash_piece(CanvasPiece* piece, const CanvasPaint* paint, const Dash* dash,
+                        double place, bool back) {
     if (dash->on <= 0.0)
         return;
     const double period = dash->on + dash->off;
@@ -209,7 +233,28 @@ static void _dash_piece(CanvasPiece* piece, const Dash* dash, double place, bool
     piece->item.dash[0] = (float)dash->on;
     piece->item.dash[1] = (float)dash->off;
     piece->item.dash[2] = (float)at;
+    piece->item.dash[3] = (float)paint->cap;
     piece->item.record.u[0] |= (CANVAS_FLAG_DASHED | (back ? CANVAS_FLAG_DASH_BACK : 0u)) << 6;
+}
+
+/*
+ * Joins. A polyline's point between two segments is a corner each draws its
+ * side of (canvas_frag.glsl): the segment's record carries the direction the
+ * stroke comes into a and goes on out of b, and the join there. A mitre whose
+ * point would reach more than four widths from the corner -- the stroke turning
+ * through more than an angle whose cosine is -0.875 -- is a bevel, and a turn
+ * back on itself, which has no bisector to cut at, is round.
+ */
+#define MITRE_TURN_MAX -0.875
+
+// The join a corner from direction `in` to `out` is drawn with.
+static uint32_t _corner_join(const CanvasPaint* paint, double in_x, double in_y, double out_x,
+                             double out_y) {
+    const double c = (in_x * out_x + in_y * out_y) / (hypot(in_x, in_y) * hypot(out_x, out_y));
+    if (paint->join == CANVAS_JOIN_ROUND || c < -0.999)
+        return CANVAS_STROKE_ROUND;
+    return paint->join == CANVAS_JOIN_MITRE && c >= MITRE_TURN_MAX ? CANVAS_STROKE_MITRE
+                                                                   : CANVAS_STROKE_BEVEL;
 }
 
 static int64_t _abs64(int64_t v) {
@@ -227,12 +272,37 @@ static size_t _pieces_for(double span, int shift) {
 
 // A segment's pieces, each `dash` taking its place along from where the piece
 // starts, and `dash` moved on to b; one from a point to itself is solid, its dot
-// being no length to dash.
+// being no length to dash. `before` and `after` are the points the stroke
+// comes from into a and goes on to out of b, at a polyline's corners; NULL at
+// an end, which takes the paint's cap. A round corner undashed writes nothing,
+// being the round ends the two segments draw anyway.
 static bool _segment(CanvasEdit* edit, const CanvasPaint* paint, CanvasPoint a, CanvasPoint b,
-                     int64_t width, bool flat_ends, Dash* dash) {
+                     int64_t width, const CanvasPoint* before, const CanvasPoint* after,
+                     Dash* dash) {
     const int shift = edit->tile_shift;
     const int64_t dx = b.x - a.x, dy = b.y - a.y;
     const double length = hypot((double)dx, (double)dy);
+    uint32_t joins = 0;
+    float in = 0.0f, out = 0.0f;
+    if (before) {
+        const double ix = (double)(a.x - before->x), iy = (double)(a.y - before->y);
+        joins |= _corner_join(paint, ix, iy, (double)dx, (double)dy) | CANVAS_JOINED_A;
+        in = (float)atan2(iy, ix);
+    }
+    if (after) {
+        const double ox = (double)(after->x - b.x), oy = (double)(after->y - b.y);
+        joins |= _corner_join(paint, (double)dx, (double)dy, ox, oy) << 2 | CANVAS_JOINED_B;
+        out = (float)atan2(oy, ox);
+    }
+    if ((joins & (CANVAS_JOIN_AT_A | CANVAS_JOIN_AT_B)) == 0u && dash->on <= 0.0)
+        joins = 0;
+    // Whether each corner lies inside a dash, decided here in double once for the two segments
+    // that meet there: each working it out in float on its own, a dash starting at a corner
+    // would draw one side's half of the join and not the other's.
+    if ((joins & CANVAS_JOINED_A) && _in_dash(dash, dash->place))
+        joins |= CANVAS_DASHED_A;
+    if ((joins & CANVAS_JOINED_B) && _in_dash(dash, dash->place + length))
+        joins |= CANVAS_DASHED_B;
     const size_t n =
         _pieces_for((double)(_abs64(dx) > _abs64(dy) ? _abs64(dx) : _abs64(dy)), shift);
     if (n == 0) {
@@ -254,12 +324,24 @@ static bool _segment(CanvasEdit* edit, const CanvasPaint* paint, CanvasPoint a, 
             to.y = a.y + llround((double)dy * t);
         }
         CanvasPiece* piece = _piece(&pieces[k], shift, paint, from, CANVAS_KIND_SEGMENT,
-                                    _end_flags(k, n, flat_ends));
+                                    _end_flags(k, n, before ? CANVAS_CAP_ROUND : paint->cap,
+                                               after ? CANVAS_CAP_ROUND : paint->cap));
         _piece_b(piece, shift, to);
-        piece->item.record.f[0] = (float)((double)width * 0.5);
-        _bound(piece, from.x, from.y, to.x, to.y, half);
+        CanvasRecord* r = &piece->item.record;
+        r->f[0] = (float)((double)width * 0.5);
+        // The corners at the segment's own ends, not at its cuts.
+        const uint32_t at =
+            (k == 0 ? CANVAS_JOIN_AT_A | CANVAS_JOINED_A | CANVAS_DASHED_A : 0u) |
+            (k + 1 == n ? CANVAS_JOIN_AT_B | CANVAS_JOINED_B | CANVAS_DASHED_B : 0u);
+        if (joins & at) {
+            r->f[1] = k == 0 ? in : 0.0f;
+            r->f[2] = k + 1 == n ? out : 0.0f;
+            r->f[3] = (float)(joins & at);
+        }
+        // A mitre reaches past the corner along the stroke: four half widths at the most.
+        _bound(piece, from.x, from.y, to.x, to.y, (joins & at) != 0u ? 4 * half : half);
         if (length > 0.0)
-            _dash_piece(piece, dash, dash->place + length * (double)k / (double)n, false);
+            _dash_piece(piece, paint, dash, dash->place + length * (double)k / (double)n, false);
         from = to;
     }
     dash->place += length;
@@ -272,21 +354,42 @@ void canvas_edit_segment(CanvasEdit* edit, const CanvasSegment* segment) {
     if (!_length_ok(segment->width, "segment", "width"))
         return;
     if (segment->a.x == segment->b.x && segment->a.y == segment->b.y &&
-        (segment->width == 0 || segment->flat_ends)) {
+        (segment->width == 0 || segment->paint.cap == CANVAS_CAP_BUTT)) {
         log_error("canvas: a segment with no extent is refused");
         return;
     }
     const EditMark mark = _mark(edit);
     Dash dash = _dash(&segment->paint, 0.0);
-    if (!_segment(edit, &segment->paint, segment->a, segment->b, segment->width, segment->flat_ends,
-                  &dash))
+    if (!_segment(edit, &segment->paint, segment->a, segment->b, segment->width, NULL, NULL, &dash))
         _rollback(edit, mark);
 }
 
-// A polyline's segments, round-joined, one pattern carried through every point
-// and stretched round a closed one; false, with some of them added, when one is
-// refused. A repeated point adds nothing to a dashed line, where its dot would
-// show in a gap: only a line of nothing but one point is its dot.
+static bool _same(CanvasPoint a, CanvasPoint b) {
+    return a.x == b.x && a.y == b.y;
+}
+
+// The point the stroke comes from into segment i's a (`way` -1), or goes on to
+// out of its b (+1): the far end of the nearest segment that way with a length,
+// round a closed line; NULL at an open line's end.
+static const CanvasPoint* _neighbour(const CanvasPoint* points, size_t count, size_t i, bool closed,
+                                     int way) {
+    const size_t segments = closed ? count : count - 1;
+    for (size_t step = 1; step < segments; step++) {
+        if (!closed && (way < 0 ? step > i : i + step >= segments))
+            return NULL;
+        const size_t j = (i + (way < 0 ? segments - step : step)) % segments;
+        const CanvasPoint *p = &points[j], *q = &points[(j + 1) % count];
+        if (!_same(*p, *q))
+            return way < 0 ? p : q;
+    }
+    return NULL;
+}
+
+// A polyline's segments, joined at its points, one pattern carried through
+// every point and stretched round a closed one; false, with some of them added,
+// when one is refused. A repeated point adds nothing to a line dashed or joined
+// other than round: it has no direction to join by, and its dot would show in a
+// gap. Only a line of nothing but one point is its dot.
 static bool _polyline(CanvasEdit* edit, const CanvasPaint* paint, const CanvasPoint* points,
                       size_t count, int64_t width, bool closed) {
     const size_t segments = closed ? count : count - 1;
@@ -296,11 +399,14 @@ static bool _polyline(CanvasEdit* edit, const CanvasPaint* paint, const CanvasPo
         around += hypot((double)(b.x - a.x), (double)(b.y - a.y));
     }
     Dash dash = _dash(paint, closed ? around : 0.0);
+    const bool skip = around > 0.0 && (dash.on > 0.0 || paint->join != CANVAS_JOIN_ROUND);
     for (size_t i = 0; i < segments; i++) {
         const CanvasPoint a = points[i], b = points[(i + 1) % count];
-        if (dash.on > 0.0 && around > 0.0 && a.x == b.x && a.y == b.y)
+        if (skip && _same(a, b))
             continue;
-        if (!_segment(edit, paint, a, b, width, false, &dash))
+        const CanvasPoint* before = around > 0.0 ? _neighbour(points, count, i, closed, -1) : NULL;
+        const CanvasPoint* after = around > 0.0 ? _neighbour(points, count, i, closed, 1) : NULL;
+        if (!_segment(edit, paint, a, b, width, before, after, &dash))
             return false;
     }
     return true;
@@ -405,7 +511,7 @@ void canvas_edit_arc(CanvasEdit* edit, const CanvasArc* arc) {
             to.y = llround(cy + r * sin(t));
         }
         CanvasPiece* piece = _piece(&pieces[k], shift, &arc->paint, from, CANVAS_KIND_ARC,
-                                    _end_flags(k, n, arc->flat_ends));
+                                    _end_flags(k, n, arc->paint.cap, arc->paint.cap));
         _piece_b(piece, shift, to);
         // The centre from the midpoint of this piece's own chord, which keeps
         // the float small however far the canvas is from its origin.
@@ -417,10 +523,11 @@ void canvas_edit_arc(CanvasEdit* edit, const CanvasArc* arc) {
         piece->item.record.f[3] = (float)r;
         double box[4];
         _arc_bound(cx, cy, r, start + sweep * (double)k / (double)n, sweep / (double)n, box);
+        // A square end's corner reaches past the arc's own bound along its tangent.
         _bound(piece, (int64_t)floor(box[0]), (int64_t)floor(box[1]), (int64_t)ceil(box[2]),
-               (int64_t)ceil(box[3]), half);
+               (int64_t)ceil(box[3]), arc->paint.cap == CANVAS_CAP_SQUARE ? 2 * half : half);
         const double into = length * (double)k / (double)n;
-        _dash_piece(piece, &dash, dash.place + (arc->clockwise ? length - into : into),
+        _dash_piece(piece, &arc->paint, &dash, dash.place + (arc->clockwise ? length - into : into),
                     arc->clockwise);
         from = to;
     }
@@ -448,7 +555,7 @@ void canvas_edit_circle(CanvasEdit* edit, const CanvasCircle* circle) {
     _bound(piece, circle->centre.x, circle->centre.y, circle->centre.x, circle->centre.y, reach);
     if (circle->stroke > 0) {
         const Dash dash = _dash(&circle->paint, TURN * (double)circle->radius);
-        _dash_piece(piece, &dash, dash.place, false);
+        _dash_piece(piece, &circle->paint, &dash, dash.place, false);
     }
     _commit(edit, 1);
 }
@@ -475,8 +582,14 @@ void canvas_edit_box(CanvasEdit* edit, const CanvasBox* box) {
     piece->item.record.f[3] = (float)box->angle;
     const double c = fabs(cos(box->angle)), s = fabs(sin(box->angle));
     const double hx = (double)box->size_x * 0.5, hy = (double)box->size_y * 0.5;
-    const int64_t ex = (int64_t)ceil(c * hx + s * hy) + (box->stroke + 1) / 2;
-    const int64_t ey = (int64_t)ceil(s * hx + c * hy) + (box->stroke + 1) / 2;
+    // A stroked square corner joins as the paint says; a rounded one is a curve. A mitre's
+    // corner reaches half the stroke past the outline each way, diagonally on a turned box.
+    const bool joined = box->stroke > 0 && box->corner == 0 && box->paint.join != CANVAS_JOIN_ROUND;
+    if (joined)
+        piece->item.record.p[3] = (int32_t)box->paint.join;
+    const int64_t reach = (box->stroke + 1) / 2 * (joined ? 2 : 1);
+    const int64_t ex = (int64_t)ceil(c * hx + s * hy) + reach;
+    const int64_t ey = (int64_t)ceil(s * hx + c * hy) + reach;
     piece->min[0] = box->centre.x - ex, piece->max[0] = box->centre.x + ex;
     piece->min[1] = box->centre.y - ey, piece->max[1] = box->centre.y + ey;
     if (box->stroke > 0) {
@@ -484,7 +597,7 @@ void canvas_edit_box(CanvasEdit* edit, const CanvasBox* box) {
         const double corner = fmin((double)box->corner, fmin(hx, hy));
         const Dash dash =
             _dash(&box->paint, 4.0 * (hx - corner) + 4.0 * (hy - corner) + TURN * corner);
-        _dash_piece(piece, &dash, dash.place, false);
+        _dash_piece(piece, &box->paint, &dash, dash.place, false);
     }
     _commit(edit, 1);
 }

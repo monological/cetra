@@ -13,14 +13,20 @@
  * tile table, the same for every layer, so the table holds one offset a tile.
  *
  * By kind:
- *   SEGMENT  p = a, b              f = half width
+ *   SEGMENT  p = a, b              f = half width; at a corner, the direction
+ *                                      the stroke comes into a and goes on out
+ *                                      of b, as angles; the joins
+ *                                      (CANVAS_JOIN_AT_*, CANVAS_JOINED_*), 0
+ *                                      for two free ends or round corners
+ *                                      undashed, which are round ends
  *   ARC      p = a, b              f = half width, centre minus the chord's
  *                                      midpoint (x, y), radius; counter-
  *                                      clockwise from a to b, an edit having
  *                                      swapped the ends of a clockwise one
  *   CIRCLE   p = centre, radius,   f unused
  *              stroke
- *   BOX      p = centre, stroke    f = half size x, half size y, corner, angle
+ *   BOX      p = centre, stroke,   f = half size x, half size y, corner, angle
+ *              join
  *   EDGE     p = a, b              f unused: the outer half of a polygon edge's
  *                                    ramp, its polygon left of a to b, an edit
  *                                    having swapped the ends where it was not
@@ -29,13 +35,15 @@
  *              font slot               units; the string's angle
  *            FLAG_MIRROR flips it across the line through the anchor. The font
  *            slot is the canvas's (its four fonts), filled in when applied.
- * A cut end (FLAG_CUT_*) is where an edit split a shape reaching too far from
- * its tile: it has no cap and no edge ramp, so the pieces meet with no seam.
+ * An end is round, butt (FLAG_FLAT_*) or square (FLAG_SQUARE_*). A cut end
+ * (FLAG_CUT_*) is where an edit split a shape reaching too far from its tile:
+ * it has no cap and no edge ramp, so the pieces meet with no seam.
  *
  * A dashed segment, arc, stroked circle or stroked box (FLAG_DASHED) is a
  * CanvasDashRecord in a store of its own, its pattern after the record:
  *   dash  vec4  the dash and the gap, stretched on a closed shape; the place in
- *               the pattern at the record's a, under one period; unused
+ *               the pattern at the record's a, under one period; the cap its
+ *               dashes end with
  * The place grows toward b, or toward a under FLAG_DASH_BACK: a clockwise arc,
  * whose ends the edit swapped. A circle's a is its rightmost point and a box's
  * the middle of its bottom side, each going round counter-clockwise.
@@ -67,6 +75,12 @@ typedef struct CanvasDashRecord {
 } CanvasDashRecord;
 
 _Static_assert(sizeof(CanvasDashRecord) == 64, "canvas_vert.glsl reads a 64-byte dashed record");
+_Static_assert(CANVAS_CAP_ROUND == CANVAS_STROKE_ROUND && CANVAS_CAP_BUTT == CANVAS_STROKE_BUTT &&
+                   CANVAS_CAP_SQUARE == CANVAS_STROKE_SQUARE &&
+                   CANVAS_JOIN_ROUND == CANVAS_STROKE_ROUND &&
+                   CANVAS_JOIN_MITRE == CANVAS_STROKE_MITRE &&
+                   CANVAS_JOIN_BEVEL == CANVAS_STROKE_BEVEL,
+               "the shaders read a cap or a join by its CanvasCap or CanvasJoin");
 
 static inline uint32_t canvas_record_head(uint32_t kind, uint32_t flags, uint16_t style) {
     return (kind & 0x3fu) | (flags & 0x3ffu) << 6 | (uint32_t)style << 16;

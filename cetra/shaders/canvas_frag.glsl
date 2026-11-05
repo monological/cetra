@@ -41,8 +41,75 @@ float flatEnd(float out_, float across, float hw) {
 
 const float CUT_OVERLAP = 0.5; // pixels each piece draws past a cut
 
+// An end that is not a corner, `out_` along past it: cut, butt, square or round.
+float freeEnd(float out_, float across, float hw, uint cut, uint butt, uint square) {
+    if ((vFlags & cut) != 0u) {
+        if (out_ > CUT_OVERLAP)
+            discard;
+        return across - hw;
+    }
+    if ((vFlags & butt) != 0u)
+        return flatEnd(out_, across, hw);
+    if ((vFlags & square) != 0u)
+        return flatEnd(out_ - hw, across, hw);
+    return out_ > 0.0 ? length(vec2(out_, across)) - hw : across - hw;
+}
+
+/*
+ * A corner of a polyline, which each of its two segments draws its own side of: the segment's
+ * body run on past its end and cut at the corner's bisector, where the neighbour's begins, their
+ * outer edges meeting in a mitre's point. Each draws on half a pixel past the bisector, as a piece
+ * does past a cut: the two edges' ramps there would otherwise each give the seam half its
+ * coverage, and the layer's max would show a line. A bevel cuts the point off along the line
+ * through the two outer edges' ends; a round corner is the round end the two share. `q` is the
+ * place from the corner, `o` the way out of the segment there and `w` the way the stroke goes on,
+ * in the segment's frame.
+ */
+float joinedEnd(float body, vec2 q, vec2 o, vec2 w, float hw, uint join) {
+    if (join == CANVAS_STROKE_ROUND)
+        return dot(q, o) > 0.0 ? length(q) - hw : body;
+    float d = max(body, dot(q, normalize(o + w)) - CUT_OVERLAP);
+    if (join == CANVAS_STROKE_BEVEL) {
+        // The outer side is the one the stroke turns away from: the right of both ways for a
+        // turn to the left, and the left for one to the right.
+        bool left = cross2(o, w) > 0.0;
+        vec2 out_ = left ? vec2(o.y, -o.x) : vec2(-o.y, o.x);
+        vec2 next = left ? vec2(w.y, -w.x) : vec2(-w.y, w.x);
+        vec2 u = normalize(out_ + next);
+        d = max(d, dot(q, u) - hw * dot(out_, u));
+    }
+    return d;
+}
+
+// A segment with a corner or a square end: each end by its cap or its join. A corner in a dash's
+// gap is drawn by nothing: the dashes there end at their own caps, and a dash starting at the
+// corner starts square, as PDF draws a dash beginning at a point of its path.
+float strokeDistance(float len, float hw, uint joins) {
+    float along = vLocal.x, across = abs(vLocal.y);
+    float body = across - hw;
+    bool dashed = vDash.y > 0.0;
+    bool cornerA = (joins & CANVAS_JOINED_A) != 0u && (!dashed || (joins & CANVAS_DASHED_A) != 0u);
+    bool cornerB = (joins & CANVAS_JOINED_B) != 0u && (!dashed || (joins & CANVAS_DASHED_B) != 0u);
+    float a = cornerA ? joinedEnd(body, vLocal, vec2(-1.0, 0.0), vEnds.xy, hw,
+                                  joins & CANVAS_JOIN_AT_A)
+              : (joins & CANVAS_JOINED_A) != 0u
+                  ? body
+                  : freeEnd(-along, across, hw, CANVAS_FLAG_CUT_A, CANVAS_FLAG_FLAT_A,
+                            CANVAS_FLAG_SQUARE_A);
+    float b = cornerB ? joinedEnd(body, vLocal - vec2(len, 0.0), vec2(1.0, 0.0), vEnds.zw, hw,
+                                  (joins & CANVAS_JOIN_AT_B) >> 2)
+              : (joins & CANVAS_JOINED_B) != 0u
+                  ? body
+                  : freeEnd(along - len, across, hw, CANVAS_FLAG_CUT_B, CANVAS_FLAG_FLAT_B,
+                            CANVAS_FLAG_SQUARE_B);
+    return max(a, b);
+}
+
 float segmentDistance() {
     float len = vShape.x, hw = vShape.y;
+    uint joins = uint(vShape.z);
+    if (joins != 0u || (vFlags & (CANVAS_FLAG_SQUARE_A | CANVAS_FLAG_SQUARE_B)) != 0u)
+        return strokeDistance(len, hw, joins);
     float along = vLocal.x, across = abs(vLocal.y);
     if (along < 0.0) {
         if ((vFlags & CANVAS_FLAG_CUT_A) != 0u) {
@@ -106,6 +173,8 @@ float arcDistance() {
     }
     if ((vFlags & flat_) != 0u)
         return flatEnd(dot(q, away), abs(dot(q, dir)), hw);
+    if ((vFlags & (atEnd ? CANVAS_FLAG_SQUARE_B : CANVAS_FLAG_SQUARE_A)) != 0u)
+        return flatEnd(dot(q, away) - hw, abs(dot(q, dir)), hw);
     return length(q) - hw;
 }
 
@@ -144,7 +213,18 @@ float circleDistance() {
     return vShape.y > 0.0 ? abs(d) - vShape.y : d;
 }
 
+// A stroked square-cornered box's outline, a mitre's corners square and a bevel's cut off along
+// the line through its two outer edges' ends.
+float boxJoined(uint join) {
+    vec2 q = abs(vLocal) - vShape.xy;
+    float hs = vShape.w;
+    float d = abs(max(q.x, q.y)) - hs;
+    return join == CANVAS_STROKE_BEVEL ? max(d, (q.x + q.y - hs) * 0.7071067811865476) : d;
+}
+
 float boxDistance() {
+    if (vEnds.x != 0.0)
+        return boxJoined(uint(vEnds.x));
     vec2 halfSize = vShape.xy;
     float corner = vShape.z, hs = vShape.w;
     vec2 q = abs(vLocal) - halfSize + corner;
@@ -153,18 +233,22 @@ float boxDistance() {
 }
 
 /*
- * Dashes. A dashed shape's distance is the larger of its own and its dash's: how far outside its
- * dash the fragment's place along the shape lies, negative inside, so each dash is the shape cut
- * square across at its two ends. The place runs on past an open shape's ends as though it went
- * straight on, which keeps a round end where a dash reaches it, and on through the half pixel
- * past a cut, so both pieces give a pixel there the same coverage.
+ * Dashes: the stroke cut into pieces along its length (canvas.h), each drawn with the cap at its
+ * ends. The fragment's place along the shape picks the dash nearest it, which is cut at the
+ * shape's own ends, run on past a corner it reaches so that the corner takes its join, and run on
+ * through a cut, so both pieces give a pixel there the same coverage. A dashed shape's distance is
+ * the larger of its own and its nearest dash's.
  */
 
-// How far outside its dash a place `s` pixels along from the record's a lies, along the path.
-float dashDistance(float s) {
-    float m = mod((vFlags & CANVAS_FLAG_DASH_BACK) != 0u ? vDash.z - s : vDash.z + s, vDash.y);
-    return m < vDash.x ? -min(m, vDash.x - m) : min(m - vDash.x, vDash.y - m);
-}
+// Where the fragment is along a dashed shape: its place in pixels from the record's a; how much
+// a length on the centreline spans at the fragment's own distance from a curve's centre, so a
+// dash's ends lie along the radius; how far it is across from the centreline, and the stroke's
+// half width; the shape's length; and which of its ends are its own, which hold the place and
+// cut a dash, and which are corners, which hold the place and let a dash run on.
+struct Along {
+    float s, scale, across, hw, len;
+    bool ownA, ownB, cornerA, cornerB;
+};
 
 // The place along a box's outline from the middle of its bottom side, counter-clockwise: each
 // side, then each quarter-circle corner, its turn times its radius.
@@ -190,29 +274,95 @@ float boxPlace() {
     return p.x > 0.0 ? a + q + b + p.y : 3.0 * a + 3.0 * q + 3.0 * b - p.y;
 }
 
-// The fragment's place along a dashed shape in pixels from the record's a, and how much a length
-// on the centreline spans at the fragment's own distance from a curve's centre, so a dash's ends
-// lie along the radius.
-vec2 dashPlace() {
-    if (vKind == CANVAS_KIND_SEGMENT)
-        return vec2(vLocal.x, 1.0);
-    if (vKind == CANVAS_KIND_CIRCLE) {
-        float t = atan(vLocal.y, vLocal.x);
-        return vec2(vShape.x * (t < 0.0 ? t + TAU : t), length(vLocal) / vShape.x);
-    }
-    if (vKind == CANVAS_KIND_ARC) {
+Along dashAlong() {
+    Along a = Along(0.0, 1.0, 0.0, 0.0, 0.0, false, false, false, false);
+    bool cutA = (vFlags & CANVAS_FLAG_CUT_A) != 0u, cutB = (vFlags & CANVAS_FLAG_CUT_B) != 0u;
+    if (vKind == CANVAS_KIND_SEGMENT) {
+        // A corner the edit found inside a dash runs that dash on round it; any other cuts the
+        // dashes there as the shape's own end does.
+        uint joins = uint(vShape.z);
+        a.cornerA = (joins & CANVAS_DASHED_A) != 0u;
+        a.cornerB = (joins & CANVAS_DASHED_B) != 0u;
+        a.ownA = !a.cornerA && !cutA;
+        a.ownB = !a.cornerB && !cutB;
+        a.s = vLocal.x;
+        a.across = abs(vLocal.y);
+        a.hw = vShape.y;
+        a.len = vShape.x;
+    } else if (vKind == CANVAS_KIND_ARC) {
         float r = vShape.x, sweep = vShape.z;
         vec2 s = vEnds.xy, e = vEnds.zw, p = vLocal;
         float t = atan(cross2(s, p), dot(s, p));
         t = t < 0.0 ? t + TAU : t;
-        if (t <= sweep)
-            return vec2(r * t, length(p) / r);
-        // Past an end, straight on along its tangent.
-        if (t - sweep < TAU - t)
-            return vec2(r * sweep + dot(p - e * r, vec2(-e.y, e.x)), 1.0);
-        return vec2(-dot(p - s * r, vec2(s.y, -s.x)), 1.0);
+        a.ownA = !cutA;
+        a.ownB = !cutB;
+        a.hw = vShape.y;
+        a.len = r * sweep;
+        a.across = abs(length(p) - r);
+        if (t <= sweep) {
+            a.s = r * t;
+            a.scale = length(p) / r;
+        } else if (t - sweep < TAU - t) {
+            // Past an end, straight on along its tangent.
+            vec2 q = p - e * r;
+            a.s = r * sweep + dot(q, vec2(-e.y, e.x));
+            a.across = abs(dot(q, e));
+        } else {
+            vec2 q = p - s * r;
+            a.s = -dot(q, vec2(s.y, -s.x));
+            a.across = abs(dot(q, s));
+        }
+    } else if (vKind == CANVAS_KIND_CIRCLE) {
+        float t = atan(vLocal.y, vLocal.x);
+        a.s = vShape.x * (t < 0.0 ? t + TAU : t);
+        a.scale = length(vLocal) / vShape.x;
+        a.across = abs(length(vLocal) - vShape.x);
+        a.hw = vShape.y;
+    } else {
+        a.s = boxPlace();
+        a.hw = vShape.w;
+        a.across = boxDistance() + a.hw; // the outline's distance, the stroke taken off again
     }
-    return vec2(boxPlace(), 1.0);
+    return a;
+}
+
+// The nearer of a dash running [x, y] along the shape and `best`, as a distance outside it along
+// the path: a dash cut to nothing by the shape's own ends is none.
+float dashNearer(float x, float y, Along a, float best) {
+    // The dash the edit found the corner in: within half a pixel of it, as float places it.
+    if (a.cornerA && x <= CUT_OVERLAP)
+        x = -1e30;
+    if (a.cornerB && y >= a.len - CUT_OVERLAP)
+        y = 1e30;
+    x = a.ownA ? max(x, 0.0) : x;
+    y = a.ownB ? min(y, a.len) : y;
+    return x > y ? best : min(best, max(x - a.s, a.s - y));
+}
+
+// The fragment's distance from the dash nearest it, its ends drawn with the cap.
+float dashDistance() {
+    Along a = dashAlong();
+    // The place held to the shape's own ends and its corners, so the dash it picks is one of the
+    // shape's, and a corner is drawn by whether it falls inside a dash.
+    float held = a.s;
+    held = a.ownA || a.cornerA ? max(held, 0.0) : held;
+    held = a.ownB || a.cornerB ? min(held, a.len) : held;
+    // The dash at or before the held place in the pattern's own direction, and the one after.
+    bool back = (vFlags & CANVAS_FLAG_DASH_BACK) != 0u;
+    float t = back ? -held : held;
+    float start = t - mod(vDash.z + t, vDash.y);
+    float e = 1e30;
+    for (int k = 0; k < 2; k++) {
+        float t0 = start + float(k) * vDash.y, t1 = t0 + vDash.x;
+        e = back ? dashNearer(-t1, -t0, a, e) : dashNearer(t0, t1, a, e);
+    }
+    e *= a.scale;
+    uint cap = uint(vDash.w + 0.5);
+    if (cap == CANVAS_STROKE_BUTT)
+        return max(e, a.across - a.hw);
+    if (cap == CANVAS_STROKE_SQUARE)
+        return max(e - a.hw, a.across - a.hw);
+    return e > 0.0 ? length(vec2(e, a.across)) - a.hw : a.across - a.hw;
 }
 
 void main() {
@@ -229,10 +379,8 @@ void main() {
         d = glyphDistance();
     else
         d = boxDistance();
-    if (vDash.y > 0.0) {
-        vec2 place = dashPlace();
-        d = max(d, dashDistance(place.x) * place.y);
-    }
+    if (vDash.y > 0.0)
+        d = max(d, dashDistance());
     // An outline is a ring uRing.x to uRing.y pixels outside the shape. Its inner ramp starts at
     // least half a pixel out, where the shape's own ends, so a pixel is the shape's or the ring's
     // and never both.
@@ -241,6 +389,8 @@ void main() {
         FragColor = canvasOutput(vOutline, CANVAS_RANK_RING, clamp(0.5 - ring, 0.0, 1.0));
         return;
     }
+    // A dashed shape too fine to draw as dashes is its pattern's average (canvas_vert.glsl).
+    float strength = vDash.y == 0.0 && vDash.x > 0.0 ? vDash.x : 1.0;
     FragColor = canvasOutput(vColor, vRaised > 0.5 ? CANVAS_RANK_RAISED : CANVAS_RANK_SHAPE,
-                             clamp(0.5 - d, 0.0, 1.0));
+                             clamp(0.5 - d, 0.0, 1.0) * strength);
 }
