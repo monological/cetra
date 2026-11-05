@@ -151,10 +151,15 @@ static void _bound(CanvasPiece* piece, int64_t x0, int64_t y0, int64_t x1, int64
     piece->max[1] = (y0 > y1 ? y0 : y1) + grow;
 }
 
+// The article a shape's name takes in a refusal.
+static const char* _a(const char* what) {
+    return what[0] && strchr("aeiou", what[0]) ? "an" : "a";
+}
+
 static bool _length_ok(int64_t v, const char* what, const char* field) {
     if (v < 0 || v >= CANVAS_LENGTH_MAX) {
-        log_error("canvas: a %s whose %s is %lld is refused (0 to %lld)", what, field, (long long)v,
-                  (long long)CANVAS_LENGTH_MAX - 1);
+        log_error("canvas: %s %s whose %s is %lld is refused (0 to %lld)", _a(what), what, field,
+                  (long long)v, (long long)CANVAS_LENGTH_MAX - 1);
         return false;
     }
     return true;
@@ -164,12 +169,12 @@ static bool _paint_ok(const CanvasEdit* edit, const CanvasPaint* paint, const ch
     if (!edit)
         return false;
     if (!paint->layer) {
-        log_error("canvas: a %s with no layer is refused", what);
+        log_error("canvas: %s %s with no layer is refused", _a(what), what);
         return false;
     }
     if ((unsigned)paint->cap > CANVAS_CAP_SQUARE || (unsigned)paint->join > CANVAS_JOIN_BEVEL) {
-        log_error("canvas: a %s whose cap is %d and join %d is refused", what, (int)paint->cap,
-                  (int)paint->join);
+        log_error("canvas: %s %s whose cap is %d and join %d is refused", _a(what), what,
+                  (int)paint->cap, (int)paint->join);
         return false;
     }
     return _length_ok(paint->dash.length, what, "dash length") &&
@@ -255,6 +260,10 @@ static uint32_t _corner_join(const CanvasPaint* paint, double in_x, double in_y,
 
 static int64_t _abs64(int64_t v) {
     return v < 0 ? -v : v;
+}
+
+static bool _same(CanvasPoint a, CanvasPoint b) {
+    return a.x == b.x && a.y == b.y;
 }
 
 // How many pieces keep each within a tile of its first point, or 0 past the
@@ -353,7 +362,7 @@ void canvas_edit_segment(CanvasEdit* edit, const CanvasSegment* segment) {
         return;
     if (!_length_ok(segment->width, "segment", "width"))
         return;
-    if (segment->a.x == segment->b.x && segment->a.y == segment->b.y &&
+    if (_same(segment->a, segment->b) &&
         (segment->width == 0 || segment->paint.cap == CANVAS_CAP_BUTT)) {
         log_error("canvas: a segment with no extent is refused");
         return;
@@ -362,10 +371,6 @@ void canvas_edit_segment(CanvasEdit* edit, const CanvasSegment* segment) {
     Dash dash = _dash(&segment->paint, 0.0);
     if (!_segment(edit, &segment->paint, segment->a, segment->b, segment->width, NULL, NULL, &dash))
         _rollback(edit, mark);
-}
-
-static bool _same(CanvasPoint a, CanvasPoint b) {
-    return a.x == b.x && a.y == b.y;
 }
 
 // The point the stroke comes from into segment i's a (`way` -1), or goes on to
@@ -832,12 +837,12 @@ static bool _polygon_edge(CanvasEdit* edit, const CanvasPaint* paint, CanvasPoin
     size_t made = 0;
     for (size_t i = 0; pieces && i + 1 < n; i++) {
         const CanvasPoint p = cuts[i].p, q = cuts[i + 1].p;
-        if (p.x == q.x && p.y == q.y)
+        if (_same(p, q))
             continue;
         // A crossing on a corner of the outline is the corner, not a cut: the
         // corner keeps its round outer ramp.
-        uint32_t flags = (p.x != a.x || p.y != a.y) ? CANVAS_FLAG_CUT_A : 0u;
-        flags |= (q.x != b.x || q.y != b.y) ? CANVAS_FLAG_CUT_B : 0u;
+        uint32_t flags = _same(p, a) ? 0u : CANVAS_FLAG_CUT_A;
+        flags |= _same(q, b) ? 0u : CANVAS_FLAG_CUT_B;
         // Anchored where its middle is, so both ends are within a tile of it.
         const CanvasPoint mid = {p.x + (q.x - p.x) / 2, p.y + (q.y - p.y) / 2};
         CanvasPiece* piece = _piece(&pieces[made++], shift, paint, mid, CANVAS_KIND_EDGE, flags);
@@ -877,7 +882,7 @@ static size_t _ring_walk(const CanvasPoint* pts, size_t i, size_t start, size_t 
     size_t j = i;
     for (size_t step = 1; step < end - start; step++) {
         j = forward ? (j + 1 < end ? j + 1 : start) : (j > start ? j - 1 : end - 1);
-        if (pts[j].x != pts[i].x || pts[j].y != pts[i].y)
+        if (!_same(pts[j], pts[i]))
             break;
     }
     return j;

@@ -58,43 +58,27 @@
 
 #define MM(v) ((int64_t)llround((v) * 1e6))
 
-// --dash, --cap and --join: every paint a sheet makes stroked so, its fills and text among them,
-// which the canvas leaves as they are. A sheet's own dash stands when it gives one.
+// --dash, --cap and --join: the stroke every paint a sheet makes starts with, its fills' and its
+// text's among them, which the canvas leaves as they are. What a sheet sets on a paint stands.
 static CanvasDash g_dash;
-static int g_cap = -1, g_join = -1; // -1: the sheet's own
+static int g_cap = -1, g_join = -1; // -1: the canvas's own default
+
+static CanvasPaint paint_of(CanvasLayer* layer, uint16_t style, uint32_t net, uint32_t object) {
+    CanvasPaint paint = {layer, style, net, object};
+    if (g_dash.length)
+        paint.dash = g_dash;
+    if (g_cap >= 0)
+        paint.cap = (CanvasCap)g_cap;
+    if (g_join >= 0)
+        paint.join = (CanvasJoin)g_join;
+    return paint;
+}
 
 // A paint with butt ends.
 static CanvasPaint butt(CanvasPaint paint) {
     paint.cap = CANVAS_CAP_BUTT;
     return paint;
 }
-
-#define DASHED_EDIT(kind, Shape)                                      \
-    static void dashed_##kind(CanvasEdit* edit, const Shape* shape) { \
-        Shape copy = *shape;                                          \
-        if (g_dash.length && !copy.paint.dash.length)                 \
-            copy.paint.dash = g_dash;                                 \
-        if (g_cap >= 0)                                               \
-            copy.paint.cap = (CanvasCap)g_cap;                        \
-        if (g_join >= 0)                                              \
-            copy.paint.join = (CanvasJoin)g_join;                     \
-        canvas_edit_##kind(edit, &copy);                              \
-    }
-DASHED_EDIT(segment, CanvasSegment)
-DASHED_EDIT(arc, CanvasArc)
-DASHED_EDIT(circle, CanvasCircle)
-DASHED_EDIT(box, CanvasBox)
-DASHED_EDIT(polyline, CanvasPolyline)
-DASHED_EDIT(polygon, CanvasPolygon)
-DASHED_EDIT(text, CanvasText)
-#undef DASHED_EDIT
-#define canvas_edit_segment  dashed_segment
-#define canvas_edit_arc      dashed_arc
-#define canvas_edit_circle   dashed_circle
-#define canvas_edit_box      dashed_box
-#define canvas_edit_polyline dashed_polyline
-#define canvas_edit_polygon  dashed_polygon
-#define canvas_edit_text     dashed_text
 
 static Canvas* g_canvas;
 static CanvasView g_views[2]; // the window's views, side by side under --split
@@ -147,6 +131,16 @@ static void probe_cell(const SheetContext* ctx, const char* sheet, const char* n
            lround(y1));
 }
 
+// Prints the framebuffer pixel a point lands in and the colour it must be.
+static void probe_pixel(const SheetContext* ctx, const char* sheet, const char* name, CanvasPoint p,
+                        uint32_t rgb) {
+    if (!ctx->probe)
+        return;
+    double x, y;
+    fb_of(ctx, p, &x, &y);
+    printf("canvas %s %s at %ld %ld want %06x\n", sheet, name, lround(x), lround(y), rgb);
+}
+
 /*
  * The shapes sheet: one row of each kind, at sizes from a hair to a pad.
  */
@@ -160,8 +154,8 @@ static void sheet_shapes(SheetContext* ctx) {
     const uint16_t white = canvas_add_style(canvas, 0xe6e6e6ffu);
     const uint16_t blue = canvas_add_style(canvas, 0x4f8fd8ffu);
     const uint16_t green = canvas_add_style(canvas, 0x58b368ffu);
-    const CanvasPaint cu = {.layer = copper, .style = orange};
-    const CanvasPaint sk = {.layer = silk, .style = white};
+    const CanvasPaint cu = paint_of(copper, orange, 0, 0);
+    const CanvasPaint sk = paint_of(silk, white, 0, 0);
 #define AT(x, y) ((CanvasPoint){MM(x) + offset, MM(y) + offset})
 
     // Segments: widths from 0.02 mm to 1 mm, round ends, then flat.
@@ -178,7 +172,7 @@ static void sheet_shapes(SheetContext* ctx) {
     }
 
     // Arcs: a quarter, a major arc, a clockwise one, flat ends, a half turn.
-    const CanvasPaint bl = {.layer = copper, .style = blue};
+    const CanvasPaint bl = paint_of(copper, blue, 0, 0);
     canvas_edit_arc(edit, &(CanvasArc){.paint = bl,
                                        .a = AT(-9.0, 1.5),
                                        .b = AT(-10.0, 2.5),
@@ -214,7 +208,7 @@ static void sheet_shapes(SheetContext* ctx) {
                                        .clockwise = true});
 
     // Circles: filled, rings, and one a hair across.
-    const CanvasPaint gr = {.layer = copper, .style = green};
+    const CanvasPaint gr = paint_of(copper, green, 0, 0);
     canvas_edit_circle(edit,
                        &(CanvasCircle){.paint = gr, .centre = AT(-9.5, -1.0), .radius = MM(0.5)});
     canvas_edit_circle(edit,
@@ -275,8 +269,7 @@ static void sheet_shapes(SheetContext* ctx) {
 
 // White on a black background, so a pixel's red code over 255 is its coverage.
 static CanvasPaint white_paint(Canvas* canvas) {
-    return (CanvasPaint){.layer = canvas_add_layer(canvas, "white"),
-                         .style = canvas_add_style(canvas, 0xffffffffu)};
+    return paint_of(canvas_add_layer(canvas, "white"), canvas_add_style(canvas, 0xffffffffu), 0, 0);
 }
 
 /*
@@ -610,11 +603,11 @@ static void sheet_symbol(SheetContext* ctx) {
     CanvasLayer* body = canvas_add_layer(canvas, "body");
     CanvasLayer* graphics = canvas_add_layer(canvas, "graphics");
     CanvasLayer* text = canvas_add_layer(canvas, "text");
-    const CanvasPaint fill = {.layer = body, .style = canvas_add_style(canvas, 0xffffc2ffu)};
-    const CanvasPaint line = {.layer = graphics, .style = canvas_add_style(canvas, 0x840000ffu)};
-    const CanvasPaint name = {.layer = text, .style = canvas_add_style(canvas, 0x008484ffu)};
-    const CanvasPaint number = {.layer = text, .style = canvas_add_style(canvas, 0xa90000ffu)};
-    const CanvasPaint label = {.layer = text, .style = canvas_add_style(canvas, 0x404040ffu)};
+    const CanvasPaint fill = paint_of(body, canvas_add_style(canvas, 0xffffc2ffu), 0, 0);
+    const CanvasPaint line = paint_of(graphics, canvas_add_style(canvas, 0x840000ffu), 0, 0);
+    const CanvasPaint name = paint_of(text, canvas_add_style(canvas, 0x008484ffu), 0, 0);
+    const CanvasPaint number = paint_of(text, canvas_add_style(canvas, 0xa90000ffu), 0, 0);
+    const CanvasPaint label = paint_of(text, canvas_add_style(canvas, 0x404040ffu), 0, 0);
 #define AT(x, y) ((CanvasPoint){MM(x) + offset, MM(y) + offset})
     const double PI = 3.141592653589793, PITCH = 2.54, LEAD = 2.54;
     const double hx = 7.62, hy = 11.43; // the body's half size
@@ -904,12 +897,6 @@ static void sheet_overlap(SheetContext* ctx) {
  * where each should land on screen. The colour a pixel takes where shapes of a
  * layer overlap is a raised one's, then the first added's.
  */
-static void probe_pixel(const SheetContext* ctx, const char* name, CanvasPoint p, uint32_t rgb) {
-    double x, y;
-    fb_of(ctx, p, &x, &y);
-    printf("canvas tags %s at %ld %ld want %06x\n", name, lround(x), lround(y), rgb);
-}
-
 static void sheet_tags(SheetContext* ctx) {
     Canvas* canvas = ctx->canvas;
     CanvasEdit* edit = ctx->edit;
@@ -919,10 +906,10 @@ static void sheet_tags(SheetContext* ctx) {
     const uint16_t white = canvas_add_style(canvas, 0xffffffffu);
     const int64_t o = ctx->offset;
 #define CELL(i) ((CanvasPoint){MM(-3.5 + 1.75 * ((i) % 5)) + o, MM(1.0 - 2.0 * ((i) / 5)) + o})
-#define BOX(i, style_, net_, object_)                                           \
-    canvas_edit_box(edit, &(CanvasBox){.paint = {layer, style_, net_, object_}, \
-                                       .centre = CELL(i),                       \
-                                       .size_x = MM(1.0),                       \
+#define BOX(i, style_, net_, object_)                                                   \
+    canvas_edit_box(edit, &(CanvasBox){.paint = paint_of(layer, style_, net_, object_), \
+                                       .centre = CELL(i),                               \
+                                       .size_x = MM(1.0),                               \
                                        .size_y = MM(1.0)})
     BOX(0, red, 0, 0);
     canvas_tags_set(tags, 1, (CanvasTagState){.colour = 0x00ff00ffu});
@@ -943,13 +930,13 @@ static void sheet_tags(SheetContext* ctx) {
     const int64_t nudge = llround((floor(edge_x) + 0.7 - edge_x) / ppu_px(ctx));
     canvas_tags_set(tags, 5, (CanvasTagState){.colour = 0x0000ffffu, .raised = true});
     BOX(5, red, 0, 0);
-    canvas_edit_box(edit, &(CanvasBox){.paint = {layer, red, 0, 5},
+    canvas_edit_box(edit, &(CanvasBox){.paint = paint_of(layer, red, 0, 5),
                                        .centre = {c5.x + MM(0.5) + nudge, c5.y},
                                        .size_x = MM(1.0),
                                        .size_y = MM(1.0)});
     canvas_tags_set(tags, 6, (CanvasTagState){.colour = 0x0000ffffu});
     BOX(6, red, 0, 0);
-    canvas_edit_box(edit, &(CanvasBox){.paint = {layer, red, 0, 6},
+    canvas_edit_box(edit, &(CanvasBox){.paint = paint_of(layer, red, 0, 6),
                                        .centre = {c6.x + MM(0.5), c6.y},
                                        .size_x = MM(1.0),
                                        .size_y = MM(1.0)});
@@ -962,31 +949,32 @@ static void sheet_tags(SheetContext* ctx) {
     canvas_tags_set(tags, 8, (CanvasTagState){.outline = 0xffff00ffu});
     const CanvasPoint trace[] = {
         {c8.x - MM(0.6), c8.y - MM(0.4)}, {c8.x, c8.y}, {c8.x + MM(0.6), c8.y - MM(0.4)}};
-    canvas_edit_polyline(
-        edit, &(CanvasPolyline){
-                  .paint = {layer, red, 0, 8}, .points = trace, .count = 3, .width = MM(0.3)});
+    canvas_edit_polyline(edit, &(CanvasPolyline){.paint = paint_of(layer, red, 0, 8),
+                                                 .points = trace,
+                                                 .count = 3,
+                                                 .width = MM(0.3)});
 #undef BOX
     if (ctx->probe) {
         // A point well inside each box, and the outline's ring: a box's edge is
         // 0.5 mm from its centre, and its ring 1.75 points past that.
         const double ring_mm = 1.75 / (ctx->view->points_per_unit * 1e6);
-        probe_pixel(ctx, "style", CELL(0), 0xff0000);
-        probe_pixel(ctx, "net-colour", CELL(1), 0x00ff00);
-        probe_pixel(ctx, "object-over-net", CELL(2), 0x0000ff);
-        probe_pixel(ctx, "dim", CELL(3), 0x808080);
-        probe_pixel(ctx, "hidden", CELL(4), 0x000000);
-        probe_pixel(ctx, "raised", (CanvasPoint){c5.x + MM(0.25), c5.y}, 0x0000ff);
+        probe_pixel(ctx, "tags", "style", CELL(0), 0xff0000);
+        probe_pixel(ctx, "tags", "net-colour", CELL(1), 0x00ff00);
+        probe_pixel(ctx, "tags", "object-over-net", CELL(2), 0x0000ff);
+        probe_pixel(ctx, "tags", "dim", CELL(3), 0x808080);
+        probe_pixel(ctx, "tags", "hidden", CELL(4), 0x000000);
+        probe_pixel(ctx, "tags", "raised", (CanvasPoint){c5.x + MM(0.25), c5.y}, 0x0000ff);
         printf("canvas tags raised-fringe at %ld %ld want %06x\n", (long)floor(edge_x),
                (long)floor(edge_y), 0xff0000u);
-        probe_pixel(ctx, "first-added", (CanvasPoint){c6.x + MM(0.25), c6.y}, 0xff0000);
-        probe_pixel(ctx, "outline-body", CELL(7), 0xff0000);
-        probe_pixel(ctx, "outline-ring", (CanvasPoint){CELL(7).x + MM(0.5 + ring_mm), CELL(7).y},
-                    0xffff00);
+        probe_pixel(ctx, "tags", "first-added", (CanvasPoint){c6.x + MM(0.25), c6.y}, 0xff0000);
+        probe_pixel(ctx, "tags", "outline-body", CELL(7), 0xff0000);
+        probe_pixel(ctx, "tags", "outline-ring",
+                    (CanvasPoint){CELL(7).x + MM(0.5 + ring_mm), CELL(7).y}, 0xffff00);
         // On the second segment's centre line, as far from the joint as the
         // first segment's ring is from its end: that ring passes through here,
         // inside the second segment's body.
         const double along = 0.15 + ring_mm, unit = sqrt(0.6 * 0.6 + 0.4 * 0.4);
-        probe_pixel(ctx, "outline-joint",
+        probe_pixel(ctx, "tags", "outline-joint",
                     (CanvasPoint){c8.x + MM(along * 0.6 / unit), c8.y - MM(along * 0.4 / unit)},
                     0xff0000);
     }
@@ -1032,7 +1020,7 @@ static void board_turn(int side, double x, double y, double* ox, double* oy) {
 static void board_pad(CanvasEdit* edit, const Board* b, CanvasLayer* layer, uint16_t style,
                       uint32_t net, uint32_t object, double x, double y, double sx, double sy,
                       double angle) {
-    canvas_edit_box(edit, &(CanvasBox){.paint = {layer, style, net, object},
+    canvas_edit_box(edit, &(CanvasBox){.paint = paint_of(layer, style, net, object),
                                        .centre = board_at(b, x, y),
                                        .size_x = MM(sx),
                                        .size_y = MM(sy),
@@ -1044,7 +1032,7 @@ static void board_pad(CanvasEdit* edit, const Board* b, CanvasLayer* layer, uint
 // pad's, so the hole shows whatever is under it.
 static void board_via(CanvasEdit* edit, const Board* b, uint32_t net, uint32_t object, double x,
                       double y, double ring, double hole) {
-    const CanvasCircle pad = {.paint = {b->top, b->top_s, net, object},
+    const CanvasCircle pad = {.paint = paint_of(b->top, b->top_s, net, object),
                               .centre = board_at(b, x, y),
                               .radius = MM((ring + hole) * 0.5),
                               .stroke = MM(ring - hole)};
@@ -1072,7 +1060,7 @@ static void board_route(CanvasEdit* edit, const Board* b, CanvasPaint paint, int
 
 static void board_label(CanvasEdit* edit, const Board* b, const char* text, double x, double y,
                         double size) {
-    canvas_edit_text(edit, &(CanvasText){.paint = {b->silk, b->silk_s, 0, 0},
+    canvas_edit_text(edit, &(CanvasText){.paint = paint_of(b->silk, b->silk_s, 0, 0),
                                          .font = b->font,
                                          .string = text,
                                          .anchor = board_at(b, x, y),
@@ -1093,7 +1081,7 @@ static void board_fill(CanvasEdit* edit, const Board* b) {
             outline[n++] = board_at(b, cx + 3.0 * cos(t), cy + 3.0 * sin(t));
         }
     }
-    canvas_edit_polyline(edit, &(CanvasPolyline){.paint = {b->edge, b->edge_s, 0, 0},
+    canvas_edit_polyline(edit, &(CanvasPolyline){.paint = paint_of(b->edge, b->edge_s, 0, 0),
                                                  .points = outline,
                                                  .count = n,
                                                  .width = MM(0.15),
@@ -1120,7 +1108,7 @@ static void board_fill(CanvasEdit* edit, const Board* b) {
             board_pad(edit, b, b->top, b->top_s, pin, 200 + pin, x0, y0, 1.4, 0.3, side * QUARTER);
             const double route[4][2] = {
                 {-4.35, y}, {-6.0, y}, {-6.0 - 1.2 * fabs(y), vy}, {-10.5, vy}};
-            board_route(edit, b, (CanvasPaint){b->top, b->top_s, pin, 300 + pin}, side, route, 4);
+            board_route(edit, b, paint_of(b->top, b->top_s, pin, 300 + pin), side, route, 4);
             double vx, vyy;
             board_turn(side, -10.5, vy, &vx, &vyy);
             board_via(edit, b, pin, 400 + pin, vx, vyy, 0.3, 0.15);
@@ -1153,20 +1141,20 @@ static void board_fill(CanvasEdit* edit, const Board* b) {
                 double tx, ty;
                 board_turn(side, -15.0, vy, &tx, &ty);
                 canvas_edit_circle(
-                    edit, &(CanvasCircle){.paint = {b->bottom, b->bottom_s, pin, 600 + pin},
+                    edit, &(CanvasCircle){.paint = paint_of(b->bottom, b->bottom_s, pin, 600 + pin),
                                           .centre = board_at(b, tx, ty),
                                           .radius = MM(0.45)});
             }
-            board_route(edit, b, (CanvasPaint){b->bottom, b->bottom_s, pin, 500 + pin}, side,
-                        bottom, bn);
+            board_route(edit, b, paint_of(b->bottom, b->bottom_s, pin, 500 + pin), side, bottom,
+                        bn);
         }
     }
-    canvas_edit_box(edit, &(CanvasBox){.paint = {b->silk, b->silk_s, 0, 0},
+    canvas_edit_box(edit, &(CanvasBox){.paint = paint_of(b->silk, b->silk_s, 0, 0),
                                        .centre = board_at(b, 0.0, 0.0),
                                        .size_x = MM(7.0),
                                        .size_y = MM(7.0),
                                        .stroke = MM(0.15)});
-    canvas_edit_circle(edit, &(CanvasCircle){.paint = {b->silk, b->silk_s, 0, 0},
+    canvas_edit_circle(edit, &(CanvasCircle){.paint = paint_of(b->silk, b->silk_s, 0, 0),
                                              .centre = board_at(b, -2.8, 2.8),
                                              .radius = MM(0.3)});
     board_label(edit, b, "U1", 0.0, 0.0, 1.5);
@@ -1182,7 +1170,7 @@ static void board_fill(CanvasEdit* edit, const Board* b) {
                 if (row == 0)
                     board_via(edit, b, 0, 0, px, py, 0.3, 0.15);
             }
-        canvas_edit_box(edit, &(CanvasBox){.paint = {b->silk, b->silk_s, 0, 0},
+        canvas_edit_box(edit, &(CanvasBox){.paint = paint_of(b->silk, b->silk_s, 0, 0),
                                            .centre = board_at(b, cx, 0.0),
                                            .size_x = MM(3.9),
                                            .size_y = MM(5.4),
@@ -1222,11 +1210,12 @@ static void board_fill(CanvasEdit* edit, const Board* b) {
             plane[pn++] = board_at(b, mx + 2.0 * cos(t), my - 2.0 * sin(t));
         }
     }
-    canvas_edit_polygon(edit, &(CanvasPolygon){.paint = {b->plane, b->plane_s, BOARD_GND, 0},
-                                               .points = plane,
-                                               .count = pn,
-                                               .holes = holes,
-                                               .hole_count = hn});
+    canvas_edit_polygon(edit,
+                        &(CanvasPolygon){.paint = paint_of(b->plane, b->plane_s, BOARD_GND, 0),
+                                         .points = plane,
+                                         .count = pn,
+                                         .holes = holes,
+                                         .hole_count = hn});
     board_label(edit, b, "CETRA CANVAS  REV A", 0.0, 17.6, 1.2);
     board_label(edit, b, "J1", 0.0, -14.6, 1.0);
 }
@@ -1313,7 +1302,7 @@ static void board_script(void) {
             canvas_set_style(g_canvas, b->silk_s, 0xf0f0d0ffu);
             break;
         case 2:
-            canvas_edit_segment(edit, &(CanvasSegment){.paint = {b->top, b->top_s, 0, 9001},
+            canvas_edit_segment(edit, &(CanvasSegment){.paint = paint_of(b->top, b->top_s, 0, 9001),
                                                        .a = board_at(b, 1.0, 1.0),
                                                        .b = board_at(b, 1.5, 1.5),
                                                        .width = MM(0.2)});
@@ -1328,7 +1317,7 @@ static void board_script(void) {
             canvas_edit_clear_layer(edit, b->transient);
             for (int i = 0; i < 50; i++)
                 canvas_edit_segment(
-                    edit, &(CanvasSegment){.paint = {b->transient, b->wire_s, 0, 0},
+                    edit, &(CanvasSegment){.paint = paint_of(b->transient, b->wire_s, 0, 0),
                                            .a = board_at(b, 0.5, 0.5 + i * 0.05),
                                            .b = board_at(b, 3.5, 0.5 + i * 0.06 + frame * 0.1),
                                            .width = MM(0.02)});
@@ -1418,15 +1407,6 @@ static void cell_area(const SheetContext* ctx, const char* sheet, const char* na
     const double px = ppu_px(ctx) * 1e6; // pixels a millimetre
     probe_cell(ctx, sheet, name, centre, MM(CELL_MM));
     printf(" area %.6f edge %.6f\n", area_mm2 * px * px, edge_mm * px);
-}
-
-static void cell_at(const SheetContext* ctx, const char* kind, const char* name, CanvasPoint p,
-                    uint32_t rgb) {
-    if (!ctx->probe)
-        return;
-    double x, y;
-    fb_of(ctx, p, &x, &y);
-    printf("canvas %s %s %ld %ld want %06x\n", kind, name, lround(x), lround(y), rgb);
 }
 
 static void dashes_box(const SheetContext* ctx, const char* kind, const char* name,
@@ -1519,8 +1499,10 @@ static void sheet_strokes(SheetContext* ctx) {
         cell_area(ctx, "strokes", name, c, 0.15 - strokes_cut((CanvasJoin)k, sharp, h), 2.0 * 1.15);
     }
     // Just inside the right angle's mitre point, which a bevel cuts off.
-    cell_at(ctx, "strokes-at", "mitre-point", AT(CELL(2, 1), 0.2 + 0.055, -0.3 - 0.055), 0xffffff);
-    cell_at(ctx, "strokes-at", "bevel-cut", AT(CELL(3, 1), 0.2 + 0.055, -0.3 - 0.055), 0x000000);
+    probe_pixel(ctx, "strokes-at", "mitre-point", AT(CELL(2, 1), 0.2 + 0.055, -0.3 - 0.055),
+                0xffffff);
+    probe_pixel(ctx, "strokes-at", "bevel-cut", AT(CELL(3, 1), 0.2 + 0.055, -0.3 - 0.055),
+                0x000000);
 
     // A box 0.8 by 0.6 with square corners, stroked 0.1, joined three ways.
     for (int k = 0; k < 3; k++) {
@@ -1536,6 +1518,18 @@ static void sheet_strokes(SheetContext* ctx) {
         snprintf(name, sizeof(name), "box-%s", JOINS[k]);
         cell_area(ctx, "strokes", name, c, 0.28 - corners[k], 4.0 * (0.8 + 0.6));
     }
+
+    // A segment 1 wide at 45 degrees, square capped, alone in its tile 20 mm off: its cap's corner
+    // reaches the half width times the square root of two past its end along x, past the half
+    // width alone. A view whose edge falls between the two draws the corner only if the tile's
+    // bound reaches it.
+    const CanvasPoint end = {MM(20.0) + ctx->offset, ctx->offset};
+    CanvasPaint square = white;
+    square.cap = CANVAS_CAP_SQUARE;
+    canvas_edit_segment(
+        edit,
+        &(CanvasSegment){.paint = square, .a = AT(end, -2.0, -2.0), .b = end, .width = MM(1.0)});
+    probe_pixel(ctx, "strokes-reach", "square-corner", AT(end, 0.64, 0.0), 0xffffff);
 #undef AT
 #undef CELL
 }
@@ -1560,8 +1554,8 @@ static void sheet_dashes(SheetContext* ctx) {
         .paint = paint, .a = AT(c, -0.5, 0.0), .b = AT(c, 0.5, 0.0), .width = MM(w)};
     canvas_edit_segment(edit, &bar);
     cell_area(ctx, "dashes", "bar", c, 3.0 * DASH_ON * w, 6.0 * (DASH_ON + w));
-    cell_at(ctx, "dashes-at", "bar-dash", AT(c, -0.5 + DASH_ON * 0.5, 0.0), 0xffffff);
-    cell_at(ctx, "dashes-at", "bar-gap", AT(c, -0.5 + DASH_ON + DASH_OFF * 0.5, 0.0), 0x000000);
+    probe_pixel(ctx, "dashes-at", "bar-dash", AT(c, -0.5 + DASH_ON * 0.5, 0.0), 0xffffff);
+    probe_pixel(ctx, "dashes-at", "bar-gap", AT(c, -0.5 + DASH_ON + DASH_OFF * 0.5, 0.0), 0x000000);
 
     // The same round: each dash a capsule, its ends past the dash's length.
     c = CELL(1, 0);
@@ -1603,8 +1597,9 @@ static void sheet_dashes(SheetContext* ctx) {
     const double round_mm = DASH_TURN * 0.4, periods = round(round_mm / period);
     const double on = round_mm / periods * DASH_ON / period, off = round_mm / periods - on;
     cell_area(ctx, "dashes", "ring", c, round_mm * w * DASH_ON / period, 2.0 * periods * (on + w));
-    cell_at(ctx, "dashes-at", "ring-dash", dashes_around(c, 0.4, on * 0.5 / 0.4), 0xffffff);
-    cell_at(ctx, "dashes-at", "ring-gap", dashes_around(c, 0.4, (on + off * 0.5) / 0.4), 0x000000);
+    probe_pixel(ctx, "dashes-at", "ring-dash", dashes_around(c, 0.4, on * 0.5 / 0.4), 0xffffff);
+    probe_pixel(ctx, "dashes-at", "ring-gap", dashes_around(c, 0.4, (on + off * 0.5) / 0.4),
+                0x000000);
 
     // An arc two periods less a gap long, butt ended, counter-clockwise from a.
     c = CELL(5, 0);
@@ -1615,9 +1610,9 @@ static void sheet_dashes(SheetContext* ctx) {
                                        .radius = MM(0.5),
                                        .width = MM(w)});
     cell_area(ctx, "dashes", "arc", c, 2.0 * DASH_ON * w, 4.0 * (DASH_ON + w));
-    cell_at(ctx, "dashes-at", "arc-dash", dashes_around(o, 0.5, DASH_ON * 0.5 / 0.5), 0xffffff);
-    cell_at(ctx, "dashes-at", "arc-gap", dashes_around(o, 0.5, (DASH_ON + DASH_OFF * 0.5) / 0.5),
-            0x000000);
+    probe_pixel(ctx, "dashes-at", "arc-dash", dashes_around(o, 0.5, DASH_ON * 0.5 / 0.5), 0xffffff);
+    probe_pixel(ctx, "dashes-at", "arc-gap",
+                dashes_around(o, 0.5, (DASH_ON + DASH_OFF * 0.5) / 0.5), 0x000000);
 
     // A clockwise arc two periods long, its pattern from its own a: from its record's a the first
     // dash and gap would trade places.
@@ -1629,10 +1624,10 @@ static void sheet_dashes(SheetContext* ctx) {
                                        .radius = MM(0.5),
                                        .width = MM(w),
                                        .clockwise = true});
-    cell_at(ctx, "dashes-at", "back-dash", dashes_around(o, 0.5, 1.6 - DASH_ON * 0.5 / 0.5),
-            0xffffff);
-    cell_at(ctx, "dashes-at", "back-gap",
-            dashes_around(o, 0.5, 1.6 - (DASH_ON + DASH_OFF * 0.5) / 0.5), 0x000000);
+    probe_pixel(ctx, "dashes-at", "back-dash", dashes_around(o, 0.5, 1.6 - DASH_ON * 0.5 / 0.5),
+                0xffffff);
+    probe_pixel(ctx, "dashes-at", "back-gap",
+                dashes_around(o, 0.5, 1.6 - (DASH_ON + DASH_OFF * 0.5) / 0.5), 0x000000);
 
     // A box and a polygon over the same square, its sides two periods with its corners in the
     // middle of gaps, from the middle of the bottom side: eight dashes, two a side.
@@ -1642,16 +1637,16 @@ static void sheet_dashes(SheetContext* ctx) {
         &(CanvasBox){
             .paint = shifted, .centre = c, .size_x = MM(0.8), .size_y = MM(0.8), .stroke = MM(w)});
     cell_area(ctx, "dashes", "box", c, 8.0 * DASH_ON * w, 16.0 * (DASH_ON + w));
-    cell_at(ctx, "dashes-at", "box-dash", AT(c, 0.2, -0.4), 0xffffff);
-    cell_at(ctx, "dashes-at", "box-gap", AT(c, 0.0, -0.4), 0x000000);
+    probe_pixel(ctx, "dashes-at", "box-dash", AT(c, 0.2, -0.4), 0xffffff);
+    probe_pixel(ctx, "dashes-at", "box-gap", AT(c, 0.0, -0.4), 0x000000);
     c = CELL(2, 1);
     const CanvasPoint square[5] = {AT(c, 0.0, -0.4), AT(c, 0.4, -0.4), AT(c, 0.4, 0.4),
                                    AT(c, -0.4, 0.4), AT(c, -0.4, -0.4)};
     canvas_edit_polygon(
         edit, &(CanvasPolygon){.paint = shifted, .points = square, .count = 5, .stroke = MM(w)});
     cell_area(ctx, "dashes", "polygon", c, 8.0 * DASH_ON * w, 16.0 * (DASH_ON + w));
-    cell_at(ctx, "dashes-at", "polygon-dash", AT(c, 0.2, -0.4), 0xffffff);
-    cell_at(ctx, "dashes-at", "polygon-gap", AT(c, 0.0, -0.4), 0x000000);
+    probe_pixel(ctx, "dashes-at", "polygon-dash", AT(c, 0.2, -0.4), 0xffffff);
+    probe_pixel(ctx, "dashes-at", "polygon-gap", AT(c, 0.0, -0.4), 0x000000);
 
     // Fills in a dashed paint, each its solid self.
     c = CELL(3, 1);
@@ -1691,7 +1686,8 @@ static void sheet_dashes(SheetContext* ctx) {
         canvas_edit_segment(edit, &tagged);
     }
     canvas_edit_remove_object(edit, 8);
-    cell_at(ctx, "dashes-at", "tagged-dash", AT(CELL(2, 2), -0.5 + DASH_ON * 0.5, 0.0), 0xff0000);
+    probe_pixel(ctx, "dashes-at", "tagged-dash", AT(CELL(2, 2), -0.5 + DASH_ON * 0.5, 0.0),
+                0xff0000);
     dashes_box(ctx, "dashes-empty", "removed", CELL(3, 2));
 
     // A segment whose gap is negative and an arc whose dash is 2^30 units, each refused.
@@ -1722,7 +1718,7 @@ static void sheet_dashes(SheetContext* ctx) {
         edit, &(CanvasPolygon){.paint = closing, .points = loop, .count = 4, .stroke = MM(w)});
     const double closing_on = 3.2 * 0.2 / 0.35; // the dashes' length round it, stretched
     cell_area(ctx, "dashes", "closing", c, closing_on * w, 2.0 * (closing_on + 9.0 * w));
-    cell_at(ctx, "dashes-at", "closing-corner", AT(c, -0.42, -0.405), 0x000000);
+    probe_pixel(ctx, "dashes-at", "closing-corner", AT(c, -0.42, -0.405), 0x000000);
 
     // Two mitred legs 0.06 wide at a right angle, a dash ending 0.003 past the corner: inside the
     // turn, the first leg's body runs to the corner, though past the bisector, and the dash there
@@ -1736,7 +1732,7 @@ static void sheet_dashes(SheetContext* ctx) {
         edit, &(CanvasPolyline){.paint = turned, .points = notch, .count = 3, .width = MM(0.06)});
     cell_area(ctx, "dashes", "notch", c, 0.503 * 0.06 + 0.03 * (0.03 - 0.003),
               2.0 * (0.503 + 3.0 * 0.06));
-    cell_at(ctx, "dashes-at", "notch-inside", AT(c, 0.2 - 0.012, -0.3 + 0.02), 0xffffff);
+    probe_pixel(ctx, "dashes-at", "notch-inside", AT(c, 0.2 - 0.012, -0.3 + 0.02), 0xffffff);
 
     // A mitred square-cornered box whose every corner ends a dash: no corner is drawn, its eight
     // dashes ending square at the corners.
@@ -1748,7 +1744,22 @@ static void sheet_dashes(SheetContext* ctx) {
         &(CanvasBox){
             .paint = ended, .centre = c, .size_x = MM(0.8), .size_y = MM(0.8), .stroke = MM(w)});
     cell_area(ctx, "dashes", "box-ends", c, 8.0 * DASH_ON * w, 16.0 * (DASH_ON + w));
-    cell_at(ctx, "dashes-at", "box-corner", AT(c, 0.4 + w * 0.25, -0.4 - w * 0.25), 0x000000);
+    probe_pixel(ctx, "dashes-at", "box-corner", AT(c, 0.4 + w * 0.25, -0.4 - w * 0.25), 0x000000);
+
+    // A solid bar crossed by a dashed one a quarter dash, raised and red, a dash's middle on the
+    // crossing: the dashed bar's red there whether it is drawn dashed or, too fine, at its average.
+    c = CELL(2, 3);
+    canvas_edit_segment(
+        edit, &(CanvasSegment){
+                  .paint = solid, .a = AT(c, -0.5, 0.0), .b = AT(c, 0.5, 0.0), .width = MM(w)});
+    canvas_tags_set(tags, 9, (CanvasTagState){.colour = 0xff0000ffu, .raised = true});
+    CanvasPaint ghost = paint;
+    ghost.object = 9;
+    ghost.dash = (CanvasDash){MM(0.1), MM(0.3), MM(0.35)};
+    canvas_edit_segment(
+        edit, &(CanvasSegment){
+                  .paint = ghost, .a = AT(c, 0.0, -0.5), .b = AT(c, 0.0, 0.5), .width = MM(w)});
+    probe_pixel(ctx, "dashes-at", "raised-crossing", c, 0xff0000);
 #undef AT
 #undef CELL
 }
