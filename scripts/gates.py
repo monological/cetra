@@ -28553,6 +28553,34 @@ def run_ui_gate(workdir):
                      moves the line counting them, a fold closed over the top
                      putting it on the fold's row, and Home on a wrapped row of
                      the fold's first line staying on that line.
+      ui-editor-rows-kept a line's rows answered from the count the editor keeps
+                     (spec 14.20): on 200 lines in 300 points, settled, every line
+                     asked twice wraps none; on a text just shown, laid out and
+                     not drawn, the first ask of a line wraps it and the second
+                     does not; at 240 points the asked line wrapped again to its
+                     new count; at 8 columns a tab stop, the rows guesses again
+                     and a line of tabs wrapped at 8.
+      ui-editor-fillers-read the fillers read back (spec 14.20): given out of order, a
+                     line named twice and one of no rows, read back sorted, the
+                     last for the line, the empty one left out; moved with their
+                     lines by two put in above; the one on a line pasted over with
+                     the same text gone; one on the line count last; none, and
+                     an element not an editor, 0 and NULL.
+      ui-editor-exact-rows exact rows (spec 14.20): on 600 lines whose words each take
+                     a row, guessed shorter than they wrap, an editor laid out on
+                     the text and not drawn counts the rows above line 300 on its
+                     first ask as one settled does, and ui_editor_scroll_row at
+                     the settled one's row puts its top on the same line and row;
+                     the bar dragged half way wraps 8 lines at most; a closed
+                     fold's 100 lines left guesses, the rest above wrapped; a
+                     second ask wraps none.
+      ui-editor-scrolls the scrolls asked of the view counted (spec 14.20): one for
+                     each of ui_editor_reveal, _scroll_place, _scroll_line and
+                     _scroll_row; one for a wheel's step, each pass of the bar
+                     pressed or held and a key moving the caret; one asked before
+                     a layout counted then and not when taken; none for an edit
+                     above the view, a fold closed over the top and opened, a
+                     layout at another width and the budget settling.
       ui-editor-steps each action told with its step: typing joined into words
                      shares one; a group holds one over typing, a Backspace and
                      more typing, one undo takes the group back and one redo makes
@@ -29884,6 +29912,30 @@ def run_ui_gate(workdir):
                            "count left out, and under a closed fold ending the text")
     print(f"  ui-editor-filler-end  {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-filler-end", ok)
+
+    ok, detail = doc_flags("editor-rows-kept", 4, "a line's rows from the count kept: none "
+                           "wrapped asking a settled text twice over, a guess wrapped once, and "
+                           "wrapped again at new columns and new tab stops")
+    print(f"  ui-editor-rows-kept   {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-rows-kept", ok)
+
+    ok, detail = doc_flags("editor-fillers-read", 5, "the fillers read back sorted, one a line and "
+                           "none empty, moved with their lines, gone from a line pasted over, "
+                           "those under the text last, and none for none")
+    print(f"  ui-editor-fillers-read {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-fillers-read", ok)
+
+    ok, detail = doc_flags("editor-exact-rows", 5, "a text just shown counts the rows above its "
+                           "top and above a row put as a settled one does, the bar wraps none, a "
+                           "closed fold's lines stay guesses, and a second ask wraps nothing")
+    print(f"  ui-editor-exact-rows  {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-exact-rows", ok)
+
+    ok, detail = doc_flags("editor-scrolls", 4, "one scroll counted for each call asked, the "
+                           "wheel, the bar and a key, one asked before a layout once, and none for "
+                           "an edit, a fold, a layout or the budget")
+    print(f"  ui-editor-scrolls     {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-scrolls", ok)
 
     ok, detail = doc_flags("editor-steps", 7, "typing joined into words shares a step, a group "
                            "holds one over typing, a Backspace and more typing, and one undo takes "

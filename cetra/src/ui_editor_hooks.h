@@ -27,5 +27,8 @@ int ui_editor_columns(const UIElement* el);
 // Whether the budget has nothing left to do: every line's rows wrapped rather than guessed, and a
 // stateful highlighter's walk past every line drawn.
 bool ui_editor_settled(const UIElement* el);
+// The lines the editor has wrapped so far, the same line again included; one it hands back from
+// the last wrap not counted.
+uint64_t ui_editor_wraps(const UIElement* el);
 
 #endif // _UI_EDITOR_HOOKS_H_
