@@ -66,7 +66,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 | 9 | What the panes and the fonts need of the UI | **Built** | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
 
-Specs 14.7 and 14.9 to 14.19 are the smaller changes pcb's window asked for, listed under "Not
+Specs 14.7 and 14.9 to 14.20 are the smaller changes pcb's window asked for, listed under "Not
 among the nine". Spec 14.8 was not asked for by pcb: a headless run waits for the textures its
 start-up asked for before frame 1 (`docs/architecture.md`, Render Pipeline), which `pcb render`
 gets for free.
@@ -456,6 +456,14 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
   rows landing a row off for each filler one side has; `ui_editor_set_gutter_digits`, so two texts
   of different lengths keep the same columns; and a filler under the last line, for a change at the
   end of a text with no line after it (`docs/ui.md`, The editor).
+- **Exact rows, fillers read back and scrolls counted** -- spec 14.20, built, from five reviews of
+  that pane in pcb 6.5's phase 13, each of something pcb worked round: `ui_editor_line_rows`
+  answering from the count the editor keeps, so asking for every changed line each frame wraps
+  nothing once settled; `ui_editor_fillers`, so pcb compares the fillers the editor holds rather
+  than keeping a copy an edit leaves stale; `ui_editor_top_row` and `ui_editor_scroll_row`
+  counting exact rows, so a side on a text just shown stands level at once, which removes 14.19's
+  known limit; and `ui_editor_scrolls`, so a side leads when the person scrolled it rather than
+  when its top moved (`docs/ui.md`, The editor).
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the

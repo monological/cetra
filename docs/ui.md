@@ -395,7 +395,8 @@ colour for every state; while that colour's alpha is 0 they are the editor's tex
 
 - **Its lines wrap at its width**: after the last space that fits, at the edge for a word longer
   than a row, later rows hung at the line's indent. Only the rows in view are wrapped and drawn;
-  every other line's rows are a guess from its length.
+  every other line's rows are a guess from its length. A layout at other columns or other tab stops
+  makes every line's rows a guess again.
 - **The scroll is held to a line and a row of it**, so a guess put right, or an edit above, never
   moves what is on screen. `ui_editor_top_line` reads it exactly, the line and the rows into it with
   the part of a row, and `ui_editor_scroll_line` puts it there, held to the text's lines and that
@@ -404,9 +405,23 @@ colour for every state; while that colour's alpha is 0 they are the editor's tex
   counted, and `ui_editor_scroll_row` puts it there (spec 14.19): two editors whose lines are
   padded level show the same rows in the same order, and copying the count holds them together
   where a line and its rows would land a row off for each filler one side has and the other lacks.
-  A double, as a text's rows pass a float's whole numbers long before its lines run out. The count
-  holds them only once each has wrapped the rows above its top: a side still guessing a line's
-  rows from its length stands off by the difference until its budget wraps them.
+  A double, as a text's rows pass a float's whole numbers long before its lines run out.
+  - Both count exact rows (spec 14.20): once the editor is laid out on its text, every line that
+    shows above the top, or above the row asked, counts the rows it wraps to, a guess wrapped
+    first, so two editors on texts that stand level agree on every row whichever has settled. A
+    line a closed fold hides shows none and is left a guess. A mark below which no line is a guess,
+    lowered by a change or a fold opened and put back to the start by new columns or tab stops,
+    means a later ask wraps only the lines past it.
+  - The cost is the first ask after a jump into a large text, which wraps everything above the
+    place at once rather than over the frames the budget would take. The bar and the wheel still
+    scroll on the guesses, so a drag through a large text wraps none of it.
+- **`ui_editor_scrolls` counts the scrolls asked of the view** (spec 14.20): `ui_editor_reveal`,
+  `_scroll_place`, `_scroll_line` and `_scroll_row`, each counted when asked, and every scroll the
+  editor makes itself -- a wheel's, the bar's, a mode's, the reveal after an action, a drag past
+  the view's edge -- whether or not the view moves. An edit, a fold, rows settling and a layout
+  move the view by none. It is the editor's, kept across the texts it shows: two editors held
+  together lead by whichever count changed, where comparing each side's top with the last frame's
+  takes a side laid out a frame late for one the person moved.
 - **The gutter is as wide as its text's line count's digits**, or as `ui_editor_set_gutter_digits`
   asks if that is more (spec 14.19), so two editors on texts of different lengths keep the same
   columns and wrap their common lines alike. It is the editor's, as its look is, and a change of
@@ -453,7 +468,13 @@ click, the draw -- counts the rows a line *shows*, which may differ from the row
   them; no caret stands on one, and a click on one lands at its line's start. A closed fold shows
   its first line's fillers above its row and none of the lines it hides. `ui_editor_line_rows` is a
   line's own rows at the editor's columns, which a host padding two editors to each other compares,
-  polling `ui_editor_columns` for when they change.
+  polling `ui_editor_columns` for when they change; it answers from the count the editor keeps,
+  wrapping only a guess (spec 14.20), so a host asking for every changed line each frame wraps
+  nothing once they settle.
+  - `ui_editor_fillers` reads them back as they stand (spec 14.20): in order of their lines, one at
+    most a line, none of no rows, those under the text last. A host compares them with what it
+    wants rather than keeping its own copy, which an edit would leave behind: a change rewriting a
+    filler's line, a line pasted over with its own text among them, takes the filler with it.
   - Fillers on the text's line count stand under its last line (spec 14.19), for a change at the
     end of a text with no line after it: counted after the own rows of the last line that shows,
     so the scroll reaches them, with no caret on them, a move by rows stopping at the last line and
@@ -475,7 +496,7 @@ its place in every text it has shown, as a vim window keeps a buffer's.
   rows as it left them (`UIEditorPlace`, everything of an editor that belongs to the text it shows).
 - A place left is parked on its text as a view of it, so every edit made there since moves it as it
   moves an editor showing the text, the changed lines' rows made guesses. Rows wrapped at other
-  columns are guesses again on return. A text freed lets its parked places go.
+  columns or tab stops are guesses again by the next layout. A text freed lets its parked places go.
 - The mode, find's query and the look are the editor's and are kept. The text it leaves forgets it
   as a view, and an undo group held to it is closed.
 - Keeping the place on the host (carets and a top with a version, mapped through `text_doc_map` on
