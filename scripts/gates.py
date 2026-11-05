@@ -31218,9 +31218,11 @@ def run_canvas_gate(workdir):
                      more; the same with the corner in a dash and mitred, that dash turning it
                      square; a ring, a butt arc, a box and a polygon over the same square from the
                      middle of its bottom side, its corners in gaps; a mitred square polygon from
-                     a corner whose pattern is stretched from 9.14 periods to 9; and a circle, a
-                     box and a polygon filled in a dashed paint, each its solid area. A fill and
-                     text never take a dash.
+                     a corner whose pattern is stretched from 9.14 periods to 9; two mitred legs
+                     whose dash ends a tenth of a half width past the corner, which turns it; a
+                     mitred square-cornered box whose every corner ends a dash, none drawn; and a
+                     circle, a box and a polygon filled in a dashed paint, each its solid area. A
+                     fill and text never take a dash.
       canvas-dash-places pixels inside the first dash and the first gap of the bar, the arc, a
                      clockwise arc from its own a, the ring from its rightmost point, the box and
                      the polygon from the middle of the bottom side: each white or black within 2
@@ -31228,7 +31230,11 @@ def run_canvas_gate(workdir):
                      the stretched square's mitre at its first point, black: a closed path's
                      last segment comes to that point a hair past a whole period, and deciding
                      there on its own whether it lay in a dash drew its half of a join no dash
-                     runs through.
+                     runs through. A pixel inside the two legs' turn on the first leg's body
+                     past the bisector, white: cut at the bisector, the dash ending just past
+                     the corner on the second left it drawn by neither. And a pixel in the
+                     box's corner square, black: the square squeezed to the corner's one place
+                     drew a dash ending there as a block of half coverage.
       canvas-dash-world the bar centred in views 8 mm and 4 mm across: along its middle row,
                      three dashes each within a pixel of 0.2 mm in pixels, 20 and then 40. A
                      dash is a length on the board, not on the screen.
@@ -31798,8 +31804,8 @@ def run_canvas_gate(workdir):
 
     dashes, probe = _canvas_run(workdir, "dashes", "--sheet", "dashes")
     cells = kind(probe, "dashes")
-    if not dashes or len(cells) != 12:
-        ok, detail = False, f"the app failed or printed {len(cells)} cells (want 12)"
+    if not dashes or len(cells) != 14:
+        ok, detail = False, f"the app failed or printed {len(cells)} cells (want 14)"
     else:
         worst, rows = areas_of(dashes, cells)
         ok = worst <= 0.03
@@ -31808,12 +31814,12 @@ def run_canvas_gate(workdir):
     note("canvas-dash-areas", ok)
 
     places = {n: t for n, t in kind(probe, "dashes-at").items() if n != "tagged-dash"}
-    if not dashes or len(places) != 13:
-        ok, detail = False, f"the app failed or printed {len(places)} places (want 13)"
+    if not dashes or len(places) != 15:
+        ok, detail = False, f"the app failed or printed {len(places)} places (want 15)"
     else:
         wrong = wrong_places(dashes, places)
         ok = not wrong
-        detail = ("13 places each white or black within 2 codes" if ok
+        detail = ("15 places each white or black within 2 codes" if ok
                   else "wrong: " + ", ".join(wrong))
     print(f"  canvas-dash-places  {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-dash-places", ok)
@@ -31822,7 +31828,7 @@ def run_canvas_gate(workdir):
     seen = {}
     for across in (8, 4):
         path, near = _canvas_run(workdir, f"dashes_{across}mm", "--sheet", "dashes", "--view",
-                                 f"-3.25,1.6,{across}")
+                                 f"-3.25,2.25,{across}")
         if path and ("dashes", "bar") in near:
             seen[across] = (bar_runs(path, near), _ppm_array(path).shape[1] / across * 0.2)
     if len(seen) != 2:
@@ -31863,9 +31869,9 @@ def run_canvas_gate(workdir):
     # dash_min_px at 30 px: the 8 mm view's 20 px dashes are drawn solid at the pattern's average,
     # the 4 mm view's 40 px ones still dashed.
     avg, avg_probe = _canvas_run(workdir, "dashes_min_8mm", "--sheet", "dashes", "--view",
-                                 "-3.25,1.6,8", "--dash-min-px", "30")
+                                 "-3.25,2.25,8", "--dash-min-px", "30")
     still, still_probe = _canvas_run(workdir, "dashes_min_4mm", "--sheet", "dashes", "--view",
-                                     "-3.25,1.6,4", "--dash-min-px", "30")
+                                     "-3.25,2.25,4", "--dash-min-px", "30")
     if not avg or not still or ("dashes", "bar") not in avg_probe:
         ok, detail = False, "a run failed"
     else:

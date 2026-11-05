@@ -1551,7 +1551,7 @@ static void sheet_dashes(SheetContext* ctx) {
     shifted.dash.phase = MM(DASH_ON + DASH_OFF * 0.5);
     const double period = DASH_ON + DASH_OFF, w = DASH_W;
 #define CELL(i, j) \
-    ((CanvasPoint){MM(-3.25 + 1.3 * (i)) + ctx->offset, MM(1.6 - 1.6 * (j)) + ctx->offset})
+    ((CanvasPoint){MM(-3.25 + 1.3 * (i)) + ctx->offset, MM(2.25 - 1.5 * (j)) + ctx->offset})
 #define AT(c, dx, dy) ((CanvasPoint){(c).x + MM(dx), (c).y + MM(dy)})
 
     // Three periods less a gap, butt ended: it ends on a dash's end.
@@ -1723,6 +1723,32 @@ static void sheet_dashes(SheetContext* ctx) {
     const double closing_on = 3.2 * 0.2 / 0.35; // the dashes' length round it, stretched
     cell_area(ctx, "dashes", "closing", c, closing_on * w, 2.0 * (closing_on + 9.0 * w));
     cell_at(ctx, "dashes-at", "closing-corner", AT(c, -0.42, -0.405), 0x000000);
+
+    // Two mitred legs 0.06 wide at a right angle, a dash ending 0.003 past the corner: inside the
+    // turn, the first leg's body runs to the corner, though past the bisector, and the dash there
+    // has turned it. Its dashes 0.103, 0.2 and 0.2 long, and the mitre's square outside the turn,
+    // less where the 0.003 past the corner lies on the first leg's body.
+    c = CELL(0, 3);
+    CanvasPaint turned = mitred;
+    turned.dash.phase = MM(0.097);
+    const CanvasPoint notch[3] = {AT(c, -0.3, -0.3), AT(c, 0.2, -0.3), AT(c, 0.2, 0.2)};
+    canvas_edit_polyline(
+        edit, &(CanvasPolyline){.paint = turned, .points = notch, .count = 3, .width = MM(0.06)});
+    cell_area(ctx, "dashes", "notch", c, 0.503 * 0.06 + 0.03 * (0.03 - 0.003),
+              2.0 * (0.503 + 3.0 * 0.06));
+    cell_at(ctx, "dashes-at", "notch-inside", AT(c, 0.2 - 0.012, -0.3 + 0.02), 0xffffff);
+
+    // A mitred square-cornered box whose every corner ends a dash: no corner is drawn, its eight
+    // dashes ending square at the corners.
+    c = CELL(1, 3);
+    CanvasPaint ended = mitred;
+    ended.dash.phase = MM(DASH_ON);
+    canvas_edit_box(
+        edit,
+        &(CanvasBox){
+            .paint = ended, .centre = c, .size_x = MM(0.8), .size_y = MM(0.8), .stroke = MM(w)});
+    cell_area(ctx, "dashes", "box-ends", c, 8.0 * DASH_ON * w, 16.0 * (DASH_ON + w));
+    cell_at(ctx, "dashes-at", "box-corner", AT(c, 0.4 + w * 0.25, -0.4 - w * 0.25), 0x000000);
 #undef AT
 #undef CELL
 }

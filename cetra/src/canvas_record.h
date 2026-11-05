@@ -16,9 +16,10 @@
  *   SEGMENT  p = a, b              f = half width; at a corner, the direction
  *                                      the stroke comes into a and goes on out
  *                                      of b, as angles; the joins
- *                                      (CANVAS_JOIN_AT_*, CANVAS_JOINED_*), 0
- *                                      for two free ends or round corners
- *                                      undashed, which are round ends
+ *                                      (CANVAS_JOIN_AT_*, CANVAS_JOINED_*,
+ *                                      CANVAS_DASHED_*), 0 for two free ends or
+ *                                      round corners of a round-capped line
+ *                                      undashed, which are its round ends
  *   ARC      p = a, b              f = half width, centre minus the chord's
  *                                      midpoint (x, y), radius; counter-
  *                                      clockwise from a to b, an edit having
@@ -35,18 +36,17 @@
  *              font slot               units; the string's angle
  *            FLAG_MIRROR flips it across the line through the anchor. The font
  *            slot is the canvas's (its four fonts), filled in when applied.
- * An end is round, butt (FLAG_FLAT_*) or square (FLAG_SQUARE_*). A cut end
- * (FLAG_CUT_*) is where an edit split a shape reaching too far from its tile:
- * it has no cap and no edge ramp, so the pieces meet with no seam.
+ * A stroke's own ends and its dashes' take the cap in FLAG_CAP.
+ * A cut end (FLAG_CUT_*) is where an edit split a shape reaching too far from
+ * its tile: it has no cap and no edge ramp, so the pieces meet with no seam.
  *
  * A dashed segment, arc, stroked circle or stroked box (FLAG_DASHED) is a
  * CanvasDashRecord in a store of its own, its pattern after the record:
  *   dash  vec4  the dash and the gap, stretched on a closed shape; the place in
- *               the pattern at the record's a, under one period; the cap its
- *               dashes end with
- * The place grows toward b, or toward a under FLAG_DASH_BACK: a clockwise arc,
- * whose ends the edit swapped. A circle's a is its rightmost point and a box's
- * the middle of its bottom side, each going round counter-clockwise.
+ *               the pattern at the record's a, under one period, growing toward
+ *               b; 0
+ * A circle's a is its rightmost point and a box's the middle of its bottom
+ * side, each going round counter-clockwise.
  */
 
 #include <stdint.h>
@@ -86,6 +86,10 @@ static inline uint32_t canvas_record_head(uint32_t kind, uint32_t flags, uint16_
     return (kind & 0x3fu) | (flags & 0x3ffu) << 6 | (uint32_t)style << 16;
 }
 
+static inline uint32_t canvas_record_flags(uint32_t head) {
+    return head >> 6 & 0x3ffu;
+}
+
 /*
  * A fill triangle, one instance of canvas_fill_vert.glsl, which picks its
  * corner by gl_VertexID:
@@ -111,8 +115,7 @@ typedef struct CanvasFill {
 _Static_assert(sizeof(CanvasFill) == 112, "canvas_fill_vert.glsl reads a 112-byte triangle");
 
 // A record as an edit holds it: what tile it belongs to, with the tile's index
-// filled in when the edit is applied, and a glyph's font slot likewise. A
-// dashed one is added as `item`, a solid one as `item.record`.
+// filled in when the edit is applied, and a glyph's font slot likewise.
 typedef struct CanvasPiece {
     CanvasLayer* layer;
     const struct Font* font; // a glyph's; NULL for every other kind

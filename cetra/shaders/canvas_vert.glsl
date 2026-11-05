@@ -28,9 +28,8 @@ flat out float vRaised;
 flat out vec4 vShape; // the kind's measures, in pixels
 flat out vec4 vEnds;  // an arc's sector: from xy counter-clockwise to zw; a segment's way on past
                       // a, back toward the segment before, and past b, in its frame; a box's join
-flat out vec4 vDash;  // the dash, the period and the place in them at the record's a, in pixels,
-                      // and the dashes' cap; a period of 0 is solid, at the strength in x when
-                      // it is more than 0
+flat out vec4 vDash;  // the dash, the period and the place in them at the record's a, in pixels;
+                      // a period of 0 is solid
 out vec2 vLocal;      // in the shape's own frame, in pixels; for a glyph, its place in the atlas
 
 const float PAD = 1.0; // the outer half of the edge ramp
@@ -40,11 +39,24 @@ float cross2(vec2 a, vec2 b) {
     return a.x * b.y - a.y * b.x;
 }
 
-// How far past a corner a join reaches along the segment, in half widths: a mitre's point, at a
-// turn whose cosine is `c`, and every other join a half width. The edit has drawn a mitre past
-// its limit as a bevel, so its reach is bounded.
-float mitreReach(float c, uint join) {
-    if (join != CANVAS_STROKE_MITRE)
+// An end of a segment or an arc, CANVAS_END_*: a cut; the shape's cap at an end of its own; and
+// at a corner its join, or open where the corner lies in a dash's gap, the dashes there ending at
+// their own caps. Drawn solid, every corner is its join.
+uint endCode(uint flags, uint cut, uint joins, uint joined, uint inDash, uint join, bool dashed) {
+    if ((flags & cut) != 0u)
+        return CANVAS_END_CUT;
+    if ((joins & joined) == 0u)
+        return flags & CANVAS_FLAG_CAP;
+    return dashed && (joins & inDash) == 0u ? CANVAS_END_OPEN : CANVAS_END_JOIN + join;
+}
+
+// How far past an end its drawing reaches along the segment, in half widths: nothing past a cut
+// or a butt end, a mitre's point at a turn whose cosine is `c`, and a half width past every
+// other. The edit has drawn a mitre past its limit as a bevel, so its reach is bounded.
+float endReach(uint code, float c) {
+    if (code == CANVAS_END_CUT || code == CANVAS_STROKE_BUTT)
+        return 0.0;
+    if (code != CANVAS_END_JOIN + CANVAS_STROKE_MITRE)
         return 1.0;
     return max(1.0, sqrt(max(1.0 - c, 0.0) / max(1.0 + c, 1e-4)));
 }
@@ -86,6 +98,11 @@ void main() {
     float pad = PAD + (ringed ? uRing.y : 0.0);
     vec2 pos;
     float span;
+    // The pattern in pixels, as every length is. Where a dash or a gap would span fewer than
+    // uDashMinPx, pixel centres land inside a dash or not at random: the line is drawn solid at
+    // the dash's share of the period, the pattern's average, so it keeps the weight its dashes had.
+    vec3 dash = aD.xyz * uPixelsPerUnit;
+    bool dashed = (flags & CANVAS_FLAG_DASHED) != 0u && min(dash.x, dash.y) >= uDashMinPx;
 
     if (kind == CANVAS_KIND_SEGMENT) {
         vec2 a = canvasPixels(aP.xy, tile.xy);
@@ -95,23 +112,31 @@ void main() {
         float len = length(d);
         vec2 dir = len > 1e-6 ? d / len : vec2(1.0, 0.0);
         vec2 n = vec2(-dir.y, dir.x);
-        // A round or square end reaches half the width past it, and a corner as far as its join.
         uint joins = uint(aF.w);
-        float reachA = (flags & (CANVAS_FLAG_FLAT_A | CANVAS_FLAG_CUT_A)) == 0u ? hw : 0.0;
-        float reachB = (flags & (CANVAS_FLAG_FLAT_B | CANVAS_FLAG_CUT_B)) == 0u ? hw : 0.0;
+        uint endA = endCode(flags, CANVAS_FLAG_CUT_A, joins, CANVAS_JOINED_A, CANVAS_DASHED_A,
+                            joins & CANVAS_JOIN_AT_A, dashed);
+        uint endB = endCode(flags, CANVAS_FLAG_CUT_B, joins, CANVAS_JOINED_B, CANVAS_DASHED_B,
+                            (joins & CANVAS_JOIN_AT_B) >> 2, dashed);
         // The way the stroke goes on past each corner, in the segment's frame: back out of a
-        // toward the segment before, on out of b.
-        vec2 inA = vec2(cos(aF.y), sin(aF.y)), outB = vec2(cos(aF.z), sin(aF.z));
-        vec2 wa = vec2(dot(-inA, dir), dot(-inA, n)), wb = vec2(dot(outB, dir), dot(outB, n));
-        if ((joins & CANVAS_JOINED_A) != 0u)
-            reachA = hw * mitreReach(dot(inA, dir), joins & CANVAS_JOIN_AT_A);
-        if ((joins & CANVAS_JOINED_B) != 0u)
-            reachB = hw * mitreReach(dot(dir, outB), (joins & CANVAS_JOIN_AT_B) >> 2);
-        float along = c.x == 0.0 ? -reachA - pad : len + reachB + pad;
+        // toward the segment before, on out of b; and the cosine of the turn there.
+        vec2 wa = vec2(0.0), wb = vec2(0.0);
+        float turnA = 1.0, turnB = 1.0;
+        if ((joins & CANVAS_JOINED_A) != 0u) {
+            vec2 inA = vec2(cos(aF.y), sin(aF.y));
+            wa = vec2(dot(-inA, dir), dot(-inA, n));
+            turnA = dot(inA, dir);
+        }
+        if ((joins & CANVAS_JOINED_B) != 0u) {
+            vec2 outB = vec2(cos(aF.z), sin(aF.z));
+            wb = vec2(dot(outB, dir), dot(outB, n));
+            turnB = dot(dir, outB);
+        }
+        float along = c.x == 0.0 ? -hw * endReach(endA, turnA) - pad
+                                 : len + hw * endReach(endB, turnB) + pad;
         float across = (c.y * 2.0 - 1.0) * (hw + pad);
         pos = a + dir * along + n * across;
         vLocal = vec2(along, across);
-        vShape = vec4(len, hw, float(joins), 0.0);
+        vShape = vec4(len, hw, float(endA | endB << 3), 0.0);
         vEnds = vec4(wa, wb);
         span = len + 2.0 * hw;
     } else if (kind == CANVAS_KIND_CIRCLE) {
@@ -129,8 +154,8 @@ void main() {
         float hs = aP.z > 0 ? max(float(aP.z) * uPixelsPerUnit * 0.5, 0.5) : 0.0;
         vec2 u = vec2(cos(aF.w), sin(aF.w));
         vec2 v = vec2(-u.y, u.x);
-        // A mitred corner reaches half the stroke past the outline each way.
-        vLocal = (c * 2.0 - 1.0) * (halfSize + hs * (aP.w != 0 ? 2.0 : 1.0) + pad);
+        // A mitred corner reaches half the stroke past the outline each way, as its sides do.
+        vLocal = (c * 2.0 - 1.0) * (halfSize + hs + pad);
         pos = centre + u * vLocal.x + v * vLocal.y;
         vShape = vec4(halfSize, corner, hs);
         vEnds = vec4(float(aP.w), 0.0, 0.0, 0.0);
@@ -155,12 +180,14 @@ void main() {
                 hi = max(hi, axes[q] * r);
             }
         }
-        // A square end's corner reaches past the bound along the tangent.
-        bool square = (flags & (CANVAS_FLAG_SQUARE_A | CANVAS_FLAG_SQUARE_B)) != 0u;
-        float grow = hw * (square ? 2.0 : 1.0) + pad;
+        // A square end's corners lie a half width along the tangent and across from its end.
+        bool square = (flags & CANVAS_FLAG_CAP) == CANVAS_STROKE_SQUARE;
+        float grow = hw * (square ? 1.4143 : 1.0) + pad;
         vLocal = mix(lo - grow, hi + grow, c);
         pos = centre + vLocal;
-        vShape = vec4(r, hw, sweep, 0.0);
+        uint endA = endCode(flags, CANVAS_FLAG_CUT_A, 0u, 0u, 0u, 0u, false);
+        uint endB = endCode(flags, CANVAS_FLAG_CUT_B, 0u, 0u, 0u, 0u, false);
+        vShape = vec4(r, hw, sweep, float(endA | endB << 3));
         vEnds = vec4(s, e);
         span = max(hi.x - lo.x, hi.y - lo.y) + 2.0 * hw;
     } else if (kind == CANVAS_KIND_EDGE) {
@@ -178,7 +205,9 @@ void main() {
         float across = c.y == 0.0 ? -PAD : 0.5 + pad;
         pos = a + dir * along + out_ * across;
         vLocal = vec2(along, across);
-        vShape = vec4(len, 0.0, 0.0, 0.0);
+        uint endA = endCode(flags, CANVAS_FLAG_CUT_A, 0u, 0u, 0u, 0u, false);
+        uint endB = endCode(flags, CANVAS_FLAG_CUT_B, 0u, 0u, 0u, 0u, false);
+        vShape = vec4(len, 0.0, float(endA | endB << 3), 0.0);
         span = len;
     } else if (kind == CANVAS_KIND_GLYPH) {
         // The glyph's box about its pen, in ems, mirrored and turned about the string's anchor.
@@ -210,13 +239,10 @@ void main() {
     // harden the outline wherever a piece is short or cut short at the tile grid.
     if (kind != CANVAS_KIND_EDGE && span < uShapeMinPx)
         return;
-    // The pattern in pixels, as every length is. Where a dash or a gap would span fewer than
-    // uDashMinPx, pixel centres land inside a dash or not at random: the line is drawn solid at
-    // the dash's share of the period, the pattern's average, so it keeps the weight its dashes had.
-    if ((flags & CANVAS_FLAG_DASHED) != 0u) {
-        vec3 dash = aD.xyz * uPixelsPerUnit;
-        vDash = min(dash.x, dash.y) >= uDashMinPx ? vec4(dash.x, dash.x + dash.y, dash.z, aD.w)
-                                                  : vec4(aD.x / (aD.x + aD.y), 0.0, 0.0, 0.0);
-    }
+    // The average as an opacity, not a coverage: its pixels keep the rank their coverage gives.
+    if (dashed)
+        vDash = vec4(dash.x, dash.x + dash.y, dash.z, 0.0);
+    else if ((flags & CANVAS_FLAG_DASHED) != 0u)
+        vColor.a *= aD.x / (aD.x + aD.y);
     gl_Position = canvasClip(pos);
 }
