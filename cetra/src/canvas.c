@@ -176,13 +176,15 @@ typedef struct CanvasCoord {
     UT_hash_handle hh;
 } CanvasCoord;
 
-// The two kinds of thing a layer keeps, each an instance in a buffer of its
-// own: shape records, a quad each, and fill triangles. Each carries its head,
-// net, object and tile as `u`, where the second column says.
-enum { CANVAS_SHAPES = 0, CANVAS_FILLS = 1, CANVAS_STORES = 2 };
-static const size_t CANVAS_ITEM_SIZE[CANVAS_STORES] = {sizeof(CanvasRecord), sizeof(CanvasFill)};
-static const size_t CANVAS_ITEM_U[CANVAS_STORES] = {offsetof(CanvasRecord, u),
-                                                    offsetof(CanvasFill, u)};
+// The kinds of thing a layer keeps, each an instance in a buffer of its own:
+// shape records, a quad each; fill triangles; and dashed shapes' records,
+// which only they pay the pattern's bytes for. Each carries its head, net,
+// object and tile as `u`, where the second column says.
+enum { CANVAS_SHAPES = 0, CANVAS_FILLS = 1, CANVAS_DASHES = 2, CANVAS_STORES = 3 };
+static const size_t CANVAS_ITEM_SIZE[CANVAS_STORES] = {sizeof(CanvasRecord), sizeof(CanvasFill),
+                                                       sizeof(CanvasDashRecord)};
+static const size_t CANVAS_ITEM_U[CANVAS_STORES] = {
+    offsetof(CanvasRecord, u), offsetof(CanvasFill, u), offsetof(CanvasDashRecord, record.u)};
 
 // A tile's items of one kind, and the range of its layer's buffer they upload
 // into.
@@ -296,6 +298,9 @@ Canvas* create_canvas(Engine* engine, const CanvasDesc* desc) {
     canvas->engine = engine;
     canvas->data = data;
     canvas->text_min_px = 3.0f;
+    // Finer than two pixels on and two off, dashes beat against the pixel grid and crawl as the
+    // view pans; drawn solid, a dashed line zoomed out keeps its weight.
+    canvas->dash_min_px = 2.0f;
     data->tile_shift = shift;
     data->tags = desc && desc->tags ? desc->tags : create_canvas_tags();
     data->owns_tags = !(desc && desc->tags);
@@ -627,7 +632,7 @@ void canvas_apply(Canvas* canvas, CanvasEdit* edit) {
                     for (size_t i = 0; i < step->count; i++) {
                         CanvasPiece* p = &edit->pieces[step->first + i];
                         // A font slot is spent only on a glyph that will be added.
-                        const uint16_t style = (uint16_t)(p->record.u[0] >> 16);
+                        const uint16_t style = (uint16_t)(p->item.record.u[0] >> 16);
                         if (!_owns_layer(d, p->layer) || style >= d->style_count) {
                             refused++;
                             continue;
@@ -638,10 +643,13 @@ void canvas_apply(Canvas* canvas, CanvasEdit* edit) {
                                 fonts_refused++;
                                 continue;
                             }
-                            p->record.p[3] = slot;
+                            p->item.record.p[3] = slot;
                         }
-                        refused += !_add(d, CANVAS_SHAPES, p->layer, p->tx, p->ty, p->min, p->max,
-                                         &p->record);
+                        const bool dashed = (p->item.record.u[0] >> 6 & CANVAS_FLAG_DASHED) != 0u;
+                        refused += dashed ? !_add(d, CANVAS_DASHES, p->layer, p->tx, p->ty, p->min,
+                                                  p->max, &p->item)
+                                          : !_add(d, CANVAS_SHAPES, p->layer, p->tx, p->ty, p->min,
+                                                  p->max, &p->item.record);
                     }
                     break;
                 case CANVAS_STEP_ADD_FILLS:
@@ -742,8 +750,16 @@ static void _instance_attrib(GLuint index, GLint count, GLenum type, GLsizei str
     glVertexAttribDivisor(index, 1);
 }
 
+// A float attribute of every instance, four floats at `offset`.
+static void _instance_floats(GLuint index, GLsizei stride, size_t offset) {
+    glEnableVertexAttribArray(index);
+    glVertexAttribPointer(index, 4, GL_FLOAT, GL_FALSE, stride, (const void*)offset);
+    glVertexAttribDivisor(index, 1);
+}
+
 // A store's vertex array. Each item is an instance: a shape record of a unit
-// quad, a fill of a triangle.
+// quad, a fill of a triangle. A dashed record is a shape record and its
+// pattern, attribute 3, which the shape store leaves off and nothing reads.
 static void _store_gl(CanvasStore* store, int kind) {
     if (store->vao)
         return;
@@ -751,14 +767,13 @@ static void _store_gl(CanvasStore* store, int kind) {
     glGenBuffers(1, &store->vbo);
     glBindVertexArray(store->vao);
     glBindBuffer(GL_ARRAY_BUFFER, store->vbo);
-    if (kind == CANVAS_SHAPES) {
-        const GLsizei stride = (GLsizei)sizeof(CanvasRecord);
+    if (kind != CANVAS_FILLS) {
+        const GLsizei stride = (GLsizei)CANVAS_ITEM_SIZE[kind];
         _instance_attrib(0, 4, GL_INT, stride, offsetof(CanvasRecord, p));
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride,
-                              (const void*)offsetof(CanvasRecord, f));
-        glVertexAttribDivisor(1, 1);
+        _instance_floats(1, stride, offsetof(CanvasRecord, f));
         _instance_attrib(2, 4, GL_UNSIGNED_INT, stride, offsetof(CanvasRecord, u));
+        if (kind == CANVAS_DASHES)
+            _instance_floats(3, stride, offsetof(CanvasDashRecord, dash));
     } else {
         // The corners as an ivec4 and an ivec2, the nine outline points as four
         // ivec4 and an ivec2, then u.
@@ -1023,7 +1038,8 @@ static uint32_t _draw_order(const CanvasData* d, const CanvasView* view, const C
 static void _draw_layer(const CanvasData* d, const CanvasLayer* layer) {
     const CanvasStore* fills = &layer->data->stores[CANVAS_FILLS];
     const CanvasStore* shapes = &layer->data->stores[CANVAS_SHAPES];
-    if (!fills->live && !shapes->live)
+    const CanvasStore* dashes = &layer->data->stores[CANVAS_DASHES];
+    if (!fills->live && !shapes->live && !dashes->live)
         return;
     const float opacity = glm_clamp(layer->opacity, 0.0f, 1.0f);
     for (int pass = 0; pass < 5; pass++) {
@@ -1041,7 +1057,8 @@ static void _draw_layer(const CanvasData* d, const CanvasLayer* layer) {
             glBlendFuncSeparate(GL_DST_ALPHA, GL_ONE_MINUS_DST_ALPHA, GL_ZERO, GL_ZERO);
         }
         // Fills first, then shapes, among them the outer half of each fill's
-        // edge ramp and every ring, a polygon's included.
+        // edge ramp and every ring, a polygon's included, then dashed shapes,
+        // which no order within a layer is promised against.
         if (fills->live && pass < 4) {
             glUseProgram(d->fill_program->id);
             uniform_set_int(d->fill_program->uniforms, "uPass", pass);
@@ -1049,12 +1066,17 @@ static void _draw_layer(const CanvasData* d, const CanvasLayer* layer) {
             glBindVertexArray(fills->vao);
             glDrawArraysInstanced(GL_TRIANGLES, 0, 3, (GLsizei)fills->end);
         }
-        if (shapes->live) {
+        if (shapes->live || dashes->live) {
             glUseProgram(d->program->id);
             uniform_set_int(d->program->uniforms, "uPass", pass);
             uniform_set_float(d->program->uniforms, "uOpacity", opacity);
-            glBindVertexArray(shapes->vao);
-            glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, (GLsizei)shapes->end);
+        }
+        const CanvasStore* quads[2] = {shapes, dashes};
+        for (int k = 0; k < 2; k++) {
+            if (!quads[k]->live)
+                continue;
+            glBindVertexArray(quads[k]->vao);
+            glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, (GLsizei)quads[k]->end);
         }
     }
 }
@@ -1073,6 +1095,7 @@ static void _view_uniforms(const ShaderProgram* program, const Canvas* canvas,
     uniform_set_float(u, "uMirror", view->mirror_x ? -1.0f : 1.0f);
     uniform_set_float(u, "uShapeMinPx", canvas->shape_min_px);
     uniform_set_float(u, "uTextMinPx", canvas->text_min_px);
+    uniform_set_float(u, "uDashMinPx", canvas->dash_min_px);
     uniform_set_int(u, "uTagCount", (int)canvas->data->tags->count);
 }
 

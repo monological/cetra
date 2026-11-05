@@ -12,9 +12,11 @@
 layout(location = 0) in ivec4 aP;
 layout(location = 1) in vec4 aF;
 layout(location = 2) in uvec4 aU;
+layout(location = 3) in vec4 aD; // a dashed record's pattern, read only under FLAG_DASHED
 
 uniform float uShapeMinPx;
 uniform float uTextMinPx;
+uniform float uDashMinPx;
 uniform samplerBuffer uGlyphs; // canvas_constants.glsl's glyph table
 uniform vec2 uRing;            // an outline ring's inner and outer distance outside a shape
 
@@ -25,6 +27,8 @@ flat out vec4 vOutline; // alpha 0 = no ring
 flat out float vRaised;
 flat out vec4 vShape; // the kind's measures, in pixels
 flat out vec4 vEnds;  // an arc's sector: from xy counter-clockwise to zw
+flat out vec4 vDash;  // the dash and the period, and the place in them at the record's a, in
+                      // pixels; a period of 0 is solid
 out vec2 vLocal;      // in the shape's own frame, in pixels; for a glyph, its place in the atlas
 
 const float PAD = 1.0; // the outer half of the edge ramp
@@ -48,6 +52,7 @@ void main() {
     vColor = vec4(0.0);
     vShape = vec4(0.0);
     vEnds = vec4(0.0);
+    vDash = vec4(0.0);
     vLocal = vec2(0.0);
     // Outside every clip plane: a quad of four such corners draws nothing.
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
@@ -179,5 +184,12 @@ void main() {
     // harden the outline wherever a piece is short or cut short at the tile grid.
     if (kind != CANVAS_KIND_EDGE && span < uShapeMinPx)
         return;
+    // The pattern in pixels, as every length is; solid when a dash or a gap would span fewer
+    // than uDashMinPx, below which the dashes beat against the pixel grid as the view pans.
+    if ((flags & CANVAS_FLAG_DASHED) != 0u) {
+        vec3 dash = aD.xyz * uPixelsPerUnit;
+        if (min(dash.x, dash.y) >= uDashMinPx)
+            vDash = vec4(dash.x, dash.x + dash.y, dash.z, 0.0);
+    }
     gl_Position = canvasClip(pos);
 }

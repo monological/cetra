@@ -31,6 +31,14 @@
  *            slot is the canvas's (its four fonts), filled in when applied.
  * A cut end (FLAG_CUT_*) is where an edit split a shape reaching too far from
  * its tile: it has no cap and no edge ramp, so the pieces meet with no seam.
+ *
+ * A dashed segment, arc, stroked circle or stroked box (FLAG_DASHED) is a
+ * CanvasDashRecord in a store of its own, its pattern after the record:
+ *   dash  vec4  the dash and the gap, stretched on a closed shape; the place in
+ *               the pattern at the record's a, under one period; unused
+ * The place grows toward b, or toward a under FLAG_DASH_BACK: a clockwise arc,
+ * whose ends the edit swapped. A circle's a is its rightmost point and a box's
+ * the middle of its bottom side, each going round counter-clockwise.
  */
 
 #include <stdint.h>
@@ -50,6 +58,15 @@ typedef struct CanvasRecord {
 } CanvasRecord;
 
 _Static_assert(sizeof(CanvasRecord) == 48, "canvas_vert.glsl reads a 48-byte record");
+
+// A dashed shape's record and its pattern, in units: the solid shapes' record
+// stays 48 bytes, and only a dashed one pays for its place along.
+typedef struct CanvasDashRecord {
+    CanvasRecord record;
+    float dash[4];
+} CanvasDashRecord;
+
+_Static_assert(sizeof(CanvasDashRecord) == 64, "canvas_vert.glsl reads a 64-byte dashed record");
 
 static inline uint32_t canvas_record_head(uint32_t kind, uint32_t flags, uint16_t style) {
     return (kind & 0x3fu) | (flags & 0x3ffu) << 6 | (uint32_t)style << 16;
@@ -80,13 +97,14 @@ typedef struct CanvasFill {
 _Static_assert(sizeof(CanvasFill) == 112, "canvas_fill_vert.glsl reads a 112-byte triangle");
 
 // A record as an edit holds it: what tile it belongs to, with the tile's index
-// filled in when the edit is applied, and a glyph's font slot likewise.
+// filled in when the edit is applied, and a glyph's font slot likewise. A
+// dashed one is added as `item`, a solid one as `item.record`.
 typedef struct CanvasPiece {
     CanvasLayer* layer;
     const struct Font* font; // a glyph's; NULL for every other kind
     int64_t tx, ty;          // its tile
     int64_t min[2], max[2];  // its bound in units
-    CanvasRecord record;
+    CanvasDashRecord item;
 } CanvasPiece;
 
 // A fill triangle as an edit holds it, likewise.
