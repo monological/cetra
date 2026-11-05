@@ -211,14 +211,22 @@ static Dash _dash(const CanvasPaint* paint, double around) {
     return d;
 }
 
-// Whether `place` lies strictly inside a dash of the pattern.
+// `place` within one period of the pattern, 0 to the period.
+static double _dash_at(const Dash* dash, double place) {
+    const double period = dash->on + dash->off;
+    const double at = fmod(place, period);
+    return at < 0.0 ? at + period : at;
+}
+
+// Whether `place` lies strictly inside a dash of the pattern. A place within a
+// billionth of a period of a dash's start or end is at it: round a closed path
+// the place at its last corner is its first's plus a whole number of stretched
+// periods, which double rounds to either side of a dash's start.
 static bool _in_dash(const Dash* dash, double place) {
     if (dash->on <= 0.0)
         return false;
-    const double period = dash->on + dash->off;
-    double at = fmod(place, period);
-    at += at < 0.0 ? period : 0.0;
-    return at > 0.0 && at < dash->on;
+    const double at = _dash_at(dash, place), tolerance = 1e-9 * (dash->on + dash->off);
+    return at > tolerance && at < dash->on - tolerance;
 }
 
 // A piece dashed, `place` into the pattern at its a, the place growing toward
@@ -227,12 +235,9 @@ static void _dash_piece(CanvasPiece* piece, const CanvasPaint* paint, const Dash
                         double place, bool back) {
     if (dash->on <= 0.0)
         return;
-    const double period = dash->on + dash->off;
-    double at = fmod(place, period);
-    at += at < 0.0 ? period : 0.0;
     piece->item.dash[0] = (float)dash->on;
     piece->item.dash[1] = (float)dash->off;
-    piece->item.dash[2] = (float)at;
+    piece->item.dash[2] = (float)_dash_at(dash, place);
     piece->item.dash[3] = (float)paint->cap;
     piece->item.record.u[0] |= (CANVAS_FLAG_DASHED | (back ? CANVAS_FLAG_DASH_BACK : 0u)) << 6;
 }
@@ -338,8 +343,12 @@ static bool _segment(CanvasEdit* edit, const CanvasPaint* paint, CanvasPoint a, 
             r->f[2] = k + 1 == n ? out : 0.0f;
             r->f[3] = (float)(joins & at);
         }
-        // A mitre reaches past the corner along the stroke: four half widths at the most.
-        _bound(piece, from.x, from.y, to.x, to.y, (joins & at) != 0u ? 4 * half : half);
+        // A mitre reaches past the corner along the stroke, four half widths at the most; a
+        // square cap's corner up to two half widths across the axes.
+        const int64_t reach = (joins & at) != 0u                ? 4 * half
+                              : paint->cap == CANVAS_CAP_SQUARE ? 2 * half
+                                                                : half;
+        _bound(piece, from.x, from.y, to.x, to.y, reach);
         if (length > 0.0)
             _dash_piece(piece, paint, dash, dash->place + length * (double)k / (double)n, false);
         from = to;
@@ -387,9 +396,10 @@ static const CanvasPoint* _neighbour(const CanvasPoint* points, size_t count, si
 
 // A polyline's segments, joined at its points, one pattern carried through
 // every point and stretched round a closed one; false, with some of them added,
-// when one is refused. A repeated point adds nothing to a line dashed or joined
-// other than round: it has no direction to join by, and its dot would show in a
-// gap. Only a line of nothing but one point is its dot.
+// when one is refused. Undashed and round, the corners are the round ends the
+// segments draw anyway, and are not worked out. Joined otherwise, a repeated
+// point adds nothing: it has no direction to join by, and its dot would show in
+// a gap. Only a line of nothing but one point is its dot, refused butt ended.
 static bool _polyline(CanvasEdit* edit, const CanvasPaint* paint, const CanvasPoint* points,
                       size_t count, int64_t width, bool closed) {
     const size_t segments = closed ? count : count - 1;
@@ -398,14 +408,18 @@ static bool _polyline(CanvasEdit* edit, const CanvasPaint* paint, const CanvasPo
         const CanvasPoint a = points[i], b = points[(i + 1) % count];
         around += hypot((double)(b.x - a.x), (double)(b.y - a.y));
     }
+    if (around == 0.0 && paint->cap == CANVAS_CAP_BUTT) {
+        log_error("canvas: a polyline with no extent is refused");
+        return false;
+    }
     Dash dash = _dash(paint, closed ? around : 0.0);
-    const bool skip = around > 0.0 && (dash.on > 0.0 || paint->join != CANVAS_JOIN_ROUND);
+    const bool joined = around > 0.0 && (dash.on > 0.0 || paint->join != CANVAS_JOIN_ROUND);
     for (size_t i = 0; i < segments; i++) {
         const CanvasPoint a = points[i], b = points[(i + 1) % count];
-        if (skip && _same(a, b))
+        if (joined && _same(a, b))
             continue;
-        const CanvasPoint* before = around > 0.0 ? _neighbour(points, count, i, closed, -1) : NULL;
-        const CanvasPoint* after = around > 0.0 ? _neighbour(points, count, i, closed, 1) : NULL;
+        const CanvasPoint* before = joined ? _neighbour(points, count, i, closed, -1) : NULL;
+        const CanvasPoint* after = joined ? _neighbour(points, count, i, closed, 1) : NULL;
         if (!_segment(edit, paint, a, b, width, before, after, &dash))
             return false;
     }
