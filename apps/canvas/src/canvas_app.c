@@ -3458,34 +3458,54 @@ static void build_borders(UISystem* ui, int width, int height, double scale, boo
 static const vec4 SEAMS_BACKDROP = {0.16f, 0.20f, 0.26f, 1.0f},
                   SEAMS_BOX = {0.80f, 0.30f, 0.20f, 1.0f};
 static const float SEAMS_RADIUS = 12.0f;
-static const float SEAMS_ROWS[] = {7.0f, 5.0f, 9.0f, 6.0f, 11.0f, 4.0f, 8.0f}; // 50 high
+static const float SEAMS_ROWS[] = {7.0f, 5.0f, 9.0f, 6.0f, 11.0f, 4.0f, 8.0f};
+#define SEAMS_ROW_COUNT (sizeof(SEAMS_ROWS) / sizeof(SEAMS_ROWS[0]))
+typedef enum { SEAMS_QUAD, SEAMS_ROUNDED, SEAMS_COLUMN } SeamsKind;
 static const struct {
     const char* name;
-    float x, y, w, h;
-} SEAMS[] = {{"stack", 20.0f, 20.0f, 40.0f, 50.0f},
-             {"alone", 80.0f, 20.0f, 40.0f, 30.0f},
-             {"round", 140.0f, 20.0f, 40.0f, 40.0f},
-             {"half", 200.0f, 20.0f, 30.5f, 30.0f},
-             {"offgrid", 260.0f, 20.0f, 40.0f, 52.75f}}; // each row a half or a quarter taller
+    SeamsKind kind;
+    float x, y, w;
+    float h;         // a quad's; a column is as high as its rows
+    float taller[2]; // a column's even and odd rows, each this much taller than SEAMS_ROWS says
+} SEAMS[] = {{"stack", SEAMS_COLUMN, 20.0f, 20.0f, 40.0f},
+             {"alone", SEAMS_QUAD, 80.0f, 20.0f, 40.0f, 30.0f},
+             {"round", SEAMS_ROUNDED, 140.0f, 20.0f, 40.0f, 40.0f},
+             {"half", SEAMS_QUAD, 200.0f, 20.0f, 30.5f, 30.0f},
+             {"offgrid", SEAMS_COLUMN, 260.0f, 20.0f, 40.0f, .taller = {0.5f, 0.25f}}};
+#define SEAMS_COUNT (sizeof(SEAMS) / sizeof(SEAMS[0]))
+
+// Box `i` in pixels, from the window's corner.
+static UIRect seams_box(size_t i) {
+    float h = SEAMS[i].h;
+    if (SEAMS[i].kind == SEAMS_COLUMN) {
+        for (size_t k = 0; k < SEAMS_ROW_COUNT; k++)
+            h += SEAMS_ROWS[k] + SEAMS[i].taller[k % 2];
+    }
+    return (UIRect){SEAMS[i].x, SEAMS[i].y, SEAMS[i].w, h};
+}
+
+// A colour as 0xRRGGBB, as the gate's probe lines name one.
+static uint32_t seams_rgb(const float c[4]) {
+    return (uint32_t)lroundf(c[0] * 255.0f) << 16 | (uint32_t)lroundf(c[1] * 255.0f) << 8 |
+           (uint32_t)lroundf(c[2] * 255.0f);
+}
 
 static void draw_seams(UIElement* el, UIDrawList* dl, void* user) {
-    (void)el;
     const float px = *(const float*)user; // points a pixel
-    ui_draw_quad(dl, (UIRect){0.0f, 0.0f, 320.0f * px, 90.0f * px}, (float*)SEAMS_BACKDROP);
-    for (size_t i = 0; i < sizeof(SEAMS) / sizeof(SEAMS[0]); i++) {
-        const UIRect r = {SEAMS[i].x * px, SEAMS[i].y * px, SEAMS[i].w * px, SEAMS[i].h * px};
-        const bool offgrid = strcmp(SEAMS[i].name, "offgrid") == 0;
-        if (offgrid || strcmp(SEAMS[i].name, "stack") == 0) {
-            float y = SEAMS[i].y;
-            for (size_t k = 0; k < sizeof(SEAMS_ROWS) / sizeof(SEAMS_ROWS[0]); k++) {
-                const float h = SEAMS_ROWS[k] + (offgrid ? (k % 2 ? 0.25f : 0.5f) : 0.0f);
+    ui_draw_quad(dl, el->rect, (float*)SEAMS_BACKDROP);
+    for (size_t i = 0; i < SEAMS_COUNT; i++) {
+        const UIRect b = seams_box(i), r = {b.x * px, b.y * px, b.w * px, b.h * px};
+        if (SEAMS[i].kind == SEAMS_QUAD) {
+            ui_draw_quad(dl, r, (float*)SEAMS_BOX);
+        } else if (SEAMS[i].kind == SEAMS_ROUNDED) {
+            ui_draw_rounded(dl, r, SEAMS_RADIUS * px, (float*)SEAMS_BOX, (vec4){0}, 0.0f);
+        } else {
+            float y = b.y;
+            for (size_t k = 0; k < SEAMS_ROW_COUNT; k++) {
+                const float h = SEAMS_ROWS[k] + SEAMS[i].taller[k % 2];
                 ui_draw_quad(dl, (UIRect){r.x, y * px, r.w, h * px}, (float*)SEAMS_BOX);
                 y += h;
             }
-        } else if (strcmp(SEAMS[i].name, "round") == 0) {
-            ui_draw_rounded(dl, r, SEAMS_RADIUS * px, (float*)SEAMS_BOX, (vec4){0}, 0.0f);
-        } else {
-            ui_draw_quad(dl, r, (float*)SEAMS_BOX);
         }
     }
 }
@@ -3498,17 +3518,15 @@ static void build_seams(UISystem* ui, double scale, bool probe) {
     ui_set_size(panel, UI_GROW, 0.0f, UI_GROW, 0.0f);
     ui_set_draw(panel, draw_seams, &px);
     ui_push(ui, screen);
-    // Each line's box is rounded outward, and names the pixel column its right edge lies in, for
-    // the half quad the one it halves.
-    for (size_t i = 0; probe && i < sizeof(SEAMS) / sizeof(SEAMS[0]); i++) {
-        const double x1 = (double)(SEAMS[i].x + SEAMS[i].w);
-        printf("canvas seams %s %.0f %.0f %.0f %.0f column %.0f want", SEAMS[i].name,
-               (double)SEAMS[i].x, (double)SEAMS[i].y, ceil(x1),
-               ceil((double)(SEAMS[i].y + SEAMS[i].h)), floor(x1));
-        printf(" %02lx%02lx%02lx backdrop %02lx%02lx%02lx\n", lround(SEAMS_BOX[0] * 255.0f),
-               lround(SEAMS_BOX[1] * 255.0f), lround(SEAMS_BOX[2] * 255.0f),
-               lround(SEAMS_BACKDROP[0] * 255.0f), lround(SEAMS_BACKDROP[1] * 255.0f),
-               lround(SEAMS_BACKDROP[2] * 255.0f));
+    if (!probe)
+        return;
+    printf("canvas seams colours want %06x backdrop %06x\n", seams_rgb(SEAMS_BOX),
+           seams_rgb(SEAMS_BACKDROP));
+    // Each box rounded outward, so the half quad's last column is the one its edge halves.
+    for (size_t i = 0; i < SEAMS_COUNT; i++) {
+        const UIRect b = seams_box(i);
+        printf("canvas seams %s %.0f %.0f %.0f %.0f\n", SEAMS[i].name, (double)b.x, (double)b.y,
+               ceil((double)(b.x + b.w)), ceil((double)(b.y + b.h)));
     }
 }
 

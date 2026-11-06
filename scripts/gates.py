@@ -31252,7 +31252,7 @@ def run_canvas_gate(workdir):
                      a join at most, f(1 - f). A two-pixel ramp left a line where two quads met,
                      and a quad drawn only over its own rect had its edge counted twice on a
                      multisampled target, by its samples and by the ramp.
-      canvas-caps   the strokes sheet (spec 14.22): a segment and an arc each capped round, butt
+      canvas-caps    the strokes sheet (spec 14.22): a segment and an arc each capped round, butt
                      and square, their areas in closed form within 0.03 px per pixel of edge, as
                      canvas-areas. A round cap adds a disc, a square one the width squared. And a
                      wide square-capped segment at 45 degrees alone in its tile, seen through a
@@ -31782,45 +31782,44 @@ def run_canvas_gate(workdir):
     shot, probe = _canvas_run(workdir, "seams", "--ui-seams")
     seams = _canvas_sheet(probe, "seams")
     names = ("stack", "alone", "half", "round", "offgrid")
-    if not shot or not all(len(seams.get(n, [])) == 10 for n in names):
+    colours = seams.get("colours", [])
+    if not shot or len(colours) != 4 or not all(len(seams.get(n, [])) == 4 for n in names):
         ok, detail = False, "the run failed or printed no boxes"
     else:
         img = _ppm_array(shot)
-        boxes = {n: [int(v) for v in seams[n][:4]] for n in names}
-        want, backdrop = int(seams["stack"][7], 16), int(seams["stack"][9], 16)
+        boxes = {n: [int(v) for v in seams[n]] for n in names}
+        box_rgb, back_rgb = (np.array([(int(c, 16) >> sh) & 255 for sh in (16, 8, 0)], float)
+                             for c in (colours[1], colours[3]))
 
         def off(pixels, rgb, codes):
-            return sum(not _rgb_near(p, rgb, codes) for p in pixels)
+            return int((np.abs(pixels - rgb).max(axis=-1) > codes).sum())
 
         def inside(n):
             x0, y0, x1, y1 = boxes[n]
-            return img[y0:y1, x0:x1].reshape(-1, 3)
+            return img[y0:y1, x0:x1]
 
         # The stack's quads meet on pixel boundaries: nothing of the backdrop between them.
-        stack = off(inside("stack"), want, 2)
+        stack = off(inside("stack"), box_rgb, 2)
         # A quad on whole pixels: filled whole, and nothing of it in the 3 pixels round it.
         x0, y0, x1, y1 = boxes["alone"]
         ring = np.ones((y1 - y0 + 6, x1 - x0 + 6), bool)
         ring[3:-3, 3:-3] = False
         around = img[y0 - 3:y1 + 3, x0 - 3:x1 + 3][ring]
-        alone = off(inside("alone"), want, 2) + off(around, backdrop, 2)
-        # The half quad's right edge through the middle of a column: that column half way.
+        alone = off(inside("alone"), box_rgb, 2) + off(around, back_rgb, 2)
+        # The half quad's right edge through the middle of its last column: that column half way.
         x0, y0, x1, y1 = boxes["half"]
-        column = int(seams["half"][5])
-        mid = sum(((((want >> sh) & 255) + ((backdrop >> sh) & 255)) // 2) << sh for sh in (16, 8, 0))
-        half = off(img[y0:y1, column], mid, 4)
+        half = off(img[y0:y1, x1 - 1], np.floor((box_rgb + back_rgb) / 2), 4)
         # Along a rounded corner's diagonal the edge crosses d by 1.4 pixels a step, so a one-pixel
         # ramp leaves one pixel between the colours; a two-pixel ramp leaves two.
         x0, y0, x1, y1 = boxes["round"]
-        diagonal = [img[y0 + k, x0 + k] for k in range(min(x1 - x0, y1 - y0) // 2)]
-        between = sum(not (_rgb_near(p, want, 2) or _rgb_near(p, backdrop, 2)) for p in diagonal)
+        diagonal = np.array([img[y0 + k, x0 + k] for k in range(min(x1 - x0, y1 - y0) // 2)])
+        between = int(((np.abs(diagonal - box_rgb).max(axis=-1) > 2)
+                       & (np.abs(diagonal - back_rgb).max(axis=-1) > 2)).sum())
         # Rows meeting part way into a pixel each cover it in part, f and 1 - f, and the backdrop
         # shows by f(1 - f), a quarter at most, when each edge's coverage counts once. Counted by
         # a multisampled target's samples as well, half of it showed. The share of the backdrop in
         # every pixel above the column's last, which is its own edge.
         x0, y0, x1, y1 = boxes["offgrid"]
-        box_rgb, back_rgb = (np.array([(c >> sh) & 255 for sh in (16, 8, 0)], float)
-                             for c in (want, backdrop))
         span = box_rgb - back_rgb
         share = float(((box_rgb - img[y0:y1 - 1, x0:x1]) @ span).max() / (span @ span))
         ok = (stack == 0 and alone == 0 and half == 0 and between <= 1

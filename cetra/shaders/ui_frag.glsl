@@ -65,10 +65,12 @@ void main() {
 
     // A one-pixel ramp centred on the edge, a box filter's coverage of it, so a
     // shape on the pixel grid fills its pixels whole and two meeting there leave
-    // nothing between them. `aa` is a pixel's size in vPos's units, at any DPI
-    // or UI scale, so it is one pixel along an edge at any angle. Not d's own
-    // derivatives: across a box's corner, where d has a kink, they read 1.4
-    // pixels, and the corner pixel of a box on the grid is left part covered.
+    // nothing between them. A fill is drawn a pixel past its rect (_push_quad),
+    // so the ramp's outer half is drawn. `aa` is a pixel's size in vPos's
+    // units, at any DPI or UI scale, so it is one pixel along an edge at any
+    // angle. Not d's own derivatives: across a box's corner, where d has a
+    // kink, they read 1.4 pixels, and the corner pixel of a box on the grid is
+    // left part covered.
     float aa = max(length(dFdx(vPos)), 1e-5);
     float inside = clamp(0.5 - d / aa, 0.0, 1.0);
 

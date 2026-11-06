@@ -163,12 +163,18 @@ static UIBatch* _batch_for(UIDrawList* dl, GLuint texture) {
     return b;
 }
 
+// One framebuffer pixel in points; 0 before the list knows its size.
+static float _pixel_points(const UIDrawList* dl) {
+    return dl->width > 0 && dl->engine->fb_width > 0
+               ? (float)dl->width / (float)dl->engine->fb_width
+               : 0.0f;
+}
+
 // The one place geometry enters the list. Every primitive below is this call
 // with different numbers, which is why there is no second place for a corner
 // radius or a clip to be forgotten.
-// The quad's own corners ARE the rect the corner SDF measures against -- there
-// was a `rect` parameter for a caller that wanted to differ, every call site
-// passed NULL, and the fallback was the only path that ever ran.
+// The quad's corners are the rect the corner SDF measures against, and a fill
+// is drawn a pixel past them.
 // False when nothing was pushed.
 static bool _push_quad(UIDrawList* dl, GLuint texture, float x0, float y0, float x1, float y1,
                        float u0, float v0, float u1, float v1, const float color[4], float radius,
@@ -193,16 +199,14 @@ static bool _push_quad(UIDrawList* dl, GLuint texture, float x0, float y0, float
     const unsigned int base = (unsigned int)dl->vcount;
     const float params[4] = {radius, border_w, mode, 0.0f};
 
-    // The default program's shapes drawn a pixel past their rect, their UV with them, so the
-    // fragment shader's one-pixel ramp is the edge's only coverage: clipped to the rect, a
-    // multisampled target counts an edge part way into a pixel twice, by its samples and by the
-    // ramp. A glyph has its own edge, and a custom program draws what it is given.
-    if (mode != UI_MODE_GLYPH && !dl->cur_program && dl->width > 0 && dl->engine->fb_width > 0) {
-        const float px = (float)dl->width / (float)dl->engine->fb_width;
-        const float du = (u1 - u0) / (x1 - x0) * px, dv = (v1 - v0) / (y1 - y0) * px;
-        x0 -= px, y0 -= px, x1 += px, y1 += px;
-        u0 -= du, v0 -= dv, u1 += du, v1 += dv;
-    }
+    // The default program's fills drawn a pixel past their rect, so the fragment shader's
+    // one-pixel ramp is the edge's only coverage: clipped to the rect, a multisampled target
+    // counts an edge part way into a pixel twice, by its samples and by the ramp. A fill never
+    // samples, so its UV stays. An image is left to its rect, past which its UV would reach
+    // another image's texels in an atlas; a glyph has its own edge, and a custom program draws
+    // what it is given.
+    const float px = mode == UI_MODE_FILL && !dl->cur_program ? _pixel_points(dl) : 0.0f;
+    x0 -= px, y0 -= px, x1 += px, y1 += px;
     const float xs[4] = {x0, x1, x1, x0};
     const float ys[4] = {y0, y0, y1, y1};
     const float us[4] = {u0, u1, u1, u0};
@@ -742,9 +746,7 @@ void ui_text_draw_span(UIDrawList* dl, const UIText* t, size_t from, size_t to, 
     // Snapping the corner and advancing the pen in float is what keeps the
     // spacing exact: the pen never sees the rounding, so no advance is
     // quantised and the glyph's own size is untouched.
-    const float px = (dl->width > 0 && dl->engine->fb_width > 0)
-                         ? (float)dl->width / (float)dl->engine->fb_width
-                         : 1.0f;
+    const float px = _pixel_points(dl);
 
     UIWalk w = _walk(t, from);
     UIGlyph s;
@@ -988,8 +990,7 @@ size_t ui_draw_list_quad_count(const UIDrawList* dl) {
 bool ui_draw_list_quad(const UIDrawList* dl, size_t i, UIRect* rect, vec4 color, int* kind) {
     if (!dl || i >= dl->vcount / 4)
         return false;
-    // The rect the shape is measured against, not the vertices, which a fill or an image lies
-    // a pixel past.
+    // The rect the shape is measured against, not the vertices, which a fill lies a pixel past.
     const UIVertex* v = &dl->verts[i * 4];
     if (rect)
         *rect = (UIRect){v[0].rect[0], v[0].rect[1], v[0].rect[2] - v[0].rect[0],
