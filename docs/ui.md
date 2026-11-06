@@ -223,7 +223,17 @@ possible. The shader is `ui_vert/frag` (`docs/shaders.md`, Game UI).
   of its glyphs.
 - **The draw list's offset moves the rounded-corner rect, the clips and `uRect` with the
   vertices**, which a slide transition and a scrolled pane need.
-- `ui_draw_list_quad_count` and `ui_draw_list_quad` read the quads back for the probe.
+- **An edge is one pixel wide, centred on it** (spec 14.23): a box filter's coverage of the shape's
+  outline, so a shape on the pixel grid fills its pixels whole and two meeting on a pixel boundary
+  leave nothing between them. A fill is drawn a pixel past its rect, so the ramp is its edge's only
+  coverage on the window's multisampled target; an image is drawn to its rect, past which its UV
+  would reach another image's texels, so an image's edge part way into a pixel is counted by the
+  samples as well. Two shapes meeting part way into a pixel each cover it in part, and what is
+  under them shows by up to a quarter there: an app wanting a clean join puts it on a pixel. The
+  UI never moves a shape onto the grid itself, which would round a hairline away and step a slow
+  slide.
+- `ui_draw_list_quad_count` and `ui_draw_list_quad` read the quads back for the probe, each as the
+  rect it was drawn for.
 
 ### Fonts (`text.c`)
 
