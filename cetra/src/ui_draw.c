@@ -193,6 +193,16 @@ static bool _push_quad(UIDrawList* dl, GLuint texture, float x0, float y0, float
     const unsigned int base = (unsigned int)dl->vcount;
     const float params[4] = {radius, border_w, mode, 0.0f};
 
+    // The default program's shapes drawn a pixel past their rect, their UV with them, so the
+    // fragment shader's one-pixel ramp is the edge's only coverage: clipped to the rect, a
+    // multisampled target counts an edge part way into a pixel twice, by its samples and by the
+    // ramp. A glyph has its own edge, and a custom program draws what it is given.
+    if (mode != UI_MODE_GLYPH && !dl->cur_program && dl->width > 0 && dl->engine->fb_width > 0) {
+        const float px = (float)dl->width / (float)dl->engine->fb_width;
+        const float du = (u1 - u0) / (x1 - x0) * px, dv = (v1 - v0) / (y1 - y0) * px;
+        x0 -= px, y0 -= px, x1 += px, y1 += px;
+        u0 -= du, v0 -= dv, u1 += du, v1 += dv;
+    }
     const float xs[4] = {x0, x1, x1, x0};
     const float ys[4] = {y0, y0, y1, y1};
     const float us[4] = {u0, u1, u1, u0};
@@ -978,10 +988,12 @@ size_t ui_draw_list_quad_count(const UIDrawList* dl) {
 bool ui_draw_list_quad(const UIDrawList* dl, size_t i, UIRect* rect, vec4 color, int* kind) {
     if (!dl || i >= dl->vcount / 4)
         return false;
-    // _push_quad's corner order: top left first, bottom right third.
+    // The rect the shape is measured against, not the vertices, which a fill or an image lies
+    // a pixel past.
     const UIVertex* v = &dl->verts[i * 4];
     if (rect)
-        *rect = (UIRect){v[0].x, v[0].y, v[2].x - v[0].x, v[2].y - v[0].y};
+        *rect = (UIRect){v[0].rect[0], v[0].rect[1], v[0].rect[2] - v[0].rect[0],
+                         v[0].rect[3] - v[0].rect[1]};
     if (color)
         memcpy(color, v[0].color, sizeof(float) * 4);
     if (kind)

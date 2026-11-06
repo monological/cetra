@@ -1535,6 +1535,10 @@ and:
   the window.
 - `--ui-borders` (spec 14.12) draws boxes of one size and radius whose borders lie over clear,
   half-alpha and opaque fills on one backdrop, which `canvas-ui-borders` holds to Porter-Duff over.
+- `--ui-seams` (spec 14.23) draws, at whole framebuffer pixels from the window's corner, quads
+  meeting edge to edge on pixel boundaries and part way into pixels, a quad on whole pixels, one
+  whose edge halves a column of pixels and a rounded box, which `canvas-ui-seams` holds to a
+  one-pixel edge.
 - `--edit-thread` fills the board's edit on a thread of its own.
 - `--canvas-probe` prints where each shape of a sheet landed and its measures, in framebuffer pixels
   with rows from the top; on the board it also runs a script, a step a frame, printing what each

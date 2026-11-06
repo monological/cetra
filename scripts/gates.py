@@ -31242,7 +31242,17 @@ def run_canvas_gate(workdir):
                      colour, which they do only if the edge's coverage counts once; each
                      within 2 codes. The border stands 20 codes or more off the backdrop,
                      so a box drawing nothing cannot pass.
-      canvas-caps    the strokes sheet (spec 14.22): a segment and an arc each capped round, butt
+      canvas-ui-seams a UI edge one pixel wide, centred on it (spec 14.23): on an opaque backdrop,
+                     a column of quads whole pixels high meeting on pixel boundaries, every pixel
+                     of it the quads' colour, and a quad on whole pixels filled whole with nothing
+                     of it in the 3 pixels round it, each within 2 codes; a quad whose edge halves
+                     a column of pixels, that column half way between the colours within 4; along
+                     a rounded corner's diagonal one pixel at most between them; and the column
+                     again with its rows meeting part way into pixels, the backdrop a quarter of
+                     a join at most, f(1 - f). A two-pixel ramp left a line where two quads met,
+                     and a quad drawn only over its own rect had its edge counted twice on a
+                     multisampled target, by its samples and by the ramp.
+      canvas-caps   the strokes sheet (spec 14.22): a segment and an arc each capped round, butt
                      and square, their areas in closed form within 0.03 px per pixel of edge, as
                      canvas-areas. A round cap adds a disc, a square one the width squared. And a
                      wide square-capped segment at 45 degrees alone in its tile, seen through a
@@ -31768,6 +31778,59 @@ def run_canvas_gate(workdir):
                       f"the border {ring} codes off the backdrop (want 20 or more)")
     print(f"  canvas-ui-borders   {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-ui-borders", ok)
+
+    shot, probe = _canvas_run(workdir, "seams", "--ui-seams")
+    seams = _canvas_sheet(probe, "seams")
+    names = ("stack", "alone", "half", "round", "offgrid")
+    if not shot or not all(len(seams.get(n, [])) == 10 for n in names):
+        ok, detail = False, "the run failed or printed no boxes"
+    else:
+        img = _ppm_array(shot)
+        boxes = {n: [int(v) for v in seams[n][:4]] for n in names}
+        want, backdrop = int(seams["stack"][7], 16), int(seams["stack"][9], 16)
+
+        def off(pixels, rgb, codes):
+            return sum(not _rgb_near(p, rgb, codes) for p in pixels)
+
+        def inside(n):
+            x0, y0, x1, y1 = boxes[n]
+            return img[y0:y1, x0:x1].reshape(-1, 3)
+
+        # The stack's quads meet on pixel boundaries: nothing of the backdrop between them.
+        stack = off(inside("stack"), want, 2)
+        # A quad on whole pixels: filled whole, and nothing of it in the 3 pixels round it.
+        x0, y0, x1, y1 = boxes["alone"]
+        ring = np.ones((y1 - y0 + 6, x1 - x0 + 6), bool)
+        ring[3:-3, 3:-3] = False
+        around = img[y0 - 3:y1 + 3, x0 - 3:x1 + 3][ring]
+        alone = off(inside("alone"), want, 2) + off(around, backdrop, 2)
+        # The half quad's right edge through the middle of a column: that column half way.
+        x0, y0, x1, y1 = boxes["half"]
+        column = int(seams["half"][5])
+        mid = sum(((((want >> sh) & 255) + ((backdrop >> sh) & 255)) // 2) << sh for sh in (16, 8, 0))
+        half = off(img[y0:y1, column], mid, 4)
+        # Along a rounded corner's diagonal the edge crosses d by 1.4 pixels a step, so a one-pixel
+        # ramp leaves one pixel between the colours; a two-pixel ramp leaves two.
+        x0, y0, x1, y1 = boxes["round"]
+        diagonal = [img[y0 + k, x0 + k] for k in range(min(x1 - x0, y1 - y0) // 2)]
+        between = sum(not (_rgb_near(p, want, 2) or _rgb_near(p, backdrop, 2)) for p in diagonal)
+        # Rows meeting part way into a pixel each cover it in part, f and 1 - f, and the backdrop
+        # shows by f(1 - f), a quarter at most, when each edge's coverage counts once. Counted by
+        # a multisampled target's samples as well, half of it showed. The share of the backdrop in
+        # every pixel above the column's last, which is its own edge.
+        x0, y0, x1, y1 = boxes["offgrid"]
+        box_rgb, back_rgb = (np.array([(c >> sh) & 255 for sh in (16, 8, 0)], float)
+                             for c in (want, backdrop))
+        span = box_rgb - back_rgb
+        share = float(((box_rgb - img[y0:y1 - 1, x0:x1]) @ span).max() / (span @ span))
+        ok = (stack == 0 and alone == 0 and half == 0 and between <= 1
+              and share <= 0.25 + 2 / np.abs(span).max())
+        detail = (f"{stack} px of the stack not its colour, {alone} px of the quad on the grid or "
+                  f"round it wrong (want 0 each), {half} px of the halved column not half way "
+                  f"(want 0), {between} px between the colours on a corner's diagonal (want 1 at "
+                  f"most), the backdrop {share:.3f} of an off-grid join (want 0.25 at most)")
+    print(f"  canvas-ui-seams     {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-ui-seams", ok)
 
     # ---- strokes and dashes (spec 14.22)
     def printed(name, m):
