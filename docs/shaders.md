@@ -237,7 +237,7 @@ chain's defaults (what is on, what is lazily allocated) are in
 - **Game UI:** `ui_vert/frag`, one program for every UI primitive, chosen per vertex by a `mode`
   attribute: a flat fill, a textured quad or an SDF glyph.
   - Rounded corners and borders are an exact signed-distance evaluation, so a radius costs no
-    vertices.
+    vertices; their edge is a one-pixel ramp (`docs/ui.md`, The draw list).
   - The glyph branch takes `fwidth` with no constant smoothing term, which keeps text the same
     weight at any size.
   - **A border is laid over its fill by Porter-Duff over** in straight colour, the box's outer edge
