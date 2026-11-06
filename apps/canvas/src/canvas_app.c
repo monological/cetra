@@ -3444,6 +3444,74 @@ static void build_borders(UISystem* ui, int width, int height, double scale, boo
     }
 }
 
+/*
+ * --ui-seams (spec 14.23): boxes of one colour on an opaque backdrop of another, which
+ * canvas-ui-seams holds to a one-pixel edge. A column of quads whole pixels high meeting on pixel
+ * boundaries, as pcb's cross-section's rows, with nothing between them; a quad on whole pixels,
+ * filled whole and nothing past it; a quad whose right edge falls half way across a column of
+ * pixels, those pixels half way; a box with rounded corners; and the column again with its rows
+ * meeting part way into pixels, where each of two quads covers the pixel in part and no more than
+ * a quarter of the backdrop shows. Drawn with ui_draw_quad and ui_draw_rounded, as pcb draws its
+ * rows, since a style's corner radius of 0 is the theme's. Its lengths are framebuffer pixels,
+ * from the window's corner.
+ */
+static const vec4 SEAMS_BACKDROP = {0.16f, 0.20f, 0.26f, 1.0f},
+                  SEAMS_BOX = {0.80f, 0.30f, 0.20f, 1.0f};
+static const float SEAMS_RADIUS = 12.0f;
+static const float SEAMS_ROWS[] = {7.0f, 5.0f, 9.0f, 6.0f, 11.0f, 4.0f, 8.0f}; // 50 high
+static const struct {
+    const char* name;
+    float x, y, w, h;
+} SEAMS[] = {{"stack", 20.0f, 20.0f, 40.0f, 50.0f},
+             {"alone", 80.0f, 20.0f, 40.0f, 30.0f},
+             {"round", 140.0f, 20.0f, 40.0f, 40.0f},
+             {"half", 200.0f, 20.0f, 30.5f, 30.0f},
+             {"offgrid", 260.0f, 20.0f, 40.0f, 52.75f}}; // each row a half or a quarter taller
+
+static void draw_seams(UIElement* el, UIDrawList* dl, void* user) {
+    (void)el;
+    const float px = *(const float*)user; // points a pixel
+    ui_draw_quad(dl, (UIRect){0.0f, 0.0f, 320.0f * px, 90.0f * px}, (float*)SEAMS_BACKDROP);
+    for (size_t i = 0; i < sizeof(SEAMS) / sizeof(SEAMS[0]); i++) {
+        const UIRect r = {SEAMS[i].x * px, SEAMS[i].y * px, SEAMS[i].w * px, SEAMS[i].h * px};
+        const bool offgrid = strcmp(SEAMS[i].name, "offgrid") == 0;
+        if (offgrid || strcmp(SEAMS[i].name, "stack") == 0) {
+            float y = SEAMS[i].y;
+            for (size_t k = 0; k < sizeof(SEAMS_ROWS) / sizeof(SEAMS_ROWS[0]); k++) {
+                const float h = SEAMS_ROWS[k] + (offgrid ? (k % 2 ? 0.25f : 0.5f) : 0.0f);
+                ui_draw_quad(dl, (UIRect){r.x, y * px, r.w, h * px}, (float*)SEAMS_BOX);
+                y += h;
+            }
+        } else if (strcmp(SEAMS[i].name, "round") == 0) {
+            ui_draw_rounded(dl, r, SEAMS_RADIUS * px, (float*)SEAMS_BOX, (vec4){0}, 0.0f);
+        } else {
+            ui_draw_quad(dl, r, (float*)SEAMS_BOX);
+        }
+    }
+}
+
+static void build_seams(UISystem* ui, double scale, bool probe) {
+    static float px;
+    px = (float)(1.0 / scale);
+    UIScreen* screen = ui_screen(ui, "seams");
+    UIElement* panel = ui_panel(ui_screen_root(screen));
+    ui_set_size(panel, UI_GROW, 0.0f, UI_GROW, 0.0f);
+    ui_set_draw(panel, draw_seams, &px);
+    ui_push(ui, screen);
+    // Each line's box is rounded outward, and names the pixel column its right edge lies in, for
+    // the half quad the one it halves.
+    for (size_t i = 0; probe && i < sizeof(SEAMS) / sizeof(SEAMS[0]); i++) {
+        const double x1 = (double)(SEAMS[i].x + SEAMS[i].w);
+        printf("canvas seams %s %.0f %.0f %.0f %.0f column %.0f want", SEAMS[i].name,
+               (double)SEAMS[i].x, (double)SEAMS[i].y, ceil(x1),
+               ceil((double)(SEAMS[i].y + SEAMS[i].h)), floor(x1));
+        printf(" %02lx%02lx%02lx backdrop %02lx%02lx%02lx\n", lround(SEAMS_BOX[0] * 255.0f),
+               lround(SEAMS_BOX[1] * 255.0f), lround(SEAMS_BOX[2] * 255.0f),
+               lround(SEAMS_BACKDROP[0] * 255.0f), lround(SEAMS_BACKDROP[1] * 255.0f),
+               lround(SEAMS_BACKDROP[2] * 255.0f));
+    }
+}
+
 static void usage(const char* argv0) {
     fprintf(stderr,
             "usage: %s [-x] [-f frames] [-S out.ppm] [-W points] [-H points]\n"
@@ -3456,7 +3524,7 @@ static void usage(const char* argv0) {
             "[--palette]\n"
             "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim] [--read-only]\n"
             "          [--editor-fold FIRST,LAST] [--editor-filler LINE,ROWS] [--refuse-close]\n"
-            "          [--ui-borders] [--dash LENGTH,GAP (mm)] [--dash-min-px PX]\n"
+            "          [--ui-borders] [--ui-seams] [--dash LENGTH,GAP (mm)] [--dash-min-px PX]\n"
             "          [--cap round|butt|square] [--join round|mitre|bevel]\n",
             argv0);
 }
@@ -3475,7 +3543,7 @@ static const char* IDENTITY_PASS = "#version 330 core\n"
 int main(int argc, char** argv) {
     bool headless = false, mirror = false, probe = false, picture = false, edit_thread = false;
     bool split = false, with_ui = false, budget = false, idle = false, ui_enter = false,
-         borders = false;
+         borders = false, seams = false;
     bool history = false, palette = false, font_sheet = false, vim = false;
     const char* editor_files[EDITOR_FILES_MAX];
     int editor_count = 0;
@@ -3589,6 +3657,8 @@ int main(int argc, char** argv) {
             g_gui_click = true;
         } else if (strcmp(argv[i], "--ui-borders") == 0) {
             borders = true;
+        } else if (strcmp(argv[i], "--ui-seams") == 0) {
+            seams = true;
         } else if (strcmp(argv[i], "--dash") == 0 && more) {
             double on = 0.0, off = 0.0;
             if (sscanf(argv[++i], "%lf,%lf", &on, &off) != 2) {
@@ -3721,7 +3791,7 @@ int main(int argc, char** argv) {
     g_engine = engine;
     g_home_view = g_views[0];
     UISystem* ui = NULL;
-    if (with_ui || history || palette || font_sheet || editor_count || borders) {
+    if (with_ui || history || palette || font_sheet || editor_count || borders || seams) {
         ui = create_ui_system(engine);
         ui_set_font(ui, font, 18.0f);
         ui_attach(ui, engine);
@@ -3798,6 +3868,8 @@ int main(int argc, char** argv) {
     }
     if (borders)
         build_borders(ui, width, height, ctx.fb_scale, probe);
+    if (seams)
+        build_seams(ui, ctx.fb_scale, probe);
     fflush(stdout);
 
     engine_add_overlay(engine, draw_view, NULL, 0);

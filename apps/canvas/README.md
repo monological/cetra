@@ -71,6 +71,9 @@ first frame after which nothing asks for another.
   selection in it holds.
 - `--ui-borders` draws boxes whose borders lie over clear, half-alpha and opaque fills, which
   `canvas-ui-borders` holds to Porter-Duff over.
+- `--ui-seams` draws quads meeting edge to edge on whole pixels and part way into them, a quad on
+  whole pixels, one whose edge halves a column of pixels and a rounded box, which
+  `canvas-ui-seams` holds to a one-pixel edge.
 
 The app reads the UI's input through `ui_input_read` alone and keeps no pointer state of its own.
 
