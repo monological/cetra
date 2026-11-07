@@ -10,7 +10,7 @@
 
 flat in vec4 vColor;
 flat in float vRaised;
-flat in float vFades;
+flat in float vFade;
 flat in vec2 vNear[9];
 noperspective in vec2 vPixel;
 
@@ -29,5 +29,5 @@ void main() {
         d = min(d, segmentDistance(vPixel, vNear[k], vNear[4 + 2 * k]));
     }
     FragColor = canvasOutput(vColor, vRaised > 0.5 ? CANVAS_RANK_RAISED : CANVAS_RANK_SHAPE,
-                             clamp(0.5 + d, 0.0, 1.0), vFades);
+                             clamp(0.5 + d, 0.0, 1.0), vFade);
 }

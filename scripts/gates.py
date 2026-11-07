@@ -31209,10 +31209,13 @@ def run_canvas_gate(workdir):
                      light and one a hair beside it faded to half white with no room, an untagged
                      blue box on a layer over a faded one blue, and a faded box over a lit green one
                      faded over it, each within 2 codes; and the near one, with 20 pt of room, under
-                     that green by 64 codes or more. Again at a fade of 1, the mask: the faded boxes
-                     gone to white, the blue blue and the green showing through. A shape fades as it
-                     is drawn, so what is drawn over it is never faded with it, and the mask hides
-                     what it leaves out rather than painting the paper over what lies beneath.
+                     that green by 64 codes or more, the faded box over the lit one faded as with no
+                     room. Again at a fade of 1, the mask: the faded boxes gone to white, the blue
+                     blue and the green showing through; with 20 pt of room as well, the near box
+                     coming back under 191 green. A lit H's red ink drawn in each run with room. A
+                     shape fades as it is drawn, so what is drawn over it is never faded with it, a
+                     light under it never spares it, and the mask hides what it leaves out rather
+                     than painting the paper over what lies beneath.
       canvas-uploads the board sheet over eight frames, what each uploaded: a tag written and a
                      style written upload nothing, a segment added one range and removed the same
                      range, and a transient layer of fifty lines, cleared and filled again, one
@@ -31614,21 +31617,46 @@ def run_canvas_gate(workdir):
     hard, probe = _canvas_run(workdir, "fade", "--sheet", "fade", "--fade", "0.5,0")
     roomy, _ = _canvas_run(workdir, "fade_room", "--sheet", "fade", "--fade", "0.5,20")
     masked, mask_probe = _canvas_run(workdir, "fade_mask", "--sheet", "fade", "--fade", "1,0")
+    mask_roomy, _ = _canvas_run(workdir, "fade_mask_room", "--sheet", "fade", "--fade", "1,20")
     cells = _canvas_sheet(probe, "fade")
     mask_cells = _canvas_sheet(mask_probe, "fade")
-    if not hard or not roomy or not masked or len(cells) != 6 or len(mask_cells) != 6:
+    label = probe.get(("fade-text", "label"))
+    if (not hard or not roomy or not masked or not mask_roomy or len(cells) != 6
+            or len(mask_cells) != 6 or not label):
         ok, detail = False, (f"the app failed or printed {len(cells)} and {len(mask_cells)} points "
-                             f"(want 6 each)")
+                             f"(want 6 each, and the label)")
     else:
+        # With room, the overlap is as without it, the light under a faded box sparing nothing;
+        # under the mask with room, the near box comes back within the room.
+        def want(cell_set, name, hexcode):
+            return {name: cell_set[name][:4] + [hexcode]}
         wrong = (_canvas_wrong_pixels(hard, cells)
-                 + [f"masked {w}" for w in _canvas_wrong_pixels(masked, mask_cells)])
+                 + [f"masked {w}" for w in _canvas_wrong_pixels(masked, mask_cells)]
+                 + [f"room {w}" for w in _canvas_wrong_pixels(roomy, want(cells, "under",
+                                                                          cells["under"][4]))])
+        mask_room_wanted = {**want(mask_cells, "under", "00ff00"),
+                            **want(mask_cells, "over", "0000ff"),
+                            **want(mask_cells, "far", "ffffff")}
+        wrong += [f"masked with room {w}"
+                  for w in _canvas_wrong_pixels(mask_roomy, mask_room_wanted)]
         near = cells["near"]
         pale = int(near[4], 16) >> 8 & 255
         roomy_near = int(_ppm_array(roomy)[int(near[2]), int(near[1])][1])
-        ok = not wrong and roomy_near < pale - 64
+        mask_near = int(_ppm_array(mask_roomy)[int(near[2]), int(near[1])][1])
+
+        # The lit H's red ink round its anchor, which a fading view with room must still draw.
+        def ink(path):
+            x, y = int(label[1]), int(label[2])
+            img = _ppm_array(path)[max(y - 15, 0):y + 15, max(x - 15, 0):x + 15].astype(int)
+            return int(((img[..., 0] > 200) & (img[..., 1] < 80) & (img[..., 2] < 80)).sum())
+        inks = [ink(hard), ink(roomy), ink(mask_roomy)]
+        ok = (not wrong and roomy_near < pale - 64 and mask_near < 255 - 64
+              and min(inks) > 20)
         detail = (f"lit and untagged red, far and near faded to {pale} green with no room, blue over "
-                  f"a faded box, a faded box over a lit one; masked, the faded gone and the lit "
-                  f"showing; near {roomy_near} with 20 pt (want under {pale - 64})"
+                  f"a faded box, a faded box over a lit one, with room too; masked, the faded gone "
+                  f"and the lit showing, with room too; near {roomy_near} with 20 pt (want under "
+                  f"{pale - 64}), {mask_near} masked (want under {255 - 64}); the lit H's ink "
+                  f"{inks} px (want over 20 each)"
                   + ("" if not wrong else "; wrong: " + ", ".join(wrong)))
     print(f"  canvas-fade         {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-fade", ok)

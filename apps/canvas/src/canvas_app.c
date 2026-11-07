@@ -991,7 +991,8 @@ static float g_fade, g_fade_room;
  * untagged -- and where each should land on screen: the lit and the untagged red, the others faded
  * toward white by the strength, or gone at 1. The near one is so with no room, and nearer red with
  * it. Over them a layer of two: an untagged blue box on a red one left out, which stays blue; and
- * a red box left out on a lit green one, faded over it, or at 1 gone so the green shows.
+ * a red box left out on a lit green one, faded over it, or at 1 gone so the green shows, room or
+ * none. And a lit red H, whose ink a fading view with room must still draw.
  */
 static void sheet_fade(SheetContext* ctx) {
     Canvas* canvas = ctx->canvas;
@@ -1034,7 +1035,16 @@ static void sheet_fade(SheetContext* ctx) {
                                                 .centre = pairs[k].at,
                                                 .size_x = pairs[k].size,
                                                 .size_y = pairs[k].size});
+    const CanvasPoint label = {MM(-3.0) + o, MM(2.0) + o};
+    canvas_edit_text(ctx->edit, &(CanvasText){.paint = paint_of(layer, red, 0, 1),
+                                              .font = ctx->font,
+                                              .string = "H",
+                                              .anchor = label,
+                                              .size = MM(1.5),
+                                              .align_x = CANVAS_ALIGN_CENTRE,
+                                              .align_y = CANVAS_ALIGN_MIDDLE});
     if (ctx->probe) {
+        probe_pixel(ctx, "fade-text", "label", label, 0xff0000);
         const uint32_t faded = (uint32_t)lroundf(255.0f * g_fade);
         const uint32_t pale = 0xff0000u | faded << 8 | faded;
         probe_pixel(ctx, "fade", "lit", lit, 0xff0000);

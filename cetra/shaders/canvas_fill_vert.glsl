@@ -19,14 +19,14 @@ layout(location = 7) in uvec4 aU;
 
 flat out vec4 vColor;
 flat out float vRaised;
-flat out float vFades; // 1 for a polygon a fading view fades
+flat out float vFade; // how far a fading view fades the polygon; 0 = not at all
 flat out vec2 vNear[9];
 noperspective out vec2 vPixel; // this fragment, in pixels from the view's centre
 
 void main() {
     vColor = vec4(0.0);
     vRaised = 0.0;
-    vFades = 0.0;
+    vFade = 0.0;
     vPixel = vec2(0.0);
     for (int i = 0; i < 9; i++)
         vNear[i] = vec2(0.0);
@@ -36,7 +36,7 @@ void main() {
     ivec4 tile = texelFetch(uTiles, int(aU.w));
     vec4 outline;
     if ((aU.x & 63u) != CANVAS_KIND_FILL || tile.z == 0 ||
-        !canvasColour(aU, vColor, outline, vRaised, vFades) || !canvasInPass(vRaised, 0.0))
+        !canvasColour(aU, vColor, outline, vRaised, vFade) || !canvasInPass(vRaised, 0.0))
         return;
     vNear[0] = canvasPixels(aNear0.xy, tile.xy);
     vNear[1] = canvasPixels(aNear0.zw, tile.xy);

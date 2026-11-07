@@ -18,7 +18,7 @@ flat in uint vFlags;
 flat in vec4 vColor;
 flat in vec4 vOutline;
 flat in float vRaised;
-flat in float vFades;
+flat in float vFade;
 flat in vec4 vShape;
 flat in vec4 vEnds;
 flat in vec4 vDash;
@@ -377,9 +377,9 @@ void main() {
     if (vOutline.a > 0.0 && d > 0.5) {
         float ring = max(uRing.x - d, d - uRing.y);
         FragColor =
-            canvasOutput(vOutline, CANVAS_RANK_RING, clamp(0.5 - ring, 0.0, 1.0), vFades);
+            canvasOutput(vOutline, CANVAS_RANK_RING, clamp(0.5 - ring, 0.0, 1.0), vFade);
         return;
     }
     FragColor = canvasOutput(vColor, vRaised > 0.5 ? CANVAS_RANK_RAISED : CANVAS_RANK_SHAPE,
-                             clamp(0.5 - d, 0.0, 1.0), vFades);
+                             clamp(0.5 - d, 0.0, 1.0), vFade);
 }

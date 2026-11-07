@@ -16,8 +16,9 @@
 // over it is never faded with it. Below a fade of 1 its colour goes toward the view's colour, and
 // it covers what lies under it as any shape does; at 1, the mask, its coverage goes instead, so
 // what lies under it shows. Within uRoom of a lit shape it fades less, down to nothing at the
-// light: the lit pass, CANVAS_PASS_LIT, drawn first and only while there is room, puts every lit
-// shape's coverage into a target of its own by max, which the taps below read.
+// light's edge, though never over the light itself: the lit pass, CANVAS_PASS_LIT, drawn first and
+// only while there is room, puts every lit shape's coverage into a target of its own by max, which
+// the taps below read.
 //
 // The order is what decides which colour a pixel shared by two shapes takes: a raised one, else
 // one that covers it well rather than an edge's fringe, and a ring last of all. A raised shape's
@@ -28,8 +29,7 @@
 
 uniform int uPass;
 uniform float uOpacity; // the layer's
-uniform float uFade;    // how far a shape left out fades away from a light; 0 = none
-uniform vec3 uFadeTo;   // toward this colour
+uniform vec3 uFadeTo;   // the colour a shape left out fades toward
 uniform float uRoom;    // framebuffer pixels round a light the fading eases off over; 0 = none
 uniform sampler2D uLit; // the lit pass's: a lit shape's coverage, while there is room
 
@@ -42,16 +42,21 @@ const int CANVAS_RANK_RING = 4;
 // thinner than that down; so a quarter of a tap's footprint lit counts as wholly lit.
 const float CANVAS_TAP_GAIN = 4.0;
 
-// How lit the fragment's pixel is, from the light on and round it: 1 on a light; within uRoom of
-// one, easing to 0 at uRoom, by the largest of CANVAS_FADE_RINGS rings of CANVAS_FADE_SPOKES taps
-// round it; 0 with no room.
+// How much the room spares a shape left out at the fragment's pixel: within uRoom of a light, easing
+// to 0 at uRoom, by the largest of CANVAS_FADE_RINGS rings of CANVAS_FADE_SPOKES taps round it. 0
+// where a light covers the pixel itself: a shape left out over a lit one is never spared by it,
+// which the lit target, holding coverage alone, could not tell from a light beside it. 0 with no
+// room.
 float canvasLight() {
     if (uRoom < 1.0)
+        return 0.0;
+    float here = texelFetch(uLit, ivec2(gl_FragCoord.xy), 0).r;
+    if (here >= 1.0)
         return 0.0;
     const float tau = 6.283185307179586;
     vec2 size = vec2(textureSize(uLit, 0));
     vec2 uv = gl_FragCoord.xy / size;
-    float lit = texelFetch(uLit, ivec2(gl_FragCoord.xy), 0).r;
+    float lit = 0.0;
     for (int r = 1; r <= CANVAS_FADE_RINGS && lit < 1.0; r++) {
         float radius = uRoom * float(r) / float(CANVAS_FADE_RINGS);
         float lod = log2(max(tau * radius / float(CANVAS_FADE_SPOKES), 1.0));
@@ -64,19 +69,15 @@ float canvasLight() {
             lit = max(lit, v * falloff);
         }
     }
-    return lit;
+    return lit * (1.0 - here);
 }
 
 // A fragment of a shape in the pass being drawn: its colour and its rank (CANVAS_RANK_*), its
-// coverage, and whether a fading view fades it (canvasColour's fades).
-vec4 canvasOutput(vec4 colour, int rank, float coverage, float fades) {
-    if (uPass != CANVAS_PASS_LIT && fades > 0.0 && uFade > 0.0) {
-        float fade = uFade * (1.0 - canvasLight());
-        if (uFade >= 1.0)
-            coverage *= 1.0 - fade;
-        else
-            colour.rgb = mix(colour.rgb, uFadeTo, fade);
-    }
+// coverage, and how far a fading view fades it (canvasColour's fade). The mask takes coverage, in
+// every pass alike; a lesser fade takes colour, only in the pass that paints.
+vec4 canvasOutput(vec4 colour, int rank, float coverage, float fade) {
+    if (fade >= 1.0)
+        coverage *= canvasLight();
     if (coverage <= 0.0)
         discard;
     if (uPass == 0)
@@ -87,5 +88,7 @@ vec4 canvasOutput(vec4 colour, int rank, float coverage, float fades) {
         rank = CANVAS_RANK_FRINGE;
     if (rank != uPass)
         discard;
+    if (fade > 0.0 && fade < 1.0)
+        colour.rgb = mix(colour.rgb, uFadeTo, fade * (1.0 - canvasLight()));
     return vec4(colour.rgb, 0.0);
 }

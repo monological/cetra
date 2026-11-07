@@ -45,11 +45,12 @@
 #define CANVAS_END_OPEN 4u
 #define CANVAS_END_JOIN 5u
 
-// The pass that draws every tagged shape's coverage into the lit target while a view fades
+// The pass that draws every lit shape's coverage into the lit target while a view fades with room
 // (canvas_pass.glsl). A pass number, so a plain int in both languages.
 #define CANVAS_PASS_LIT 5
-// The composite's taps round a pixel of a fading view: rings out to the room, spokes a ring. The
-// lit target's levels are made down to the widest ring's spacing. Counts, plain ints.
+// The taps round a fragment of a shape a view fades (canvas_pass.glsl): rings out to the room,
+// spokes a ring. The lit target's levels are made down to the widest ring's spacing. Counts, plain
+// ints.
 #define CANVAS_FADE_RINGS 4
 #define CANVAS_FADE_SPOKES 12
 

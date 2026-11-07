@@ -371,7 +371,7 @@ typedef struct CanvasView {
     double points_per_unit;    // the zoom
     bool mirror_x;             // seen from the other side, as a board from below
     uint32_t background;       // drawn under every layer, opaque
-    float fade;                // how far a tagged shape not lit fades: 0 = none, 1 = to fade_to
+    float fade;                // how far a tagged shape not lit fades: 0 = none, 1 = hidden
     uint32_t fade_to;          //   toward this colour, the paper it is drawn on; rgb alone
     float fade_room;           //   less within this many points of a lit one; 0 = a hard edge
     CanvasLayerSet shown;      // empty = every layer

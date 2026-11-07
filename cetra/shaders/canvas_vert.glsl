@@ -25,8 +25,8 @@ flat out uint vFlags;
 flat out vec4 vColor;
 flat out vec4 vOutline; // alpha 0 = no ring
 flat out float vRaised;
-flat out float vFades; // 1 for a shape a fading view fades
-flat out vec4 vShape;  // the kind's measures, in pixels
+flat out float vFade; // how far a fading view fades the shape; 0 = not at all
+flat out vec4 vShape; // the kind's measures, in pixels
 flat out vec4 vEnds;  // an arc's sector: from xy counter-clockwise to zw; a segment's way on past
                       // a, back toward the segment before, and past b, in its frame; a box's join
 flat out vec4 vDash;  // the dash, the period and the place in them at the record's a, in pixels;
@@ -83,10 +83,10 @@ void main() {
 
     ivec4 tile = texelFetch(uTiles, int(aU.w));
     vRaised = 0.0;
-    vFades = 0.0;
+    vFade = 0.0;
     vOutline = vec4(0.0);
     if (kind == CANVAS_KIND_NONE || tile.z == 0 ||
-        !canvasColour(aU, vColor, vOutline, vRaised, vFades))
+        !canvasColour(aU, vColor, vOutline, vRaised, vFade))
         return;
     // A glyph has no ring, its quad being its atlas cell.
     if (kind == CANVAS_KIND_GLYPH)

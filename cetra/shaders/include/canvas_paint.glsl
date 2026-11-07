@@ -10,6 +10,8 @@ uniform samplerBuffer uStyles; // a colour per style
 uniform samplerBuffer uTags;   // three texels per tag: colour, outline, (dim, hidden, raised, lit)
 uniform int uTagCount;
 uniform int uPass;             // canvas_pass.glsl's
+uniform float uFade;           // how far a shape left out fades; 0 = none, 1 = hidden
+uniform float uRoom;           // canvas_pass.glsl's
 uniform vec2 uFraction;        // the view's centre past its integer unit
 uniform float uPixelsPerUnit;
 uniform float uMirror;         // -1 to see the canvas from the other side
@@ -33,10 +35,10 @@ vec4 canvasTagTexel(uint tag, int i) {
 // A shape's colour, from u = (head, net, object, tile): the object's colour if it states one,
 // else the net's, else the style's, dimmed by the larger of the two dims; its outline the
 // object's if it states one, else the net's, alpha 0 for none; raised when either tag raises
-// it; and whether a fading view fades it, 1 when it is tagged and neither tag lights it. False
-// when either tag hides it. In the lit pass it has no outline, and a shape no tag lights is
-// false: the pass draws lit shapes alone.
-bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised, out float fades) {
+// it; and how far a fading view fades it, uFade when it is tagged and neither tag lights it. False
+// when either tag hides it, or the mask with no room does. In the lit pass it has no outline, and
+// a shape no tag lights is false: the pass draws lit shapes alone.
+bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised, out float fade) {
     colour = texelFetch(uStyles, int(u.x >> 16));
     outline = vec4(0.0);
     float dim = 0.0;
@@ -65,12 +67,13 @@ bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised, 
         lit = max(lit, m.a);
         tagged = true;
     }
-    fades = tagged && lit == 0.0 ? 1.0 : 0.0;
+    fade = tagged && lit == 0.0 ? uFade : 0.0;
     if (uPass == CANVAS_PASS_LIT) {
-        colour = vec4(1.0);
         outline = vec4(0.0);
         return lit > 0.0 && !hidden;
     }
+    if (fade >= 1.0 && uRoom < 1.0)
+        return false;
     if (objectColour.a > 0.0)
         colour = objectColour;
     else if (netColour.a > 0.0)
