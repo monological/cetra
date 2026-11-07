@@ -29,14 +29,16 @@
 
 // The units the canvas program reads its tables from: its own ledger. A font's
 // atlas is on a unit of its own, CANVAS_UNIT_FONTS plus its slot, since GL 4.1
-// indexes a sampler array only by a value the same across a draw.
+// indexes a sampler array only by a value the same across a draw. The lit
+// target, which a fading view's shapes read their room from, follows them.
 enum {
     CANVAS_UNIT_TILES = 0,
     CANVAS_UNIT_STYLES = 1,
     CANVAS_UNIT_TAGS = 2,
     CANVAS_UNIT_GLYPHS = 3,
     CANVAS_UNIT_FONTS = 4,
-    CANVAS_UNIT_END = CANVAS_UNIT_FONTS + CANVAS_FONT_MAX,
+    CANVAS_UNIT_LIT = CANVAS_UNIT_FONTS + CANVAS_FONT_MAX,
+    CANVAS_UNIT_END,
 };
 
 /*
@@ -275,7 +277,7 @@ typedef struct CanvasData {
     int32_t* tile_table;
     size_t tile_table_cap;
     GLuint target_fbo, target_texture;
-    GLuint lit_fbo, lit_texture; // pass 5's, mipmapped: r lit coverage, g tagged coverage
+    GLuint lit_fbo, lit_texture; // pass 5's, mipmapped: a lit shape's coverage
     int target_w, target_h;
     void* scratch; // a tile's range, its items then dead slots
     size_t scratch_bytes;
@@ -741,6 +743,7 @@ static bool _gl_ready(Canvas* canvas) {
         uniform_set_int(u, "uGlyphs", CANVAS_UNIT_GLYPHS);
         for (int slot = 0; slot < CANVAS_FONT_MAX; slot++)
             uniform_set_int(u, FONTS[slot], CANVAS_UNIT_FONTS + slot);
+        uniform_set_int(u, "uLit", CANVAS_UNIT_LIT);
     }
     create_fullscreen_quad_vao(&d->quad_vao, &d->quad_vbo);
     glGenBuffers(1, &d->style_buffer);
@@ -1013,14 +1016,14 @@ static bool _target(CanvasData* d, int w, int h) {
     return true;
 }
 
-// The lit target, made at the view target's size by the first draw that fades: r a lit shape's
-// coverage, g any tagged shape's, mipmapped for the composite's taps. False when it is incomplete.
+// The lit target, made at the view target's size by the first draw that fades with room: a lit
+// shape's coverage, mipmapped for the taps round a shape left out. False when it is incomplete.
 static bool _lit_target(CanvasData* d) {
     if (d->lit_fbo)
         return true;
-    if (!gl_color_fbo_create(d->target_w, d->target_h, GL_RG8, &d->lit_fbo, &d->lit_texture)) {
-        log_error("canvas: its %dx%d lit target is incomplete, so it does not fade", d->target_w,
-                  d->target_h);
+    if (!gl_color_fbo_create(d->target_w, d->target_h, GL_R8, &d->lit_fbo, &d->lit_texture)) {
+        log_error("canvas: its %dx%d lit target is incomplete, so it fades with no room",
+                  d->target_w, d->target_h);
         gl_delete_texture(&d->lit_texture);
         gl_delete_fbo(&d->lit_fbo);
         return false;
@@ -1120,10 +1123,8 @@ static void _draw_layer(const CanvasData* d, const CanvasLayer* layer) {
     }
 }
 
-// The view's tagged shapes into the lit target, the largest coverage of each kind winning, then
-// its levels made down to the deepest the composite's taps read room_px pixels out. With no room
-// the taps are not read, and the top level is 0 so the texture is complete without levels. The
-// view target's viewport stands.
+// The view's lit shapes into the lit target, the largest coverage winning, then its levels made
+// down to the deepest the taps read room_px pixels out. The view target's viewport stands.
 static void _draw_lit(CanvasData* d, const CanvasLayer* const* order, uint32_t n, double room_px) {
     glBindFramebuffer(GL_FRAMEBUFFER, d->lit_fbo);
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
@@ -1135,7 +1136,7 @@ static void _draw_lit(CanvasData* d, const CanvasLayer* const* order, uint32_t n
     glBlendEquation(GL_FUNC_ADD);
     // A tap's level is log2 of the spacing of the ring it is on, the widest the room's.
     const double spacing = 2.0 * GLM_PI * room_px / CANVAS_FADE_SPOKES;
-    const int deepest = room_px < 1.0 ? 0 : (int)ceil(log2(fmax(spacing, 1.0)));
+    const int deepest = (int)ceil(log2(fmax(spacing, 1.0)));
     glBindTexture(GL_TEXTURE_2D, d->lit_texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, deepest);
     if (deepest > 0)
@@ -1143,12 +1144,18 @@ static void _draw_lit(CanvasData* d, const CanvasLayer* const* order, uint32_t n
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-// What both canvas programs read of the view.
+// What both canvas programs read of the view: where it looks, and how it fades, room_px 0 for no
+// room.
 static void _view_uniforms(const ShaderProgram* program, const Canvas* canvas,
                            const CanvasView* view, const float size[2], float ppu,
-                           const float ring[2]) {
+                           const float ring[2], float fade, double room_px) {
     UniformManager* u = program->uniforms;
     glUseProgram(program->id);
+    float to[4];
+    _rgba_floats(view->fade_to, to);
+    uniform_set_float(u, "uFade", fade);
+    uniform_set_vec3(u, "uFadeTo", to);
+    uniform_set_float(u, "uRoom", (float)room_px);
     const float fraction[2] = {(float)view->fraction[0], (float)view->fraction[1]};
     uniform_set_vec2(u, "uFraction", fraction);
     uniform_set_vec2(u, "uSize", size);
@@ -1197,19 +1204,20 @@ void canvas_draw(Canvas* canvas, const CanvasView* view) {
         const double margin = 2.0 + ring[1] + 0.5;
         _tiles_upload(d, view, (w * 0.5 + margin) / ppu, (h * 0.5 + margin) / ppu);
 
-        // The background, and an alpha of zero for the first layer's scratch.
-        float bg[4];
-        _rgba_floats(view->background, bg);
-        glBindFramebuffer(GL_FRAMEBUFFER, d->target_fbo);
+        // A fading view's shapes read their room from the lit pass, drawn first, and only while
+        // there is room.
+        const float fade = glm_clamp(view->fade, 0.0f, 1.0f);
+        const double room_px = view->fade_room * sx;
+        const bool roomy = fade > 0.0f && room_px >= 1.0 && _lit_target(d);
+
         glViewport(0, 0, w, h);
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-        glClearColor(bg[0], bg[1], bg[2], 0.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-
         glEnable(GL_BLEND);
         const float size[2] = {(float)w, (float)h};
-        _view_uniforms(d->program, canvas, view, size, (float)ppu, ring);
-        _view_uniforms(d->fill_program, canvas, view, size, (float)ppu, ring);
+        _view_uniforms(d->program, canvas, view, size, (float)ppu, ring, fade,
+                       roomy ? room_px : 0.0);
+        _view_uniforms(d->fill_program, canvas, view, size, (float)ppu, ring, fade,
+                       roomy ? room_px : 0.0);
         glActiveTexture(GL_TEXTURE0 + CANVAS_UNIT_TILES);
         glBindTexture(GL_TEXTURE_BUFFER, d->tile_texture);
         glActiveTexture(GL_TEXTURE0 + CANVAS_UNIT_STYLES);
@@ -1225,13 +1233,20 @@ void canvas_draw(Canvas* canvas, const CanvasView* view) {
 
         const CanvasLayer* order[CANVAS_LAYER_MAX] = {NULL};
         const uint32_t n = _draw_order(d, view, order);
+        if (roomy) {
+            _draw_lit(d, order, n, room_px);
+            glActiveTexture(GL_TEXTURE0 + CANVAS_UNIT_LIT);
+            glBindTexture(GL_TEXTURE_2D, d->lit_texture);
+        }
+
+        // The background, and an alpha of zero for the first layer's scratch.
+        float bg[4];
+        _rgba_floats(view->background, bg);
+        glBindFramebuffer(GL_FRAMEBUFFER, d->target_fbo);
+        glClearColor(bg[0], bg[1], bg[2], 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
         for (uint32_t i = 0; i < n; i++)
             _draw_layer(d, order[i]);
-        const float fade = glm_clamp(view->fade, 0.0f, 1.0f);
-        const double room_px = view->fade_room * sx;
-        const bool fading = fade > 0.0f && _lit_target(d);
-        if (fading)
-            _draw_lit(d, order, n, room_px);
         for (int unit = CANVAS_UNIT_END - 1; unit >= CANVAS_UNIT_TILES; unit--) {
             glActiveTexture(GL_TEXTURE0 + (GLenum)unit);
             glBindTexture(unit >= CANVAS_UNIT_FONTS ? GL_TEXTURE_2D : GL_TEXTURE_BUFFER, 0);
@@ -1247,25 +1262,10 @@ void canvas_draw(Canvas* canvas, const CanvasView* view) {
         const int origin[4] = {(int)x0, gl_y, 0, 0};
         uniform_set_ivec4(d->composite->uniforms, "uOrigin", origin);
         uniform_set_int(d->composite->uniforms, "uView", 0);
-        uniform_set_float(d->composite->uniforms, "uFade", fading ? fade : 0.0f);
-        if (fading) {
-            float to[4];
-            _rgba_floats(view->fade_to, to);
-            uniform_set_vec3(d->composite->uniforms, "uFadeTo", to);
-            uniform_set_float(d->composite->uniforms, "uRoom", (float)room_px);
-            uniform_set_int(d->composite->uniforms, "uLit", 1);
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, d->lit_texture);
-            glActiveTexture(GL_TEXTURE0);
-        }
+        glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, d->target_texture);
         draw_fullscreen_quad(d->quad_vao);
         glBindTexture(GL_TEXTURE_2D, 0);
-        if (fading) {
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, 0);
-            glActiveTexture(GL_TEXTURE0);
-        }
     }
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_TEXTURE_BUFFER, 0);

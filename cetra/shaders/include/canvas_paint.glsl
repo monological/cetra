@@ -33,10 +33,10 @@ vec4 canvasTagTexel(uint tag, int i) {
 // A shape's colour, from u = (head, net, object, tile): the object's colour if it states one,
 // else the net's, else the style's, dimmed by the larger of the two dims; its outline the
 // object's if it states one, else the net's, alpha 0 for none; raised when either tag raises
-// it. False when either tag hides it. In the lit pass its colour's red is whether either tag
-// lights it, it has no outline, and an untagged shape is false: the pass draws tagged shapes
-// alone.
-bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised) {
+// it; and whether a fading view fades it, 1 when it is tagged and neither tag lights it. False
+// when either tag hides it. In the lit pass it has no outline, and a shape no tag lights is
+// false: the pass draws lit shapes alone.
+bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised, out float fades) {
     colour = texelFetch(uStyles, int(u.x >> 16));
     outline = vec4(0.0);
     float dim = 0.0;
@@ -65,10 +65,11 @@ bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised) 
         lit = max(lit, m.a);
         tagged = true;
     }
+    fades = tagged && lit == 0.0 ? 1.0 : 0.0;
     if (uPass == CANVAS_PASS_LIT) {
-        colour = vec4(lit, 0.0, 0.0, 1.0);
+        colour = vec4(1.0);
         outline = vec4(0.0);
-        return tagged && !hidden;
+        return lit > 0.0 && !hidden;
     }
     if (objectColour.a > 0.0)
         colour = objectColour;
