@@ -95,7 +95,7 @@ typedef struct CanvasTags CanvasTags;
 // another's edge, so give shapes that overlap one colour or raise one. The
 // layer is translucent as a whole, its overlaps drawn once. An object's state
 // wins over its net's for colour and outline; the larger dim wins, and either
-// tag hides or raises.
+// tag hides, raises or lights.
 typedef struct CanvasTagState {
     uint32_t colour;  // in place of the shape's style colour; 0 = the style's
     uint32_t outline; // a ring just outside a shape (not text), under its layer's other
@@ -103,7 +103,7 @@ typedef struct CanvasTagState {
     float dim;        // 0 = as drawn, 1 = black
     bool hidden;
     bool raised;
-    bool lit; // a light a dimming view spares, with what is within its room
+    bool lit; // a light a fading view spares, with what is within its room
 } CanvasTagState;
 
 CanvasTags* create_canvas_tags(void);
@@ -371,9 +371,9 @@ typedef struct CanvasView {
     double points_per_unit;    // the zoom
     bool mirror_x;             // seen from the other side, as a board from below
     uint32_t background;       // drawn under every layer, opaque
-    float dim;                 // 0 = none; else how far a tagged shape not lit fades, to 1
-    uint32_t dim_to;           //   toward this colour, the paper it is drawn on
-    float dim_room;            //   less within this many points of a lit one; 0 = none
+    float fade;                // how far a tagged shape not lit fades: 0 = none, 1 = to fade_to
+    uint32_t fade_to;          //   toward this colour, the paper it is drawn on; rgb alone
+    float fade_room;           //   less within this many points of a lit one; 0 = a hard edge
     CanvasLayerSet shown;      // empty = every layer
     const CanvasLayer* active; // drawn last, over the others; NULL = none
 } CanvasView;

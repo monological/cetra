@@ -166,6 +166,7 @@ GLenum gl_transfer_format(GLenum internal_format) {
         case GL_R16F:
         case GL_R32F:
             return GL_RED;
+        case GL_RG8:
         case GL_RG16F:
         case GL_RG32F:
             return GL_RG;

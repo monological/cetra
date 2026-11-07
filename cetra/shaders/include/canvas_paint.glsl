@@ -7,7 +7,7 @@
 
 uniform isamplerBuffer uTiles; // per tile: its origin less the view's centre, and whether it shows
 uniform samplerBuffer uStyles; // a colour per style
-uniform samplerBuffer uTags;   // three texels per tag: colour, outline, (dim, hidden, raised)
+uniform samplerBuffer uTags;   // three texels per tag: colour, outline, (dim, hidden, raised, lit)
 uniform int uTagCount;
 uniform int uPass;             // canvas_pass.glsl's
 uniform vec2 uFraction;        // the view's centre past its integer unit
@@ -33,7 +33,9 @@ vec4 canvasTagTexel(uint tag, int i) {
 // A shape's colour, from u = (head, net, object, tile): the object's colour if it states one,
 // else the net's, else the style's, dimmed by the larger of the two dims; its outline the
 // object's if it states one, else the net's, alpha 0 for none; raised when either tag raises
-// it. False when either tag hides it.
+// it. False when either tag hides it. In the lit pass its colour's red is whether either tag
+// lights it, it has no outline, and an untagged shape is false: the pass draws tagged shapes
+// alone.
 bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised) {
     colour = texelFetch(uStyles, int(u.x >> 16));
     outline = vec4(0.0);
@@ -63,9 +65,8 @@ bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised) 
         lit = max(lit, m.a);
         tagged = true;
     }
-    // The lit pass (spec 14.24): every tagged shape, red where lit, and no ring.
-    if (uPass == 5) {
-        colour = vec4(lit, 1.0, 0.0, 1.0);
+    if (uPass == CANVAS_PASS_LIT) {
+        colour = vec4(lit, 0.0, 0.0, 1.0);
         outline = vec4(0.0);
         return tagged && !hidden;
     }

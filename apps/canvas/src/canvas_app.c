@@ -981,20 +981,20 @@ static void sheet_tags(SheetContext* ctx) {
 #undef CELL
 }
 
-// --dim STRENGTH,ROOM: how far the view fades its tagged shapes not lit, toward white, and the
-// points round a lit one it eases off over (spec 14.24).
-static float g_dim, g_dim_room;
+// --fade STRENGTH,ROOM: how far the view fades its tagged shapes not lit toward its sheet's paper,
+// and the points round a lit one it eases off over (spec 14.24).
+static float g_fade, g_fade_room;
 
 /*
- * The dim sheet (spec 14.24): four red boxes in a row of a layer drawn under --dim -- one lit, one
- * a hair beside it tagged but not lit, one tagged far from it, and one untagged -- and where each
- * should land on screen: the lit and the untagged red, the far one faded toward white by the
- * strength. The near one is said with no colour: the far one's with no room, nearer red with it.
+ * The fade sheet (spec 14.24): on white paper, four red boxes of a layer drawn under --fade -- one
+ * lit, one a hair beside it tagged but not lit, one tagged far from it, and one untagged -- and
+ * where each should land on screen: the lit and the untagged red, the others faded toward white by
+ * the strength. The near one is so with no room, and nearer red with it.
  */
-static void sheet_dim(SheetContext* ctx) {
+static void sheet_fade(SheetContext* ctx) {
     Canvas* canvas = ctx->canvas;
     CanvasTags* tags = canvas_tags(canvas);
-    CanvasLayer* layer = canvas_add_layer(canvas, "dim");
+    CanvasLayer* layer = canvas_add_layer(canvas, "fade");
     const uint16_t red = canvas_add_style(canvas, 0xff0000ffu);
     const int64_t o = ctx->offset;
     canvas_tags_set(tags, 1, (CanvasTagState){.lit = true});
@@ -1012,13 +1012,13 @@ static void sheet_dim(SheetContext* ctx) {
                                                 .size_x = MM(1.0),
                                                 .size_y = MM(1.0)});
     if (ctx->probe) {
-        const uint32_t faded = (uint32_t)lroundf(255.0f * g_dim);
-        probe_pixel(ctx, "dim", "lit", lit, 0xff0000);
-        probe_pixel(ctx, "dim", "far", far, 0xff0000u | faded << 8 | faded);
-        probe_pixel(ctx, "dim", "untagged", untagged, 0xff0000);
-        double x, y;
-        fb_of(ctx, (CanvasPoint){near.x - MM(0.45), near.y}, &x, &y);
-        printf("canvas dim near at %ld %ld\n", lround(x), lround(y));
+        const uint32_t faded = (uint32_t)lroundf(255.0f * g_fade);
+        const uint32_t pale = 0xff0000u | faded << 8 | faded;
+        probe_pixel(ctx, "fade", "lit", lit, 0xff0000);
+        probe_pixel(ctx, "fade", "far", far, pale);
+        probe_pixel(ctx, "fade", "untagged", untagged, 0xff0000);
+        // 0.15 mm from the lit box's edge.
+        probe_pixel(ctx, "fade", "near", (CanvasPoint){near.x - MM(0.45), near.y}, pale);
     }
 }
 
@@ -1826,7 +1826,7 @@ static const Sheet SHEETS[] = {
     {"glyphs", sheet_glyphs, {0.0, 0.0}, 8.0, 0x000000ffu},
     {"overlap", sheet_overlap, {0.0, 0.0}, 8.0, 0x000000ffu},
     {"tags", sheet_tags, {0.0, 0.0}, 9.0, 0x000000ffu},
-    {"dim", sheet_dim, {0.0, 0.0}, 9.0, 0x000000ffu},
+    {"fade", sheet_fade, {0.0, 0.0}, 9.0, 0xffffffffu},
     {"board", sheet_board, {0.0, 0.0}, 66.0, 0x001023ffu},
     {"strokes", sheet_strokes, {0.0, 0.0}, 8.0, 0x000000ffu},
     {"dashes", sheet_dashes, {0.0, 0.0}, 8.0, 0x000000ffu},
@@ -3586,7 +3586,7 @@ static void usage(const char* argv0) {
         "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim] [--read-only]\n"
         "          [--editor-fold FIRST,LAST] [--editor-filler LINE,ROWS] [--refuse-close]\n"
         "          [--ui-borders] [--ui-seams] [--dash LENGTH,GAP (mm)] [--dash-min-px PX]\n"
-        "          [--cap round|butt|square] [--join round|mitre|bevel] [--dim STRENGTH,ROOM]\n",
+        "          [--cap round|butt|square] [--join round|mitre|bevel] [--fade STRENGTH,ROOM]\n",
         argv0);
 }
 
@@ -3745,9 +3745,9 @@ int main(int argc, char** argv) {
             *(cap ? &g_cap : &g_join) = kind;
         } else if (strcmp(argv[i], "--dash-min-px") == 0 && more) {
             dash_min_px = (float)atof(argv[++i]);
-        } else if (strcmp(argv[i], "--dim") == 0 && more) {
-            if (sscanf(argv[++i], "%f,%f", &g_dim, &g_dim_room) != 2) {
-                fprintf(stderr, "canvas: --dim takes STRENGTH,ROOM (points)\n");
+        } else if (strcmp(argv[i], "--fade") == 0 && more) {
+            if (sscanf(argv[++i], "%f,%f", &g_fade, &g_fade_room) != 2) {
+                fprintf(stderr, "canvas: --fade takes STRENGTH,ROOM (points)\n");
                 return 2;
             }
         } else {
@@ -3812,9 +3812,9 @@ int main(int argc, char** argv) {
                              ((double)width - g_side_width) / (double)g_view_count / (cw * 1e6),
                          .mirror_x = mirror,
                          .background = sheet->background,
-                         .dim = g_dim,
-                         .dim_to = 0xffffffffu,
-                         .dim_room = g_dim_room};
+                         .fade = g_fade,
+                         .fade_to = sheet->background,
+                         .fade_room = g_fade_room};
     // The centre in whole units plus its fraction, from millimetres and the offset.
     const double ux = cx * 1e6, uy = cy * 1e6;
     view->centre = (CanvasPoint){(int64_t)floor(ux) + offset, (int64_t)floor(uy) + offset};

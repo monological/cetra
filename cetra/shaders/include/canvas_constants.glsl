@@ -45,6 +45,14 @@
 #define CANVAS_END_OPEN 4u
 #define CANVAS_END_JOIN 5u
 
+// The pass that draws every tagged shape's coverage into the lit target while a view fades
+// (canvas_pass.glsl). A pass number, so a plain int in both languages.
+#define CANVAS_PASS_LIT 5
+// The composite's taps round a pixel of a fading view: rings out to the room, spokes a ring. The
+// lit target's levels are made down to the widest ring's spacing. Counts, plain ints.
+#define CANVAS_FADE_RINGS 4
+#define CANVAS_FADE_SPOKES 12
+
 // The glyph table (canvas_vert.glsl's uGlyphs): CANVAS_GLYPH_CODEPOINTS entries a font, two
 // texels each, for each of the CANVAS_FONT_MAX fonts a canvas draws with. Codepoint 0 draws
 // nothing, so its first texel holds the font's own numbers. Counts, so plain ints in both

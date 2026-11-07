@@ -66,14 +66,12 @@ net and its parts and fades the rest.
 
 - **A tag can be lit**; a shape is lit when either of its tags is, so a pad on a lit net is lit
   whatever its part's tag says.
-- **A view dims by `dim`** toward `dim_to`, the paper it is drawn on: white under a schematic, the
-  background under a board. A tagged shape not lit fades by `dim`; within `dim_room` points of a lit
-  one it fades less, down to nothing at the light. An untagged shape never fades.
-- **It costs a pass only while a view dims**: every layer drawn again into the lit target, each
-  tagged shape's coverage in green and a lit one's in red, by max, then mipmapped. The composite
-  fades each pixel by its green, less by how near the red is: the largest of rings of taps within
-  the room, each read at a level as wide as its spacing, so a light thinner than the taps still
-  registers.
+- **A view fades by `fade`** toward `fade_to`, the paper it is drawn on: white under a schematic,
+  the background under a board. A tagged shape not lit fades by `fade`; within `fade_room` points
+  of a lit one it fades less, down to nothing at the light. An untagged shape never fades.
+- **It costs a pass and a target only while a view fades**: the lit pass (`canvas_pass.glsl`)
+  draws every tagged shape's coverage, and the composite fades by it (`canvas_composite_frag.glsl`
+  has how the room is read). A view that does not fade draws as before.
 - **A tag's own `dim` is another thing**: it darkens one shape toward black, whatever the view.
 
 ## Ten things easy to get backwards
