@@ -12,6 +12,10 @@
 //      reach a pixel spends the whole coverage and overlaps add nothing.
 // Pass 1 is drawn only while a tag raises and pass 4 only while one draws a ring.
 //
+// Pass 5 (spec 14.24), only while the view dims, draws every layer again into a target of its own
+// by max: each tagged shape's coverage in green, and a lit one's in red, for the composite to dim
+// by.
+//
 // The order is what decides which colour a pixel shared by two shapes takes: a raised one, else
 // one that covers it well rather than an edge's fringe, and a ring last of all. A raised shape's
 // fringe is a fringe like any other, or its edge would move half a pixel out over a neighbour.
@@ -32,6 +36,8 @@ vec4 canvasOutput(vec4 colour, int rank, float coverage) {
         discard;
     if (uPass == 0)
         return vec4(0.0, 0.0, 0.0, coverage * colour.a * uOpacity);
+    if (uPass == 5)
+        return vec4(colour.r * coverage, coverage, 0.0, 0.0);
     if (rank != CANVAS_RANK_RING && coverage < 0.5)
         rank = CANVAS_RANK_FRINGE;
     if (rank != uPass)

@@ -103,6 +103,7 @@ typedef struct CanvasTagState {
     float dim;        // 0 = as drawn, 1 = black
     bool hidden;
     bool raised;
+    bool lit; // a light a dimming view spares, with what is within its room
 } CanvasTagState;
 
 CanvasTags* create_canvas_tags(void);
@@ -370,6 +371,9 @@ typedef struct CanvasView {
     double points_per_unit;    // the zoom
     bool mirror_x;             // seen from the other side, as a board from below
     uint32_t background;       // drawn under every layer, opaque
+    float dim;                 // 0 = none; else how far a tagged shape not lit fades, to 1
+    uint32_t dim_to;           //   toward this colour, the paper it is drawn on
+    float dim_room;            //   less within this many points of a lit one; 0 = none
     CanvasLayerSet shown;      // empty = every layer
     const CanvasLayer* active; // drawn last, over the others; NULL = none
 } CanvasView;

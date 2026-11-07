@@ -59,6 +59,23 @@ its join and its dash. A paint of zeros is round, round and solid.
 - **A dashed shape costs a 64-byte record** in a store of its own, its pattern after the shape's
   record; a solid one stays 48 bytes, and a solid round line writes no joins.
 
+## Dimming by light
+
+A view can dim everything tagged but what is lit (spec 14.24), as an EDA tool's highlight spares a
+net and its parts and fades the rest.
+
+- **A tag can be lit**; a shape is lit when either of its tags is, so a pad on a lit net is lit
+  whatever its part's tag says.
+- **A view dims by `dim`** toward `dim_to`, the paper it is drawn on: white under a schematic, the
+  background under a board. A tagged shape not lit fades by `dim`; within `dim_room` points of a lit
+  one it fades less, down to nothing at the light. An untagged shape never fades.
+- **It costs a pass only while a view dims**: every layer drawn again into the lit target, each
+  tagged shape's coverage in green and a lit one's in red, by max, then mipmapped. The composite
+  fades each pixel by its green, less by how near the red is: the largest of rings of taps within
+  the room, each read at a level as wide as its spacing, so a light thinner than the taps still
+  registers.
+- **A tag's own `dim` is another thing**: it darkens one shape toward black, whatever the view.
+
 ## Ten things easy to get backwards
 
 1. **Coordinates are int64 units (pcb's nanometres) and never become floats until they are a
@@ -95,7 +112,8 @@ its join and its dash. A paint of zeros is round, round and solid.
    triangles cross too many tiles would keep the ones added before and its whole outline.
 7. **Every shape carries two tags, a net and an object**: indices into a `CanvasTags` table a canvas
    may share with another, so one write highlights a net in the schematic and the layout. A tag
-   carries colour, a pick outline, dim, hidden and raised. A tag or style write uploads no geometry.
+   carries colour, a pick outline, dim, hidden, raised and lit. A tag or style write uploads no
+   geometry.
 8. **Edits are built on any thread.** A `CanvasEdit` holds no GL; layout, splitting and triangulating
    happen there, and `canvas_apply` merges one on the main thread.
 9. **Text is a glyph record each, placed by its pen in ems** from the string's anchor

@@ -40,6 +40,8 @@ bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised) 
     float dim = 0.0;
     bool hidden = false;
     raised = 0.0;
+    float lit = 0.0;
+    bool tagged = false;
     vec4 netColour = vec4(0.0), objectColour = vec4(0.0), objectOutline = vec4(0.0);
     if (u.y != 0u && u.y < uint(uTagCount)) {
         netColour = canvasTagTexel(u.y, 0);
@@ -48,6 +50,8 @@ bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised) 
         dim = m.r;
         hidden = m.g > 0.5;
         raised = max(raised, m.b);
+        lit = max(lit, m.a);
+        tagged = true;
     }
     if (u.z != 0u && u.z < uint(uTagCount)) {
         objectColour = canvasTagTexel(u.z, 0);
@@ -56,6 +60,14 @@ bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised) 
         dim = max(dim, m.r);
         hidden = hidden || m.g > 0.5;
         raised = max(raised, m.b);
+        lit = max(lit, m.a);
+        tagged = true;
+    }
+    // The lit pass (spec 14.24): every tagged shape, red where lit, and no ring.
+    if (uPass == 5) {
+        colour = vec4(lit, 1.0, 0.0, 1.0);
+        outline = vec4(0.0);
+        return tagged && !hidden;
     }
     if (objectColour.a > 0.0)
         colour = objectColour;

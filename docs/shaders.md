@@ -251,7 +251,7 @@ chain's defaults (what is on, what is lazily allocated) are in
   end of a segment or arc to a cap, a cut, an open corner or a join, `CANVAS_END_*`, which one
   fragment function draws), `canvas_fill_vert/frag` (a
   polygon's triangles and their inner ramp), `canvas_composite_frag` (a view's rectangle into the
-  frame, opaque), over `include/canvas_constants.glsl`, `include/canvas_paint.glsl` (the view, the
+  frame, opaque, dimmed by light while the view dims), over `include/canvas_constants.glsl`, `include/canvas_paint.glsl` (the view, the
   tables, a shape's colour through its tags) and `include/canvas_pass.glsl` (the layer resolve's
   passes). See [canvas.md](canvas.md)
 - **App shaders †:** `late_surface_vert` with `include/late_surface.glsl`,
