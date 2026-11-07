@@ -31204,11 +31204,15 @@ def run_canvas_gate(workdir):
                      other's body: the trace's colour shows there, not the ring's. Rings are
                      painted last, after every shape of the layer has spent its pixels. Each
                      within 2 codes.
-      canvas-fade    the fade sheet under a view fading by half toward its white paper (spec
-                     14.24): the lit box and the untagged one red, a tagged one far from the light
-                     and one a hair beside it faded to half white with no room, each within 2
-                     codes; and the near one, with 20 pt of room, under that green by 64 codes or
-                     more. A shape is spared by its light's nearness, never by its tag alone.
+      canvas-fade    the fade sheet under a view fading by half toward its white paper (specs
+                     14.24, 14.25): the lit box and the untagged one red, a tagged one far from the
+                     light and one a hair beside it faded to half white with no room, an untagged
+                     blue box on a layer over a faded one blue, and a faded box over a lit green one
+                     faded over it, each within 2 codes; and the near one, with 20 pt of room, under
+                     that green by 64 codes or more. Again at a fade of 1, the mask: the faded boxes
+                     gone to white, the blue blue and the green showing through. A shape fades as it
+                     is drawn, so what is drawn over it is never faded with it, and the mask hides
+                     what it leaves out rather than painting the paper over what lies beneath.
       canvas-uploads the board sheet over eight frames, what each uploaded: a tag written and a
                      style written upload nothing, a segment added one range and removed the same
                      range, and a transient layer of fifty lines, cleared and filled again, one
@@ -31609,17 +31613,22 @@ def run_canvas_gate(workdir):
 
     hard, probe = _canvas_run(workdir, "fade", "--sheet", "fade", "--fade", "0.5,0")
     roomy, _ = _canvas_run(workdir, "fade_room", "--sheet", "fade", "--fade", "0.5,20")
+    masked, mask_probe = _canvas_run(workdir, "fade_mask", "--sheet", "fade", "--fade", "1,0")
     cells = _canvas_sheet(probe, "fade")
-    if not hard or not roomy or len(cells) != 4:
-        ok, detail = False, f"the app failed or printed {len(cells)} points (want 4)"
+    mask_cells = _canvas_sheet(mask_probe, "fade")
+    if not hard or not roomy or not masked or len(cells) != 6 or len(mask_cells) != 6:
+        ok, detail = False, (f"the app failed or printed {len(cells)} and {len(mask_cells)} points "
+                             f"(want 6 each)")
     else:
-        wrong = _canvas_wrong_pixels(hard, cells)
+        wrong = (_canvas_wrong_pixels(hard, cells)
+                 + [f"masked {w}" for w in _canvas_wrong_pixels(masked, mask_cells)])
         near = cells["near"]
         pale = int(near[4], 16) >> 8 & 255
         roomy_near = int(_ppm_array(roomy)[int(near[2]), int(near[1])][1])
         ok = not wrong and roomy_near < pale - 64
-        detail = (f"lit and untagged red, far and near faded to {pale} green with no room; near "
-                  f"{roomy_near} with 20 pt (want under {pale - 64})"
+        detail = (f"lit and untagged red, far and near faded to {pale} green with no room, blue over "
+                  f"a faded box, a faded box over a lit one; masked, the faded gone and the lit "
+                  f"showing; near {roomy_near} with 20 pt (want under {pale - 64})"
                   + ("" if not wrong else "; wrong: " + ", ".join(wrong)))
     print(f"  canvas-fade         {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-fade", ok)

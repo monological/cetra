@@ -986,16 +986,21 @@ static void sheet_tags(SheetContext* ctx) {
 static float g_fade, g_fade_room;
 
 /*
- * The fade sheet (spec 14.24): on white paper, four red boxes of a layer drawn under --fade -- one
- * lit, one a hair beside it tagged but not lit, one tagged far from it, and one untagged -- and
- * where each should land on screen: the lit and the untagged red, the others faded toward white by
- * the strength. The near one is so with no room, and nearer red with it.
+ * The fade sheet (specs 14.24, 14.25): on white paper, four red boxes of a layer drawn under
+ * --fade -- one lit, one a hair beside it tagged but not lit, one tagged far from it, and one
+ * untagged -- and where each should land on screen: the lit and the untagged red, the others faded
+ * toward white by the strength, or gone at 1. The near one is so with no room, and nearer red with
+ * it. Over them a layer of two: an untagged blue box on a red one left out, which stays blue; and
+ * a red box left out on a lit green one, faded over it, or at 1 gone so the green shows.
  */
 static void sheet_fade(SheetContext* ctx) {
     Canvas* canvas = ctx->canvas;
     CanvasTags* tags = canvas_tags(canvas);
     CanvasLayer* layer = canvas_add_layer(canvas, "fade");
+    CanvasLayer* over = canvas_add_layer(canvas, "fade over");
     const uint16_t red = canvas_add_style(canvas, 0xff0000ffu);
+    const uint16_t green = canvas_add_style(canvas, 0x00ff00ffu);
+    const uint16_t blue = canvas_add_style(canvas, 0x0000ffffu);
     const int64_t o = ctx->offset;
     canvas_tags_set(tags, 1, (CanvasTagState){.lit = true});
     canvas_tags_set(tags, 2, (CanvasTagState){.colour = 0xff0000ffu});
@@ -1011,6 +1016,24 @@ static void sheet_fade(SheetContext* ctx) {
                                                 .centre = boxes[k].at,
                                                 .size_x = MM(1.0),
                                                 .size_y = MM(1.0)});
+    // Each pair a box of the first layer and a smaller one of the layer over it.
+    const CanvasPoint covered = {MM(3.0) + o, MM(-2.0) + o}, under = {o, MM(2.0) + o};
+    const struct {
+        CanvasPoint at;
+        CanvasLayer* layer;
+        uint16_t style;
+        uint32_t object;
+        int64_t size;
+    } pairs[] = {{covered, layer, red, 2, MM(1.0)},
+                 {covered, over, blue, 0, MM(0.5)},
+                 {under, layer, green, 1, MM(1.0)},
+                 {under, over, red, 2, MM(0.5)}};
+    for (size_t k = 0; k < sizeof pairs / sizeof pairs[0]; k++)
+        canvas_edit_box(ctx->edit, &(CanvasBox){.paint = paint_of(pairs[k].layer, pairs[k].style, 0,
+                                                                  pairs[k].object),
+                                                .centre = pairs[k].at,
+                                                .size_x = pairs[k].size,
+                                                .size_y = pairs[k].size});
     if (ctx->probe) {
         const uint32_t faded = (uint32_t)lroundf(255.0f * g_fade);
         const uint32_t pale = 0xff0000u | faded << 8 | faded;
@@ -1019,6 +1042,8 @@ static void sheet_fade(SheetContext* ctx) {
         probe_pixel(ctx, "fade", "untagged", untagged, 0xff0000);
         // 0.15 mm from the lit box's edge.
         probe_pixel(ctx, "fade", "near", (CanvasPoint){near.x - MM(0.45), near.y}, pale);
+        probe_pixel(ctx, "fade", "over", covered, 0x0000ff);
+        probe_pixel(ctx, "fade", "under", under, g_fade >= 1.0f ? 0x00ff00 : pale);
     }
 }
 
