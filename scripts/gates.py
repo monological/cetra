@@ -31204,6 +31204,11 @@ def run_canvas_gate(workdir):
                      other's body: the trace's colour shows there, not the ring's. Rings are
                      painted last, after every shape of the layer has spent its pixels. Each
                      within 2 codes.
+      canvas-dim     the dim sheet under a view dimming by half toward white (spec 14.24): the lit
+                     box and the untagged one red, a tagged one far from the light faded to half
+                     white, each within 2 codes; a tagged one a hair beside the light the far one's
+                     colour with no room, and with 20 pt of room under its green by 64 codes or
+                     more. A shape is spared by its light's nearness, never by its tag alone.
       canvas-uploads the board sheet over eight frames, what each uploaded: a tag written and a
                      style written upload nothing, a segment added one range and removed the same
                      range, and a transient layer of fifty lines, cleared and filled again, one
@@ -31601,6 +31606,27 @@ def run_canvas_gate(workdir):
                   else "wrong: " + ", ".join(wrong))
     print(f"  canvas-tags         {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-tags", ok)
+
+    hard, hard_probe = _canvas_run(workdir, "dim", "--sheet", "dim", "--dim", "0.5,0")
+    roomy, roomy_probe = _canvas_run(workdir, "dim_room", "--sheet", "dim", "--dim", "0.5,20")
+    cells = _canvas_sheet(hard_probe, "dim")
+    near = cells.get("near")
+    if not hard or not roomy or len(cells) != 4 or not near:
+        ok, detail = False, f"the app failed or printed {len(cells)} points (want 4)"
+    else:
+        wanted = {n: t for n, t in cells.items() if n != "near"}
+        wrong = _canvas_wrong_pixels(hard, wanted)
+        x, y = int(near[1]), int(near[2])
+        fx, fy = int(cells["far"][1]), int(cells["far"][2])
+        hard_img, roomy_img = _ppm_array(hard), _ppm_array(roomy)
+        hard_near, far = int(hard_img[y, x][1]), int(hard_img[fy, fx][1])
+        roomy_near = int(roomy_img[y, x][1])
+        ok = not wrong and abs(hard_near - far) <= 2 and roomy_near < far - 64
+        detail = (f"lit and untagged red, far faded to {far} green; near {hard_near} with no room, "
+                  f"{roomy_near} with 20 pt (want the far one's, then under {far - 64})"
+                  + ("" if not wrong else "; wrong: " + ", ".join(wrong)))
+    print(f"  canvas-dim          {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-dim", ok)
 
     board, probe = _canvas_run(workdir, "board", "--sheet", "board", "-f", "8")
     steps = _canvas_sheet(probe, "board")

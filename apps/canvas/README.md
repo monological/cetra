@@ -30,7 +30,11 @@ Every flag, and what each probe prints, is in `docs/cli-reference.md`, "The othe
 units: `shapes` (the default), `areas`, `polygons`, `ramp`, `thin`, `long`, `long-short`,
 `glyphs`, `tags`, `overlap`, a `symbol` of an integrated circuit with turned pin names, a
 two-layer `board` with a ground plane, a highlighted net, a picked pad and a removed trace, and
-`strokes` and `dashes`, a cell a cap, join or dash pattern, each with its area in closed form.
+`strokes` and `dashes`, a cell a cap, join or dash pattern, each with its area in closed form, and
+`dim`, four boxes one lit, for a view that dims.
+
+- `--dim STRENGTH,ROOM` makes the view dim (`docs/canvas.md`, Dimming by light): its tagged shapes
+  not lit fade toward white by STRENGTH, less within ROOM points of a lit one.
 
 - `--dash LENGTH,GAP` (mm), `--cap round|butt|square` and `--join round|mitre|bevel` stroke every
   paint a sheet makes so; what a sheet sets on a paint itself stands. `--sheet symbol --dash

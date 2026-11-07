@@ -981,6 +981,47 @@ static void sheet_tags(SheetContext* ctx) {
 #undef CELL
 }
 
+// --dim STRENGTH,ROOM: how far the view fades its tagged shapes not lit, toward white, and the
+// points round a lit one it eases off over (spec 14.24).
+static float g_dim, g_dim_room;
+
+/*
+ * The dim sheet (spec 14.24): four red boxes in a row of a layer drawn under --dim -- one lit, one
+ * a hair beside it tagged but not lit, one tagged far from it, and one untagged -- and where each
+ * should land on screen: the lit and the untagged red, the far one faded toward white by the
+ * strength. The near one is said with no colour: the far one's with no room, nearer red with it.
+ */
+static void sheet_dim(SheetContext* ctx) {
+    Canvas* canvas = ctx->canvas;
+    CanvasTags* tags = canvas_tags(canvas);
+    CanvasLayer* layer = canvas_add_layer(canvas, "dim");
+    const uint16_t red = canvas_add_style(canvas, 0xff0000ffu);
+    const int64_t o = ctx->offset;
+    canvas_tags_set(tags, 1, (CanvasTagState){.lit = true});
+    canvas_tags_set(tags, 2, (CanvasTagState){.colour = 0xff0000ffu});
+    // The lit box's right edge at -2.5 mm, the near one's left 0.1 mm past it.
+    const CanvasPoint lit = {MM(-3.0) + o, o}, near = {MM(-1.9) + o, o}, far = {MM(3.0) + o, o},
+                      untagged = {o, MM(-2.0) + o};
+    const struct {
+        CanvasPoint at;
+        uint32_t object;
+    } boxes[] = {{lit, 1}, {near, 2}, {far, 2}, {untagged, 0}};
+    for (size_t k = 0; k < sizeof boxes / sizeof boxes[0]; k++)
+        canvas_edit_box(ctx->edit, &(CanvasBox){.paint = paint_of(layer, red, 0, boxes[k].object),
+                                                .centre = boxes[k].at,
+                                                .size_x = MM(1.0),
+                                                .size_y = MM(1.0)});
+    if (ctx->probe) {
+        const uint32_t faded = (uint32_t)lroundf(255.0f * g_dim);
+        probe_pixel(ctx, "dim", "lit", lit, 0xff0000);
+        probe_pixel(ctx, "dim", "far", far, 0xff0000u | faded << 8 | faded);
+        probe_pixel(ctx, "dim", "untagged", untagged, 0xff0000);
+        double x, y;
+        fb_of(ctx, (CanvasPoint){near.x - MM(0.45), near.y}, &x, &y);
+        printf("canvas dim near at %ld %ld\n", lround(x), lround(y));
+    }
+}
+
 /*
  * The board sheet: a dense two-layer board, made the way pcb would make one.
  * Its layers, styles and tags are set on the main thread, and its shapes are
@@ -1785,6 +1826,7 @@ static const Sheet SHEETS[] = {
     {"glyphs", sheet_glyphs, {0.0, 0.0}, 8.0, 0x000000ffu},
     {"overlap", sheet_overlap, {0.0, 0.0}, 8.0, 0x000000ffu},
     {"tags", sheet_tags, {0.0, 0.0}, 9.0, 0x000000ffu},
+    {"dim", sheet_dim, {0.0, 0.0}, 9.0, 0x000000ffu},
     {"board", sheet_board, {0.0, 0.0}, 66.0, 0x001023ffu},
     {"strokes", sheet_strokes, {0.0, 0.0}, 8.0, 0x000000ffu},
     {"dashes", sheet_dashes, {0.0, 0.0}, 8.0, 0x000000ffu},
@@ -3531,20 +3573,21 @@ static void build_seams(UISystem* ui, double scale, bool probe) {
 }
 
 static void usage(const char* argv0) {
-    fprintf(stderr,
-            "usage: %s [-x] [-f frames] [-S out.ppm] [-W points] [-H points]\n"
-            "          [--sheet NAME] [--view X,Y,WIDTH (mm)] [--offset UNITS] [--mirror]\n"
-            "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread] [--work-delay "
-            "MS]\n"
-            "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
-            "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--input-script PATH]\n"
-            "          [--ui-enter] [--ui-text TEXT] [--ui-keys] [--gui-click] [--history] "
-            "[--palette]\n"
-            "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim] [--read-only]\n"
-            "          [--editor-fold FIRST,LAST] [--editor-filler LINE,ROWS] [--refuse-close]\n"
-            "          [--ui-borders] [--ui-seams] [--dash LENGTH,GAP (mm)] [--dash-min-px PX]\n"
-            "          [--cap round|butt|square] [--join round|mitre|bevel]\n",
-            argv0);
+    fprintf(
+        stderr,
+        "usage: %s [-x] [-f frames] [-S out.ppm] [-W points] [-H points]\n"
+        "          [--sheet NAME] [--view X,Y,WIDTH (mm)] [--offset UNITS] [--mirror]\n"
+        "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread] [--work-delay "
+        "MS]\n"
+        "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
+        "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--input-script PATH]\n"
+        "          [--ui-enter] [--ui-text TEXT] [--ui-keys] [--gui-click] [--history] "
+        "[--palette]\n"
+        "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim] [--read-only]\n"
+        "          [--editor-fold FIRST,LAST] [--editor-filler LINE,ROWS] [--refuse-close]\n"
+        "          [--ui-borders] [--ui-seams] [--dash LENGTH,GAP (mm)] [--dash-min-px PX]\n"
+        "          [--cap round|butt|square] [--join round|mitre|bevel] [--dim STRENGTH,ROOM]\n",
+        argv0);
 }
 
 // An after-tonemap pass that changes nothing, so the frame is drawn into the
@@ -3702,6 +3745,11 @@ int main(int argc, char** argv) {
             *(cap ? &g_cap : &g_join) = kind;
         } else if (strcmp(argv[i], "--dash-min-px") == 0 && more) {
             dash_min_px = (float)atof(argv[++i]);
+        } else if (strcmp(argv[i], "--dim") == 0 && more) {
+            if (sscanf(argv[++i], "%f,%f", &g_dim, &g_dim_room) != 2) {
+                fprintf(stderr, "canvas: --dim takes STRENGTH,ROOM (points)\n");
+                return 2;
+            }
         } else {
             usage(argv[0]);
             return 2;
@@ -3763,7 +3811,10 @@ int main(int argc, char** argv) {
     *view = (CanvasView){.points_per_unit =
                              ((double)width - g_side_width) / (double)g_view_count / (cw * 1e6),
                          .mirror_x = mirror,
-                         .background = sheet->background};
+                         .background = sheet->background,
+                         .dim = g_dim,
+                         .dim_to = 0xffffffffu,
+                         .dim_room = g_dim_room};
     // The centre in whole units plus its fraction, from millimetres and the offset.
     const double ux = cx * 1e6, uy = cy * 1e6;
     view->centre = (CanvasPoint){(int64_t)floor(ux) + offset, (int64_t)floor(uy) + offset};
