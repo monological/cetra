@@ -17,7 +17,7 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-07: 14.24, dimming by light._
+_Last updated: 2026-11-07: 14.25, fading each shape._
 
 ---
 
@@ -66,7 +66,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 | 9 | What the panes and the fonts need of the UI | **Built** | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
 
-Specs 14.7, 14.9 to 14.21, 14.23 and 14.24 are the smaller changes pcb's window asked for, listed under
+Specs 14.7, 14.9 to 14.21 and 14.23 to 14.25 are the smaller changes pcb's window asked for, listed under
 "Not among the nine". Spec 14.8 was not asked for by pcb: a headless run waits for the textures its
 start-up asked for before frame 1 (`docs/architecture.md`, Render Pipeline), which `pcb render`
 gets for free.
@@ -491,6 +491,11 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
   with room in points round what is lit where it dims less. The tag's own dim darkened toward black,
   which on a schematic's white paper made the faded parts stand out (`docs/canvas.md`, Dimming by
   light).
+- **Fading each shape** -- spec 14.25, a correction to 14.24 found in pcb 7.3.1: 14.24 faded the
+  picture after it was drawn, by the tagged shapes under each pixel, so pcb's selection box over a
+  faded part faded with it, and under the mask a hidden shape still covered what was lit. Each shape
+  now fades as it is drawn; the mask hides it. Whether a lit shape should draw over every faded one
+  is pcb's to decide.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the

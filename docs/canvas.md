@@ -69,9 +69,13 @@ net and its parts and fades the rest.
 - **A view fades by `fade`** toward `fade_to`, the paper it is drawn on: white under a schematic,
   the background under a board. A tagged shape not lit fades by `fade`; within `fade_room` points
   of a lit one it fades less, down to nothing at the light. An untagged shape never fades.
-- **It costs a pass and a target only while a view fades**: the lit pass (`canvas_pass.glsl`)
-  draws every tagged shape's coverage, and the composite fades by it (`canvas_composite_frag.glsl`
-  has how the room is read). A view that does not fade draws as before.
+- **A shape fades as it is drawn** (spec 14.25), in the layers' order, so what is drawn over it is
+  never faded with it: a selection box over a faded part keeps its colour. Below a fade of 1 the
+  shape's colour goes toward `fade_to` and it still covers what lies under it; at 1, the mask, it
+  is gone, and what lies under it shows.
+- **Room costs a pass and a target, and only while a view fades with room**: the lit pass draws
+  every lit shape's coverage first, and each shape left out reads its room from it
+  (`canvas_pass.glsl`). A view that does not fade draws as before.
 - **A tag's own `dim` is another thing**: it darkens one shape toward black, whatever the view.
 
 ## Ten things easy to get backwards
