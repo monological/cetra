@@ -68,7 +68,8 @@ net and its parts and fades the rest.
   whatever its part's tag says.
 - **A view fades by `fade`** toward `fade_to`, the paper it is drawn on: white under a schematic,
   the background under a board. A tagged shape not lit fades by `fade`; within `fade_room` points
-  of a lit one it fades less, down to nothing at the light. An untagged shape never fades.
+  of a lit one it fades less, down to nothing at the light's edge, though over a lit shape it fades
+  wholly. An untagged shape never fades.
 - **A shape fades as it is drawn** (spec 14.25), in the layers' order, so what is drawn over it is
   never faded with it: a selection box over a faded part keeps its colour. Below a fade of 1 the
   shape's colour goes toward `fade_to` and it still covers what lies under it; at 1, the mask, it
