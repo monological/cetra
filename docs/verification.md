@@ -31,9 +31,9 @@ tree's binaries: `git archive` into a scratch directory, the seven submodules li
 
 ## Contents
 
-- [Running the gates](#running-the-gates) — where the suite's code lives, which binaries a number
-  describes, what a release run moves, why frame counts are a correctness question, how to read a
-  `--profiler` table
+- [Running the gates](#running-the-gates) — where the suite's code lives, choosing the groups or
+  arms that run, which binaries a number describes, what a release run moves, why frame counts are a
+  correctness question, how to read a `--profiler` table
 - [Writing a gate arm](#writing-a-gate-arm) — falsifying an arm, and the constructions that cannot
   fail
 - [Deterministic renders](#deterministic-renders) — the bar, the noise floor, reading a diff
@@ -100,6 +100,34 @@ Where a new name goes, and the rules the split depends on:
   reach one file, and every other would run the default binaries.
 - **No file binds a name twice**, by a definition or an import. `gate-names`, in the `gate-docs`
   group, holds every file to it.
+
+### Choosing what runs
+
+- **`--only SEL[,SEL]`** runs the groups whose selector contains a selector. **`--arms SEL[,SEL]`**
+  runs the arms chosen, and only the groups holding them; with `--only`, both hold. A selector
+  that is an arm's whole name chooses that arm alone (`ui-layout`, not `ui-layout-resize` with
+  it); any other chooses every arm whose name contains it (`ui-editor`). `--list` lists the groups and `--list-arms` their arms, each group marked as choosing its
+  arms one by one or running whole.
+- **An arm's name is read from its verdict line** in the group's source, the literal gate-docs reads
+  too, so an arm whose name is built at run time cannot be chosen.
+- **The run prints the arms it chose before it starts**, by group. A group that does not guard its
+  arms runs all of them, and that line says so.
+- **A chosen arm that never ran fails the run**: its guard names another arm, or it sits in a branch
+  the run did not take.
+
+`ui`, `canvas` and `idle` guard their arms (spec 14.29); the other groups run whole under `--arms`.
+To guard a group, or to add an arm to one that guards:
+
+- **Each arm sits under `if arm("name"):`**, its whole run and verdict inside. Arms that print
+  their verdicts from one run sit under one guard naming them all, and run together.
+- **A run two arms read is a `functools.cache` function at the group's level**, called by each
+  arm that reads it, so it runs once, on the first chosen arm that asks. A constant two arms read
+  sits at the group's level too. An `if` block is no scope in Python, so a run left inside its
+  first arm's block is invisible to the second until both run, and the second alone stops on an
+  `UnboundLocalError`.
+- **`gate-arm-guards`**, in the `gate-docs` group, holds a guarding group to both: each arm printed
+  under a guard naming it, each guard naming an arm printed under it, and no arm reading a name only
+  another arm's block assigns.
 
 ### Which binaries a number describes
 

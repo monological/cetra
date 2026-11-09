@@ -30,7 +30,13 @@ def main():
     ap.add_argument("--keep", action="store_true", help="keep the generated scenes and frames")
     ap.add_argument("--only", metavar="SEL",
                     help="run only groups whose selector contains SEL (comma-separated)")
+    ap.add_argument("--arms", metavar="SEL",
+                    help="run only the arm named SEL, or the arms whose name contains it "
+                         "(comma-separated), and only the groups holding them; with --only, "
+                         "within those groups")
     ap.add_argument("--list", action="store_true", help="list group selectors and exit")
+    ap.add_argument("--list-arms", action="store_true",
+                    help="list each group's arms (under --only, those groups') and exit")
     ap.add_argument("--bin-dir", metavar="DIR",
                     help="where to find the app binaries (default out/bin; "
                          "out/release/bin runs forest ~5x faster)")
@@ -41,6 +47,7 @@ def main():
     # alone: every module that imported RENDER would keep the default it saw.
     if args.bin_dir:
         os.environ["CETRA_BIN_DIR"] = os.path.abspath(args.bin_dir)
+    from gatelib.arms import arms_printed, arms_ran, choose, guards
     from gatelib.groups import GATE_GROUPS
     from gatelib.harness import BIN_DIR, CALIBRATED_FB_SCALE, RENDER, _detect_fb_scale
 
@@ -48,6 +55,43 @@ def main():
         for selector, banner, _ in GATE_GROUPS:
             print(f"  {selector:<22} {banner}")
         return 0
+
+    groups = GATE_GROUPS
+    if args.only:
+        wanted = [s.strip() for s in args.only.split(",") if s.strip()]
+        groups = [g for g in GATE_GROUPS if any(w in g[0] for w in wanted)]
+        # A selector that matches nothing is a typo, and running zero gates while
+        # reporting success is the worst outcome this script has.
+        if not groups:
+            sys.exit(f"--only {args.only!r} matched no group; --list to see them")
+
+    if args.list_arms:
+        for selector, _, fn in groups:
+            names = arms_printed(fn)
+            how = "chosen one by one" if guards(fn) else "runs whole under --arms"
+            print(f"  {selector} ({len(names)} arms, {how})")
+            for name in names:
+                print(f"      {name}")
+        return 0
+
+    # The arms chosen, by group. Read from the verdict lines in each group's source, so an arm
+    # whose name is built at run time cannot be chosen; its group's other arms still can. A
+    # selector that is an arm's whole name chooses that arm alone, or ui-layout could never be run
+    # without ui-layout-resize; any other matches by substring.
+    chosen = {}
+    if args.arms:
+        wanted = [s.strip() for s in args.arms.split(",") if s.strip()]
+        names = {n for _, _, fn in groups for n in arms_printed(fn)}
+        whole = {w for w in wanted if w in names}
+        for selector, _, fn in groups:
+            hits = [n for n in arms_printed(fn)
+                    if n in whole or any(w in n for w in wanted if w not in whole)]
+            if hits:
+                chosen[selector] = hits
+        if not chosen:
+            sys.exit(f"--arms {args.arms!r} matched no arm; --list-arms to see them")
+        groups = [g for g in groups if g[0] in chosen]
+        choose(n for hits in chosen.values() for n in hits)
 
     if not os.path.exists(RENDER):
         sys.exit(f"{RENDER} not found -- run ./build.sh first")
@@ -60,15 +104,12 @@ def main():
     if BIN_DIR.endswith(os.path.join("out", "bin")):
         print("          (forest runs ~5x faster from a release build -- "
               "./build.sh --release and it is picked up automatically)")
-
-    groups = GATE_GROUPS
-    if args.only:
-        wanted = [s.strip() for s in args.only.split(",") if s.strip()]
-        groups = [g for g in GATE_GROUPS if any(w in g[0] for w in wanted)]
-        # A selector that matches nothing is a typo, and running zero gates while
-        # reporting success is the worst outcome this script has.
-        if not groups:
-            sys.exit(f"--only {args.only!r} matched no group; --list to see them")
+    # And what --arms chose, before anything runs: a group that does not guard its arms runs
+    # all of them, which is minutes more than the arms asked for and should never be a surprise.
+    for selector, _, fn in groups:
+        if selector in chosen:
+            whole = "" if guards(fn) else " -- runs whole, its arms are not guarded"
+            print(f"arms: {selector}: {', '.join(chosen[selector])}{whole}")
 
     workdir = tempfile.mkdtemp(prefix="cetra_gates_")
     # The suite's own cook cache (spec 11.99), never the developer's persistent
@@ -98,7 +139,18 @@ def main():
         else:
             shutil.rmtree(workdir, ignore_errors=True)
 
+    # A chosen arm a guarding group never let run: its guard names another arm, or it sits in a
+    # branch the run did not take. Passing it as nothing to do would report a check never made.
+    unrun = [n for selector, _, fn in groups if guards(fn)
+             for n in chosen.get(selector, ()) if n not in arms_ran()]
+    if unrun:
+        print(f"\nchosen but never run: {', '.join(unrun)}")
+        failures += unrun
+
     scope = "" if groups is GATE_GROUPS else f" ({len(groups)} of {len(GATE_GROUPS)} groups)"
+    if chosen:
+        scope = (f" ({sum(len(h) for h in chosen.values())} chosen arms in {len(groups)} "
+                 f"of {len(GATE_GROUPS)} groups)")
     if failures:
         print(f"\n{len(failures)} gate(s) failed{scope}: {', '.join(failures)}")
         return 1

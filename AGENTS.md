@@ -56,8 +56,17 @@ the original tree.
 ## Verifying
 
 - `scripts/gates.py` asserts analytic properties; `scripts/goldens.py` compares the committed
-  golden PNGs. Run gates scoped, `--only <group>,<group>`. The full suite takes over 40 minutes:
-  ask before starting it.
+  golden PNGs.
+- **Run what the change can reach, and nothing more.** Name it from the diff before any run:
+  - **A few arms:** `scripts/gates.py --arms <arm>,<arm>`, which runs those arms alone. An arm's
+    whole name chooses it alone; part of one chooses every arm containing it, so `--arms ui-editor`
+    runs every editor arm. `--list-arms --only <group>` lists a group's arms. `ui`, `canvas` and `idle` run only the arms chosen. Another group holding
+    a chosen arm runs whole, and says so before it starts.
+  - **Most of a group, or a helper several of its arms share:** `--only <group>,<group>`.
+  - **The full suite** takes over 40 minutes: ask before starting it.
+  - **Nothing the suite reads** (a doc, a comment, a log line): no run. Nor a second run for a change
+    that cannot reach what the last green run covered; read a number from that run's output rather
+    than running again to see it.
 - Never build, render or edit `scripts/gates.py` or anything under `scripts/gatelib/` while gates
   or goldens run. A commit counts as an edit, since the pre-commit hook stashes unstaged files.
 - Prefer headless runs (`-x -f N -S out.ppm`) for checking behaviour and for measuring.
