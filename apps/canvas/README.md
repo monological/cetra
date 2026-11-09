@@ -80,6 +80,11 @@ first frame after which nothing asks for another.
 - `--ui-seams` draws quads meeting edge to edge on whole pixels and part way into them, a quad on
   whole pixels, one whose edge halves a column of pixels and a rounded box, which
   `canvas-ui-seams` holds to a one-pixel edge.
+- `--ui-lines` draws the UI's lines and convex shapes: a level line, a slanted one, a hairline, a
+  polyline with sharp turns, a trapezoid, squares on and off the pixel grid beside a quad, two
+  triangles meeting on a diagonal and two shapes the UI refuses, which `canvas-ui-lines` holds to
+  their areas and to the one-pixel edge. Under them is a graph staged as pcb's board modal draws
+  one: gridlines, three curves, and a trace's picture with a dimension line and arrowheads.
 
 The app reads the UI's input through `ui_input_read` alone and keeps no pointer state of its own.
 

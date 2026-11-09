@@ -235,9 +235,14 @@ chain's defaults (what is on, what is lazily allocated) are in
 - **Particles:** `particle_vert/frag`
 - **Text:** `text_vert/frag`
 - **Game UI:** `ui_vert/frag`, one program for every UI primitive, chosen per vertex by a `mode`
-  attribute: a flat fill, a textured quad or an SDF glyph.
+  attribute: a flat fill, a textured quad, an SDF glyph, a line or a convex shape.
   - Rounded corners and borders are an exact signed-distance evaluation, so a radius costs no
     vertices; their edge is a one-pixel ramp (`docs/ui.md`, The draw list).
+  - **A line and a convex shape add no attribute, uniform or sampler** (spec 14.28): their geometry
+    rides the `border` attribute, which they do not need for a colour, as distances affine in the
+    position. A line's branch measures the distance to its segment less half its width; a convex
+    shape's multiplies its edges' ramps. `aa`, a pixel's size in points, is taken before any branch,
+    so every fragment of a pixel quad reaches the derivative.
   - The glyph branch takes `fwidth` with no constant smoothing term, which keeps text the same
     weight at any size.
   - **A border is laid over its fill by Porter-Duff over** in straight colour, the box's outer edge

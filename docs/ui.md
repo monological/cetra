@@ -204,7 +204,8 @@ character before the field types it.
 
 The UI's own draw list: flat fills, quads (a whole picture, or a part of one with
 `ui_draw_textured_quad_uv`, the whole-picture quad being that quad over 0..1), 9-slice, rounded
-rects and SDF glyph runs, batched by (texture, program, clip) into one vertex buffer. It is drawn as
+rects, lines, convex shapes and SDF glyph runs, batched by (texture, program, clip) into one vertex
+buffer. It is drawn as
 an engine overlay after tone mapping, so a menu is never graded, bloomed, grained or rescaled by
 `--render-scale`, and is captured by a headless screenshot, which is what makes a menu golden
 possible. The shader is `ui_vert/frag` (`docs/shaders.md`, Game UI).
@@ -232,8 +233,34 @@ possible. The shader is `ui_vert/frag` (`docs/shaders.md`, Game UI).
   under them shows by up to a quarter there: an app wanting a clean join puts it on a pixel. The
   UI never moves a shape onto the grid itself, which would round a hairline away and step a slow
   slide.
+- **Lines and convex shapes** (spec 14.28): `ui_draw_line`, `ui_draw_polyline` and `ui_draw_convex`
+  take `UIPoint`s in window points and draw in the fill's vertex format and program, batching with
+  it, under the same one-pixel edge, so a graph's curves and gridlines are one draw.
+  - A line's ends are round: it is every point within half its width of the segment.
+  - **A line thinner than a pixel is drawn a pixel wide at its width's share of its alpha.** The
+    ramp alone covers a pixel by about half at any width below one, so a hairline would draw as
+    heavy as a one-pixel line; this way its coverage sums to its area.
+  - A polyline is its lines, each to the next, so its joins are the round ends overlapping: no
+    notch, but a colour with alpha below 1 is laid twice over each join.
+  - A convex shape has 3 or 4 corners, in order either way round. Its coverage is the product of its
+    edges' ramps, the box filter's coverage of a right-angled corner, so on whole pixels it draws as
+    a quad of the same rect; two meeting on an edge part way into pixels show what is under them by
+    up to a quarter there, as two quads do.
+  - **Refused, logged and not drawn**: a count other than 3 or 4, a shape not convex, one of no area,
+    and a line not finite or of no width. A refusal is logged at every call, once a frame from a
+    draw hook.
+  - Dashes, butt and square ends, mitre joins, concave shapes and shapes of more corners are the
+    canvas's (`docs/canvas.md`).
+- **What each mode keeps in the vertex.** `params.z` is the mode: 0 a fill, 1 an image, 2 a glyph, 3
+  a line, 4 a convex shape. `rect` is the shape's bounds in every mode. `params.x` is a fill's
+  corner radius or a line's half width. `border` is a fill's border colour; for a line, each
+  corner's place along the segment and across it and the segment's length; for a convex shape,
+  each corner's signed distance to each edge, positive inside, a triangle's fourth far enough never
+  to limit. Each is affine in the position, so it is exact wherever it is interpolated, and none is
+  a position, so the offset has nothing there to move.
 - `ui_draw_list_quad_count` and `ui_draw_list_quad` read the quads back for the probe, each as the
-  rect it was drawn for.
+  rect it was drawn for, a line and a convex shape as their bounds with kind 3 or 4;
+  `ui_draw_list_quad_border` returns false for both, which have no border.
 
 ### Fonts (`text.c`)
 
