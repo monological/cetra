@@ -31,8 +31,9 @@ typedef struct TextDoc TextDoc;
 
 // How far back an offset or a range can be brought forward, in changes.
 #define TEXT_DOC_HISTORY 4096
-// The host's range layers: errors, a selection shared with other views, and two more of its own.
-#define TEXT_DOC_LAYERS 4
+// The host's range layers, each the host's to fill: errors, a selection shared with other views,
+// whatever else it marks.
+#define TEXT_DOC_LAYERS 8
 
 typedef enum TextNewline {
     TEXT_NEWLINE_LF,   // "\n"

@@ -2018,9 +2018,10 @@ static int probe_editor_whole_lines(UISystem* ui) {
     glm_vec4_copy(red, theme.editor_styles[1].background);
     glm_vec4_copy(green, theme.editor_styles[2].background);
     ui_set_theme(ui, &theme);
-    // The first three lines whole, up to the last's start; the last's first two characters.
+    // The first three lines whole, up to the last's start; the last's first two characters, on the
+    // last layer, which plain sees drawn.
     text_doc_set_ranges(doc, 0, 0, &(TextRange){0, last_at, 1}, 1);
-    text_doc_set_ranges(doc, 1, 0, &(TextRange){last_at, last_at + 2, 2}, 1);
+    text_doc_set_ranges(doc, TEXT_DOC_LAYERS - 1, 0, &(TextRange){last_at, last_at + 2, 2}, 1);
     ui_editor_set_selections(ed, &(TextSelection){1, 3}, 1);
     editor_pass(ui);
     vec4 sel = {0.0f};
