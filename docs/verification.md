@@ -31,8 +31,9 @@ tree's binaries: `git archive` into a scratch directory, the seven submodules li
 
 ## Contents
 
-- [Running the gates](#running-the-gates) — which binaries a number describes, what a release run
-  moves, why frame counts are a correctness question, how to read a `--profiler` table
+- [Running the gates](#running-the-gates) — where the suite's code lives, which binaries a number
+  describes, what a release run moves, why frame counts are a correctness question, how to read a
+  `--profiler` table
 - [Writing a gate arm](#writing-a-gate-arm) — falsifying an arm, and the constructions that cannot
   fail
 - [Deterministic renders](#deterministic-renders) — the bar, the noise floor, reading a diff
@@ -74,6 +75,31 @@ tree's binaries: `git archive` into a scratch directory, the seven submodules li
 
 `gates.py` needs Python 3 with numpy (`python3 -m pip install numpy`; without it the script fails
 at the import, before any group runs) and ImageMagick's `magick` on the path for `compare`.
+
+### Where the suite lives
+
+`scripts/gates.py` is the command: its arguments, the run and the summary. The suite itself is in
+`scripts/gatelib/` (spec 14.29):
+
+- **`groups/`** holds the groups, a file each, and `groups/__init__.py` holds the table,
+  `GATE_GROUPS`, in run order. Sibling groups that share helpers share a file named for their
+  subject: `water.py` holds water, water-night and beach.
+- **The modules beside it** hold what several files use, by subject: `harness` (asset paths, the
+  binaries, running an app, the framebuffer scale), `images`, `scenes`, `probes`, `profiling`,
+  `world`, `sky` and `lighting`.
+
+Where a new name goes, and the rules the split depends on:
+
+- **A helper or constant one group uses lives in that group's file.** When a second file needs it,
+  it moves to the shared module of its subject. A group's file never imports another group's.
+- **A new group** is a file in `groups/` and a row in the table, at its place in the run order.
+- **A path in the tree is joined from `ROOT` or `SCRIPTS`** (`harness`), never from a module's
+  `__file__`, which changes when the module moves.
+- **The binaries are looked up when gatelib is imported.** `--bin-dir` reaches them through
+  `CETRA_BIN_DIR`, which `gates.py` sets before its import. Rebinding `RENDER` afterwards would
+  reach one file, and every other would run the default binaries.
+- **No file binds a name twice**, by a definition or an import. `gate-names`, in the `gate-docs`
+  group, holds every file to it.
 
 ### Which binaries a number describes
 

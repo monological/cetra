@@ -738,7 +738,7 @@ static ShaderProgram* _create_pbr_variant(const char* name, PbrFamily family, un
     // and needs no exemption.
     program->depth_prepass_safe = !program->fur_shells && !(hook && hook->offset);
 
-    // Parsed by scripts/gates.py::_PBR_VARIANT. It is the only way from outside
+    // Parsed by scripts/gatelib/probes.py::_PBR_VARIANT. It is the only way from outside
     // to see which variant a scene resolved to, because a correct variant and
     // the uber-shader are the same picture.
     //

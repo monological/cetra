@@ -18,7 +18,7 @@ This file is the rules. What the engine is and how it works is in `docs/`.
 | Shadows, GI, IBL, the sky, probes, rain | `docs/lighting.md` |
 | `cetra/src/game/`, particles | `docs/game-framework.md` |
 | The build, compiler flags, using cetra from another project | `docs/building.md` |
-| Gates, goldens, any measurement | `docs/verification.md` |
+| Gates (a group, an arm, `scripts/gatelib/`), goldens, any measurement | `docs/verification.md` |
 | An app's flags, headless runs | `docs/cli-reference.md` |
 | An example app | `apps/<app>/README.md` |
 | A 14.x spec | `docs/eda-roadmap.md` |
@@ -58,8 +58,8 @@ the original tree.
 - `scripts/gates.py` asserts analytic properties; `scripts/goldens.py` compares the committed
   golden PNGs. Run gates scoped, `--only <group>,<group>`. The full suite takes over 40 minutes:
   ask before starting it.
-- Never build, render or edit `scripts/gates.py` while gates or goldens run. A commit counts as an
-  edit, since the pre-commit hook stashes unstaged files.
+- Never build, render or edit `scripts/gates.py` or anything under `scripts/gatelib/` while gates
+  or goldens run. A commit counts as an edit, since the pre-commit hook stashes unstaged files.
 - Prefer headless runs (`-x -f N -S out.ppm`) for checking behaviour and for measuring.
 - Before quoting a pixel difference, render one configuration twice. The difference between those
   two is the noise floor, and a number without it means nothing.

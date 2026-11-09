@@ -17,7 +17,7 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-09: 14.28, lines and convex shapes in the UI._
+_Last updated: 2026-11-09: 14.29, the gate suite in files._
 
 ---
 
@@ -69,7 +69,8 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 Specs 14.7, 14.9 to 14.21 and 14.23 to 14.28 are the smaller changes pcb's window asked for, listed under
 "Not among the nine". Spec 14.8 was not asked for by pcb: a headless run waits for the textures its
 start-up asked for before frame 1 (`docs/architecture.md`, Render Pipeline), which `pcb render`
-gets for free.
+gets for free. Nor was 14.29, which splits the gate suite into files (`docs/verification.md`,
+Running the gates).
 
 **Order**: 1, 2, 5, 6, 6a and 9 are built, in that order; the canvas went first because the
 schematic and the layout both stand on it, and the editor stands on 5's UTF-8, typed input,
