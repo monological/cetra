@@ -168,6 +168,9 @@ void ui_draw_line(UIDrawList* dl, UIPoint a, UIPoint b, float width, vec4 color)
 // Lines through `count` points, each to the next. The round ends join them with no notch; where two
 // meet, a colour with alpha below 1 is laid twice over the join.
 void ui_draw_polyline(UIDrawList* dl, const UIPoint* points, size_t count, float width, vec4 color);
+// A filled convex shape of 3 or 4 corners, in order either way round. Any other count, a shape not
+// convex or one of no area draws nothing and is logged.
+void ui_draw_convex(UIDrawList* dl, const UIPoint* corners, size_t count, vec4 color);
 // An image stretched over the rect, multiplied by `tint`.
 void ui_draw_textured_quad(UIDrawList* dl, UIRect r, const Texture* tex, vec4 tint);
 // A part of an image stretched over the rect, multiplied by `tint`: `uv` is {u0, v0, u1, v1}, v0
@@ -231,13 +234,13 @@ void ui_pop_clip(UIDrawList* dl);
 uint64_t ui_draw_list_signature(const UIDrawList* dl);
 
 // The quads the list holds, in the order they were emitted, read back: quad `i`'s corners in
-// points, its colour and its kind (0 a fill, 1 an image, 2 a glyph, 3 a line, its rect the bounds
-// it covers). For a test or a tool asserting what a draw produced; false past the end, with the
-// outputs untouched.
+// points, its colour and its kind (0 a fill, 1 an image, 2 a glyph, 3 a line, 4 a convex shape, a
+// line's and a convex shape's rect the bounds it covers). For a test or a tool asserting what a
+// draw produced; false past the end, with the outputs untouched.
 size_t ui_draw_list_quad_count(const UIDrawList* dl);
 bool ui_draw_list_quad(const UIDrawList* dl, size_t i, UIRect* rect, vec4 color, int* kind);
-// Quad `i`'s border: its colour and its width in points, 0 for none. False for a line, which has
-// none.
+// Quad `i`'s border: its colour and its width in points, 0 for none. False for a line or a convex
+// shape, which have none.
 bool ui_draw_list_quad_border(const UIDrawList* dl, size_t i, vec4 border, float* width);
 
 // An element's own fragment program for the next primitives emitted; NULL

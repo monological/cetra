@@ -5,7 +5,9 @@ in vec4 vColor;
 in vec2 vPos;
 in vec4 vRect;
 in vec4 vParams; // x corner radius or a line's half width, y border width, z mode, w a glyph's edge
-in vec4 vBorder; // the border's colour; a line's place along and across it and its length
+// The border's colour; a line's place along and across it and its length; a convex shape's distance
+// to each edge, positive inside.
+in vec4 vBorder;
 
 out vec4 FragColor;
 
@@ -27,6 +29,7 @@ uniform float uFocus;
 #define UI_MODE_TEXTURE 1
 #define UI_MODE_GLYPH 2
 #define UI_MODE_LINE 3
+#define UI_MODE_CONVEX 4
 
 // Signed distance to a rounded box, negative inside. `b` is the half-extent and
 // `r` the corner radius; at r = 0 this is the exact square box, so a square
@@ -56,6 +59,19 @@ void main() {
         float along = vBorder.x - clamp(vBorder.x, 0.0, vBorder.z);
         float d = length(vec2(along, vBorder.y)) - vParams.x;
         float alpha = clamp(0.5 - d / aa, 0.0, 1.0) * vColor.a;
+        if (alpha < 0.003)
+            discard;
+        FragColor = vec4(vColor.rgb, alpha);
+        return;
+    }
+
+    if (mode == UI_MODE_CONVEX) {
+        // The product of the edges' ramps: the box filter's coverage of a
+        // corner between edges at right angles, so a shape on whole pixels
+        // draws as a fill of the same rect. Their minimum would cover a corner
+        // pixel by the lesser edge's share where the box covers the product.
+        vec4 edge = clamp(0.5 + vBorder / aa, 0.0, 1.0);
+        float alpha = edge.x * edge.y * edge.z * edge.w * vColor.a;
         if (alpha < 0.003)
             discard;
         FragColor = vec4(vColor.rgb, alpha);

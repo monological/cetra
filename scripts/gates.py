@@ -31266,14 +31266,21 @@ def run_canvas_gate(workdir):
                      a join at most, f(1 - f). A two-pixel ramp left a line where two quads met,
                      and a quad drawn only over its own rect had its edge counted twice on a
                      multisampled target, by its samples and by the ramp.
-      canvas-ui-lines lines in the UI's draw list under its one-pixel edge (spec 14.28): on an
-                     opaque backdrop, a line 2 pixels wide level on a pixel boundary, its two rows
-                     its colour and the rows beside them the backdrop's, within 2 codes; one at
-                     30 degrees covering its area, length times width and its ends' disc, within
-                     2%; one half a pixel wide within 5%, which it does because it is drawn a
-                     pixel wide at half its alpha, the ramp alone covering a pixel by about half;
-                     and a polyline turning 60 degrees at each join, the join's pixel and one
-                     on its outer side, which only the round ends cover, its colour within 2.
+      canvas-ui-lines lines and convex shapes in the UI's draw list under its one-pixel edge
+                     (spec 14.28): on an opaque backdrop, a line 2 pixels wide level on a pixel
+                     boundary, its two rows its colour and the rows beside them the backdrop's,
+                     within 2 codes; one at 30 degrees covering its area, length times width and
+                     its ends' disc, within 2%; one half a pixel wide within 5%, which it does
+                     because it is drawn a pixel wide at half its alpha, the ramp alone covering
+                     a pixel by about half; a polyline turning 60 degrees at each join, the
+                     join's pixel and one on its outer side, which only the round ends cover, its
+                     colour within 2. A trapezoid whose top and bottom fall just short of a
+                     pixel's centre covering its area within 1%, which needs its box drawn a
+                     pixel past; a convex square on whole pixels matching a quad of the same rect
+                     within 1 code; a square whose edges halve pixels, each corner pixel a
+                     quarter covered within 2, the product of its edges' ramps and not their
+                     minimum; two triangles meeting on a diagonal, the backdrop a quarter of it
+                     at most; and a concave shape and one of five corners drawing nothing.
       canvas-caps    the strokes sheet (spec 14.22): a segment and an arc each capped round, butt
                      and square, their areas in closed form within 0.03 px per pixel of edge, as
                      canvas-areas. A round cap adds a disc, a square one the width squared. And a
@@ -31902,7 +31909,8 @@ def run_canvas_gate(workdir):
 
     shot, probe = _canvas_run(workdir, "lines", "--ui-lines")
     lines = _canvas_sheet(probe, "lines")
-    names = ("level", "slant", "hair", "joined")
+    names = ("level", "slant", "hair", "joined", "trapezoid", "square", "quad", "halves", "meeting",
+             "concave", "five")
     colours = lines.get("colours", [])
     if not shot or len(colours) != 4 or not all(n in lines for n in names):
         ok, detail = False, "the run failed or printed no lines"
@@ -31921,14 +31929,25 @@ def run_canvas_gate(workdir):
         def off(pixels, rgb):
             return int((np.abs(pixels - rgb).max(axis=-1) > 2).sum())
 
+        def box(n, grow):
+            # The shape's bounds, grown by `grow` pixels and its half width, as array bounds.
+            w, p = shape(n)
+            x0, y0 = np.floor(p.min(axis=0) - w / 2 - grow).astype(int)
+            x1, y1 = np.ceil(p.max(axis=0) + w / 2 + grow).astype(int)
+            return x0, y0, x1, y1
+
         def area_error(n):
             # A pixel's coverage is how far it lies from the backdrop toward the ink; summed round
-            # the line, against its area, length times width and its ends' disc.
+            # the shape, against its area: a line's length times width and its ends' disc, a
+            # convex shape's by the shoelace.
             w, p = shape(n)
-            x0, y0 = np.floor(p.min(axis=0) - w / 2 - 3).astype(int)
-            x1, y1 = np.ceil(p.max(axis=0) + w / 2 + 3).astype(int)
+            x0, y0, x1, y1 = box(n, 3)
             got = float(((img[y0:y1, x0:x1] - back) @ span).sum() / (span @ span))
-            want = float(np.linalg.norm(p[1] - p[0])) * w + np.pi * (w / 2) ** 2
+            if w > 0:
+                want = float(np.linalg.norm(p[1] - p[0])) * w + np.pi * (w / 2) ** 2
+            else:
+                q = np.roll(p, -1, axis=0)
+                want = abs(float((p[:, 0] * q[:, 1] - q[:, 0] * p[:, 1]).sum())) / 2
             return abs(got - want) / want
 
         # Level on a pixel boundary: its rows between the ends its colour, the rows either side
@@ -31947,11 +31966,36 @@ def run_canvas_gate(workdir):
             for at in (j, j - inward / np.linalg.norm(inward) * (w / 2 - 1)):
                 x, y = np.floor(at).astype(int)
                 joined += not _rgb_near(img[y, x], ink_hex, 2)
-        ok = level == 0 and slant <= 0.02 and hair <= 0.05 and joined == 0
+        # A trapezoid whose top and bottom fall just short of a pixel's centre, where the ramp's
+        # outer half covers the next row by 0.4: drawn only to its bounds, it misses that row.
+        trapezoid = area_error("trapezoid")
+        # A convex square on whole pixels against a quad of the same rect, pixel for pixel.
+        x0, y0, x1, y1 = box("square", 2)
+        u0, v0, _, _ = box("quad", 2)
+        square = int(np.abs(img[y0:y1, x0:x1] - img[v0:v0 + y1 - y0, u0:u0 + x1 - x0]).max())
+        # A square whose edges halve pixels: each corner pixel a quarter covered, the box filter's
+        # coverage and the product of the edges' halves. Their minimum would be a half.
+        _, p = shape("halves")
+        corners = [img[int(y), int(x)] for x, y in p]
+        quarter = max(int(np.abs(c - (back + span / 4)).max()) for c in corners)
+        # Two triangles meeting on a diagonal: no pixel inside the pair shows more of the backdrop
+        # than a quarter, f(1 - f) for coverages f and 1 - f.
+        x0, y0, x1, y1 = box("meeting", -2)
+        meeting = float(((ink - img[y0:y1, x0:x1]) @ span).max() / (span @ span))
+        # A concave shape and one of five corners draw nothing.
+        refused = sum(off(img[y0:y1, x0:x1], back)
+                      for x0, y0, x1, y1 in (box("concave", 2), box("five", 2)))
+        ok = (level == 0 and slant <= 0.02 and hair <= 0.05 and joined == 0
+              and trapezoid <= 0.01 and square <= 1 and quarter <= 2
+              and meeting <= 0.25 + 2 / np.abs(span).max() and refused == 0)
         detail = (f"{level} px of the level line or the rows beside it wrong (want 0), the slanted "
                   f"line's coverage {slant:.1%} off its area (want 2% at most), the hairline's "
                   f"{hair:.1%} (want 5% at most), {joined} px at the joins not the line's colour "
-                  f"(want 0)")
+                  f"(want 0); the trapezoid's {trapezoid:.1%} (want 1% at most), the convex "
+                  f"square {square} codes off the quad (want 1 at most), a halved square's corner "
+                  f"{quarter} codes off a quarter covered (want 2 at most), the backdrop "
+                  f"{meeting:.3f} of the triangles' diagonal (want 0.25 at most), {refused} px "
+                  f"drawn by the refused shapes (want 0)")
     print(f"  canvas-ui-lines     {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-ui-lines", ok)
 

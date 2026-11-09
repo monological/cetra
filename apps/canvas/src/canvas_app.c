@@ -3608,38 +3608,95 @@ static void build_seams(UISystem* ui, double scale, bool probe) {
 }
 
 /*
- * --ui-lines (spec 14.28): lines of one colour on an opaque backdrop of another, which
- * canvas-ui-lines holds to their areas and to the UI's one-pixel edge. A line two pixels wide,
- * level on a pixel boundary, its two rows filled whole; one slanted and one half a pixel wide,
- * each covering its area; and a polyline turning 60 degrees at each join, filled whole at the
- * joins and round them. Its lengths are framebuffer pixels, from the window's corner.
+ * --ui-lines (spec 14.28): lines and convex shapes of one colour on an opaque backdrop of another,
+ * which canvas-ui-lines holds to their areas and to the UI's one-pixel edge. A line two pixels
+ * wide, level on a pixel boundary, its two rows filled whole; one slanted and one half a pixel
+ * wide, each covering its area; a polyline turning 60 degrees at each join, filled whole at the
+ * joins and round them. A trapezoid whose top and bottom fall just short of a pixel's centre,
+ * covering its area; a square on whole pixels beside a quad of the same size; a square whose edges
+ * halve pixels, a quarter of each corner pixel covered; two triangles meeting on a diagonal; and a
+ * concave shape and one of five corners, which draw nothing. Its lengths are framebuffer pixels,
+ * from the window's corner.
  */
 static const vec4 LINES_BACKDROP = {0.10f, 0.12f, 0.16f, 1.0f},
                   LINES_INK = {0.95f, 0.80f, 0.35f, 1.0f};
-#define LINES_POINTS_MAX 4
+#define LINES_POINTS_MAX 5
+typedef enum {
+    LINES_POLYLINE,
+    LINES_CONVEX,
+    LINES_QUAD,    // ui_draw_quad over the rect from its first point to its second
+    LINES_MEETING, // two triangles, its corners' first, second and third and its first, third and
+                   // fourth
+} LinesKind;
 static const struct {
     const char* name;
-    float width;
+    LinesKind kind;
+    float width; // a polyline's
     size_t count;
     UIPoint points[LINES_POINTS_MAX];
 } LINES[] = {
-    {"level", 2.0f, 2, {{20.0f, 30.0f}, {120.0f, 30.0f}}},
+    {"level", LINES_POLYLINE, 2.0f, 2, {{20.0f, 30.0f}, {120.0f, 30.0f}}},
     // 100 pixels long at 30 degrees, from off the grid.
-    {"slant", 2.0f, 2, {{160.3f, 20.2f}, {246.9025f, 70.2f}}},
-    {"hair", 0.5f, 2, {{290.3f, 20.2f}, {376.9025f, 70.2f}}},
+    {"slant", LINES_POLYLINE, 2.0f, 2, {{160.3f, 20.2f}, {246.9025f, 70.2f}}},
+    {"hair", LINES_POLYLINE, 0.5f, 2, {{290.3f, 20.2f}, {376.9025f, 70.2f}}},
     // Legs 40 pixels long at 30 degrees either side of level.
-    {"joined", 8.0f, 4, {{420.4f, 40.3f}, {455.041f, 60.3f}, {489.682f, 40.3f}, {524.323f, 60.3f}}},
+    {"joined",
+     LINES_POLYLINE,
+     8.0f,
+     4,
+     {{420.4f, 40.3f}, {455.041f, 60.3f}, {489.682f, 40.3f}, {524.323f, 60.3f}}},
+    {"trapezoid",
+     LINES_CONVEX,
+     0.0f,
+     4,
+     {{40.3f, 230.4f}, {100.3f, 230.4f}, {85.3f, 190.6f}, {55.3f, 190.6f}}},
+    {"square",
+     LINES_CONVEX,
+     0.0f,
+     4,
+     {{130.0f, 190.0f}, {170.0f, 190.0f}, {170.0f, 230.0f}, {130.0f, 230.0f}}},
+    {"quad", LINES_QUAD, 0.0f, 2, {{180.0f, 190.0f}, {220.0f, 230.0f}}},
+    {"halves",
+     LINES_CONVEX,
+     0.0f,
+     4,
+     {{230.5f, 190.5f}, {270.5f, 190.5f}, {270.5f, 230.5f}, {230.5f, 230.5f}}},
+    {"meeting",
+     LINES_MEETING,
+     0.0f,
+     4,
+     {{280.3f, 190.2f}, {330.6f, 190.2f}, {330.6f, 230.7f}, {280.3f, 230.7f}}},
+    {"concave",
+     LINES_CONVEX,
+     0.0f,
+     4,
+     {{340.0f, 190.0f}, {380.0f, 210.0f}, {340.0f, 230.0f}, {355.0f, 210.0f}}},
+    {"five",
+     LINES_CONVEX,
+     0.0f,
+     5,
+     {{390.0f, 190.0f}, {430.0f, 190.0f}, {435.0f, 210.0f}, {410.0f, 230.0f}, {385.0f, 210.0f}}},
 };
 #define LINES_COUNT (sizeof(LINES) / sizeof(LINES[0]))
 
 static void draw_lines(UIElement* el, UIDrawList* dl, void* user) {
     const float px = *(const float*)user; // points a pixel
+    float* ink = (float*)LINES_INK;
     ui_draw_quad(dl, el->rect, (float*)LINES_BACKDROP);
     for (size_t i = 0; i < LINES_COUNT; i++) {
         UIPoint p[LINES_POINTS_MAX];
         for (size_t k = 0; k < LINES[i].count; k++)
             p[k] = (UIPoint){LINES[i].points[k].x * px, LINES[i].points[k].y * px};
-        ui_draw_polyline(dl, p, LINES[i].count, LINES[i].width * px, (float*)LINES_INK);
+        if (LINES[i].kind == LINES_POLYLINE) {
+            ui_draw_polyline(dl, p, LINES[i].count, LINES[i].width * px, ink);
+        } else if (LINES[i].kind == LINES_CONVEX) {
+            ui_draw_convex(dl, p, LINES[i].count, ink);
+        } else if (LINES[i].kind == LINES_QUAD) {
+            ui_draw_quad(dl, (UIRect){p[0].x, p[0].y, p[1].x - p[0].x, p[1].y - p[0].y}, ink);
+        } else {
+            ui_draw_convex(dl, (const UIPoint[]){p[0], p[1], p[2]}, 3, ink);
+            ui_draw_convex(dl, (const UIPoint[]){p[0], p[2], p[3]}, 3, ink);
+        }
     }
 }
 
@@ -3655,7 +3712,7 @@ static void build_lines(UISystem* ui, double scale, bool probe) {
         return;
     printf("canvas lines colours want %06x backdrop %06x\n", seams_rgb(LINES_INK),
            seams_rgb(LINES_BACKDROP));
-    // Each its width, then its points.
+    // Each a polyline's width or 0, then its points.
     for (size_t i = 0; i < LINES_COUNT; i++) {
         printf("canvas lines %s %.4f", LINES[i].name, (double)LINES[i].width);
         for (size_t k = 0; k < LINES[i].count; k++)

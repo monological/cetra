@@ -20,6 +20,7 @@
 #define UI_MODE_TEXTURE 1.0f
 #define UI_MODE_GLYPH   2.0f
 #define UI_MODE_LINE    3.0f
+#define UI_MODE_CONVEX  4.0f
 
 /*
  * One vertex format for every kind of thing the UI draws. Fills, images and
@@ -36,11 +37,12 @@ typedef struct UIVertex {
     float x, y;
     float u, v;
     float color[4];
-    float rect[4];   // min.xy, max.xy -- the quad's own bounds, for the corner SDF; a line's bounds
+    float rect[4]; // min.xy, max.xy -- the quad's own bounds, for the corner SDF; else the shape's
     float params[4]; // corner radius or a line's half width, border width, mode, a glyph's edge
-    // The border's colour; a line's: this corner's place along the segment from its start and
-    // across it, and the segment's length, in points, each affine in the position and so exact
-    // wherever it is interpolated.
+    // The border's colour. A line's: this corner's place along the segment from its start and
+    // across it, and the segment's length. A convex shape's: this corner's signed distance to each
+    // edge, positive inside. In points, each affine in the position and so exact wherever it is
+    // interpolated.
     float border[4];
 } UIVertex;
 
@@ -368,6 +370,64 @@ void ui_draw_polyline(UIDrawList* dl, const UIPoint* points, size_t count, float
     }
     for (size_t i = 1; i < count; i++)
         ui_draw_line(dl, points[i - 1], points[i], width, color);
+}
+
+// A convex shape's distance to an edge that never limits it: a triangle's fourth, and an edge of no
+// length, which a corner given twice makes.
+#define UI_CONVEX_FAR 1e6f
+
+void ui_draw_convex(UIDrawList* dl, const UIPoint* corners, size_t count, vec4 color) {
+    if (!dl)
+        return;
+    if ((count != 3 && count != 4) || !corners) {
+        log_error("ui: a convex shape takes 3 or 4 corners, not %zu", count);
+        return;
+    }
+    float area2 = 0.0f; // twice the signed area
+    bool left = false, right = false;
+    float x0 = corners[0].x, y0 = corners[0].y, x1 = x0, y1 = y0;
+    for (size_t i = 0; i < count; i++) {
+        const UIPoint p = corners[i], q = corners[(i + 1) % count], r = corners[(i + 2) % count];
+        if (!isfinite(p.x) || !isfinite(p.y)) {
+            log_error("ui: a convex shape's corner %zu is not finite", i);
+            return;
+        }
+        area2 += p.x * q.y - q.x * p.y;
+        const float turn = (q.x - p.x) * (r.y - q.y) - (q.y - p.y) * (r.x - q.x);
+        left |= turn > 0.0f;
+        right |= turn < 0.0f;
+        x0 = fminf(x0, p.x), y0 = fminf(y0, p.y), x1 = fmaxf(x1, p.x), y1 = fmaxf(y1, p.y);
+    }
+    if (left && right) {
+        log_error("ui: a shape of %zu corners turning both ways is not convex", count);
+        return;
+    }
+    if (!(fabsf(area2) > 0.0f)) {
+        log_error("ui: a convex shape of no area is not drawn");
+        return;
+    }
+    // Its bounds a pixel past, as a fill's are, so the ramp's outer half is drawn.
+    const float px = _pixel_points(dl);
+    const float xs[4] = {x0 - px, x1 + px, x1 + px, x0 - px};
+    const float ys[4] = {y0 - px, y0 - px, y1 + px, y1 + px};
+    // Each box corner's signed distance to each edge, positive on the side the shape lies.
+    const float inward = area2 > 0.0f ? 1.0f : -1.0f;
+    float border[4][4];
+    for (int k = 0; k < 4; k++) {
+        for (size_t i = 0; i < 4; i++) {
+            border[k][i] = UI_CONVEX_FAR;
+            if (i >= count)
+                continue;
+            const UIPoint p = corners[i], q = corners[(i + 1) % count];
+            const float ex = q.x - p.x, ey = q.y - p.y, len = sqrtf(ex * ex + ey * ey);
+            if (len > 0.0f)
+                border[k][i] = inward * (ex * (ys[k] - p.y) - ey * (xs[k] - p.x)) / len;
+        }
+    }
+    const float rect[4] = {x0, y0, x1, y1};
+    const float params[4] = {0.0f, 0.0f, UI_MODE_CONVEX, 0.0f};
+    static const float uv[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    _push(dl, dl->white, xs, ys, uv, uv, rect, color, params, border);
 }
 
 void ui_draw_textured_quad(UIDrawList* dl, UIRect r, const Texture* tex, vec4 tint) {
@@ -1083,7 +1143,7 @@ bool ui_draw_list_quad_border(const UIDrawList* dl, size_t i, vec4 border, float
     if (!dl || i >= dl->vcount / 4)
         return false;
     const UIVertex* v = &dl->verts[i * 4];
-    // A line's border field holds its geometry, not a colour.
+    // A line's and a convex shape's border field holds its geometry, not a colour.
     if (v[0].params[2] >= UI_MODE_LINE)
         return false;
     if (border)
