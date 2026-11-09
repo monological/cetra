@@ -40,7 +40,8 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gates import asset, compare  # noqa: E402  (the shell-out, and the kind routing)
+from gatelib.harness import asset  # noqa: E402  (the kind routing)
+from gatelib.images import compare  # noqa: E402  (the shell-out)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -74,7 +75,7 @@ ASSETS = os.path.join(ROOT, "assets")
 
 # A recipe's `scene` is a repo-relative string handed to the binary, so it
 # carries its own kind directory (assets/scenes/foo.cscn) rather than going
-# through gates.py's asset() -- these are arguments, not paths this script
+# through gatelib's asset() -- these are arguments, not paths this script
 # opens. The goldens themselves route through golden_path below.
 GOLDENS = os.path.join(ASSETS, "goldens")
 
