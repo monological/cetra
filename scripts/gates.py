@@ -28517,8 +28517,10 @@ def run_ui_gate(workdir):
                      first before the line's number; the + in the gap after the
                      number on its first row only, in the text's colour; a style
                      with a - alone puts it on its line, shorter than the +, and
-                     no fill; with both styles zeroed, no quad ends at the text's
-                     edge and no glyph stands in the gap.
+                     no fill; the - style's sign_colour green (spec 14.26), the -
+                     is green and the + still the text's colour; with both styles
+                     zeroed, no quad ends at the text's edge and no glyph stands
+                     in the gap.
       ui-editor-bar-room a bar is drawn only inside its element, its insets
                      included (spec 14.17): of two editors in a row over a
                      200-line text, the second 300 by 150, every fill a bar wide
@@ -29911,10 +29913,10 @@ def run_ui_gate(workdir):
     print(f"  ui-editor-fillers     {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-fillers", ok)
 
-    ok, detail = doc_flags("editor-gutter", 3, "a range's gutter fill on every row of its line "
+    ok, detail = doc_flags("editor-gutter", 4, "a range's gutter fill on every row of its line "
                            "from the gutter's left to the text, under the number; its sign in the "
-                           "gap on the line's first row only, in the text's colour, a sign alone "
-                           "drawing no fill; a zeroed style neither")
+                           "gap on the line's first row only, in the text's colour or its style's "
+                           "sign_colour, a sign alone drawing no fill; a zeroed style neither")
     print(f"  ui-editor-gutter      {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-gutter", ok)
 

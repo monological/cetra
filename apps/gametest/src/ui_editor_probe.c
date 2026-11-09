@@ -2453,7 +2453,8 @@ static bool ends_at_text(const UISystem* ui, float tx, float y) {
 
 // A range's style marks the gutter of each line it reaches: a fill on every row from the gutter's
 // left to the text, drawn under the number, and a sign in the gap after the number on the line's
-// first row only, in the text's plain colour; a sign alone draws no fill; a zeroed style neither.
+// first row only, in the text's plain colour, or in its style's sign_colour when that is set; a
+// sign alone draws no fill; a zeroed style neither.
 static int probe_editor_gutter(UISystem* ui) {
     char text[512];
     size_t len = (size_t)snprintf(text, sizeof(text), "short\n");
@@ -2518,6 +2519,22 @@ static int probe_editor_gutter(UISystem* ui) {
         fprintf(stderr, "editor-gutter: + %zu, on later rows %zu, - %zu, on the short line %zu\n",
                 plus_n, later, minus_n, short_n);
     say_flag("editor-gutter", "sign", "first_row", sign);
+
+    // A style's sign_colour reaches its own sign and nothing else: the - green, the + still the
+    // code's colour.
+    vec4 green = {0.0f, 1.0f, 0.0f, 1.0f};
+    glm_vec4_copy(green, theme.editor_styles[2].sign_colour);
+    ui_set_theme(ui, &theme);
+    editor_pass(ui);
+    const bool coloured = row_glyphs(ui, gap, tx, y_long, row, plus, 2) == 1 &&
+                          row_glyphs(ui, gap, tx, y_minus, row, minus, 2) == 1 &&
+                          same_colour(minus[0].colour, green) &&
+                          same_colour(plus[0].colour, code[0].colour);
+    if (!coloured)
+        fprintf(stderr, "editor-gutter: - (%.2f %.2f %.2f %.2f), + (%.2f %.2f %.2f %.2f)\n",
+                minus[0].colour[0], minus[0].colour[1], minus[0].colour[2], minus[0].colour[3],
+                plus[0].colour[0], plus[0].colour[1], plus[0].colour[2], plus[0].colour[3]);
+    say_flag("editor-gutter", "coloured", "own", coloured);
 
     // Zeroed, neither: no quad reaching the text from the left and no glyph in the gap.
     theme.editor_styles[1] = theme.editor_styles[2] = (UIEditorStyle){0};
