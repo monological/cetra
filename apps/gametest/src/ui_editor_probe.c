@@ -2532,8 +2532,9 @@ static int probe_editor_gutter(UISystem* ui) {
                           same_colour(plus[0].colour, code[0].colour);
     if (!coloured)
         fprintf(stderr, "editor-gutter: - (%.2f %.2f %.2f %.2f), + (%.2f %.2f %.2f %.2f)\n",
-                minus[0].colour[0], minus[0].colour[1], minus[0].colour[2], minus[0].colour[3],
-                plus[0].colour[0], plus[0].colour[1], plus[0].colour[2], plus[0].colour[3]);
+                (double)minus[0].colour[0], (double)minus[0].colour[1], (double)minus[0].colour[2],
+                (double)minus[0].colour[3], (double)plus[0].colour[0], (double)plus[0].colour[1],
+                (double)plus[0].colour[2], (double)plus[0].colour[3]);
     say_flag("editor-gutter", "coloured", "own", coloured);
 
     // Zeroed, neither: no quad reaching the text from the left and no glyph in the gap.
