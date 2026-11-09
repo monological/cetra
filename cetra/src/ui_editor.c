@@ -3434,13 +3434,17 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
             const float* gutters[RANGES_DRAWN * TEXT_DOC_LAYERS];
             size_t gutter_count = 0;
             uint32_t sign = 0;
+            const float* sign_colour = fg;
             for (size_t k = 0; k < marking_count; k++) {
                 const UIEditorStyle* st = _style(t, marking[k].style);
                 if (!_reaches_line(&marking[k], l.at, line_end))
                     continue;
                 if (st->gutter[3] > 0.0f)
                     gutters[gutter_count++] = st->gutter;
-                sign = st->sign ? st->sign : sign;
+                if (st->sign) {
+                    sign = st->sign;
+                    sign_colour = st->sign_colour[3] > 0.0f ? st->sign_colour : fg;
+                }
             }
             for (; row < rows.count && y < bottom; row++, y += ed->row) {
                 const size_t from = rows.starts[row];
@@ -3463,7 +3467,8 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
                     for (int k = 0; k < n; k++, nx += cell_px)
                         _glyph(dl, ed, (uint32_t)num[k], nx, base_px, numbers);
                     if (sign)
-                        _glyph(dl, ed, sign, gutter_px + (float)digits * cell_px, base_px, fg);
+                        _glyph(dl, ed, sign, gutter_px + (float)digits * cell_px, base_px,
+                               sign_colour);
                 }
                 // Backgrounds: the host's whole lines, its other ranges, find's matches, then the
                 // selections over them.
