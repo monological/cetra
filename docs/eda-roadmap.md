@@ -17,7 +17,7 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-08: 14.26, a gutter sign colour._
+_Last updated: 2026-11-09: 14.27, eight range layers._
 
 ---
 
@@ -66,7 +66,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 | 9 | What the panes and the fonts need of the UI | **Built** | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
 
-Specs 14.7, 14.9 to 14.21 and 14.23 to 14.26 are the smaller changes pcb's window asked for, listed under
+Specs 14.7, 14.9 to 14.21 and 14.23 to 14.27 are the smaller changes pcb's window asked for, listed under
 "Not among the nine". Spec 14.8 was not asked for by pcb: a headless run waits for the textures its
 start-up asked for before frame 1 (`docs/architecture.md`, Render Pipeline), which `pcb render`
 gets for free.
@@ -500,6 +500,9 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
   by its underline: `UIEditorStyle.sign_colour`, a style's gutter sign in a colour of its own, so
   pcb marks a line with an error or a warning with a `>` in its underline's colour (`docs/ui.md`,
   The editor).
+- **Eight range layers** -- spec 14.27, built, from pcb 7.4.1's look, where the rule pcb's checks
+  take the code to could not be told from the lines round it: `TEXT_DOC_LAYERS` from 4 to 8, so pcb
+  tints the rule's line on a layer of its own, the four it had all in use (`docs/ui.md`, The text).
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the

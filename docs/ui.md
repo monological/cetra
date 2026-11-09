@@ -395,7 +395,7 @@ leaves the carets, and a cut copies before it deletes.
   changes in a ring of the last 65,536 written. A line whose spans were written over colours itself
   again when drawn, so letting colour go never walks the lines. `stateful` is for a language whose
   lines begin inside something an earlier one opened;
-- the host's ranges, in four layers.
+- the host's ranges, in eight layers (`TEXT_DOC_LAYERS`), each the host's to fill.
 
 ### The editor (`ui_editor.c`)
 
