@@ -3679,6 +3679,49 @@ static const struct {
 };
 #define LINES_COUNT (sizeof(LINES) / sizeof(LINES[0]))
 
+/*
+ * Under the cases, a graph staged as pcb's board modal draws one, in points: gridlines and axes as
+ * quads, three curves of 40 points, and a trace's picture, a trapezoid on its dielectric with its
+ * top width marked by a dimension line and two arrowheads. For looking at, not gated.
+ */
+static void draw_lines_graph(UIDrawList* dl, float px) {
+    static const vec4 GRID = {0.24f, 0.27f, 0.33f, 1.0f}, AXIS = {0.70f, 0.72f, 0.78f, 1.0f},
+                      DIELECTRIC = {0.22f, 0.38f, 0.28f, 1.0f},
+                      COPPER = {0.86f, 0.56f, 0.30f, 1.0f};
+    static const vec4 CURVES[3] = {
+        {0.40f, 0.65f, 1.00f, 1.0f}, {1.00f, 0.60f, 0.25f, 1.0f}, {0.45f, 0.85f, 0.50f, 1.0f}};
+    const float x0 = 40.0f, x1 = 250.0f, y0 = 140.0f, y1 = 280.0f;
+    for (float y = y0; y < y1; y += 28.0f)
+        ui_draw_quad(dl, (UIRect){x0, y, x1 - x0, px}, (float*)GRID);
+    for (float x = x0 + 42.0f; x <= x1; x += 42.0f)
+        ui_draw_quad(dl, (UIRect){x, y0, px, y1 - y0}, (float*)GRID);
+    ui_draw_quad(dl, (UIRect){x0 - 1.0f, y0, 1.0f, y1 - y0 + 1.0f}, (float*)AXIS);
+    ui_draw_quad(dl, (UIRect){x0 - 1.0f, y1, x1 - x0 + 1.0f, 1.0f}, (float*)AXIS);
+    UIPoint curve[40];
+    for (int c = 0; c < 3; c++) {
+        for (int i = 0; i < 40; i++) {
+            const float t = (float)i / 39.0f;
+            const float v = c == 0   ? 0.55f + 0.30f * expf(-5.0f * t)
+                            : c == 1 ? 0.35f + 0.12f * sinf(6.0f * t) * expf(-t)
+                                     : 0.08f + 0.70f * powf(t, 1.5f);
+            curve[i] = (UIPoint){x0 + t * (x1 - x0), y1 - v * (y1 - y0)};
+        }
+        ui_draw_polyline(dl, curve, 40, 1.5f, (float*)CURVES[c]);
+    }
+    ui_draw_quad(dl, (UIRect){280.0f, 235.0f, 105.0f, 35.0f}, (float*)DIELECTRIC);
+    ui_draw_convex(
+        dl,
+        (const UIPoint[]){{300.0f, 235.0f}, {365.0f, 235.0f}, {357.0f, 215.0f}, {308.0f, 215.0f}},
+        4, (float*)COPPER);
+    ui_draw_line(dl, (UIPoint){308.0f, 212.0f}, (UIPoint){308.0f, 199.0f}, 0.75f, (float*)AXIS);
+    ui_draw_line(dl, (UIPoint){357.0f, 212.0f}, (UIPoint){357.0f, 199.0f}, 0.75f, (float*)AXIS);
+    ui_draw_line(dl, (UIPoint){313.0f, 205.0f}, (UIPoint){352.0f, 205.0f}, 0.75f, (float*)AXIS);
+    ui_draw_convex(dl, (const UIPoint[]){{308.0f, 205.0f}, {315.0f, 202.0f}, {315.0f, 208.0f}}, 3,
+                   (float*)AXIS);
+    ui_draw_convex(dl, (const UIPoint[]){{357.0f, 205.0f}, {350.0f, 208.0f}, {350.0f, 202.0f}}, 3,
+                   (float*)AXIS);
+}
+
 static void draw_lines(UIElement* el, UIDrawList* dl, void* user) {
     const float px = *(const float*)user; // points a pixel
     float* ink = (float*)LINES_INK;
@@ -3698,6 +3741,7 @@ static void draw_lines(UIElement* el, UIDrawList* dl, void* user) {
             ui_draw_convex(dl, (const UIPoint[]){p[0], p[2], p[3]}, 3, ink);
         }
     }
+    draw_lines_graph(dl, px);
 }
 
 static void build_lines(UISystem* ui, double scale, bool probe) {
