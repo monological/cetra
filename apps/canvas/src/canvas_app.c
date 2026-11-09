@@ -3607,6 +3607,63 @@ static void build_seams(UISystem* ui, double scale, bool probe) {
     }
 }
 
+/*
+ * --ui-lines (spec 14.28): lines of one colour on an opaque backdrop of another, which
+ * canvas-ui-lines holds to their areas and to the UI's one-pixel edge. A line two pixels wide,
+ * level on a pixel boundary, its two rows filled whole; one slanted and one half a pixel wide,
+ * each covering its area; and a polyline turning 60 degrees at each join, filled whole at the
+ * joins and round them. Its lengths are framebuffer pixels, from the window's corner.
+ */
+static const vec4 LINES_BACKDROP = {0.10f, 0.12f, 0.16f, 1.0f},
+                  LINES_INK = {0.95f, 0.80f, 0.35f, 1.0f};
+#define LINES_POINTS_MAX 4
+static const struct {
+    const char* name;
+    float width;
+    size_t count;
+    UIPoint points[LINES_POINTS_MAX];
+} LINES[] = {
+    {"level", 2.0f, 2, {{20.0f, 30.0f}, {120.0f, 30.0f}}},
+    // 100 pixels long at 30 degrees, from off the grid.
+    {"slant", 2.0f, 2, {{160.3f, 20.2f}, {246.9025f, 70.2f}}},
+    {"hair", 0.5f, 2, {{290.3f, 20.2f}, {376.9025f, 70.2f}}},
+    // Legs 40 pixels long at 30 degrees either side of level.
+    {"joined", 8.0f, 4, {{420.4f, 40.3f}, {455.041f, 60.3f}, {489.682f, 40.3f}, {524.323f, 60.3f}}},
+};
+#define LINES_COUNT (sizeof(LINES) / sizeof(LINES[0]))
+
+static void draw_lines(UIElement* el, UIDrawList* dl, void* user) {
+    const float px = *(const float*)user; // points a pixel
+    ui_draw_quad(dl, el->rect, (float*)LINES_BACKDROP);
+    for (size_t i = 0; i < LINES_COUNT; i++) {
+        UIPoint p[LINES_POINTS_MAX];
+        for (size_t k = 0; k < LINES[i].count; k++)
+            p[k] = (UIPoint){LINES[i].points[k].x * px, LINES[i].points[k].y * px};
+        ui_draw_polyline(dl, p, LINES[i].count, LINES[i].width * px, (float*)LINES_INK);
+    }
+}
+
+static void build_lines(UISystem* ui, double scale, bool probe) {
+    static float px;
+    px = (float)(1.0 / scale);
+    UIScreen* screen = ui_screen(ui, "lines");
+    UIElement* panel = ui_panel(ui_screen_root(screen));
+    ui_set_size(panel, UI_GROW, 0.0f, UI_GROW, 0.0f);
+    ui_set_draw(panel, draw_lines, &px);
+    ui_push(ui, screen);
+    if (!probe)
+        return;
+    printf("canvas lines colours want %06x backdrop %06x\n", seams_rgb(LINES_INK),
+           seams_rgb(LINES_BACKDROP));
+    // Each its width, then its points.
+    for (size_t i = 0; i < LINES_COUNT; i++) {
+        printf("canvas lines %s %.4f", LINES[i].name, (double)LINES[i].width);
+        for (size_t k = 0; k < LINES[i].count; k++)
+            printf(" %.4f %.4f", (double)LINES[i].points[k].x, (double)LINES[i].points[k].y);
+        printf("\n");
+    }
+}
+
 static void usage(const char* argv0) {
     fprintf(
         stderr,
@@ -3620,7 +3677,8 @@ static void usage(const char* argv0) {
         "[--palette]\n"
         "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim] [--read-only]\n"
         "          [--editor-fold FIRST,LAST] [--editor-filler LINE,ROWS] [--refuse-close]\n"
-        "          [--ui-borders] [--ui-seams] [--dash LENGTH,GAP (mm)] [--dash-min-px PX]\n"
+        "          [--ui-borders] [--ui-seams] [--ui-lines] [--dash LENGTH,GAP (mm)]\n"
+        "          [--dash-min-px PX]\n"
         "          [--cap round|butt|square] [--join round|mitre|bevel] [--fade STRENGTH,ROOM]\n",
         argv0);
 }
@@ -3639,7 +3697,7 @@ static const char* IDENTITY_PASS = "#version 330 core\n"
 int main(int argc, char** argv) {
     bool headless = false, mirror = false, probe = false, picture = false, edit_thread = false;
     bool split = false, with_ui = false, budget = false, idle = false, ui_enter = false,
-         borders = false, seams = false;
+         borders = false, seams = false, lines = false;
     bool history = false, palette = false, font_sheet = false, vim = false;
     const char* editor_files[EDITOR_FILES_MAX];
     int editor_count = 0;
@@ -3755,6 +3813,8 @@ int main(int argc, char** argv) {
             borders = true;
         } else if (strcmp(argv[i], "--ui-seams") == 0) {
             seams = true;
+        } else if (strcmp(argv[i], "--ui-lines") == 0) {
+            lines = true;
         } else if (strcmp(argv[i], "--dash") == 0 && more) {
             double on = 0.0, off = 0.0;
             if (sscanf(argv[++i], "%lf,%lf", &on, &off) != 2) {
@@ -3895,7 +3955,7 @@ int main(int argc, char** argv) {
     g_engine = engine;
     g_home_view = g_views[0];
     UISystem* ui = NULL;
-    if (with_ui || history || palette || font_sheet || editor_count || borders || seams) {
+    if (with_ui || history || palette || font_sheet || editor_count || borders || seams || lines) {
         ui = create_ui_system(engine);
         ui_set_font(ui, font, 18.0f);
         ui_attach(ui, engine);
@@ -3974,6 +4034,8 @@ int main(int argc, char** argv) {
         build_borders(ui, width, height, ctx.fb_scale, probe);
     if (seams)
         build_seams(ui, ctx.fb_scale, probe);
+    if (lines)
+        build_lines(ui, ctx.fb_scale, probe);
     fflush(stdout);
 
     engine_add_overlay(engine, draw_view, NULL, 0);

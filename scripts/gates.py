@@ -31266,6 +31266,14 @@ def run_canvas_gate(workdir):
                      a join at most, f(1 - f). A two-pixel ramp left a line where two quads met,
                      and a quad drawn only over its own rect had its edge counted twice on a
                      multisampled target, by its samples and by the ramp.
+      canvas-ui-lines lines in the UI's draw list under its one-pixel edge (spec 14.28): on an
+                     opaque backdrop, a line 2 pixels wide level on a pixel boundary, its two rows
+                     its colour and the rows beside them the backdrop's, within 2 codes; one at
+                     30 degrees covering its area, length times width and its ends' disc, within
+                     2%; one half a pixel wide within 5%, which it does because it is drawn a
+                     pixel wide at half its alpha, the ramp alone covering a pixel by about half;
+                     and a polyline turning 60 degrees at each join, the join's pixel and one
+                     on its outer side, which only the round ends cover, its colour within 2.
       canvas-caps    the strokes sheet (spec 14.22): a segment and an arc each capped round, butt
                      and square, their areas in closed form within 0.03 px per pixel of edge, as
                      canvas-areas. A round cap adds a disc, a square one the width squared. And a
@@ -31891,6 +31899,61 @@ def run_canvas_gate(workdir):
                   f"most), the backdrop {share:.3f} of an off-grid join (want 0.25 at most)")
     print(f"  canvas-ui-seams     {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-ui-seams", ok)
+
+    shot, probe = _canvas_run(workdir, "lines", "--ui-lines")
+    lines = _canvas_sheet(probe, "lines")
+    names = ("level", "slant", "hair", "joined")
+    colours = lines.get("colours", [])
+    if not shot or len(colours) != 4 or not all(n in lines for n in names):
+        ok, detail = False, "the run failed or printed no lines"
+    else:
+        img = _ppm_array(shot)[..., :3].astype(float)
+        ink_hex, back_hex = int(colours[1], 16), int(colours[3], 16)
+        ink, back = (np.array([(c >> sh) & 255 for sh in (16, 8, 0)], float)
+                     for c in (ink_hex, back_hex))
+        span = ink - back
+
+        def shape(n):
+            # Its width, then its points, in pixels.
+            v = [float(t) for t in lines[n]]
+            return v[0], np.array(v[1:]).reshape(-1, 2)
+
+        def off(pixels, rgb):
+            return int((np.abs(pixels - rgb).max(axis=-1) > 2).sum())
+
+        def area_error(n):
+            # A pixel's coverage is how far it lies from the backdrop toward the ink; summed round
+            # the line, against its area, length times width and its ends' disc.
+            w, p = shape(n)
+            x0, y0 = np.floor(p.min(axis=0) - w / 2 - 3).astype(int)
+            x1, y1 = np.ceil(p.max(axis=0) + w / 2 + 3).astype(int)
+            got = float(((img[y0:y1, x0:x1] - back) @ span).sum() / (span @ span))
+            want = float(np.linalg.norm(p[1] - p[0])) * w + np.pi * (w / 2) ** 2
+            return abs(got - want) / want
+
+        # Level on a pixel boundary: its rows between the ends its colour, the rows either side
+        # the backdrop's, round ends and all.
+        w, p = shape("level")
+        ax, bx, y, r = int(p[0][0]), int(p[1][0]), int(p[0][1]), int(w // 2)
+        level = (off(img[y - r:y + r, ax:bx], ink)
+                 + off(img[[y - r - 1, y + r], ax - r - 2:bx + r + 2], back))
+        slant, hair = area_error("slant"), area_error("hair")
+        # At each join, its pixel and the pixel half way out along the bisector on the outer side,
+        # which only the two round ends cover.
+        w, p = shape("joined")
+        joined = 0
+        for q, j, k in zip(p, p[1:], p[2:]):
+            inward = (q - j) / np.linalg.norm(q - j) + (k - j) / np.linalg.norm(k - j)
+            for at in (j, j - inward / np.linalg.norm(inward) * (w / 2 - 1)):
+                x, y = np.floor(at).astype(int)
+                joined += not _rgb_near(img[y, x], ink_hex, 2)
+        ok = level == 0 and slant <= 0.02 and hair <= 0.05 and joined == 0
+        detail = (f"{level} px of the level line or the rows beside it wrong (want 0), the slanted "
+                  f"line's coverage {slant:.1%} off its area (want 2% at most), the hairline's "
+                  f"{hair:.1%} (want 5% at most), {joined} px at the joins not the line's colour "
+                  f"(want 0)")
+    print(f"  canvas-ui-lines     {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-ui-lines", ok)
 
     # ---- strokes and dashes (spec 14.22)
     def printed(name, m):

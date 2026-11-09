@@ -156,6 +156,18 @@ void ui_draw_quad(UIDrawList* dl, UIRect r, vec4 color);
 // throwaway struct per piece.
 void ui_draw_rounded(UIDrawList* dl, UIRect r, float radius, vec4 fill, vec4 border,
                      float border_width);
+
+// A point in window points, top-left origin, +Y down.
+typedef struct UIPoint {
+    float x, y;
+} UIPoint;
+
+// A straight line from a to b, `width` points wide, its ends round: every point within width / 2 of
+// the segment. A line thinner than a pixel is drawn a pixel wide at its width's share of its alpha.
+void ui_draw_line(UIDrawList* dl, UIPoint a, UIPoint b, float width, vec4 color);
+// Lines through `count` points, each to the next. The round ends join them with no notch; where two
+// meet, a colour with alpha below 1 is laid twice over the join.
+void ui_draw_polyline(UIDrawList* dl, const UIPoint* points, size_t count, float width, vec4 color);
 // An image stretched over the rect, multiplied by `tint`.
 void ui_draw_textured_quad(UIDrawList* dl, UIRect r, const Texture* tex, vec4 tint);
 // A part of an image stretched over the rect, multiplied by `tint`: `uv` is {u0, v0, u1, v1}, v0
@@ -219,11 +231,13 @@ void ui_pop_clip(UIDrawList* dl);
 uint64_t ui_draw_list_signature(const UIDrawList* dl);
 
 // The quads the list holds, in the order they were emitted, read back: quad `i`'s corners in
-// points, its colour and its kind (0 a fill, 1 an image, 2 a glyph). For a test or a tool asserting
-// what a draw produced; false past the end, with the outputs untouched.
+// points, its colour and its kind (0 a fill, 1 an image, 2 a glyph, 3 a line, its rect the bounds
+// it covers). For a test or a tool asserting what a draw produced; false past the end, with the
+// outputs untouched.
 size_t ui_draw_list_quad_count(const UIDrawList* dl);
 bool ui_draw_list_quad(const UIDrawList* dl, size_t i, UIRect* rect, vec4 color, int* kind);
-// Quad `i`'s border: its colour and its width in points, 0 for none.
+// Quad `i`'s border: its colour and its width in points, 0 for none. False for a line, which has
+// none.
 bool ui_draw_list_quad_border(const UIDrawList* dl, size_t i, vec4 border, float* width);
 
 // An element's own fragment program for the next primitives emitted; NULL

@@ -4,8 +4,8 @@ in vec2 vUV;
 in vec4 vColor;
 in vec2 vPos;
 in vec4 vRect;
-in vec4 vParams; // x corner radius, y border width, z mode, w a glyph's edge
-in vec4 vBorder;
+in vec4 vParams; // x corner radius or a line's half width, y border width, z mode, w a glyph's edge
+in vec4 vBorder; // the border's colour; a line's place along and across it and its length
 
 out vec4 FragColor;
 
@@ -26,6 +26,7 @@ uniform float uFocus;
 #define UI_MODE_FILL 0
 #define UI_MODE_TEXTURE 1
 #define UI_MODE_GLYPH 2
+#define UI_MODE_LINE 3
 
 // Signed distance to a rounded box, negative inside. `b` is the half-extent and
 // `r` the corner radius; at r = 0 this is the exact square box, so a square
@@ -37,6 +38,29 @@ float sdRoundBox(vec2 p, vec2 b, float r) {
 
 void main() {
     int mode = int(vParams.z + 0.5);
+
+    // A one-pixel ramp centred on the edge, a box filter's coverage of it, so a
+    // shape on the pixel grid fills its pixels whole and two meeting there leave
+    // nothing between them. A fill is drawn a pixel past its rect (_push_quad),
+    // so the ramp's outer half is drawn. `aa` is a pixel's size in vPos's
+    // units, at any DPI or UI scale, so it is one pixel along an edge at any
+    // angle. Not d's own derivatives: across a box's corner, where d has a
+    // kink, they read 1.4 pixels, and the corner pixel of a box on the grid is
+    // left part covered. Taken before any branch, where every fragment of the
+    // pixel quad reaches it.
+    float aa = max(length(dFdx(vPos)), 1e-5);
+
+    if (mode == UI_MODE_LINE) {
+        // The distance to the segment, less half the width: the round ends are
+        // where the place along it is clamped to its length.
+        float along = vBorder.x - clamp(vBorder.x, 0.0, vBorder.z);
+        float d = length(vec2(along, vBorder.y)) - vParams.x;
+        float alpha = clamp(0.5 - d / aa, 0.0, 1.0) * vColor.a;
+        if (alpha < 0.003)
+            discard;
+        FragColor = vec4(vColor.rgb, alpha);
+        return;
+    }
 
     if (mode == UI_MODE_GLYPH) {
         // The SDF core of text_frag.glsl, deliberately the same formula: two
@@ -62,16 +86,6 @@ void main() {
     vec2 centre = (vRect.zw + vRect.xy) * 0.5;
     float radius = clamp(vParams.x, 0.0, min(half_size.x, half_size.y));
     float d = sdRoundBox(vPos - centre, half_size, radius);
-
-    // A one-pixel ramp centred on the edge, a box filter's coverage of it, so a
-    // shape on the pixel grid fills its pixels whole and two meeting there leave
-    // nothing between them. A fill is drawn a pixel past its rect (_push_quad),
-    // so the ramp's outer half is drawn. `aa` is a pixel's size in vPos's
-    // units, at any DPI or UI scale, so it is one pixel along an edge at any
-    // angle. Not d's own derivatives: across a box's corner, where d has a
-    // kink, they read 1.4 pixels, and the corner pixel of a box on the grid is
-    // left part covered.
-    float aa = max(length(dFdx(vPos)), 1e-5);
     float inside = clamp(0.5 - d / aa, 0.0, 1.0);
 
     vec4 fill = vColor;

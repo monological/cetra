@@ -19,6 +19,7 @@
 #define UI_MODE_FILL    0.0f
 #define UI_MODE_TEXTURE 1.0f
 #define UI_MODE_GLYPH   2.0f
+#define UI_MODE_LINE    3.0f
 
 /*
  * One vertex format for every kind of thing the UI draws. Fills, images and
@@ -35,8 +36,11 @@ typedef struct UIVertex {
     float x, y;
     float u, v;
     float color[4];
-    float rect[4];   // min.xy, max.xy -- the quad's own bounds, for the corner SDF
-    float params[4]; // corner radius, border width, mode, a glyph's field value at its outline
+    float rect[4];   // min.xy, max.xy -- the quad's own bounds, for the corner SDF; a line's bounds
+    float params[4]; // corner radius or a line's half width, border width, mode, a glyph's edge
+    // The border's colour; a line's: this corner's place along the segment from its start and
+    // across it, and the segment's length, in points, each affine in the position and so exact
+    // wherever it is interpolated.
     float border[4];
 } UIVertex;
 
@@ -171,16 +175,15 @@ static float _pixel_points(const UIDrawList* dl) {
 }
 
 // The one place geometry enters the list. Every primitive below is this call
-// with different numbers, which is why there is no second place for a corner
-// radius or a clip to be forgotten.
-// The quad's corners are the rect the corner SDF measures against, and a fill
-// is drawn a pixel past them.
+// with different numbers, which is why there is no second place for a clip, the
+// offset or the alpha to be forgotten.
+// Four corners in order round the quad, each with its UV and its `border`
+// field; `rect` is the bounds the shape is measured against, which the offset
+// moves with the corners.
 // False when nothing was pushed.
-static bool _push_quad(UIDrawList* dl, GLuint texture, float x0, float y0, float x1, float y1,
-                       float u0, float v0, float u1, float v1, const float color[4], float radius,
-                       float border_w, float mode, const float border[4]) {
-    if (!dl || x1 <= x0 || y1 <= y0)
-        return false;
+static bool _push(UIDrawList* dl, GLuint texture, const float xs[4], const float ys[4],
+                  const float us[4], const float vs[4], const float rect[4], const float color[4],
+                  const float params[4], const float border[4][4]) {
     if (!_reserve_verts(dl, 4) || !_reserve_idx(dl, 6))
         return false;
     UIBatch* batch = _batch_for(dl, texture);
@@ -188,15 +191,50 @@ static bool _push_quad(UIDrawList* dl, GLuint texture, float x0, float y0, float
         return false;
 
     static const float opaque_white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    static const float no_border[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     const float* c = color ? color : opaque_white;
-    const float* bc = border ? border : no_border;
-    // The corner SDF's rect moves with the quad, or a rounded corner is measured where the quad
-    // was before the offset and a sliding screen's panels lose their corners.
-    const float rc[4] = {x0 + dl->offset_x, y0 + dl->offset_y, x1 + dl->offset_x,
-                         y1 + dl->offset_y};
+    // The rect moves with the quad, or a rounded corner is measured where the quad was before the
+    // offset and a sliding screen's panels lose their corners.
+    const float rc[4] = {rect[0] + dl->offset_x, rect[1] + dl->offset_y, rect[2] + dl->offset_x,
+                         rect[3] + dl->offset_y};
 
     const unsigned int base = (unsigned int)dl->vcount;
+    for (int i = 0; i < 4; i++) {
+        UIVertex* v = &dl->verts[dl->vcount++];
+        v->x = xs[i] + dl->offset_x;
+        v->y = ys[i] + dl->offset_y;
+        v->u = us[i];
+        v->v = vs[i];
+        memcpy(v->color, c, sizeof(float) * 4);
+        memcpy(v->rect, rc, sizeof(float) * 4);
+        memcpy(v->params, params, sizeof(float) * 4);
+        memcpy(v->border, border[i], sizeof(float) * 4);
+        v->color[3] *= dl->alpha;
+    }
+
+    const unsigned int order[6] = {0, 1, 2, 0, 2, 3};
+    for (int i = 0; i < 6; i++)
+        dl->idx[dl->icount++] = base + order[i];
+    batch->index_count += 6;
+    return true;
+}
+
+// A quad with its sides along the axes, its corners the rect the corner SDF
+// measures against; a fill is drawn a pixel past them.
+static bool _push_quad(UIDrawList* dl, GLuint texture, float x0, float y0, float x1, float y1,
+                       float u0, float v0, float u1, float v1, const float color[4], float radius,
+                       float border_w, float mode, const float border[4]) {
+    if (!dl || x1 <= x0 || y1 <= y0)
+        return false;
+
+    static const float no_border[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    const float* b = border ? border : no_border;
+    // A fading screen fades the border with the fill, or it pops in whole.
+    const float bc[4] = {b[0], b[1], b[2], b[3] * dl->alpha};
+    const float borders[4][4] = {{bc[0], bc[1], bc[2], bc[3]},
+                                 {bc[0], bc[1], bc[2], bc[3]},
+                                 {bc[0], bc[1], bc[2], bc[3]},
+                                 {bc[0], bc[1], bc[2], bc[3]}};
+    const float rect[4] = {x0, y0, x1, y1};
     const float params[4] = {radius, border_w, mode, 0.0f};
 
     // The default program's fills drawn a pixel past their rect, so the fragment shader's
@@ -211,26 +249,7 @@ static bool _push_quad(UIDrawList* dl, GLuint texture, float x0, float y0, float
     const float ys[4] = {y0, y0, y1, y1};
     const float us[4] = {u0, u1, u1, u0};
     const float vs[4] = {v0, v0, v1, v1};
-    for (int i = 0; i < 4; i++) {
-        UIVertex* v = &dl->verts[dl->vcount++];
-        v->x = xs[i] + dl->offset_x;
-        v->y = ys[i] + dl->offset_y;
-        v->u = us[i];
-        v->v = vs[i];
-        memcpy(v->color, c, sizeof(float) * 4);
-        memcpy(v->rect, rc, sizeof(float) * 4);
-        memcpy(v->params, params, sizeof(float) * 4);
-        memcpy(v->border, bc, sizeof(float) * 4);
-        // A fading screen fades the border with the fill, or it pops in whole.
-        v->color[3] *= dl->alpha;
-        v->border[3] *= dl->alpha;
-    }
-
-    const unsigned int order[6] = {0, 1, 2, 0, 2, 3};
-    for (int i = 0; i < 6; i++)
-        dl->idx[dl->icount++] = base + order[i];
-    batch->index_count += 6;
-    return true;
+    return _push(dl, texture, xs, ys, us, vs, rect, color, params, borders);
 }
 
 // ---------------------------------------------------------------- primitives
@@ -291,6 +310,64 @@ void ui_draw_rounded(UIDrawList* dl, UIRect r, float radius, vec4 fill, vec4 bor
         return;
     _push_quad(dl, dl->white, r.x, r.y, r.x + r.w, r.y + r.h, 0, 0, 1, 1, fill, radius,
                border_width, UI_MODE_FILL, border);
+}
+
+void ui_draw_line(UIDrawList* dl, UIPoint a, UIPoint b, float width, vec4 color) {
+    if (!dl)
+        return;
+    if (!(width > 0.0f) || !isfinite(width) || !isfinite(a.x) || !isfinite(a.y) || !isfinite(b.x) ||
+        !isfinite(b.y)) {
+        log_error("ui: a line %g points wide from (%g, %g) to (%g, %g) is not drawn", (double)width,
+                  (double)a.x, (double)a.y, (double)b.x, (double)b.y);
+        return;
+    }
+    float c[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    if (color)
+        memcpy(c, color, sizeof(c));
+    // A line thinner than a pixel drawn a pixel wide at its width's share of the alpha: the ramp
+    // alone covers a pixel by about half at any width below one, so a hairline would draw as heavy
+    // as a one-pixel line. This way its coverage sums to its area.
+    const float px = _pixel_points(dl);
+    if (width < px) {
+        c[3] *= width / px;
+        width = px;
+    }
+    const float h = width * 0.5f;
+    // The quad reaches a pixel past the round ends and the sides, so the ramp's outer half is
+    // drawn, as a fill's is.
+    const float e = h + px;
+    const float dx = b.x - a.x, dy = b.y - a.y;
+    const float len = sqrtf(dx * dx + dy * dy);
+    // A line of no length is a dot, and any direction draws it.
+    const float tx = len > 0.0f ? dx / len : 1.0f, ty = len > 0.0f ? dy / len : 0.0f;
+    const float along[4] = {-e, len + e, len + e, -e};
+    const float across[4] = {-e, -e, e, e};
+    float xs[4], ys[4], border[4][4];
+    for (int i = 0; i < 4; i++) {
+        xs[i] = a.x + tx * along[i] - ty * across[i];
+        ys[i] = a.y + ty * along[i] + tx * across[i];
+        border[i][0] = along[i];
+        border[i][1] = across[i];
+        border[i][2] = len;
+        border[i][3] = 0.0f;
+    }
+    const float rect[4] = {fminf(a.x, b.x) - h, fminf(a.y, b.y) - h, fmaxf(a.x, b.x) + h,
+                           fmaxf(a.y, b.y) + h};
+    const float params[4] = {h, 0.0f, UI_MODE_LINE, 0.0f};
+    static const float uv[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    _push(dl, dl->white, xs, ys, uv, uv, rect, c, params, border);
+}
+
+void ui_draw_polyline(UIDrawList* dl, const UIPoint* points, size_t count, float width,
+                      vec4 color) {
+    if (!dl)
+        return;
+    if (count > 0 && !points) {
+        log_error("ui: a polyline of %zu points and no array of them", count);
+        return;
+    }
+    for (size_t i = 1; i < count; i++)
+        ui_draw_line(dl, points[i - 1], points[i], width, color);
 }
 
 void ui_draw_textured_quad(UIDrawList* dl, UIRect r, const Texture* tex, vec4 tint) {
@@ -1006,6 +1083,9 @@ bool ui_draw_list_quad_border(const UIDrawList* dl, size_t i, vec4 border, float
     if (!dl || i >= dl->vcount / 4)
         return false;
     const UIVertex* v = &dl->verts[i * 4];
+    // A line's border field holds its geometry, not a colour.
+    if (v[0].params[2] >= UI_MODE_LINE)
+        return false;
     if (border)
         memcpy(border, v[0].border, sizeof(float) * 4);
     if (width)
