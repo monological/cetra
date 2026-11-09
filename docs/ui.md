@@ -247,8 +247,10 @@ possible. The shader is `ui_vert/frag` (`docs/shaders.md`, Game UI).
     a quad of the same rect; two meeting on an edge part way into pixels show what is under them by
     up to a quarter there, as two quads do.
   - **Refused, logged and not drawn**: a count other than 3 or 4, a shape not convex, one of no area,
-    and a line not finite or of no width. A refusal is logged at every call, once a frame from a
-    draw hook.
+    and a polyline with a point not finite or of no width, the whole of it. A refusal is logged at
+    every call, once a frame from a draw hook. A corner within rounding of its neighbours' line is
+    taken as on it, so a shape whose corners were computed in floats is not refused for one placed
+    on an edge.
   - Dashes, butt and square ends, mitre joins, concave shapes and shapes of more corners are the
     canvas's (`docs/canvas.md`).
 - **One vertex format for every mode**: a line and a convex shape keep their geometry in the field
