@@ -1,4 +1,6 @@
-"""The gametest and canvas probe runners several groups use."""
+"""Running an app for what it prints, and reading that back, where several groups share it:
+render's and gametest's probe flags and their rows, apps/canvas's runs, the config and
+block-compression runs, and the environment that scribbles over freed memory."""
 
 import functools
 import json
@@ -6,11 +8,72 @@ import re
 import os
 import subprocess
 
-from gatelib.harness import GAMETEST, RENDER, ROOT, _PROBE_TIMEOUT, _bin, _probe_render, _run, asset
+from gatelib.harness import GAMETEST, RENDER, ROOT, _bin, _run, asset
 from gatelib.scenes import TEXCOMP_FIXTURE
 
 
 GAMETEST_TRACE_EVERY = 10
+
+
+def _probe_render(scene, flag, prefix, extra=None, frames=30):
+    """Run one of the RENDER app's --*-probe flags headless, and parse what it printed.
+
+    Returns ([{key: str}], combined output). The parsing is _probe_rows below,
+    which is also what an app other than render goes through -- this one only
+    owns the invocation.
+    """
+    # No -S of its own, and no workdir: callers read probe ROWS off stdout, and the
+    # frames these used to write were a readback and a file write nobody opened. One
+    # that also wants the frame passes -S in `extra`.
+    cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", "400", "-H", "300", flag]
+    r = _run(cmd + (extra or []), capture_output=True, text=True)
+    text = r.stdout + r.stderr
+    return _probe_rows(text, prefix), text
+
+
+def _probe_rows(text, prefix):
+    """The `<prefix> [tag] k=v ...` lines in `text`, as dicts in emission order.
+
+    Every probe in the tree emits that shape, so the parsing lives HERE rather
+    than being written out per subsystem -- which it was six times before this
+    existed, and is still written out three more times in the suite, by readers
+    that predate it.
+
+    Values stay STRINGS. Callers cast what they need: the emissive probe carries
+    `center=1,2,3`, which a blanket float() would drop on the floor.
+
+    Split out of _probe_render, which hardcodes the RENDER app, once a probe
+    emitted by another app needed the same loop. A row leading with TWO bare
+    tokens does not fit -- _water_probe's grid rows are the case, and would read
+    the second as a key.
+    """
+    rows = []
+    for line in text.splitlines():
+        if not line.startswith(prefix + " "):
+            continue
+        parts = line.split()[1:]
+        rec = {}
+        # A leading bare token is the line's TAG, which is how a probe says which
+        # kind of row this is. Dispatching on that rather than on whether some
+        # field happens to parse is the lesson _water_fft_probe records.
+        if parts and "=" not in parts[0]:
+            rec["kind"] = parts[0]
+            parts = parts[1:]
+        for tok in parts:
+            if "=" in tok:
+                k, v = tok.split("=", 1)
+                rec[k] = v
+        rows.append(rec)
+    return rows
+
+
+# Every --*-probe reader below spawns gametest and reads one case out of the stream.
+# This is the half they share; what differs is the grammar, which each keeps.
+#
+# The timeout is the reason this is one function rather than five. None of the five had
+# one, so a gametest that wedged hung the whole suite rather than failing a group -- and
+# a fix applied to the reader you happened to be looking at would have left four behind.
+_PROBE_TIMEOUT = 300
 
 
 def _gametest_probe_text(flag, case, env=None, extra=None, timeout=None):

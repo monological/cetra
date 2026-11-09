@@ -9,7 +9,7 @@ import re
 import os
 import random
 
-from gatelib.harness import RENDER, _probe_rows, _run, _shared_constant, asset
+from gatelib.harness import RENDER, _run, _shared_constant, asset
 from gatelib.images import (
     _DISPLAY_TO_LINEAR, _SRGB_TO_LINEAR, _box_luma_dense, _linear_luma, _pixels_past, _read_ppm,
     compare,
@@ -18,6 +18,7 @@ from gatelib.lighting import (
     LSTREAM_FIXTURE, LSTREAM_PROP_ROOM, LSTREAM_TILE_LIGHTS, _crossing, _dir_render,
     _lstream_cam_eye, _lstream_rooms,
 )
+from gatelib.probes import _probe_rows
 from gatelib.scenes import _cscn_camera, _projector, cscn_copy
 
 

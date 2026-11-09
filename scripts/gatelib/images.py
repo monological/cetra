@@ -161,6 +161,8 @@ def _ppm_array(path):
     """A capture as an (h, w, 3) float array of 8-bit codes."""
     w, h, data = _read_ppm(path)
     return np.frombuffer(data[:w * h * 3], dtype=np.uint8).reshape(h, w, 3).astype(np.float64)
+
+
 MASK_GRID = 12
 
 
@@ -177,6 +179,8 @@ def _box_luma(pix, w, h, box):
                             (y0 + (y1 - y0) * (iy + 0.5) / n) * h)
                for iy in range(n) for ix in range(n)]
     return sum(samples) / len(samples)
+
+
 ABSORB_GRID = 12
 
 

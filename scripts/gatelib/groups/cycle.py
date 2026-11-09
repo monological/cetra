@@ -21,7 +21,7 @@ def run_cycle_gate(workdir):
     """The day/night cycle (spec 11.81): one clock, and a bake spread across frames.
 
       cycle-quiesce  a FROZEN cycle at hour H renders 0 px from explicit --sun-elevation
-                     /--sun-azimuth taken from this file's own twin of sky_sun_path. Pins
+                     /--sun-azimuth taken from the suite's own twin of sky_sun_path. Pins
                      the path formula AND proves an armed-but-frozen clock touches
                      nothing -- which is also what makes --day-cycle 0 a no-op rather
                      than a sun teleport, the defect the review caught here.

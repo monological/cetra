@@ -9,13 +9,13 @@ import math
 import re
 import os
 
-from gatelib.harness import RENDER, _import_fixture_gen, _probe_rows, _run, asset
+from gatelib.harness import RENDER, _import_fixture_gen, _run, asset
 from gatelib.images import _read_ppm, compare
 from gatelib.lighting import (
     LSTREAM_FIXTURE, LSTREAM_PROP_ROOM, LSTREAM_TILE_LIGHTS, _lstream_cam_eye, _lstream_pose,
     _lstream_rooms,
 )
-from gatelib.probes import _COOK_ROW
+from gatelib.probes import _COOK_ROW, _probe_rows
 from gatelib.scenes import CORNELL_FIXTURE, _cscn_camera, _projector, cscn_copy
 from gatelib.world import _origin_diff
 

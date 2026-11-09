@@ -6,7 +6,7 @@ import os
 
 import numpy as np
 
-from gatelib.arms import arm
+from gatelib.arms import Arms
 from gatelib.images import _ppm_array, compare
 from gatelib.probes import _canvas_probe, _canvas_run, _canvas_shot, _scribbled
 
@@ -342,37 +342,17 @@ def run_canvas_gate(workdir):
                      glFinish calls: the median under 6 ms. A timing arm: the bound is this
                      machine's (2.55 ms measured on an M1 Max) and does not travel.
     """
-    failed = []
-
-    def note(name, ok):
-        if not ok:
-            failed.append(name)
+    arm = Arms(19)
 
     # The runs more than one arm reads, each made once, by the first chosen arm that asks for it.
     @functools.cache
-    def areas_run():
-        return _canvas_run(workdir, "areas", "--sheet", "areas")
-
-    @functools.cache
-    def shapes_run():
-        return _canvas_run(workdir, "shapes", "--sheet", "shapes")
-
-    @functools.cache
-    def polygons_run():
-        return _canvas_run(workdir, "polygons", "--sheet", "polygons")
-
-    @functools.cache
-    def glyphs_run():
-        return _canvas_run(workdir, "glyphs", "--sheet", "glyphs")
+    def sheet_run(sheet):
+        return _canvas_run(workdir, sheet, "--sheet", sheet)
 
     @functools.cache
     def board_run():
         # The board with no UI over it, which a UI over it must leave as it is.
         return _canvas_run(workdir, "board_plain", "--sheet", "board")
-
-    @functools.cache
-    def strokes_run():
-        return _canvas_run(workdir, "strokes", "--sheet", "strokes")
 
     @functools.cache
     def dashes_run():
@@ -383,8 +363,9 @@ def run_canvas_gate(workdir):
         return dashes, probe, said
 
     # ---- areas
-    if arm("canvas-areas"):
-        areas, probe = areas_run()
+    @arm("canvas-areas")
+    def _():
+        areas, probe = sheet_run("areas")
         if not areas:
             ok, detail = False, "the app failed"
         else:
@@ -392,11 +373,11 @@ def run_canvas_gate(workdir):
             ok = len(rows) == 9 and worst <= 0.03
             detail = (f"{len(rows)} shapes (want 9), worst {worst:.4f} px of edge (want <= 0.03): "
                       + ", ".join(rows))
-        print(f"  canvas-areas        {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-areas", ok)
+        return ok, detail
 
     # ---- ramp
-    if arm("canvas-ramp"):
+    @arm("canvas-ramp")
+    def _():
         path, probe = _canvas_run(workdir, "ramp", "--sheet", "ramp")
         if not path:
             ok, detail = False, "the app failed"
@@ -414,11 +395,11 @@ def run_canvas_gate(workdir):
                 rows.append(f"{name} {at.min():.3f}..{at.max():.3f} (want {want:.3f})")
             ok = ok and len(rows) == 5
             detail = f"{len(rows)} edges (want 5), the pixel each crosses: " + ", ".join(rows)
-        print(f"  canvas-ramp         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-ramp", ok)
+        return ok, detail
 
     # ---- thin
-    if arm("canvas-thin"):
+    @arm("canvas-thin")
+    def _():
         path, probe = _canvas_run(workdir, "thin", "--sheet", "thin")
         if not path or ("thin", "across") not in probe or ("thin", "down") not in probe:
             ok, detail = False, "the app failed or printed no lines"
@@ -432,14 +413,14 @@ def run_canvas_gate(workdir):
                   and np.abs(down - 1.0).max() <= 2.0 / 255.0)
             detail = (f"columns across {across.min():.4f}..{across.max():.4f}, rows down "
                       f"{down.min():.4f}..{down.max():.4f} (want 1 within 2/255)")
-        print(f"  canvas-thin         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-thin", ok)
+        return ok, detail
 
     # ---- translation
-    if arm("canvas-translation"):
-        areas, _ = areas_run()
+    @arm("canvas-translation")
+    def _():
+        areas, _ = sheet_run("areas")
         far, _ = _canvas_run(workdir, "areas_far", "--sheet", "areas", "--offset", str(1 << 40))
-        near_text, _ = _canvas_run(workdir, "glyphs_near", "--sheet", "glyphs")
+        near_text, _ = sheet_run("glyphs")
         far_text, _ = _canvas_run(workdir, "glyphs_far", "--sheet", "glyphs", "--offset",
                                   str(1 << 40))
         if not areas or not far or not near_text or not far_text:
@@ -452,11 +433,11 @@ def run_canvas_gate(workdir):
             ok = ae == 0 and te == 0 and drawn > 1000.0 and text_drawn > 1000.0
             detail = (f"shapes {ae} px differ, text {te} px (want 0 and 0), {drawn:.0f} and "
                       f"{text_drawn:.0f} px^2 drawn")
-        print(f"  canvas-translation  {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-translation", ok)
+        return ok, detail
 
     # ---- long segment
-    if arm("canvas-long-segment"):
+    @arm("canvas-long-segment")
+    def _():
         long_, _ = _canvas_run(workdir, "long", "--sheet", "long")
         short, _ = _canvas_run(workdir, "long_short", "--sheet", "long-short")
         if not long_ or not short:
@@ -467,12 +448,12 @@ def run_canvas_gate(workdir):
             ok = pae <= 5.0 / 255.0 and drawn > 0.1
             detail = (f"{ae} px differ, peak {pae * 255:.0f} codes (want <= 5), the line covers "
                       f"{drawn:.1%} of the frame")
-        print(f"  canvas-long-segment {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-long-segment", ok)
+        return ok, detail
 
     # ---- mirror
-    if arm("canvas-mirror"):
-        plain, _ = shapes_run()
+    @arm("canvas-mirror")
+    def _():
+        plain, _ = sheet_run("shapes")
         mirrored, _ = _canvas_run(workdir, "shapes_mirror", "--sheet", "shapes", "--mirror")
         if not plain or not mirrored:
             ok, detail = False, "a run failed"
@@ -484,12 +465,12 @@ def run_canvas_gate(workdir):
             ok = peak <= 1.0 and asymmetric > 0
             detail = (f"{differ} px differ from the plain sheet flipped, peak {peak:.0f} code(s) "
                       f"(want <= 1); the sheet is not its own mirror image ({asymmetric} px)")
-        print(f"  canvas-mirror       {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-mirror", ok)
+        return ok, detail
 
     # ---- target
-    if arm("canvas-target"):
-        plain, _ = shapes_run()
+    @arm("canvas-target")
+    def _():
+        plain, _ = sheet_run("shapes")
         picture, probe = _canvas_run(workdir, "shapes_picture", "--sheet", "shapes", "--picture")
         if not plain or not picture:
             ok, detail = False, "a run failed"
@@ -499,12 +480,12 @@ def run_canvas_gate(workdir):
             ok = ae == 0 and target == "picture"
             detail = (f"{ae} px differ, peak {pae:.4f} (want 0), drawn into the {target} (want "
                       f"picture)")
-        print(f"  canvas-target       {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-target", ok)
+        return ok, detail
 
     # ---- tiles
-    if arm("canvas-tiles"):
-        plain, _ = shapes_run()
+    @arm("canvas-tiles")
+    def _():
+        plain, _ = sheet_run("shapes")
         tiny, _ = _canvas_run(workdir, "shapes_tiny", "--sheet", "shapes", "--tile-shift", "16")
         if not plain or not tiny:
             ok, detail = False, "a run failed"
@@ -512,12 +493,12 @@ def run_canvas_gate(workdir):
             ae, pae = compare(plain, tiny)
             ok = round(pae * 255) <= 1
             detail = f"{ae} px differ, peak {pae * 255:.0f} code(s) (want <= 1)"
-        print(f"  canvas-tiles        {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-tiles", ok)
+        return ok, detail
 
     # ---- polygons
-    if arm("canvas-triangulation"):
-        polygons, probe = polygons_run()
+    @arm("canvas-triangulation")
+    def _():
+        polygons, probe = sheet_run("polygons")
         cells = _canvas_sheet(probe, "polygons")
         if not polygons or len(cells) != 6:
             ok, detail = False, f"the app failed or printed {len(cells)} polygons (want 6)"
@@ -531,11 +512,11 @@ def run_canvas_gate(workdir):
                 ok = ok and good
                 rows.append(f"{name} {m['triangles']:.0f}/{want_count:.0f}")
             detail = "areas agree, triangles (want n - 2 + 2h): " + ", ".join(rows)
-        print(f"  canvas-triangulation {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-triangulation", ok)
+        return ok, detail
 
-    if arm("canvas-polygon-areas"):
-        polygons, probe = polygons_run()
+    @arm("canvas-polygon-areas")
+    def _():
+        polygons, probe = sheet_run("polygons")
         cells = _canvas_sheet(probe, "polygons")
         tiny, _ = _canvas_run(workdir, "polygons_tiny", "--sheet", "polygons", "--tile-shift",
                               "16")
@@ -554,10 +535,10 @@ def run_canvas_gate(workdir):
             ok = worst <= 0.01
             detail = (f"worst {worst:.4f} px of outline (want <= 0.01) over both tile sizes; "
                       f"with 65 um tiles: " + ", ".join(rows))
-        print(f"  canvas-polygon-areas {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-polygon-areas", ok)
+        return ok, detail
 
-    if arm("canvas-refused-whole"):
+    @arm("canvas-refused-whole")
+    def _():
         whole, probe = _canvas_run(workdir, "polygons_refused", "--sheet", "polygons",
                                    "--tile-shift", "12")
         cells = _canvas_sheet(probe, "polygons")
@@ -579,12 +560,12 @@ def run_canvas_gate(workdir):
             detail = (f"drawn whole: {', '.join(drawn) or 'none'}; refused whole: "
                       f"{', '.join(refused) or 'none'}; part drawn: {', '.join(partial) or 'none'} "
                       f"(want none, and at least one of each other)")
-        print(f"  canvas-refused-whole {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-refused-whole", ok)
+        return ok, detail
 
     # ---- text
-    if arm("canvas-glyph-edge"):
-        glyphs, probe = glyphs_run()
+    @arm("canvas-glyph-edge")
+    def _():
+        glyphs, probe = sheet_run("glyphs")
         cells = {name: tokens for (sheet, name), tokens in probe.items()
                  if sheet == "glyphs" and tokens[0] == "box"}
         if not glyphs or len(cells) != 5:
@@ -603,11 +584,11 @@ def run_canvas_gate(workdir):
             detail = (f"at a {_canvas_cell(cells['B'])[1]['em']:.0f} px em, each within 0.6% "
                       f"(worst {max(abs(e) for e in errors):.2%}), mean {mean:+.2%} "
                       f"(want within 0.3%): " + ", ".join(rows))
-        print(f"  canvas-glyph-edge   {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-glyph-edge", ok)
+        return ok, detail
 
-    if arm("canvas-text-width"):
-        _, probe = glyphs_run()
+    @arm("canvas-text-width")
+    def _():
+        _, probe = sheet_run("glyphs")
         width = probe.get(("glyphs", "width"))
         if not width:
             ok, detail = False, "the app printed no width"
@@ -615,11 +596,11 @@ def run_canvas_gate(workdir):
             got, want = int(width[0]), float(width[2])
             ok = want > 0 and abs(got - want) <= 1e-5 * want
             detail = f"{got} units against the font's {want:.1f} (want within 1e-5)"
-        print(f"  canvas-text-width   {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-text-width", ok)
+        return ok, detail
 
-    if arm("canvas-kern-pairs"):
-        _, probe = glyphs_run()
+    @arm("canvas-kern-pairs")
+    def _():
+        _, probe = sheet_run("glyphs")
         pairs = probe.get(("glyphs", "pairs"))
         if not pairs:
             ok, detail = False, "the app printed no pairs"
@@ -630,11 +611,11 @@ def run_canvas_gate(workdir):
             detail = (f"{count} pairs, {kerned} of them kerned; differing from stb_truetype's own, "
                       f"{differ} asked by codepoint and {by_pen} stepped by the pen (want some "
                       f"kerned and none differing)")
-        print(f"  canvas-kern-pairs   {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-kern-pairs", ok)
+        return ok, detail
 
-    if arm("canvas-atlas-fields"):
-        _, probe = glyphs_run()
+    @arm("canvas-atlas-fields")
+    def _():
+        _, probe = sheet_run("glyphs")
         atlas = probe.get(("glyphs", "atlas"))
         if not atlas:
             ok, detail = False, "the app printed no atlas"
@@ -643,11 +624,11 @@ def run_canvas_gate(workdir):
             ok = count > 200 and differ == 0
             detail = (f"{count} glyphs, {differ} whose texels differ from stb_truetype's own field "
                       f"(want over 200 and none)")
-        print(f"  canvas-atlas-fields {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-atlas-fields", ok)
+        return ok, detail
 
     # ---- the fonts built into the program (spec 14.6)
-    if arm("canvas-font-memory"):
+    @arm("canvas-font-memory")
+    def _():
         sheet, probe = _canvas_run(workdir, "font_memory", "--font-sheet")
         # "canvas fonts bytes B fonts F faces C of N": each count read by its label.
         line = ["bytes"] + probe.get(("fonts", "bytes"), [])
@@ -662,11 +643,11 @@ def run_canvas_gate(workdir):
             detail = (f"of {count} built-in fonts, {counts['bytes']} with their file's bytes, "
                       f"{counts['fonts']} making the font the file makes and {counts['faces']} the "
                       f"face (want all); {ink} px of the sheet's text (want over 2000)")
-        print(f"  canvas-font-memory  {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-font-memory", ok)
+        return ok, detail
 
     # ---- layers and tags
-    if arm("canvas-overlap-once"):
+    @arm("canvas-overlap-once")
+    def _():
         path, probe = _canvas_run(workdir, "overlap", "--sheet", "overlap")
         both, one = probe.get(("overlap", "both")), probe.get(("overlap", "one"))
         if not path or not both or not one:
@@ -677,10 +658,10 @@ def run_canvas_gate(workdir):
             b = int(img[int(one[2]), int(one[1]), 0])
             ok = a == b and abs(a - 127.5) <= 1.0
             detail = f"the crossing {a}, one arm {b} (want equal, and half of white)"
-        print(f"  canvas-overlap-once {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-overlap-once", ok)
+        return ok, detail
 
-    if arm("canvas-tags"):
+    @arm("canvas-tags")
+    def _():
         path, probe = _canvas_run(workdir, "tags", "--sheet", "tags")
         cells = _canvas_sheet(probe, "tags")
         if not path or len(cells) != 11:
@@ -690,10 +671,10 @@ def run_canvas_gate(workdir):
             ok = not wrong
             detail = ("11 points each its state's colour within 2 codes" if ok
                       else "wrong: " + ", ".join(wrong))
-        print(f"  canvas-tags         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-tags", ok)
+        return ok, detail
 
-    if arm("canvas-fade"):
+    @arm("canvas-fade")
+    def _():
         hard, probe = _canvas_run(workdir, "fade", "--sheet", "fade", "--fade", "0.5,0")
         roomy, _ = _canvas_run(workdir, "fade_room", "--sheet", "fade", "--fade", "0.5,20")
         masked, mask_probe = _canvas_run(workdir, "fade_mask", "--sheet", "fade", "--fade", "1,0")
@@ -738,10 +719,10 @@ def run_canvas_gate(workdir):
                       f"20 pt (want under {pale - 64}), {mask_near} masked (want under "
                       f"{255 - 64}); the lit H's ink {inks} px (want over 20 each)"
                       + ("" if not wrong else "; wrong: " + ", ".join(wrong)))
-        print(f"  canvas-fade         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-fade", ok)
+        return ok, detail
 
-    if arm("canvas-uploads"):
+    @arm("canvas-uploads")
+    def _():
         board, probe = _canvas_run(workdir, "board", "--sheet", "board", "-f", "8")
         steps = _canvas_sheet(probe, "board")
         if not board or len(steps) != 7:
@@ -757,10 +738,10 @@ def run_canvas_gate(workdir):
             detail = ", ".join(f"{name} {v[0]} range(s) {v[1]} B" for name, v in s.items()) + (
                 "; every step changed the generation" if all(v[2] > 0 for v in s.values())
                 else "; a step left the generation as it was")
-        print(f"  canvas-uploads      {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-uploads", ok)
+        return ok, detail
 
-    if arm("canvas-edit-thread"):
+    @arm("canvas-edit-thread")
+    def _():
         threaded, _ = _canvas_run(workdir, "board_thread", "--sheet", "board", "--edit-thread")
         plain, _ = board_run()
         if not threaded or not plain:
@@ -769,11 +750,11 @@ def run_canvas_gate(workdir):
             ae, pae = compare(plain, threaded)
             ok = ae == 0
             detail = f"{ae} px differ, peak {pae:.4f} (want 0)"
-        print(f"  canvas-edit-thread  {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-edit-thread", ok)
+        return ok, detail
 
     # ---- views
-    if arm("canvas-split"):
+    @arm("canvas-split")
+    def _():
         split, _ = _canvas_run(workdir, "split", "--sheet", "board", "--split")
         left, _ = _canvas_run(workdir, "split_left", "--sheet", "board", "--split", "--only-view",
                               "0")
@@ -792,11 +773,11 @@ def run_canvas_gate(workdir):
             detail = (f"left half {left_differ} px from the left view alone, right half "
                       f"{right_differ} px from the right alone (want 0 and 0); the halves differ "
                       f"by {unlike} px")
-        print(f"  canvas-split        {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-split", ok)
+        return ok, detail
 
     # ---- the editor as panes (spec 14.6)
-    if arm("canvas-panes"):
+    @arm("canvas-panes")
+    def _():
         pane_a, pane_b = os.path.join(workdir, "pane_a.ckt"), os.path.join(workdir, "pane_b.ckt")
         with open(pane_a, "w", encoding="utf-8", newline="") as f:
             f.write("(a one)\n(a two)\n")
@@ -866,10 +847,10 @@ def run_canvas_gate(workdir):
             ok = all(want.values())
             detail = (f"{want} -- second pane after the round trip "
                       f"{' '.join(two.get(('pane', '1'), ['none']))} (want its caret at 15)")
-        print(f"  canvas-panes        {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-panes", ok)
+        return ok, detail
 
-    if arm("canvas-under-ui"):
+    @arm("canvas-under-ui")
+    def _():
         plain, _ = board_run()
         under, probe = _canvas_run(workdir, "board_ui", "--sheet", "board", "--ui")
         panel = probe.get(("ui", "panel"))
@@ -889,10 +870,10 @@ def run_canvas_gate(workdir):
             ok = good and outside == 0
             detail = (f"the panel's centre {centre[0]:02x}{centre[1]:02x}{centre[2]:02x} (want "
                       f"{want:06x}), {outside} px differ outside it (want 0)")
-        print(f"  canvas-under-ui     {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-under-ui", ok)
+        return ok, detail
 
-    if arm("canvas-ui-borders"):
+    @arm("canvas-ui-borders")
+    def _():
         shot, probe = _canvas_run(workdir, "borders", "--ui-borders")
         names = ("opaque", "clear", "half", "mixed", "edge", "solid")
         boxes = {n: [int(v) for v in probe.get(("border", n), [])[:4]] for n in names}
@@ -928,10 +909,10 @@ def run_canvas_gate(workdir):
                           f"{half}, an opaque border's outer edge against a filled box's {edge} "
                           f"(want 2 at most); the border {ring} codes off the backdrop (want 20 or "
                           f"more)")
-        print(f"  canvas-ui-borders   {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-ui-borders", ok)
+        return ok, detail
 
-    if arm("canvas-ui-seams"):
+    @arm("canvas-ui-seams")
+    def _():
         shot, probe = _canvas_run(workdir, "seams", "--ui-seams")
         seams = _canvas_sheet(probe, "seams")
         names = ("stack", "alone", "half", "round", "offgrid")
@@ -978,10 +959,10 @@ def run_canvas_gate(workdir):
                       f"way (want 0), {between} px between the colours on a corner's diagonal "
                       f"(want 1 at most), the backdrop {share:.3f} of an off-grid join (want 0.25 "
                       f"at most)")
-        print(f"  canvas-ui-seams     {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-ui-seams", ok)
+        return ok, detail
 
-    if arm("canvas-ui-lines"):
+    @arm("canvas-ui-lines")
+    def _():
         shot, probe = _canvas_run(workdir, "lines", "--ui-lines")
         lines = _canvas_sheet(probe, "lines")
         names = ("level", "slant", "hair", "joined", "trapezoid", "square", "quad", "halves",
@@ -1072,8 +1053,7 @@ def run_canvas_gate(workdir):
                       f"the backdrop {meeting:.3f} of the triangles' diagonal (want 0.25 at most), "
                       f"{refused} px drawn by the refused shapes (want 0), the triangle with a "
                       f"corner on an edge {'drawn' if straight == 0 else 'refused'} (want drawn)")
-        print(f"  canvas-ui-lines     {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-ui-lines", ok)
+        return ok, detail
 
     # ---- strokes and dashes (spec 14.22)
     def printed(name, m):
@@ -1091,8 +1071,9 @@ def run_canvas_gate(workdir):
         edges = np.flatnonzero(np.diff(np.concatenate(([0], row.astype(np.int8), [0]))))
         return [(int(a), int(b - a)) for a, b in zip(edges[0::2], edges[1::2])]
 
-    if arm("canvas-caps"):
-        strokes, probe = strokes_run()
+    @arm("canvas-caps")
+    def _():
+        strokes, probe = sheet_run("strokes")
         caps = {n: t for n, t in _canvas_sheet(probe, "strokes").items()
                 if n.startswith(("segment-", "arc-"))}
         # The view's left edge 0.6 mm past the far segment's end, between its cap's corner and the
@@ -1110,11 +1091,11 @@ def run_canvas_gate(workdir):
                       + ("past its tile's bound drawn; " if not wrong
                          else f"past its tile's bound {wrong[0]}; ")
                       + ", ".join(rows))
-        print(f"  canvas-caps         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-caps", ok)
+        return ok, detail
 
-    if arm("canvas-joins"):
-        strokes, probe = strokes_run()
+    @arm("canvas-joins")
+    def _():
+        strokes, probe = sheet_run("strokes")
         joins = {n: t for n, t in _canvas_sheet(probe, "strokes").items()
                  if not n.startswith(("segment-", "arc-"))}
         places = _canvas_sheet(probe, "strokes-at")
@@ -1128,10 +1109,10 @@ def run_canvas_gate(workdir):
             detail = (f"worst {worst:.4f} px of edge (want <= 0.03), "
                       + (f"places wrong: {', '.join(wrong)}; " if wrong else "both places right; ")
                       + ", ".join(rows))
-        print(f"  canvas-joins        {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-joins", ok)
+        return ok, detail
 
-    if arm("canvas-dash-areas"):
+    @arm("canvas-dash-areas")
+    def _():
         dashes, probe, _ = dashes_run()
         cells = _canvas_sheet(probe, "dashes")
         if not dashes or len(cells) != 14:
@@ -1140,10 +1121,10 @@ def run_canvas_gate(workdir):
             worst, rows = _canvas_area_rows(dashes, cells, printed)
             ok = worst <= 0.03
             detail = f"worst {worst:.4f} px of edge (want <= 0.03): " + ", ".join(rows)
-        print(f"  canvas-dash-areas   {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-dash-areas", ok)
+        return ok, detail
 
-    if arm("canvas-dash-places"):
+    @arm("canvas-dash-places")
+    def _():
         dashes, probe, _ = dashes_run()
         places = {n: t for n, t in _canvas_sheet(probe, "dashes-at").items() if n != "tagged-dash"}
         if not dashes or len(places) != 16:
@@ -1153,11 +1134,11 @@ def run_canvas_gate(workdir):
             ok = not wrong
             detail = ("16 places each their colour within 2 codes" if ok
                       else "wrong: " + ", ".join(wrong))
-        print(f"  canvas-dash-places  {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-dash-places", ok)
+        return ok, detail
 
     # The bar centred in views 8 mm and 4 mm across; its dashes are 0.2 mm (the sheet's DASH_ON).
-    if arm("canvas-dash-world"):
+    @arm("canvas-dash-world")
+    def _():
         seen = {}
         for across in (8, 4):
             path, near = _canvas_run(workdir, f"dashes_{across}mm", "--sheet", "dashes", "--view",
@@ -1173,10 +1154,10 @@ def run_canvas_gate(workdir):
                                f"{', '.join(str(n) for _, n in runs)} px (want 3 of {want:.0f} "
                                f"within 1)"
                                for across, (runs, want) in seen.items())
-        print(f"  canvas-dash-world   {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-dash-world", ok)
+        return ok, detail
 
-    if arm("canvas-dash-twins"):
+    @arm("canvas-dash-twins")
+    def _():
         dashes, probe, _ = dashes_run()
         far, _ = _canvas_run(workdir, "dashes_far", "--sheet", "dashes", "--offset", str(1 << 40))
         mirrored, _ = _canvas_run(workdir, "dashes_mirror", "--sheet", "dashes", "--mirror")
@@ -1199,12 +1180,12 @@ def run_canvas_gate(workdir):
             detail = (f"2^40 units off {far_ae} px (want 0), mirrored peak {mirror_peak:.0f} "
                       f"code(s) and 65 um tiles {tiles_pae * 255:.0f} (want <= 1 each), the dashed "
                       f"string {text_differ} px from the plain one (want 0, {ink:.0f} px^2 of ink)")
-        print(f"  canvas-dash-twins   {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-dash-twins", ok)
+        return ok, detail
 
     # dash_min_px at 30 px: the default view's 20 px dashes are drawn solid at the pattern's
     # average, the 4 mm view's 40 px ones still dashed.
-    if arm("canvas-dash-solid"):
+    @arm("canvas-dash-solid")
+    def _():
         avg, avg_probe = _canvas_run(workdir, "dashes_min_8mm", "--sheet", "dashes",
                                      "--dash-min-px", "30")
         still, still_probe = _canvas_run(workdir, "dashes_min_4mm", "--sheet", "dashes", "--view",
@@ -1228,10 +1209,10 @@ def run_canvas_gate(workdir):
                       f"within 2 codes); 40 px dashes: {dashed} (want 3); the raised ghost "
                       + ("red where it crosses a bar" if not raised else raised[0]) if len(inside)
                       else "the bar drew nothing")
-        print(f"  canvas-dash-solid   {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-dash-solid", ok)
+        return ok, detail
 
-    if arm("canvas-dash-tags"):
+    @arm("canvas-dash-tags")
+    def _():
         dashes, probe, _ = dashes_run()
         places = _canvas_sheet(probe, "dashes-at")
         empty = _canvas_sheet(probe, "dashes-empty")
@@ -1244,10 +1225,10 @@ def run_canvas_gate(workdir):
             detail = (("the tagged dash its object's red within 2 codes" if not wrong
                        else "wrong: " + ", ".join(wrong))
                       + f", the removed bar's cell peak {left:.0f} (want 0)")
-        print(f"  canvas-dash-tags    {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-dash-tags", ok)
+        return ok, detail
 
-    if arm("canvas-dash-refused"):
+    @arm("canvas-dash-refused")
+    def _():
         dashes, probe, said = dashes_run()
         empty = _canvas_sheet(probe, "dashes-empty")
         refusals = ("a segment whose dash gap is -1 is refused",
@@ -1260,10 +1241,10 @@ def run_canvas_gate(workdir):
             ok = len(named) == 2 and left == 0.0
             detail = (f"{len(named)} of 2 refusals named in the log, the cell's peak {left:.0f} "
                       f"(want both, and 0)")
-        print(f"  canvas-dash-refused {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-dash-refused", ok)
+        return ok, detail
 
-    if arm("canvas-budget"):
+    @arm("canvas-budget")
+    def _():
         _, probe = _canvas_run(workdir, "budget", "--sheet", "board", "--split", "--budget", "-W",
                                "1920", "-H", "1080", "-f", "30")
         timed = sorted((int(name), float(t[1])) for (sheet, name), t in probe.items()
@@ -1277,10 +1258,9 @@ def run_canvas_gate(workdir):
             ok = median <= 6.0
             detail = (f"the board split at 1920x1080 points, both views: median {median:.2f} ms "
                       f"over {len(steady)} frames (want <= 6; a timing arm, this machine's)")
-        print(f"  canvas-budget       {'PASS' if ok else 'FAIL'}  {detail}")
-        note("canvas-budget", ok)
+        return ok, detail
 
-    return failed
+    return arm.failed
 
 
 def _canvas_coverage(path):

@@ -138,7 +138,7 @@ def run_profiler_gate(workdir):
     something occasional published a per-OCCURRENCE cost in a column of per-FRAME means,
     and TIMED summed it in as though it ran throughout. `dir_shadow_fixture --gi-volume`
     printed a CPU TIMED of 736.855 ms against a 35.049 ms FRAME: 21x a ceiling that
-    profiler.h and gates.py both assert. Nothing was wrong with the clock.
+    profiler.h and this group both assert. Nothing was wrong with the clock.
 
     gpu-sum could not see it -- it is a LOWER bound, and the defect makes TIMED too big.
     cpu-bound (run_submission_gate) asserts the ceiling and was green only because its

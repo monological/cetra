@@ -11,11 +11,9 @@ import sys
 
 import numpy as np
 
-from gatelib.harness import (
-    NO_HALOS, RENDER, ROOT, _probe_render, _probe_rows, _run, _shared_constant, asset, render,
-)
+from gatelib.harness import NO_HALOS, RENDER, ROOT, _run, _shared_constant, asset, render
 from gatelib.images import _DISPLAY_TO_LINEAR, _box_luma_dense, _ppm_array, _read_ppm, compare
-from gatelib.probes import _PBR_VARIANT, _pbr_feature_bits
+from gatelib.probes import _PBR_VARIANT, _pbr_feature_bits, _probe_render, _probe_rows
 from gatelib.scenes import WATER_BOUNDS_AWAY, WATER_DRY_OVER, _cscn_camera, _projector, cscn_copy
 
 

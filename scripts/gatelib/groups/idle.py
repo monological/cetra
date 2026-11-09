@@ -5,7 +5,7 @@
 import functools
 import os
 
-from gatelib.arms import arm
+from gatelib.arms import Arms
 from gatelib.harness import asset, render
 from gatelib.images import compare
 from gatelib.probes import _canvas_run, _canvas_shot
@@ -101,18 +101,15 @@ def run_idle_gate(workdir):
                      taken the second, the run ending on the frame of the second; with no hook
                      the first ends it; and a close over four frames asked once, on the first.
     """
-    failed = []
-
-    def note(name, ok):
-        if not ok:
-            failed.append(name)
+    arm = Arms(19)
 
     # The still sheet drawn once without idle mode, which two arms read: made by the first chosen.
     @functools.cache
     def plain_run():
         return _idle_run(workdir, "still_plain", "--sheet", "shapes", frames=1, idle=False)
 
-    if arm("idle-still"):
+    @arm("idle-still")
+    def _():
         still, said = _idle_run(workdir, "still", "--sheet", "shapes")
         plain, _ = plain_run()
         if not still or not plain or "frames" not in said:
@@ -121,10 +118,10 @@ def run_idle_gate(workdir):
             ae, _ = compare(plain, still)
             ok = said["frames"] == 1 and ae == 0
             detail = f"{said['frames']} frame(s) drawn of 50 (want 1), {ae} px from one plain frame"
-        print(f"  idle-still          {'PASS' if ok else 'FAIL'}  {detail}")
-        note("idle-still", ok)
+        return ok, detail
 
-    if arm("idle-timed"):
+    @arm("idle-timed")
+    def _():
         _, said = _idle_run(workdir, "timed", "--sheet", "shapes", "--idle-wake", "0.2,0.3")
         d = said.get("deltas", [])
         if "frames" not in said or len(d) != 3:
@@ -135,12 +132,12 @@ def run_idle_gate(workdir):
             detail = (f"{said['frames']} frames (want 3), {span:.3f} s from the first to the last "
                       f"(want >= 0.5), delta_time {d[1]:.4f} and {d[2]:.4f} s after the waits "
                       f"(want under 0.2 and 0.3), {said['waited']:.3f} s waited")
-        print(f"  idle-timed          {'PASS' if ok else 'FAIL'}  {detail}")
-        note("idle-timed", ok)
+        return ok, detail
 
     # Each run's frame 1 asks; its wall clock is taken just before, so a frame at or past the ask's
     # time plus a wait is at or past that wait.
-    if arm("idle-wakes-kept"):
+    @arm("idle-wakes-kept")
+    def _():
         _, two = _idle_run(workdir, "wakes_two", "--sheet", "shapes", "--idle-wake", "0.6+0.2")
         _, near = _idle_run(workdir, "wakes_near", "--sheet", "shapes", "--idle-wake", "0.3+0.3005")
         many = [round(0.02 + 0.01 * k, 2) for k in range(64)] + [1.0]
@@ -159,10 +156,10 @@ def run_idle_gate(workdir):
                       f"(want 2) at {', '.join(f'{t:.4f}' for t in after[1])} s (want >= 0.3005); "
                       f"65 times: warned {full['wakes_full']} (want 1), {full['frames']} frames, "
                       f"the last at {last:.3f} s (want >= 1)")
-        print(f"  idle-wakes-kept     {'PASS' if ok else 'FAIL'}  {detail}")
-        note("idle-wakes-kept", ok)
+        return ok, detail
 
-    if arm("idle-thread"):
+    @arm("idle-thread")
+    def _():
         late, said = _idle_run(workdir, "thread", "--sheet", "board", "--edit-thread",
                                "--idle-wake", "0.5")
         board, _ = _idle_run(workdir, "board_plain", "--sheet", "board", frames=2, idle=False)
@@ -174,10 +171,10 @@ def run_idle_gate(workdir):
             detail = (f"{said['frames']} frames (want 3), {said['waited']:.3f} s waited for the "
                       f"wake and the thread (want > 0.5), {ae} px from the board drawn plainly "
                       f"(want 0)")
-        print(f"  idle-thread         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("idle-thread", ok)
+        return ok, detail
 
-    if arm("idle-pointer"):
+    @arm("idle-pointer")
+    def _():
         plain, _ = plain_run()
         script = os.path.join(workdir, "idle_drag.txt")
         with open(script, "w") as f:
@@ -194,10 +191,10 @@ def run_idle_gate(workdir):
             ok = said["frames"] == played and ae == 0 and moved > 1000
             detail = (f"{said['frames']} frames (want {played}), {ae} px from the drag without "
                       f"idle mode (want 0), {moved} px moved from the still sheet (want > 1000)")
-        print(f"  idle-pointer        {'PASS' if ok else 'FAIL'}  {detail}")
-        note("idle-pointer", ok)
+        return ok, detail
 
-    if arm("idle-3d"):
+    @arm("idle-3d")
+    def _():
         fixture = asset("mask_fixture.cscn")
         shot = os.path.join(workdir, "idle_3d.ppm")
         shot_plain = os.path.join(workdir, "idle_3d_plain.ppm")
@@ -211,10 +208,10 @@ def run_idle_gate(workdir):
             ok = os.path.exists(last) and ae == 0
             detail = (f"frame 12 {'drawn' if os.path.exists(last) else 'never drawn'} of 12, "
                       f"{ae} px from the fixture without idle mode (want 0)")
-        print(f"  idle-3d             {'PASS' if ok else 'FAIL'}  {detail}")
-        note("idle-3d", ok)
+        return ok, detail
 
-    if arm("idle-ui"):
+    @arm("idle-ui")
+    def _():
         _, said = _idle_run(workdir, "ui", "--sheet", "shapes", "--ui", "--ui-enter", frames=200)
         if "frames" not in said:
             ok, detail = False, "the run failed"
@@ -222,20 +219,20 @@ def run_idle_gate(workdir):
             ok = 15 <= said["frames"] <= 60
             detail = (f"{said['frames']} frames of 200 (want 15 to 60: the 0.25 s fade's 15 at the "
                       f"least, and an end)")
-        print(f"  idle-ui             {'PASS' if ok else 'FAIL'}  {detail}")
-        note("idle-ui", ok)
+        return ok, detail
 
-    if arm("idle-gui"):
+    @arm("idle-gui")
+    def _():
         _, said = _idle_run(workdir, "gui", "--sheet", "shapes", "--gui-click", frames=200)
         if "frames" not in said:
             ok, detail = False, "the run failed"
         else:
             ok = 4 <= said["frames"] <= 10
             detail = f"{said['frames']} frames of 200 (want 4 to 10)"
-        print(f"  idle-gui            {'PASS' if ok else 'FAIL'}  {detail}")
-        note("idle-gui", ok)
+        return ok, detail
 
-    if arm("idle-load"):
+    @arm("idle-load")
+    def _():
         _, said = _idle_run(workdir, "load", "--sheet", "shapes", "--idle-wake", "0.5",
                             "--idle-load", os.path.relpath(asset("fire_hearth_color.png")),
                             frames=200)
@@ -245,10 +242,10 @@ def run_idle_gate(workdir):
             ok = said["frames"] == 3 and said.get("loaded") == (2048, 1608)
             detail = (f"{said['frames']} frames (want 3), {said['waited']:.3f} s waited for the "
                       f"wake and the decode, delivered at {said.get('loaded')} (want (2048, 1608))")
-        print(f"  idle-load           {'PASS' if ok else 'FAIL'}  {detail}")
-        note("idle-load", ok)
+        return ok, detail
 
-    if arm("idle-type"):
+    @arm("idle-type")
+    def _():
         script = os.path.join(workdir, "idle_type.script")
         with open(script, "w", encoding="utf-8") as f:
             f.write("2 key=mod+k\n4 type=zo\n6 key=down\n8 key=escape\n")
@@ -259,13 +256,13 @@ def run_idle_gate(workdir):
         else:
             ok = 9 <= said["frames"] <= 30
             detail = f"{said['frames']} frames of 200 (want 9 to 30: the script's, and an end)"
-        print(f"  idle-type           {'PASS' if ok else 'FAIL'}  {detail}")
-        note("idle-type", ok)
+        return ok, detail
 
     # The code editor on 24 MB: its budget wraps the guessed rows a frame's share at a time, asking
     # for each frame, and once every row is wrapped nothing asks and the run ends. The UI's own
     # eases keep a run drawing a while whatever the text, so a small text's run is the baseline.
-    if arm("idle-editor"):
+    @arm("idle-editor")
+    def _():
         line = "    (sig IO_L1N_T0L_N1_DBC_44 :io :bank 44 :byte 0 :strobe :domain VCCO_44)\n"
 
         def editor_run(tag, megabytes):
@@ -285,13 +282,13 @@ def run_idle_gate(workdir):
         detail = (f"{frames} frames of the 400 allowed against {small} for a line of text, every "
                   f"row wrapped {settled} (want over 30 more than the line's, which a 24 MB text's "
                   f"budget takes at 192 KB a frame, the end before 400, and 1)")
-        print(f"  idle-editor         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("idle-editor", ok)
+        return ok, detail
 
     # Headless, a frame waits for the work out (spec 14.7): the board's thread, begun as the first
     # frame draws and made slow on purpose, lands in the second while a script keeps every frame
     # drawing.
-    if arm("idle-work-waits"):
+    @arm("idle-work-waits")
+    def _():
         script = os.path.join(workdir, "idle_work.script")
         with open(script, "w", encoding="utf-8") as f:
             f.write("0-20 idle\n")
@@ -306,8 +303,7 @@ def run_idle_gate(workdir):
         detail = (", ".join(f"{d} ms: begun at frame {b}, landed at {landed}"
                             for d, (b, landed) in runs.items())
                   + " (want each landed the frame after it was begun)")
-        print(f"  idle-work-waits     {'PASS' if ok else 'FAIL'}  {detail}")
-        note("idle-work-waits", ok)
+        return ok, detail
 
     # The window's close, which the app may refuse (spec 14.7): a script's close asks the hook as
     # the close button would, as the frame it is on ends.
@@ -320,7 +316,8 @@ def run_idle_gate(workdir):
         said = probe.get(("close", "asked"))
         return (int(said[0]), int(said[2]), int(said[4])) if said and len(said) == 5 else None
 
-    if arm("engine-close-hook"):
+    @arm("engine-close-hook")
+    def _():
         twice = close_run("twice", "5 close\n9 close\n", "--refuse-close")
         alone = close_run("alone", "5 close\n9 close\n")
         held = close_run("held", "3-6 close\n", "--refuse-close")
@@ -331,7 +328,6 @@ def run_idle_gate(workdir):
         detail = (f"asked, refused and frames drawn: refused then taken {twice} (want (2, 1, 11)), "
                   f"no hook {alone} (want (0, 0, 7)), a close over frames 3 to 6 {held} (want "
                   f"(1, 1, 30)) and with no hook {first} (want (0, 0, 5), its first frame)")
-        print(f"  engine-close-hook   {'PASS' if ok else 'FAIL'}  {detail}")
-        note("engine-close-hook", ok)
+        return ok, detail
 
-    return failed
+    return arm.failed

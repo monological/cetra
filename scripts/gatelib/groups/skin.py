@@ -347,7 +347,7 @@ def _scanline_ripple(pix, w, h, project, radius, cx, half=SSS_RIPPLE_WINDOW):
     barely 2x separation; sampling by pixel gets 6x.
 
     Compares the scanline against its own moving average, so it needs no
-    reference image and cannot drift -- the property every gate in this file
+    reference image and cannot drift -- the property every gate in the suite
     has.
     """
     c = project((cx, 0.0, 0.0))

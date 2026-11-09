@@ -519,7 +519,7 @@ def run_purkinje_gate(workdir):
     # --- purkinje-sharpen --------------------------------------------------
     # THE ONLY ARM IN THE SUITE THAT RENDERS --sharpen AT ALL. sceneToToned is
     # called five times under it, and the four neighbour taps were previously
-    # executed by nothing: --sharpen appears once in this file (with the shift
+    # executed by nothing: --sharpen appeared once in the suite (with the shift
     # off) and never in goldens.py, so the whole tap path was dead under gate
     # conditions.
     #

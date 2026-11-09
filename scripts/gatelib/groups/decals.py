@@ -253,7 +253,7 @@ def run_decal_gate(workdir):
         # The scorch too: it is the decal whose frame comes from the canonical
         # perpendicular fallback and the only one carrying a surface map, so it
         # is the one most likely to be wrong -- and its colour went unasserted
-        # while both this file and docs/verification.md quoted it as a reading.
+        # while both the suite and docs/verification.md quoted it as a reading.
         scorch = _decal_byte(pix_on, w, h, project, gen.SCORCH_READ)
         floor = _decal_byte(pix_on, w, h, project, gen.FLOOR_CLEAR)
         ok = (_decal_near(poster, gen.POSTER_TR) and _decal_near(wall, wall_substrate) and

@@ -1,6 +1,7 @@
 """The conifer group: the conifer form of the tree generator (spec 13.35)."""
 
-from gatelib.harness import _probe_render, _probe_rows, asset
+from gatelib.harness import asset
+from gatelib.probes import _probe_render, _probe_rows
 
 
 # The tree generator's fixture (spec 13.35): a `trees` block whose every tree is there for an arm

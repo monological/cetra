@@ -19,7 +19,7 @@ PUPPET = "assets/scenes/puppet.cscn"
 _ANIM_PROBE = re.compile(r"^anim ([\w-]+) (\w+) (\w+)((?:\s+-?[\d.]+)+)$", re.M)
 # The trace's POSITION and the character's own heading, for the two arms that ask where
 # the player actually went (spec 12.18). Separate passes over the same line, the rule
-# this file already follows for vel and cam: five arms index _GAMETEST_TRACE's three
+# the suite already follows for vel and cam: five arms index _GAMETEST_TRACE's three
 # groups positionally and adding captures would renumber every one of them.
 _GAMETEST_POS = re.compile(r"player step (\d+) .*? pos\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)")
 _GAMETEST_YAW = re.compile(r"player step (\d+) .* yaw (-?[\d.]+)")

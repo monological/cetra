@@ -17,13 +17,12 @@ import os
 import subprocess
 import sys
 
-from gatelib.harness import (
-    ASSET_KINDS, NO_HALOS, RENDER, ROOT, _probe_rows, _run, asset, asset_subpath, render,
-)
+from gatelib.harness import ASSET_KINDS, NO_HALOS, RENDER, ROOT, _run, asset, asset_subpath, render
 from gatelib.images import (
     _SRGB_TO_LINEAR, _absorb_box_rgb, _box_luma_dense, _linear_luma, _linear_rgb, _read_ppm,
     compare,
 )
+from gatelib.probes import _probe_rows
 from gatelib.profiling import _profiled_run
 from gatelib.scenes import (
     WATER_BOUNDS_AWAY, WATER_DRY_OVER, WATER_FIXTURE, _cscn_camera, _projector, cscn_copy,
@@ -675,6 +674,23 @@ WATER_SPECKS_MAX_FRACTION = 0.03
 WATER_RIPPLE_DROP_AT = "-2,3,2"
 WATER_RIPPLE_DROP_FRAMES = ("20", "50")
 WATER_RIPPLE_DROP_MIN_GROWTH = 1.5  # radius at the later frame over the earlier
+
+# Water surface (spec 11.32), on assets/water_fixture.
+#
+# A ramp rising out of the water over a flat bed. Absorption is monotone in path
+# length, and on a flat bed the path GROWS with distance because the sight line
+# gets more grazing -- so a scanline up the frame is a continuous sweep of path
+# length across one surface, and the tinted channel has to fall along it.
+#
+# Red is the channel to read: clear water's extinction is ~7x higher in red than
+# in blue, so R/B is the absorption signal and blue is very nearly the reference.
+# Measured near/mid/far: 0.2133, 0.1452, 0.0938.
+#
+# The horizon is deliberately NOT sampled. There the Fresnel reflection of the
+# sky dominates the transmitted term and R/B rises again (0.328) -- correctly, and
+# it would break a monotonicity arm that reached that far. An arm has to stop
+# where the quantity it names stops being the thing on screen.
+#
 # Three boxes down the left side, clear of the ramp, at increasing distance.
 WATER_ABSORB_BOXES = [(0.06, 0.86, 0.20, 0.94),
                       (0.06, 0.72, 0.20, 0.80),
@@ -963,7 +979,7 @@ def _cscn_wave_train_parse_fields():
 def _c_function_body(src, signature):
     """The braced body of one C function, by brace matching from its signature.
 
-    Bounding a body at the next `static ` instead -- which this file did until
+    Bounding a body at the next `static ` instead -- which the suite did until
     11.60 -- is only correct when the next function is also static. It was not:
     apply_wave_train is followed by four NON-static functions, so its "body" ran
     to the end of them and the scraper had been reading four extra functions all
@@ -1809,7 +1825,7 @@ def run_water_night_gate(workdir):
     if serr:
         # Reported rather than folded into the verdict. Swallowing it printed a bare
         # `-1 px` FAIL with no diagnostic, which is the one failure mode a reader cannot
-        # act on and every other arm in this file avoids.
+        # act on and every other arm in the suite avoids.
         print(f"  water-scatter-refuse ERROR render failed: {serr.strip()[-200:]}")
         failures.append("water-scatter-refuse")
     else:

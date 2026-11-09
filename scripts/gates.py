@@ -25,6 +25,15 @@ import sys
 import tempfile
 
 
+def _selectors(text):
+    """A comma-separated --only or --arms, its empty entries dropped."""
+    return [s.strip() for s in text.split(",") if s.strip()]
+
+
+def _count(n, noun):
+    return f"{n} {noun}{'' if n == 1 else 's'}"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--keep", action="store_true", help="keep the generated scenes and frames")
@@ -47,7 +56,7 @@ def main():
     # alone: every module that imported RENDER would keep the default it saw.
     if args.bin_dir:
         os.environ["CETRA_BIN_DIR"] = os.path.abspath(args.bin_dir)
-    from gatelib.arms import arms_printed, arms_ran, choose, guards
+    from gatelib.arms import arms_printed, choose, guards, select, unrun
     from gatelib.groups import GATE_GROUPS
     from gatelib.harness import BIN_DIR, CALIBRATED_FB_SCALE, RENDER, _detect_fb_scale
 
@@ -58,7 +67,7 @@ def main():
 
     groups = GATE_GROUPS
     if args.only:
-        wanted = [s.strip() for s in args.only.split(",") if s.strip()]
+        wanted = _selectors(args.only)
         groups = [g for g in GATE_GROUPS if any(w in g[0] for w in wanted)]
         # A selector that matches nothing is a typo, and running zero gates while
         # reporting success is the worst outcome this script has.
@@ -69,25 +78,14 @@ def main():
         for selector, _, fn in groups:
             names = arms_printed(fn)
             how = "chosen one by one" if guards(fn) else "runs whole under --arms"
-            print(f"  {selector} ({len(names)} arms, {how})")
+            print(f"  {selector} ({_count(len(names), 'arm')}, {how})")
             for name in names:
                 print(f"      {name}")
         return 0
 
-    # The arms chosen, by group. Read from the verdict lines in each group's source, so an arm
-    # whose name is built at run time cannot be chosen; its group's other arms still can. A
-    # selector that is an arm's whole name chooses that arm alone, or ui-layout could never be run
-    # without ui-layout-resize; any other matches by substring.
     chosen = {}
     if args.arms:
-        wanted = [s.strip() for s in args.arms.split(",") if s.strip()]
-        names = {n for _, _, fn in groups for n in arms_printed(fn)}
-        whole = {w for w in wanted if w in names}
-        for selector, _, fn in groups:
-            hits = [n for n in arms_printed(fn)
-                    if n in whole or any(w in n for w in wanted if w not in whole)]
-            if hits:
-                chosen[selector] = hits
+        chosen = select(groups, _selectors(args.arms))
         if not chosen:
             sys.exit(f"--arms {args.arms!r} matched no arm; --list-arms to see them")
         groups = [g for g in groups if g[0] in chosen]
@@ -108,7 +106,7 @@ def main():
     # all of them, which is minutes more than the arms asked for and should never be a surprise.
     for selector, _, fn in groups:
         if selector in chosen:
-            whole = "" if guards(fn) else " -- runs whole, its arms are not guarded"
+            whole = "" if guards(fn) else " -- runs whole, its arms are not chosen one by one"
             print(f"arms: {selector}: {', '.join(chosen[selector])}{whole}")
 
     workdir = tempfile.mkdtemp(prefix="cetra_gates_")
@@ -139,18 +137,20 @@ def main():
         else:
             shutil.rmtree(workdir, ignore_errors=True)
 
-    # A chosen arm a guarding group never let run: its guard names another arm, or it sits in a
-    # branch the run did not take. Passing it as nothing to do would report a check never made.
-    unrun = [n for selector, _, fn in groups if guards(fn)
-             for n in chosen.get(selector, ()) if n not in arms_ran()]
-    if unrun:
-        print(f"\nchosen but never run: {', '.join(unrun)}")
-        failures += unrun
+    # A chosen arm its group never reached would otherwise pass as nothing to do: a check never
+    # made, reported as made.
+    never = unrun(groups, chosen) if chosen else []
+    if never:
+        print(f"\nchosen but never run: {', '.join(never)}")
+        failures += never
 
-    scope = "" if groups is GATE_GROUPS else f" ({len(groups)} of {len(GATE_GROUPS)} groups)"
     if chosen:
-        scope = (f" ({sum(len(h) for h in chosen.values())} chosen arms in {len(groups)} "
-                 f"of {len(GATE_GROUPS)} groups)")
+        arms = _count(sum(len(h) for h in chosen.values()), "chosen arm")
+        scope = f" ({arms} in {len(groups)} of {len(GATE_GROUPS)} groups)"
+    elif groups is not GATE_GROUPS:
+        scope = f" ({len(groups)} of {len(GATE_GROUPS)} groups)"
+    else:
+        scope = ""
     if failures:
         print(f"\n{len(failures)} gate(s) failed{scope}: {', '.join(failures)}")
         return 1

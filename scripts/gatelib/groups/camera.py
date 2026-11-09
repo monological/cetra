@@ -6,8 +6,8 @@ import re
 import os
 import subprocess
 
-from gatelib.harness import RENDER, _PROBE_TIMEOUT, _bin, asset
-from gatelib.probes import _gametest_probe_text
+from gatelib.harness import RENDER, _bin, asset
+from gatelib.probes import _PROBE_TIMEOUT, _gametest_probe_text
 from gatelib.scenes import RENDER_CAM
 
 

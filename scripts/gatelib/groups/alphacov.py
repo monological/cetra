@@ -211,6 +211,8 @@ def run_alphacov_gate(workdir):
         failures.append("alphacov-far")
 
     return failures
+
+
 _ALPHACOV_GEN = None
 
 

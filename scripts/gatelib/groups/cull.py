@@ -3,8 +3,9 @@
 import json
 import os
 
-from gatelib.harness import _probe_render, asset, render
+from gatelib.harness import asset, render
 from gatelib.images import compare
+from gatelib.probes import _probe_render
 from gatelib.profiling import (
     SUBMIT_CASCADES, _fixture_mesh_nodes, _profiled_run, _submit_sum_detail,
 )

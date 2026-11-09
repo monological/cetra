@@ -5,8 +5,8 @@ import re
 import os
 import subprocess
 
-from gatelib.harness import GAMETEST, _PROBE_TIMEOUT
-from gatelib.probes import _gametest_probe_text
+from gatelib.harness import GAMETEST
+from gatelib.probes import _PROBE_TIMEOUT, _gametest_probe_text
 
 
 _GRAPH_PROBE = re.compile(r"^graph ([\w-]+) ([\w-]+) (\w+)((?:\s+-?[\d.]+)+)$", re.M)
@@ -44,7 +44,7 @@ def _graph_trace(workdir, tag, script, frames, extra=None):
     # thrown away. The trace is byte-identical at the default 1280x720 and the
     # water leg costs 58.6 s there against 22.9 s here -- the state sequence is a
     # function of the physics and the pad script, not of the resolution. Stated
-    # rather than inherited, which is what every render() call in this file does.
+    # rather than inherited, which is what every render() call in the suite does.
     try:
         r = subprocess.run(
             [GAMETEST, "-x", "-f", str(frames), "-W", "160", "-H", "100", "--no-crates",

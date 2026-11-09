@@ -4,8 +4,9 @@ import json
 import math
 import os
 
-from gatelib.harness import NO_HALOS, _probe_render, asset, render
+from gatelib.harness import NO_HALOS, asset, render
 from gatelib.images import _DISPLAY_TO_LINEAR, _box_luma_dense, _read_ppm, compare
+from gatelib.probes import _probe_render
 from gatelib.scenes import _cscn_camera, _projector, cscn_copy
 from gatelib.sky import CLOUDSHADOW_FRAMES, STARS_FIXTURE, STARS_PIN, _sliced_vs_atomic
 

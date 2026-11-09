@@ -85,13 +85,16 @@ at the import, before any group runs) and ImageMagick's `magick` on the path for
   `GATE_GROUPS`, in run order. Sibling groups that share helpers share a file named for their
   subject: `water.py` holds water, water-night and beach.
 - **The modules beside it** hold what several files use, by subject: `harness` (asset paths, the
-  binaries, running an app, the framebuffer scale), `images`, `scenes`, `probes`, `profiling`,
-  `world`, `sky` and `lighting`.
+  binaries, running an app, the framebuffer scale), `images`, `scenes`, `probes` (an app run for
+  what it prints, and reading that back), `profiling`, `world`, `sky` and `lighting`, and `arms`
+  (choosing which arms run).
 
 Where a new name goes, and the rules the split depends on:
 
 - **A helper or constant one group uses lives in that group's file.** When a second file needs it,
-  it moves to the shared module of its subject. A group's file never imports another group's.
+  it moves to the shared module of its subject. A group's file never imports another group's, so
+  a fact two groups share sits in a subject module even when one of them owns it: the mask
+  fixture's boxes are in `scenes`, because `ortho` re-tests the mask.
 - **A new group** is a file in `groups/` and a row in the table, at its place in the run order.
 - **A path in the tree is joined from `ROOT` or `SCRIPTS`** (`harness`), never from a module's
   `__file__`, which changes when the module moves.
@@ -106,28 +109,30 @@ Where a new name goes, and the rules the split depends on:
 - **`--only SEL[,SEL]`** runs the groups whose selector contains a selector. **`--arms SEL[,SEL]`**
   runs the arms chosen, and only the groups holding them; with `--only`, both hold. A selector
   that is an arm's whole name chooses that arm alone (`ui-layout`, not `ui-layout-resize` with
-  it); any other chooses every arm whose name contains it (`ui-editor`). `--list` lists the groups and `--list-arms` their arms, each group marked as choosing its
+  it); any other chooses every arm whose name contains it (`ui-editor`).
+- **`--list`** lists the groups and **`--list-arms`** their arms, each group marked as choosing its
   arms one by one or running whole.
-- **An arm's name is read from its verdict line** in the group's source, the literal gate-docs reads
-  too, so an arm whose name is built at run time cannot be chosen.
-- **The run prints the arms it chose before it starts**, by group. A group that does not guard its
-  arms runs all of them, and that line says so.
-- **A chosen arm that never ran fails the run**: its guard names another arm, or it sits in a branch
-  the run did not take.
+- **The run prints the arms it chose before it starts**, by group. A group that does not choose
+  its arms one by one runs all of them, and that line says so.
+- **A chosen arm that never ran fails the run**, so it cannot pass as nothing to do.
 
-`ui`, `canvas` and `idle` guard their arms (spec 14.29); the other groups run whole under `--arms`.
-To guard a group, or to add an arm to one that guards:
+`ui`, `canvas` and `idle` choose their arms one by one (spec 14.29); the other groups run whole
+under `--arms`. In such a group:
 
-- **Each arm sits under `if arm("name"):`**, its whole run and verdict inside. Arms that print
-  their verdicts from one run sit under one guard naming them all, and run together.
+- **Each arm is a function under `@arm("name")`**, where `arm = Arms(width)` is the group's
+  (`gatelib/arms.py`). A chosen arm runs as it is defined and returns `(ok, detail)`, `ok` None
+  for a SKIP; the decorator prints the verdict line, the name in a column `width` wide, and
+  keeps the failures the group returns as `arm.failed`. The name is written once.
 - **A run two arms read is a `functools.cache` function at the group's level**, called by each
   arm that reads it, so it runs once, on the first chosen arm that asks. A constant two arms read
-  sits at the group's level too. An `if` block is no scope in Python, so a run left inside its
-  first arm's block is invisible to the second until both run, and the second alone stops on an
-  `UnboundLocalError`.
-- **`gate-arm-guards`**, in the `gate-docs` group, holds a guarding group to both: each arm printed
-  under a guard naming it, each guard naming an arm printed under it, and no arm reading a name only
-  another arm's block assigns.
+  sits at the group's level too. An arm's own names are its function's, so one that read
+  another's fails with a NameError on every run, not only on the day it runs alone.
+- **`gate-arm-guards`**, in the `gate-docs` group, holds such a group to printing no verdict of
+  its own: an arm left out of the decorators would run whatever `--arms` chose, and `--arms`
+  could never choose it.
+
+In a group that prints its verdicts itself, an arm's name is read from its verdict line, the
+literal gate-docs reads too, so an arm whose name is built at run time cannot be chosen.
 
 ### Which binaries a number describes
 

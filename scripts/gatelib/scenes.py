@@ -112,6 +112,8 @@ def _scale_emitters(d, factor):
     fog = d.get("post", {}).get("fog")
     if fog and "ambient" in fog:
         fog["ambient"] = [c * factor for c in fog["ambient"]]
+
+
 # The circuit board at true scale (gen_board_fixture.py) in its three views: the scene file's
 # three-quarter camera, the whole board, and 2 mm from an 0402. Its golden is the first.
 BOARD_VIEWS = {
@@ -168,6 +170,8 @@ def _world_pixel_box(project, lo, hi, inset):
            for z in (lo[2], hi[2])]
     return (int(min(p[0] for p in pts)) + inset, int(min(p[1] for p in pts)) + inset,
             int(max(p[0] for p in pts)) - inset, int(max(p[1] for p in pts)) - inset)
+
+
 # The eligibility fixture: one skinned mesh on two nodes. No .cscn -- it needs
 # no look, only a program that cannot read InstanceBlock.
 SKIN_FIXTURE = "skinned_instance_fixture.gltf"
@@ -213,29 +217,17 @@ FOGVOL_FRAMES = "60"
 FOGVOL_DARKEN_MAX = 0.92
 
 
-# Water surface (spec 11.32), on assets/water_fixture.
-#
-# A ramp rising out of the water over a flat bed. Absorption is monotone in path
-# length, and on a flat bed the path GROWS with distance because the sight line
-# gets more grazing -- so a scanline up the frame is a continuous sweep of path
-# length across one surface, and the tinted channel has to fall along it.
-#
-# Red is the channel to read: clear water's extinction is ~7x higher in red than
-# in blue, so R/B is the absorption signal and blue is very nearly the reference.
-# Measured near/mid/far: 0.2133, 0.1452, 0.0938.
-#
-# The horizon is deliberately NOT sampled. There the Fresnel reflection of the
-# sky dominates the transmitted term and R/B rises again (0.328) -- correctly, and
-# it would break a monotonicity arm that reached that far. An arm has to stop
-# where the quantity it names stops being the thing on screen.
+# The water fixture (spec 11.32): a ramp rising out of the water over a flat bed.
 WATER_FIXTURE = "water_fixture.cscn"
 WATER_BOUNDS_AWAY = "1000,1000,1001,1001"
 WATER_DRY_OVER = "0,0,0,1e4,1e4"  # over everything
+
+# The exposure pin alone: a probe fixture authors its own sky rather than taking one from flags.
 PROBE_SKY = ["--no-auto-exposure", "-E", "1.0"]
+
 CORNELL_FIXTURE = "cornell_box.cscn"
 
-
-# --- block-compressed textures (spec 11.85) ---------------------------------
+# Block-compressed textures (spec 11.85).
 TEXCOMP_FIXTURE = "texcomp_fixture.cscn"
 
 

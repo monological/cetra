@@ -3,8 +3,9 @@
 import math
 import os
 
-from gatelib.harness import _probe_render, asset, render
+from gatelib.harness import asset, render
 from gatelib.images import _SRGB_TO_LINEAR, _read_ppm, compare
+from gatelib.probes import _probe_render
 from gatelib.scenes import cscn_copy
 
 

@@ -69,6 +69,8 @@ def _fogdepth_layout(gen, w, h):
 
     neighbours = {names[k]: (gap_names[k], gap_names[k + 1]) for k in range(len(names))}
     return boxes, neighbours
+
+
 # The two sweep panes carry alpha 0.5 and 0.25 and are mirrored about x=0, so the
 # difference of their fog ratios is (0.5 - 0.25) x the near-vs-far advantage with the
 # backdrop gradient cancelled. Measured 0.0676 against 0.0677 predicted; before the fix it

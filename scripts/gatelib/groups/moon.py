@@ -6,8 +6,9 @@ import json
 import math
 import os
 
-from gatelib.harness import NO_HALOS, _probe_render, asset, render
+from gatelib.harness import NO_HALOS, asset, render
 from gatelib.images import _SRGB_TO_LINEAR, _read_ppm, compare
+from gatelib.probes import _probe_render
 from gatelib.scenes import _projector, cscn_copy
 from gatelib.sky import (
     CYCLE_LATITUDE, CYCLE_QUIESCE_HOUR, NIGHTFLOOR_GROUND_BAND, STARS_BAND, STARS_FIXTURE,
@@ -274,7 +275,7 @@ def run_moon_gate(workdir):
                       angle belongs moves every rung BUT 90, which is where the two agree
                       and why the ladder straddles it.
       moon-disc       the disc lands where the sky says and NOWHERE else. The camera is
-                      aimed down this file's own copy of the elevation/azimuth formula
+                      aimed down the suite's own copy of the elevation/azimuth formula
                       and the disc is placed by the C's, so the arm asserts that two
                       independent computations of one direction agree; the predicted mask
                       fills and nothing moves outside it. It fails FIRST and by name if
@@ -335,7 +336,7 @@ def run_moon_gate(workdir):
                       other side. Coverage is pinned at 1.0 because the moon is a point
                       and cannot use the stars' whole-band dodge.
       moon-cycle      a FROZEN cycle at an hour renders 0 px from explicit
-                      --moon-elevation/--moon-azimuth taken from this file's twin of the
+                      --moon-elevation/--moon-azimuth taken from the suite's twin of the
                       lag arithmetic, and the SAME angles at a different hour move real
                       pixels. The second leg is not thoroughness: without it a tick that
                       never writes the moon passes the identity whenever the twin happens

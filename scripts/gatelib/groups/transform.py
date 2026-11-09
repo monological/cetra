@@ -2,7 +2,8 @@
 
 import os
 
-from gatelib.harness import _bin, _probe_rows, _run
+from gatelib.harness import _bin, _run
+from gatelib.probes import _probe_rows
 
 
 # The only RIGID scene-graph mover in the tree that is also headless

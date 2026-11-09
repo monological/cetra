@@ -3,7 +3,8 @@
 import math
 import os
 
-from gatelib.harness import _probe_render, asset
+from gatelib.harness import asset
+from gatelib.probes import _probe_render
 from gatelib.scenes import _scale_emitters, cscn_copy
 
 

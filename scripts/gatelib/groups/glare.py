@@ -2,8 +2,9 @@
 
 import os
 
-from gatelib.harness import RENDER, _probe_rows, _run, asset, render
+from gatelib.harness import RENDER, _run, asset, render
 from gatelib.images import compare
+from gatelib.probes import _probe_rows
 from gatelib.scenes import WATER_FIXTURE, cscn_copy
 
 

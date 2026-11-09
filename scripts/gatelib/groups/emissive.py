@@ -3,8 +3,9 @@
 import json
 import os
 
-from gatelib.harness import NO_HALOS, _probe_render, asset, render
+from gatelib.harness import NO_HALOS, asset, render
 from gatelib.images import _absorb_box_rgb, _read_ppm, compare
+from gatelib.probes import _probe_render
 from gatelib.scenes import CORNELL_FIXTURE, _cscn_camera, _projector, cscn_copy
 
 

@@ -3,7 +3,8 @@
 import re
 import subprocess
 
-from gatelib.harness import GAMETEST, _PROBE_TIMEOUT, asset
+from gatelib.harness import GAMETEST, asset
+from gatelib.probes import _PROBE_TIMEOUT
 
 
 # "ragdoll <case> <label> <key> <numbers...>" from gametest --ragdoll-probe,

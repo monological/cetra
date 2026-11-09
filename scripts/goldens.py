@@ -40,10 +40,8 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gatelib.harness import asset  # noqa: E402  (the kind routing)
+from gatelib.harness import ROOT, asset  # noqa: E402  (the repository, and the kind routing)
 from gatelib.images import compare  # noqa: E402  (the shell-out)
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Same override gates.py takes, and the same env var, so one export covers both.
 #

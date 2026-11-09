@@ -7,7 +7,7 @@ import os
 from gatelib.harness import RENDER, _run, asset
 
 
-# Milliseconds of slack on every ORDERING comparison in this file. The
+# Milliseconds of slack on every ORDERING comparison in the suite. The
 # quantities are printed at three decimal places, so this is the tolerance for
 # the rounding and nothing else -- the defects these arms catch are measured in
 # whole multiples, not in fractions of a millisecond. It is a constant rather
@@ -277,7 +277,7 @@ def _submit_sum_violations(tables):
     reads each group's own source for the arms it runs -- so an arm printed from
     in here is invisible to the checker, and the group carrying it has to opt out
     of being checked at all. The arithmetic still lives once; only the verdict
-    line moved to the caller, which is where every other helper in this file
+    line moved to the caller, which is where every other helper in the suite
     leaves it.
     """
     rows = dict(tables["submit"])
@@ -293,13 +293,15 @@ def _submit_sum_detail(tables, label):
     Split this way, rather than printing here, because gate-arm-docs reads each
     group's own source for the arm names it runs -- so an arm whose verdict line
     lives in a helper is invisible to the checker, and the group carrying it has
-    to opt out of being checked at all. Every other helper in this file already
+    to opt out of being checked at all. Every other helper in the suite already
     works this way; this one did not.
     """
     rows, bad = _submit_sum_violations(tables)
     ok = bool(rows) and not bad
     return ok, (f"{label}: {len(rows)} passes, "
                 f"{'identity holds in each' if ok else f'violations {bad}'}")
+
+
 _CLUSTERED_LINE = re.compile(r"clustered: (\d+) directional \+ (\d+) clusterable lights, "
                              r"(\d+) cluster indices")
 
@@ -315,4 +317,6 @@ def _lod_run(workdir, tag, eye, extra):
     return _profiled_run(workdir, f"lod_{tag}",
                          ["--cam-eye", eye, "--cam-target", "0,0.5,-6"] + extra,
                          fixture=LOD_FIXTURE, size=("400", "300"))
+
+
 OCCLUSION_MAT = "occlusion_fixture_mat.cscn"

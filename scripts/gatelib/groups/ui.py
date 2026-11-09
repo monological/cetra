@@ -11,7 +11,7 @@ import sys
 
 import numpy as np
 
-from gatelib.arms import arm
+from gatelib.arms import Arms
 from gatelib.harness import ROOT, SCRIPTS
 from gatelib.images import _ppm_array
 from gatelib.probes import (
@@ -1155,21 +1155,14 @@ def run_ui_gate(workdir):
                      é is not e. A codepoint the atlas lacks draws its box rather
                      than a silent gap (end to end).
     """
-    failed = []
-
-    def note(name, ok):
-        # Bookkeeping only. Each verdict LINE below prints its arm's name as a
-        # literal, because that source text is what gate-docs reads to tell the
-        # documented list from the one that actually runs -- a helper that
-        # formatted the name would leave every arm here invisible to it.
-        if not ok:
-            failed.append(name)
+    arm = Arms(21)
 
     def close(a, b, tol=0.01):
         return abs(a - b) <= tol
 
     # ---- layout
-    if arm("ui-layout"):
+    @arm("ui-layout")
+    def _():
         p = _ui_probe("layout")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1189,11 +1182,11 @@ def run_ui_gate(workdir):
                       f"(want centred, h = 2*{pad:.0f} + 3*{h:.0f} + 2*{gap:.0f} = {want_ph:.0f}), "
                       f"rows inset to {rows[0][2]:.0f} at y "
                       f"{rows[0][1]:.0f}/{rows[1][1]:.0f}/{rows[2][1]:.0f}")
-        print(f"  ui-layout             {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-layout", ok)
+        return ok, detail
 
     # ---- layout at other sizes
-    if arm("ui-layout-resize"):
+    @arm("ui-layout-resize")
+    def _():
         p = _ui_probe("layout-resize")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1205,11 +1198,11 @@ def run_ui_gate(workdir):
             detail = (f"640x360 -> {small[0]:.0f},{small[1]:.0f}; "
                       f"2560x1440 -> {large[0]:.0f},{large[1]:.0f}; back to the first size "
                       f"reproduces it {'exactly' if small == again else 'NOT exactly'}")
-        print(f"  ui-layout-resize      {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-layout-resize", ok)
+        return ok, detail
 
     # ---- wrapping
-    if arm("ui-wrap"):
+    @arm("ui-wrap")
+    def _():
         p = _ui_probe("wrap")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1221,11 +1214,11 @@ def run_ui_gate(workdir):
             detail = (f"{count} lines at {limit:.0f} points, widths "
                       + "/".join(f"{w:.0f}" for w in widths)
                       + f" (want every line <= {limit:.0f} and the first > {limit * 0.75:.0f})")
-        print(f"  ui-wrap               {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-wrap", ok)
+        return ok, detail
 
     # ---- navigation
-    if arm("ui-nav"):
+    @arm("ui-nav")
+    def _():
         p = _ui_probe("nav")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1235,11 +1228,11 @@ def run_ui_gate(workdir):
             detail = ("focus " + " -> ".join(f"{v:.0f}" for v in seq)
                       + " (want -1 0 1 2 0 2: nothing focused, then acquire, two moves, a wrap off "
                         "the end and a wrap back)")
-        print(f"  ui-nav                {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-nav", ok)
+        return ok, detail
 
     # ---- focus set by the app
-    if arm("ui-focus-set"):
+    @arm("ui-focus-set")
+    def _():
         p = _ui_probe("focus-set")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1250,11 +1243,11 @@ def run_ui_gate(workdir):
             detail = ("focus " + " -> ".join(f"{v:.0f}" for v in seq)
                       + f" (want 1 2 -1 0: set, moved on, cleared, acquired), reported back "
                         f"({same:.0f})")
-        print(f"  ui-focus-set          {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-focus-set", ok)
+        return ok, detail
 
     # ---- hit testing
-    if arm("ui-hit"):
+    @arm("ui-hit")
+    def _():
         p = _ui_probe("hit")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1268,11 +1261,11 @@ def run_ui_gate(workdir):
                       f"neighbours; padding and gap claim {p[('padding', 'rows')][0]:.0f}/"
                       f"{p[('gap', 'rows')][0]:.0f} rows; the pointer walk reaches row1 "
                       f"({p[('pointer', 'row1')][0]:.0f})")
-        print(f"  ui-hit                {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-hit", ok)
+        return ok, detail
 
     # ---- capture
-    if arm("ui-capture"):
+    @arm("ui-capture")
+    def _():
         p = _ui_probe("capture")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1294,11 +1287,11 @@ def run_ui_gate(workdir):
                       f"{free_move:.2f} -> {held_move:.2f} -> {given_move:.2f} (want it taken to 0 "
                       f"and handed back) while ui_accept holds {free_accept:.2f} -> "
                       f"{held_accept:.2f} (want it unaffected)")
-        print(f"  ui-capture            {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-capture", ok)
+        return ok, detail
 
     # ---- the screen stack
-    if arm("ui-stack"):
+    @arm("ui-stack")
+    def _():
         p = _ui_probe("stack")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1308,11 +1301,11 @@ def run_ui_gate(workdir):
             ok = all(v == 1 for v in vals)
             detail = ("top is where it should be after "
                       + ", ".join(f"{k}={v:.0f}" for k, v in zip(keys, vals)) + " (want all 1)")
-        print(f"  ui-stack              {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-stack", ok)
+        return ok, detail
 
     # ---- theme resolution
-    if arm("ui-theme-identity"):
+    @arm("ui-theme-identity")
+    def _():
         p = _ui_probe("theme-identity")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1322,11 +1315,11 @@ def run_ui_gate(workdir):
             ok = match == 1 and differs == 1
             detail = (f"a zeroed style hashes identically to no style ({match:.0f}, want 1) and a "
                       f"style that says something does not ({differs:.0f}, want 1)")
-        print(f"  ui-theme-identity     {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-theme-identity", ok)
+        return ok, detail
 
     # ---- a part of a picture
-    if arm("ui-textured-uv"):
+    @arm("ui-textured-uv")
+    def _():
         p = _ui_probe("textured-uv")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1337,11 +1330,11 @@ def run_ui_gate(workdir):
             detail = (f"the whole-picture quad hashes identically to the UV quad over 0..1 "
                       f"({match:.0f}, want 1) and a part of the picture does not ({differs:.0f}, "
                       f"want 1)")
-        print(f"  ui-textured-uv        {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-textured-uv", ok)
+        return ok, detail
 
     # ---- on the stack, not only on top
-    if arm("ui-on-stack"):
+    @arm("ui-on-stack")
+    def _():
         p = _ui_probe("on-stack")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1353,11 +1346,11 @@ def run_ui_gate(workdir):
             ok = got == want
             detail = ("on the stack " + " ".join(f"{s}-{n}={v:.0f}" for (s, n), v in zip(keys, got))
                       + " (want 0 1 0 1 1 0 1: the one under counts, a pop takes only the top)")
-        print(f"  ui-on-stack           {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-on-stack", ok)
+        return ok, detail
 
     # ---- a screen that hides the ones under it
-    if arm("ui-opaque"):
+    @arm("ui-opaque")
+    def _():
         p = _ui_probe("opaque")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1369,11 +1362,11 @@ def run_ui_gate(workdir):
             detail = (f"stacked plainly both draw ({plain:.0f}), opaque the top draws as it does "
                       f"alone ({covered:.0f}), popped the one under draws as it did "
                       f"({popped:.0f}); want 1/1/1")
-        print(f"  ui-opaque             {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-opaque", ok)
+        return ok, detail
 
     # ---- the closed element list
-    if arm("ui-elements-closed"):
+    @arm("ui-elements-closed")
+    def _():
         try:
             with open(_UI_HEADER, "r", encoding="utf-8") as f:
                 names = _UI_CTOR.findall(f.read())
@@ -1382,11 +1375,11 @@ def run_ui_gate(workdir):
                       f"(want exactly {len(_UI_KINDS)})")
         except OSError as e:
             ok, detail = False, f"cannot read ui.h ({e})"
-        print(f"  ui-elements-closed    {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-elements-closed", ok)
+        return ok, detail
 
     # ---- settings
-    if arm("ui-settings-roundtrip"):
+    @arm("ui-settings-roundtrip")
+    def _():
         env = dict(os.environ)
         env["CETRA_SETTINGS_DIR"] = os.path.join(workdir, "ui-settings")
         p = _ui_probe("settings", env=env)
@@ -1408,11 +1401,11 @@ def run_ui_gate(workdir):
                       f"survives a read into a zeroed struct, the mode rides the file as a name "
                       f"({p[('named', 'fullscreen')][0]:.0f}), an absent file leaves defaults, and "
                       f"apply reaches the mixer ({p[('applied', 'master')][0]:.3f})")
-        print(f"  ui-settings-roundtrip {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-settings-roundtrip", ok)
+        return ok, detail
 
     # ---- wrapped labels (spec 14.2)
-    if arm("ui-wrap-label"):
+    @arm("ui-wrap-label")
+    def _():
         p = _ui_probe("wrap-label")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1429,10 +1422,10 @@ def run_ui_gate(workdir):
                       f"{lines * lh + 8.0:.2f}), {w:.2f} wide (want {inner:.0f}), drawn to "
                       f"{right:.2f} (want within {inner:.0f}); with no width it is {fit:.3f} wide, "
                       f"its longest word {word:.3f}")
-        print(f"  ui-wrap-label         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-wrap-label", ok)
+        return ok, detail
 
-    if arm("ui-wrap-cache"):
+    @arm("ui-wrap-cache")
+    def _():
         p = _ui_probe("wrap-cache")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1445,11 +1438,11 @@ def run_ui_gate(workdir):
                       f"{seq[2]:.0f} at a new width, {seq[3]:.0f} after new text, {seq[4]:.0f} in "
                       f"a new size (want 1, 1, 2, 3, 4); measured "
                       + ", ".join(f"{m:.0f}" for m in measured) + " (want 1, 1, 1, 2, 3)")
-        print(f"  ui-wrap-cache         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-wrap-cache", ok)
+        return ok, detail
 
     # ---- styled runs
-    if arm("ui-runs-draw"):
+    @arm("ui-runs-draw")
+    def _():
         p = _ui_probe("runs-draw")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1461,10 +1454,10 @@ def run_ui_gate(workdir):
                   and colors[2] == red and colors[3] == own and abs(face_w - plain_w) > 1.0)
             detail = (f"glyph colours {colors} (want own, red, red, own); the run's glyph in "
                       f"another face is {face_w:.2f} wide against {plain_w:.2f}")
-        print(f"  ui-runs-draw          {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-runs-draw", ok)
+        return ok, detail
 
-    if arm("ui-runs-wrap"):
+    @arm("ui-runs-wrap")
+    def _():
         p = _ui_probe("runs-wrap")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1474,10 +1467,10 @@ def run_ui_gate(workdir):
             ok = face_lines > plain_lines and right <= width + 0.5
             detail = (f"{plain_lines:.0f} lines in one face, {face_lines:.0f} with a word in a "
                       f"wider one (want more), drawn to {right:.2f} of {width:.2f}")
-        print(f"  ui-runs-wrap          {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-runs-wrap", ok)
+        return ok, detail
 
-    if arm("ui-runs-refused"):
+    @arm("ui-runs-refused")
+    def _():
         p = _ui_probe("runs-refused")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1488,12 +1481,12 @@ def run_ui_gate(workdir):
                   and kept == 3 and retext == 0)
             detail = (f"accepted {verdicts} (want only valid), {kept:.0f} runs kept through the "
                       f"refusals (want 3), {retext:.0f} after new text (want 0)")
-        print(f"  ui-runs-refused       {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-runs-refused", ok)
+        return ok, detail
 
     # ---- the scrolling pane: 20 rows 30 tall, 8 apart, in a 300x200 pane at (490, 260)
     row_pitch, view, content = 38.0, 200.0, 20 * 30.0 + 19 * 8.0
-    if arm("ui-scroll-layout"):
+    @arm("ui-scroll-layout")
+    def _():
         p = _ui_probe("scroll-layout")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1507,10 +1500,10 @@ def run_ui_gate(workdir):
             detail = (f"content {p[('content', 'height')][0]:.1f} (want {content:.0f}), rows at "
                       f"{at} (want pitch {row_pitch:.0f} from {py:.0f}), wheeled {scroll:.1f} and "
                       f"every row moved up by it: {moved}")
-        print(f"  ui-scroll-layout      {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-scroll-layout", ok)
+        return ok, detail
 
-    if arm("ui-scroll-wheel"):
+    @arm("ui-scroll-wheel")
+    def _():
         p = _ui_probe("scroll-wheel")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1526,10 +1519,10 @@ def run_ui_gate(workdir):
                       f"{got['top'][0]:.1f}, off the pane {got['outside'][0]:.1f} (want 0); "
                       f"nested, inner {got['inner'][0]:.1f} (want {2 * step:.0f}) and outer "
                       f"{got['outer'][0]:.1f} (want 0)")
-        print(f"  ui-scroll-wheel       {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-scroll-wheel", ok)
+        return ok, detail
 
-    if arm("ui-scroll-clip"):
+    @arm("ui-scroll-clip")
+    def _():
         p = _ui_probe("scroll-clip")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1542,10 +1535,10 @@ def run_ui_gate(workdir):
             detail = (f"clicks in view {cin:.0f} and below it {cout:.0f} (want 1, 0); over the UI "
                       f"{oin:.0f} and {oout:.0f} (want 1, 0); {drawn:.0f} rows emitted (want 6), "
                       f"{outside:.0f} wholly outside (want 0)")
-        print(f"  ui-scroll-clip        {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-scroll-clip", ok)
+        return ok, detail
 
-    if arm("ui-scroll-into-view"):
+    @arm("ui-scroll-into-view")
+    def _():
         p = _ui_probe("scroll-into-view")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1566,10 +1559,10 @@ def run_ui_gate(workdir):
                       f"hovering row 5 focuses it ({hover_focus:.0f}) and scrolls "
                       f"{hover_moved:.1f} (want 0); the app showing row 2 scrolls to {app} (want "
                       f"{want_app:.0f}), the focus kept ({app_focus})")
-        print(f"  ui-scroll-into-view   {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-scroll-into-view", ok)
+        return ok, detail
 
-    if arm("ui-scroll-follow"):
+    @arm("ui-scroll-follow")
+    def _():
         p = _ui_probe("scroll-follow")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1582,10 +1575,10 @@ def run_ui_gate(workdir):
             detail = (f"begins at {first:.0f} (want its end {h0 - view:.0f}), grown {grown:.0f} "
                       f"(want {h1 - view:.0f}); scrolled up to {up:.0f}, a row added leaves it at "
                       f"{kept:.0f}")
-        print(f"  ui-scroll-follow      {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-scroll-follow", ok)
+        return ok, detail
 
-    if arm("ui-scroll-bar"):
+    @arm("ui-scroll-bar")
+    def _():
         p = _ui_probe("scroll-bar")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1602,14 +1595,14 @@ def run_ui_gate(workdir):
             detail = (f"thumb {th:.2f} tall (want {want_h:.2f}) at {ty:.1f} (want {py + 2:.0f}); "
                       f"dragged 50 points it scrolls {dragged:.2f} (want {want_drag:.2f}); a press "
                       f"below it pages {paged:.1f} (want {0.9 * view:.0f})")
-        print(f"  ui-scroll-bar         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-scroll-bar", ok)
+        return ok, detail
 
     # ---- virtual rows: 30-point rows 8 points apart in a 200-point pane
     row_h, row_gap = 30.0, 8.0
     # The rows in view at most, and one either side.
     held_most = math.ceil(200.0 / (row_h + row_gap)) + 3
-    if arm("ui-rows-built"):
+    @arm("ui-rows-built")
+    def _():
         p = _ui_probe("rows-built")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1626,10 +1619,10 @@ def run_ui_gate(workdir):
                       f"{far_builds:.0f} built in all (want at most {near_builds + far:.0f}); row "
                       f"50,000 shown {p[('far', 'shown')][0]:.0f}, laid out again "
                       f"{p[('again', 'builds')][0]:.0f} built (want 0)")
-        print(f"  ui-rows-built         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-rows-built", ok)
+        return ok, detail
 
-    if arm("ui-rows-measure"):
+    @arm("ui-rows-measure")
+    def _():
         p = _ui_probe("rows-measure")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1649,10 +1642,10 @@ def run_ui_gate(workdir):
                       f"{p[('again', 'builds')][0]:.0f} built (want 0); wider, {narrow:.0f} to "
                       f"{wide:.0f} with {wider:.0f} built (want fewer points, at most 2 built); a "
                       f"changed row {p[('changed', 'builds')][0]:.0f} (want {wider + 1:.0f})")
-        print(f"  ui-rows-measure       {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-rows-measure", ok)
+        return ok, detail
 
-    if arm("ui-rows-anchor"):
+    @arm("ui-rows-anchor")
+    def _():
         p = _ui_probe("rows-anchor")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1665,10 +1658,10 @@ def run_ui_gate(workdir):
             detail = (f"row 100 shown {shown:.0f}, its bottom {bottoms[0]:.1f} (want the pane's "
                       f"{bottoms[1]:.1f}); the row above the view built again {above:.0f} tall "
                       f"(want 90), the first row in view moved {moved:.2f} (want 0)")
-        print(f"  ui-rows-anchor        {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-rows-anchor", ok)
+        return ok, detail
 
-    if arm("ui-rows-focus"):
+    @arm("ui-rows-focus")
+    def _():
         p = _ui_probe("rows-focus")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1679,11 +1672,11 @@ def run_ui_gate(workdir):
             detail = (f"focused row built {p[('first', 'built')][0]:.0f}; scrolled to "
                       f"{p[('far', 'scroll')][0]:.0f}, kept {p[('far', 'kept')][0]:.0f} with "
                       f"{held:.0f} rows held (want at most {held_most + 1})")
-        print(f"  ui-rows-focus         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-rows-focus", ok)
+        return ok, detail
 
     # ---- the most an element measures, and lengths that are none
-    if arm("ui-max-size"):
+    @arm("ui-max-size")
+    def _():
         p = _ui_probe("max-size")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1703,11 +1696,11 @@ def run_ui_gate(workdir):
                       f"growing child held to 100 takes {held:.0f} and its siblings {rest} (want "
                       f"250 each); two held to 100 and centred {both} at {offset:.0f} (want 200); "
                       f"a fixed one with a most of 10 keeps {fixed:.0f} (want 50)")
-        print(f"  ui-max-size           {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-max-size", ok)
+        return ok, detail
 
     # ---- a size as a share of the parent; every length here is exact in float, so == holds
-    if arm("ui-share"):
+    @arm("ui-share")
+    def _():
         p = _ui_probe("share")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1756,10 +1749,10 @@ def run_ui_gate(workdir):
                       f"0.7 and GROW in 578, 579 and 311.5 points: {splits}; nested, across, held, "
                       f"two halves leaving a point, two past 1, under a FIT parent and of 0 as the "
                       f"rule says")
-        print(f"  ui-share              {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-share", ok)
+        return ok, detail
 
-    if arm("ui-padding-none"):
+    @arm("ui-padding-none")
+    def _():
         p = _ui_probe("padding-none")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1773,12 +1766,12 @@ def run_ui_gate(workdir):
                       f"{none[3]:.0f} (want 20 x 40) from its corner {first}; zero inherits, "
                       f"{inherit[2]:.0f} x {inherit[3]:.0f} (want more); none above and below and "
                       f"6 either side, {sides[2]:.0f} x {sides[3]:.0f} (want 32 x 20)")
-        print(f"  ui-padding-none       {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-padding-none", ok)
+        return ok, detail
 
     # A glyph's corner is snapped to the framebuffer's pixels, so a baseline or a pen read back
     # from it lies within half a pixel of where it was drawn.
-    if arm("ui-label-padding"):
+    @arm("ui-label-padding")
+    def _():
         p = _ui_probe("label-padding")
         if not p or ("baseline", "off") not in p:
             ok, detail = False, "the probe produced nothing"
@@ -1788,10 +1781,10 @@ def run_ui_gate(workdir):
             ok = abs(base) <= snap and abs(pen) <= snap
             detail = (f"padding 10 above and 12 left: the baseline {base:+.2f} and the pen "
                       f"{pen:+.2f} points off their place inside it (want within {snap:.2f})")
-        print(f"  ui-label-padding      {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-label-padding", ok)
+        return ok, detail
 
-    if arm("ui-baseline"):
+    @arm("ui-baseline")
+    def _():
         p = _ui_probe("baseline")
         count = p.get(("glyphs", "count"), [0])[0] if p else 0
         if count != 7:
@@ -1809,10 +1802,10 @@ def run_ui_gate(workdir):
                       f"(want within {snap:.2f}); the row's own at {own:.2f}; the textless panel "
                       f"{top:+.2f} from the row's top (want 0); the row {height:.2f} tall, its "
                       f"lowest child reaching {reach:.2f}")
-        print(f"  ui-baseline           {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-baseline", ok)
+        return ok, detail
 
-    if arm("ui-control-lines"):
+    @arm("ui-control-lines")
+    def _():
         p = _ui_probe("control-lines")
         counts = p.get(("rows", "count")) if p else None
         if not counts:
@@ -1826,10 +1819,10 @@ def run_ui_gate(workdir):
             detail = (f"rows {counts} (want 1, 2, 2); a row's centre off the button's centre {one} "
                       f"for one line and {two} for two lines' middle (want equal); the slider's "
                       f"track {clear} points below its second row (want over 0)")
-        print(f"  ui-control-lines      {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-control-lines", ok)
+        return ok, detail
 
-    if arm("ui-text-mesh"):
+    @arm("ui-text-mesh")
+    def _():
         p = _ui_probe("text-mesh")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1840,14 +1833,14 @@ def run_ui_gate(workdir):
             ok = not wrong and greens == [1, 0, 1, 1, 1]
             detail = (f"5 characters and 5 quads, only the é's coloured (greens {greens})" if ok
                       else f"wrong: {wrong}; greens {greens} (want 1, 0, 1, 1, 1)")
-        print(f"  ui-text-mesh          {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-text-mesh", ok)
+        return ok, detail
 
     # ---- the text field: each probe line says 1 where its text was the one it wanted
     def flags_ok(p, keys):
         return not _probe_wrong(p, {k: 1 for k in keys})
 
-    if arm("ui-field-type"):
+    @arm("ui-field-type")
+    def _():
         p = _ui_probe("field-type")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1858,10 +1851,10 @@ def run_ui_gate(workdir):
                   and changes == [1, 2, 2])
             detail = (f"typed 'hello' then ' world', the caret at {caret[0]:.0f} (want 5), "
                       f"on_change {changes} (want 1, 2, 2)")
-        print(f"  ui-field-type         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-field-type", ok)
+        return ok, detail
 
-    if arm("ui-field-edit"):
+    @arm("ui-field-edit")
+    def _():
         p = _ui_probe("field-edit")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1873,10 +1866,10 @@ def run_ui_gate(workdir):
             detail = (f"carets after left, a word left, Home, End and Delete {carets} (want 9, 6, "
                       f"0, 11, 0); Backspace, a word's Backspace and Delete left the texts they "
                       f"should")
-        print(f"  ui-field-edit         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-field-edit", ok)
+        return ok, detail
 
-    if arm("ui-field-utf8"):
+    @arm("ui-field-utf8")
+    def _():
         p = _ui_probe("field-utf8")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1890,10 +1883,10 @@ def run_ui_gate(workdir):
                       f"{typed[0]:.0f} (want 9, 9); left twice {lefts} (want 5, 3); Backspace "
                       f"leaves {erased[3]:.0f} bytes and caret {erased[0]:.0f} (want 7, 1), "
                       f"codepoints {cps}")
-        print(f"  ui-field-utf8         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-field-utf8", ok)
+        return ok, detail
 
-    if arm("ui-field-select"):
+    @arm("ui-field-select")
+    def _():
         p = _ui_probe("field-select")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1905,10 +1898,10 @@ def run_ui_gate(workdir):
             detail = (f"selections {sel} (want shift 0-5, all 0-16, double 6-10, triple 0-16); a "
                       f"read-only field took runs and copied plain text; an editable one refused "
                       f"runs")
-        print(f"  ui-field-select       {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-field-select", ok)
+        return ok, detail
 
-    if arm("ui-field-clipboard"):
+    @arm("ui-field-clipboard")
+    def _():
         p = _ui_probe("field-clipboard")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1919,10 +1912,10 @@ def run_ui_gate(workdir):
             ok = not wrong
             detail = ("copy, paste, a flattened newline, cut, and a read-only field's copy that "
                       "neither cuts nor pastes, each as it should be" if ok else f"wrong: {wrong}")
-        print(f"  ui-field-clipboard    {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-field-clipboard", ok)
+        return ok, detail
 
-    if arm("ui-field-undo"):
+    @arm("ui-field-undo")
+    def _():
         p = _ui_probe("field-undo")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1933,10 +1926,10 @@ def run_ui_gate(workdir):
             detail = ("'abc def' undoes to 'abc' then nothing, and redoes back a word at a time"
                       if ok else f"the text was not the one wanted after {list(wrong)} (want "
                       f"'abc', '', 'abc', 'abc def'; the probe's stderr names each)")
-        print(f"  ui-field-undo         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-field-undo", ok)
+        return ok, detail
 
-    if arm("ui-field-caret-x"):
+    @arm("ui-field-caret-x")
+    def _():
         p = _ui_probe("field-caret-x")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1945,10 +1938,10 @@ def run_ui_gate(workdir):
             ok = worst <= 0.5
             detail = (f"the caret at most {worst:.3f} points from where the glyph at its index is "
                       f"drawn (want within the pixel snap, 0.5)")
-        print(f"  ui-field-caret-x      {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-field-caret-x", ok)
+        return ok, detail
 
-    if arm("ui-field-scroll-x"):
+    @arm("ui-field-scroll-x")
+    def _():
         p = _ui_probe("field-scroll-x")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1961,10 +1954,10 @@ def run_ui_gate(workdir):
             detail = (f"at the end the caret is at {end:.1f} inside {left:.0f}-{right:.0f}, "
                       f"scrolled {end_scroll:.1f}; Home puts it at {home:.1f} with the scroll "
                       f"{home_scroll:.1f}")
-        print(f"  ui-field-scroll-x     {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-field-scroll-x", ok)
+        return ok, detail
 
-    if arm("ui-field-multiline"):
+    @arm("ui-field-multiline")
+    def _():
         p = _ui_probe("field-multiline")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -1988,10 +1981,10 @@ def run_ui_gate(workdir):
                       f"with no most {nomost_rows:.0f} rows in {nomost_h:.0f} points (want "
                       f"{nomost_rows * lh + 16:.0f}); Page Down over three rows shown moves "
                       f"{paged} rows (want 3)")
-        print(f"  ui-field-multiline    {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-field-multiline", ok)
+        return ok, detail
 
-    if arm("ui-field-placeholder"):
+    @arm("ui-field-placeholder")
+    def _():
         p = _ui_probe("field-placeholder")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -2006,10 +1999,10 @@ def run_ui_gate(workdir):
                       f"({'yes' if flags else 'no'}); {dim:.0f} of {empty:.0f} glyphs dim while "
                       f"empty, {typed_dim:.0f} once 'ok' is typed (want 0) with {typed:.0f} glyphs "
                       f"(want {empty - dim + 2:.0f})")
-        print(f"  ui-field-placeholder  {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-field-placeholder", ok)
+        return ok, detail
 
-    if arm("ui-field-append"):
+    @arm("ui-field-append")
+    def _():
         p = _ui_probe("field-append")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -2029,10 +2022,10 @@ def run_ui_gate(workdir):
                       f"restyled and appended to before a layout, {rows:.0f} rows against "
                       f"{fresh:.0f} broken from scratch, {was:.0f} before (want equal, and not "
                       f"{was:.0f})")
-        print(f"  ui-field-append       {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-field-append", ok)
+        return ok, detail
 
-    if arm("ui-field-keys"):
+    @arm("ui-field-keys")
+    def _():
         p = _ui_probe("field-keys")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -2045,10 +2038,10 @@ def run_ui_gate(workdir):
             wrong = _probe_wrong(p, want)
             ok = not wrong
             detail = "every key did what it should" if ok else f"wrong: {wrong}"
-        print(f"  ui-field-keys         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-field-keys", ok)
+        return ok, detail
 
-    if arm("ui-field-focus"):
+    @arm("ui-field-focus")
+    def _():
         p = _ui_probe("field-focus")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -2059,11 +2052,11 @@ def run_ui_gate(workdir):
             wrong = _probe_wrong(p, want)
             ok = not wrong
             detail = "the focus went where it should" if ok else f"wrong: {wrong}"
-        print(f"  ui-field-focus        {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-field-focus", ok)
+        return ok, detail
 
     # ---- the matcher
-    if arm("ui-match"):
+    @arm("ui-match")
+    def _():
         p = _ui_probe("match")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -2078,10 +2071,10 @@ def run_ui_gate(workdir):
                       f"'sum' in 'résumé' at {p.get(('utf8', 'at'))} (want bytes 3, 4, 5); "
                       f"positions written for no match, 'rn', 'sum' and '' {counts} "
                       f"(want 0, 2, 3, 0)")
-        print(f"  ui-match              {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-match", ok)
+        return ok, detail
 
-    if arm("ui-utf8"):
+    @arm("ui-utf8")
+    def _():
         p = _ui_probe("utf8")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -2095,8 +2088,7 @@ def run_ui_gate(workdir):
                       f"U+FFFD from {length:.0f} malformed bytes (want one a byte), prev mirrors "
                       f"next at every step" if ok else f"wrong: {wrong}; {replaced:.0f} U+FFFD "
                       f"from {length:.0f} malformed bytes (want one a byte)")
-        print(f"  ui-utf8               {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-utf8", ok)
+        return ok, detail
 
     # ---- the code editor (spec 14.4): every probe line a 1, and as many as the case says
     def doc_flags(case, lines, what, env=None):
@@ -2108,14 +2100,15 @@ def run_ui_gate(workdir):
             return False, f"wrong: {wrong}; {len(p)} lines of {lines}"
         return True, what
 
-    if arm("ui-doc-roundtrip"):
+    @arm("ui-doc-roundtrip")
+    def _():
         ok, detail = doc_flags("doc-roundtrip", 30, "LF, CRLF, mixed, a lone CR, a byte-order "
                                "mark, no final newline and nothing: each byte-exact loaded, edited "
                                "and undone, and the line ending found")
-        print(f"  ui-doc-roundtrip      {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-doc-roundtrip", ok)
+        return ok, detail
 
-    if arm("ui-doc-random"):
+    @arm("ui-doc-random")
+    def _():
         p = _ui_probe("doc-random")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -2128,49 +2121,49 @@ def run_ui_gate(workdir):
                       f"its text, lines, line starts, line_of or copies; {undone:.0f} steps undone "
                       f"to the first text {p[('undone', 'first')][0]:.0f}, redone to the last "
                       f"{p[('redone', 'last')][0]:.0f}")
-        print(f"  ui-doc-random         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-doc-random", ok)
+        return ok, detail
 
-    if arm("ui-doc-map"):
+    @arm("ui-doc-map")
+    def _():
         ok, detail = doc_flags("doc-map", 13, "offsets and ranges held at an old version land "
                                "where the changes since put them, cut or dropped inside replaced "
                                "bytes, and follow later changes; a version too new or too old is "
                                "refused")
-        print(f"  ui-doc-map            {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-doc-map", ok)
+        return ok, detail
 
-    if arm("ui-doc-set-text"):
+    @arm("ui-doc-set-text")
+    def _():
         ok, detail = doc_flags("doc-set-text", 7, "a whole new text lands as the one change "
                                "between the two, on characters' edges, a caret moved through it; "
                                "the same text is no change; the host's edit inside a character is "
                                "refused")
-        print(f"  ui-doc-set-text       {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-doc-set-text", ok)
+        return ok, detail
 
-    if arm("ui-doc-undo"):
+    @arm("ui-doc-undo")
+    def _():
         ok, detail = doc_flags("doc-undo", 19, "typing joins into words, a sealed caret splits it, "
                                "two carets are one step, undo and redo restore the text and the "
                                "carets, with keep_undo off nothing is kept, and a change asked for "
                                "inside on_action is refused")
-        print(f"  ui-doc-undo           {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-doc-undo", ok)
+        return ok, detail
 
-    if arm("ui-doc-read-only"):
+    @arm("ui-doc-read-only")
+    def _():
         ok, detail = doc_flags("doc-read-only", 6, "typing at two carets refused as one action and "
                                "told to no one but on_refused, an editor's undo and redo refused, "
                                "the host's edits, undo and redo taken, and nothing different "
                                "writable")
-        print(f"  ui-doc-read-only      {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-doc-read-only", ok)
+        return ok, detail
 
-    if arm("ui-doc-highlight"):
+    @arm("ui-doc-highlight")
+    def _():
         ok, detail = doc_flags("doc-highlight", 8, "a line is coloured once until it changes; a "
                                "stateful line waits on the walk, and a changed line asks again of "
                                "the lines after it only while the state it leaves has changed")
-        print(f"  ui-doc-highlight      {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-doc-highlight", ok)
+        return ok, detail
 
-    if arm("ui-glyph-cache"):
+    @arm("ui-glyph-cache")
+    def _():
         p = _ui_probe("glyph-cache")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -2181,18 +2174,18 @@ def run_ui_gate(workdir):
                   and len(flags) == 6)
             detail = (f"{checked:.0f} glyphs of JetBrains Mono, {wrong:.0f} differing from "
                       f"stb_truetype's own bitmap in the atlas; {flags}")
-        print(f"  ui-glyph-cache        {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-glyph-cache", ok)
+        return ok, detail
 
-    if arm("ui-editor-wrap"):
+    @arm("ui-editor-wrap")
+    def _():
         ok, detail = doc_flags("editor-wrap", 7, "a line breaks after its last space that fits, at "
                                "the edge for a word longer than a row, past tabs and characters "
                                "past ASCII at their columns, its later rows hung at its indent "
                                "unless that is over half the row")
-        print(f"  ui-editor-wrap        {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-wrap", ok)
+        return ok, detail
 
-    if arm("ui-editor-hit"):
+    @arm("ui-editor-hit")
+    def _():
         p = _ui_probe("editor-hit")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -2203,26 +2196,26 @@ def run_ui_gate(workdir):
             detail = (f"{glyphs:.0f} glyphs drawn, {glyphs_wrong:.0f} whose cell a click does not "
                       f"land on the offset drawn there; {trips:.0f} carets, {trips_wrong:.0f} a "
                       f"click at does not land back on")
-        print(f"  ui-editor-hit         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-hit", ok)
+        return ok, detail
 
-    if arm("ui-editor-anchor"):
+    @arm("ui-editor-anchor")
+    def _():
         ok, detail = doc_flags("editor-anchor", 4, "lines put in above the view, every line above "
                                "it measured where it was guessed, and a new width all keep the "
                                "line at its top; the wheel moves it")
-        print(f"  ui-editor-anchor      {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-anchor", ok)
+        return ok, detail
 
-    if arm("ui-editor-keys"):
+    @arm("ui-editor-keys")
+    def _():
         ok, detail = doc_flags("editor-keys", 19, "every standard binding's effect: characters, "
                                "words, rows, the line's first character then its start, the text's "
                                "start, deletes, Enter indenting, Tab and Shift+Tab, select all, "
                                "copy, cut, paste, typing past ASCII, undo and redo; every command "
                                "listed once")
-        print(f"  ui-editor-keys        {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-keys", ok)
+        return ok, detail
 
-    if arm("ui-editor-carets"):
+    @arm("ui-editor-carets")
+    def _():
         ok, detail = doc_flags("editor-carets", 11, "typing at five carets as one action, "
                                "overlapping selections merged, five lines pasted one to each "
                                "caret, Cmd+D's word and next matches, Esc to the primary, a caret "
@@ -2232,48 +2225,48 @@ def run_ui_gate(workdir):
                                "and a caret merged into a selection it starts; freed memory "
                                "scribbled over, so the bar's place reads no memory left unset",
                                env=_scribbled())
-        print(f"  ui-editor-carets      {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-carets", ok)
+        return ok, detail
 
-    if arm("ui-editor-mode"):
+    @arm("ui-editor-mode")
+    def _():
         ok, detail = doc_flags("editor-mode", 6, "a vim-like mode built through the public calls "
                                "alone: x, dw, a count before j, i into an insert mode that types "
                                "and takes the standard mode's arrows, Esc back to a normal mode "
                                "that types nothing")
-        print(f"  ui-editor-mode        {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-mode", ok)
+        return ok, detail
 
-    if arm("ui-editor-host-undo"):
+    @arm("ui-editor-host-undo")
+    def _():
         ok, detail = doc_flags("editor-host-undo", 3, "with keep_undo off, a host's mode binding "
                                "Cmd+Z to its own command runs it, the text untouched, and the "
                                "editor's own undo refuses")
-        print(f"  ui-editor-host-undo   {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-host-undo", ok)
+        return ok, detail
 
     # ---- the seams a mode stands on (spec 14.5)
-    if arm("ui-editor-layer"):
+    @arm("ui-editor-layer")
+    def _():
         ok, detail = doc_flags("editor-layer", 4, "a layer over a mode draws its block caret and "
                                "types nothing where it types nothing, runs its own key, and keeps "
                                "its own name")
-        print(f"  ui-editor-layer       {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-layer", ok)
+        return ok, detail
 
-    if arm("ui-editor-decline"):
+    @arm("ui-editor-decline")
+    def _():
         ok, detail = doc_flags("editor-decline", 1, "a layer's command that does nothing hands its "
                                "key to the mode under it, whose binding runs")
-        print(f"  ui-editor-decline     {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-decline", ok)
+        return ok, detail
 
-    if arm("ui-editor-paired-char"):
+    @arm("ui-editor-paired-char")
+    def _():
         ok, detail = doc_flags("editor-paired-char", 6, "a binding taking Space takes the space "
                                "its press makes, a space arriving alone is typed, a key nothing "
                                "binds types its character, a used key with no character in its "
                                "pass takes none from the next, a key moving the focus types its "
                                "character nowhere, and a field's letter is typed")
-        print(f"  ui-editor-paired-char {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-paired-char", ok)
+        return ok, detail
 
-    if arm("ui-element-keys"):
+    @arm("ui-element-keys")
+    def _():
         ok, detail = doc_flags("element-keys", 15, "a focused panel with a key hook is handed "
                                "every key and character in order, a key it takes dropping its "
                                "character wherever the focus went, and keeps the focus under a "
@@ -2281,57 +2274,57 @@ def run_ui_gate(workdir):
                                "only when it is focusable; a field's hook keeps a / out of its "
                                "text; a panel with no hook is as it was; the four controls and an "
                                "editor refuse a hook")
-        print(f"  ui-element-keys       {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-element-keys", ok)
+        return ok, detail
 
-    if arm("ui-panel-focus"):
+    @arm("ui-panel-focus")
+    def _():
         ok, detail = doc_flags("panel-focus", 8, "a panel taking the keys is drawn focused: its "
                                "border over a draw hook's painting, focused and pressed, on its "
                                "own quad with no hook, over its style's image, in the theme's "
                                "colour when the app sets one; a focusable panel with no key hook "
                                "and a label draw none")
-        print(f"  ui-panel-focus        {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-panel-focus", ok)
+        return ok, detail
 
-    if arm("ui-border-fade"):
+    @arm("ui-border-fade")
+    def _():
         ok, detail = doc_flags("border-fade", 2, "a fading screen fades a quad's border with its "
                                "fill: at a draw list's alpha of one half, both alphas halved")
-        print(f"  ui-border-fade        {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-border-fade", ok)
+        return ok, detail
 
-    if arm("ui-editor-shapes"):
+    @arm("ui-editor-shapes")
+    def _():
         ok, detail = doc_flags("editor-shapes", 4, "a selection of three characters drawn three "
                                "cells wide, four with the character at its far end, and its line "
                                "whole with the line break; the block caret over the character at "
                                "the head")
-        print(f"  ui-editor-shapes      {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-shapes", ok)
+        return ok, detail
 
-    if arm("ui-editor-line-numbers"):
+    @arm("ui-editor-line-numbers")
+    def _():
         ok, detail = doc_flags("editor-line-numbers", 3, "the line numbers in the text's colour at "
                                "38% with theme.line_numbers zeroed, all red with it set while the "
                                "code keeps its colour, and at 38% again with it zeroed once more")
-        print(f"  ui-editor-line-numbers {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-line-numbers", ok)
+        return ok, detail
 
-    if arm("ui-editor-whole-lines"):
+    @arm("ui-editor-whole-lines")
+    def _():
         ok, detail = doc_flags("editor-whole-lines", 5, "a whole-line range fills each row of its "
                                "lines from the text's left edge to the editor's right, an empty "
                                "and a wrapped line included, not the line its end starts; a "
                                "selection over it; a plain style bands its characters; a zeroed "
                                "style draws nothing")
-        print(f"  ui-editor-whole-lines {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-whole-lines", ok)
+        return ok, detail
 
-    if arm("ui-editor-scroll-line"):
+    @arm("ui-editor-scroll-line")
+    def _():
         ok, detail = doc_flags("editor-scroll-line", 4, "the line at the top and the rows into it "
                                "read after a wheel's 32.5 rows, put on a second editor with its "
                                "rows level with the first's, put before a layout and taken at it, "
                                "and held past the last line as a wheel is")
-        print(f"  ui-editor-scroll-line {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-scroll-line", ok)
+        return ok, detail
 
-    if arm("ui-editor-folds"):
+    @arm("ui-editor-folds")
+    def _():
         ok, detail = doc_flags("editor-folds", 8, "a closed fold one row in the fold colour with "
                                "its label and no number, the next line numbered as before; a row "
                                "move, a wheel, a click and an offset inside it take it as one row; "
@@ -2340,181 +2333,178 @@ def run_ui_gate(workdir):
                                "and End from a line it hides stay on that line; kept in a text "
                                "left, none on a second editor; overlaps refused; open-fold, "
                                "close-fold and toggle-fold by name")
-        print(f"  ui-editor-folds       {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-folds", ok)
+        return ok, detail
 
-    if arm("ui-editor-fillers"):
+    @arm("ui-editor-fillers")
+    def _():
         ok, detail = doc_flags("editor-fillers", 4, "filler rows above a line and above a closed "
                                "fold's row in the filler colour with no number or text, none for a "
                                "line the fold hides; a row move steps over them and the top's rows "
                                "count them; a click on one lands at its line's start; a line's "
                                "rows as asked are its rows as drawn")
-        print(f"  ui-editor-fillers     {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-fillers", ok)
+        return ok, detail
 
-    if arm("ui-editor-gutter"):
+    @arm("ui-editor-gutter")
+    def _():
         ok, detail = doc_flags("editor-gutter", 4, "a range's gutter fill on every row of its line "
                                "from the gutter's left to the text, under the number; its sign in "
                                "the gap on the line's first row only, in the text's colour or its "
                                "style's sign_colour, a sign alone drawing no fill; a zeroed style "
                                "neither")
-        print(f"  ui-editor-gutter      {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-gutter", ok)
+        return ok, detail
 
-    if arm("ui-editor-bar-room"):
+    @arm("ui-editor-bar-room")
+    def _():
         ok, detail = doc_flags("editor-bar-room", 4, "a bar only inside its element: an editor "
                                "sized to nothing draws none, one 4 points wide none and a press on "
                                "it pages nothing; one with room draws its thumb inside its insets")
-        print(f"  ui-editor-bar-room    {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-bar-room", ok)
+        return ok, detail
 
-    if arm("ui-editor-top-row"):
+    @arm("ui-editor-top-row")
+    def _():
         ok, detail = doc_flags("editor-top-row", 6, "the top as rows from the text's start, "
                                "fillers and a closed fold's row counted, put back as read, held as "
                                "a wheel is, taken at a layout when asked before, and two sides "
                                "level at one row")
-        print(f"  ui-editor-top-row     {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-top-row", ok)
+        return ok, detail
 
-    if arm("ui-editor-gutter-digits"):
+    @arm("ui-editor-gutter-digits")
+    def _():
         ok, detail = doc_flags("editor-gutter-digits", 4, "a short text asked for 4 digits with a "
                                "long text's columns and numbers, its own for 0 or fewer, and a "
                                "change's rows guessed again and settled")
-        print(f"  ui-editor-gutter-digits {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-gutter-digits", ok)
+        return ok, detail
 
-    if arm("ui-editor-filler-end"):
+    @arm("ui-editor-filler-end")
+    def _():
         ok, detail = doc_flags("editor-filler-end", 6, "fillers on the line count drawn under the "
                                "last line and counted to the scroll's end, no caret on them, a "
                                "click there at the text's end, kept under a new last line, one "
                                "past the count left out, and under a closed fold ending the text")
-        print(f"  ui-editor-filler-end  {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-filler-end", ok)
+        return ok, detail
 
-    if arm("ui-editor-rows-kept"):
+    @arm("ui-editor-rows-kept")
+    def _():
         ok, detail = doc_flags("editor-rows-kept", 4, "a line's rows from the count kept: none "
                                "wrapped asking a settled text twice over, a guess wrapped once, "
                                "and wrapped again at new columns and new tab stops")
-        print(f"  ui-editor-rows-kept   {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-rows-kept", ok)
+        return ok, detail
 
-    if arm("ui-editor-fillers-read"):
+    @arm("ui-editor-fillers-read")
+    def _():
         ok, detail = doc_flags("editor-fillers-read", 5, "the fillers read back sorted, one a line "
                                "and none empty, moved with their lines, gone from a line pasted "
                                "over, those under the text last, and none for none")
-        print(f"  ui-editor-fillers-read {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-fillers-read", ok)
+        return ok, detail
 
-    if arm("ui-editor-exact-rows"):
+    @arm("ui-editor-exact-rows")
+    def _():
         ok, detail = doc_flags("editor-exact-rows", 7, "a text just shown counts the rows above "
                                "its top and above a row put as a settled one does, the bar wraps "
                                "none, a closed fold's lines stay guesses until it is cut to a line "
                                "or opened, and a second ask wraps nothing")
-        print(f"  ui-editor-exact-rows  {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-exact-rows", ok)
+        return ok, detail
 
-    if arm("ui-editor-scrolls"):
+    @arm("ui-editor-scrolls")
+    def _():
         ok, detail = doc_flags("editor-scrolls", 4, "one scroll counted for each call asked, the "
                                "wheel, the bar and a key, one asked before a layout once, and none "
                                "for an edit, a fold, a layout or the budget")
-        print(f"  ui-editor-scrolls     {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-scrolls", ok)
+        return ok, detail
 
-    if arm("ui-editor-link"):
+    @arm("ui-editor-link")
+    def _():
         ok, detail = doc_flags("editor-link", 10, "two linked editors level at every layout, in "
                                "either order in the tree and with no scroll asked, led by the last "
                                "asked a scroll and never by a "
                                "layout or the hold, another text following, hidden ones held to "
                                "nothing, a freed one let go, and links making no pair refused")
-        print(f"  ui-editor-link        {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-link", ok)
+        return ok, detail
 
-    if arm("ui-editor-link-folds"):
+    @arm("ui-editor-link-folds")
+    def _():
         ok, detail = doc_flags("editor-link-folds", 8, "a fold turned on one side turned on the "
                                "other by a command, a call, a click, an edit and vim's z keys, "
                                "none with counts apart, a set of folds one side's own, and the two "
                                "level after")
-        print(f"  ui-editor-link-folds  {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-link-folds", ok)
+        return ok, detail
 
-    if arm("ui-editor-steps"):
+    @arm("ui-editor-steps")
+    def _():
         ok, detail = doc_flags("editor-steps", 7, "typing joined into words shares a step, a group "
                                "holds one over typing, a Backspace and more typing, and one undo "
                                "takes the group back and one redo makes it again; typing after "
                                "keep_undo was off a step of its own; the steps the same with "
                                "keep_undo off")
-        print(f"  ui-editor-steps       {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-steps", ok)
+        return ok, detail
 
     # ---- the vim mode held to vim itself (spec 14.5)
-    if arm("ui-vim-oracle"):
+    @arm("ui-vim-oracle")
+    def _():
         if not _VIM:
-            print("  ui-vim-oracle         SKIP  (no vim on the path)")
-        else:
-            cases = _vim_corpus(_VIM_SEQUENCES)
-            diffs, ran = _vim_oracle(cases, workdir, "oracle")
-            ok = ran == len(cases) and not diffs
-            shown = _vim_shown(diffs, lambda case: f"{case[3]!r} at {case[1]}:{case[2]}")
-            detail = (f"{len(cases)} cases of {len(_VIM_SEQUENCES)} sequences over "
-                      f"{len(_VIM_FIXTURES)} texts, vim ran {ran}, {len(diffs)} differ from it"
-                      + (f": {shown}" if shown else ""))
-            print(f"  ui-vim-oracle         {'PASS' if ok else 'FAIL'}  {detail}")
-            note("ui-vim-oracle", ok)
+            return None, "(no vim on the path)"
+        cases = _vim_corpus(_VIM_SEQUENCES)
+        diffs, ran = _vim_oracle(cases, workdir, "oracle")
+        ok = ran == len(cases) and not diffs
+        shown = _vim_shown(diffs, lambda case: f"{case[3]!r} at {case[1]}:{case[2]}")
+        detail = (f"{len(cases)} cases of {len(_VIM_SEQUENCES)} sequences over "
+                  f"{len(_VIM_FIXTURES)} texts, vim ran {ran}, {len(diffs)} differ from it"
+                  + (f": {shown}" if shown else ""))
+        return ok, detail
 
     # ---- the vim mode over the host's folds, held to vim's manual folds (spec 14.16)
-    if arm("ui-vim-folds"):
+    @arm("ui-vim-folds")
+    def _():
         if not _VIM:
-            print("  ui-vim-folds          SKIP  (no vim on the path)")
-        else:
-            cases = _vim_corpus(_VIM_FOLD_SEQUENCES, _VIM_FOLD_FIXTURES)
-            diffs, ran = _vim_oracle(cases, workdir, "folds")
-            ok = ran == len(cases) and not diffs
-            shown = _vim_shown(diffs, lambda case: f"{case[3]!r} at {case[1]}:{case[2]}")
-            detail = (f"{len(cases)} cases of {len(_VIM_FOLD_SEQUENCES)} sequences over closed "
-                      f"folds on {len(_VIM_FOLD_FIXTURES)} texts, vim ran {ran}, {len(diffs)} "
-                      f"differ from it"
-                      + (f": {shown}" if shown else ""))
-            print(f"  ui-vim-folds          {'PASS' if ok else 'FAIL'}  {detail}")
-            note("ui-vim-folds", ok)
+            return None, "(no vim on the path)"
+        cases = _vim_corpus(_VIM_FOLD_SEQUENCES, _VIM_FOLD_FIXTURES)
+        diffs, ran = _vim_oracle(cases, workdir, "folds")
+        ok = ran == len(cases) and not diffs
+        shown = _vim_shown(diffs, lambda case: f"{case[3]!r} at {case[1]}:{case[2]}")
+        detail = (f"{len(cases)} cases of {len(_VIM_FOLD_SEQUENCES)} sequences over closed "
+                  f"folds on {len(_VIM_FOLD_FIXTURES)} texts, vim ran {ran}, {len(diffs)} "
+                  f"differ from it"
+                  + (f": {shown}" if shown else ""))
+        return ok, detail
 
     # ---- the vim mode held to vim on sequences no one wrote (spec 14.5)
-    if arm("ui-vim-random"):
+    @arm("ui-vim-random")
+    def _():
         if not _VIM:
-            print("  ui-vim-random         SKIP  (no vim on the path)")
-        else:
-            seeds = (1, 2, 3, 4)
-            cases, seed_of = [], {}
-            for seed in seeds:
-                for case in _vim_random_cases(seed, 400):
-                    seed_of.setdefault(case, seed)
-                    cases.append(case)
-            diffs, ran = _vim_oracle(cases, workdir, "random")
-            ok = ran == len(cases) and not diffs
-            shown = _vim_shown(diffs, lambda case: f"seed {seed_of[case]} {case[3]!r} at "
-                                                   f"{case[1]}:{case[2]}")
-            detail = (f"{len(cases)} sequences from seeds {', '.join(map(str, seeds))}, vim ran "
-                      f"{ran}, {len(diffs)} differ from it" + (f": {shown}" if shown else ""))
-            print(f"  ui-vim-random         {'PASS' if ok else 'FAIL'}  {detail}")
-            note("ui-vim-random", ok)
+            return None, "(no vim on the path)"
+        seeds = (1, 2, 3, 4)
+        cases, seed_of = [], {}
+        for seed in seeds:
+            for case in _vim_random_cases(seed, 400):
+                seed_of.setdefault(case, seed)
+                cases.append(case)
+        diffs, ran = _vim_oracle(cases, workdir, "random")
+        ok = ran == len(cases) and not diffs
+        shown = _vim_shown(diffs, lambda case: f"seed {seed_of[case]} {case[3]!r} at "
+                                               f"{case[1]}:{case[2]}")
+        detail = (f"{len(cases)} sequences from seeds {', '.join(map(str, seeds))}, vim ran "
+                  f"{ran}, {len(diffs)} differ from it" + (f": {shown}" if shown else ""))
+        return ok, detail
 
-    if arm("ui-vim-state"):
+    @arm("ui-vim-state")
+    def _():
         ok, detail = doc_flags("vim-state", 11, "NORMAL and INSERT named, the block caret and the "
                                "bar, the keys of a half-typed command shown and dropped by Esc, a "
                                "click past a line's end held on its last character, the three "
                                "visual modes named and drawn their own ways, a drag entering "
                                "visual mode, and a count past the most a put makes refused")
-        print(f"  ui-vim-state          {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-vim-state", ok)
+        return ok, detail
 
-    if arm("ui-vim-undo"):
+    @arm("ui-vim-undo")
+    def _():
         ok, detail = doc_flags("vim-undo", 8, "an insert from i to Esc, an Enter and a Backspace "
                                "in it, is one step, and so is cw with what it typed: each undone "
                                "and redone whole, and told as one step with keep_undo off too; an "
                                "insert of 5,000 keys made again whole by .")
-        print(f"  ui-vim-undo           {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-vim-undo", ok)
+        return ok, detail
 
-    if arm("ui-vim-host"):
+    @arm("ui-vim-host")
+    def _():
         ok, detail = doc_flags("vim-host", 9, "a host's Space over the vim mode acts in normal "
                                "mode and takes its space, hands it back in insert mode where it is "
                                "typed, keeps the host's name over vim's look, and the host's undo "
@@ -2523,10 +2513,10 @@ def run_ui_gate(workdir):
                                "asking nothing; one vim over two editors lets the first's insert "
                                "go when keys reach the second, and a paste in insert mode is made "
                                "again as the text it typed")
-        print(f"  ui-vim-host           {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-vim-host", ok)
+        return ok, detail
 
-    if arm("ui-vim-lookup"):
+    @arm("ui-vim-lookup")
+    def _():
         ok, detail = doc_flags("vim-lookup", 11, "gd, gD, Ctrl+] and K asked of the host once "
                                "each, of their kinds; g Esc d asking nothing; dgd and visual gd "
                                "vim's motions; Ctrl+] and K in a one-line visual area asked with "
@@ -2535,29 +2525,25 @@ def run_ui_gate(workdir):
                                "change before a lookup; a read-only text asking; a host's jump "
                                "from a block kept; dgd after j characterwise; another text shown "
                                "from visual mode left normal")
-        print(f"  ui-vim-lookup         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-vim-lookup", ok)
-    if arm("ui-vim-carets"):
+        return ok, detail
+    @arm("ui-vim-carets")
+    def _():
         ok, detail = doc_flags("vim-carets", 10, "a block's I a caret on each line, what is typed "
                                "on every one, one cursor at the top left after Esc and after undo, "
                                "A after the block; each of three carets taking 3x, dw and a visual "
                                "area; two areas sharing a character deleted as one; and two "
                                "carets' ranges nested out of order shifted and re-indented a line "
                                "once each")
-        print(f"  ui-vim-carets         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-vim-carets", ok)
+        return ok, detail
 
-    # The text the editor's and the vim mode's end-to-end arms open, written by the first chosen.
-    @functools.cache
-    def editor_text():
-        path = os.path.join(workdir, "editor_script.txt")
-        with open(path, "w", encoding="utf-8", newline="") as f:
-            f.write("one two\none four\n")
-        return path
+    # The text the editor's and the vim mode's end-to-end arms open.
+    text_path = os.path.join(workdir, "editor_script.txt")
+    with open(text_path, "w", encoding="utf-8", newline="") as f:
+        f.write("one two\none four\n")
 
     # ---- the editor end to end: a file opened, two carets typed at, undone, a word found
-    if arm("ui-editor-script"):
-        text_path = editor_text()
+    @arm("ui-editor-script")
+    def _():
         script = os.path.join(workdir, "editor_script.script")
         find_key = "mod+g" if sys.platform == "darwin" else "f3"
         with open(script, "w", encoding="utf-8") as f:
@@ -2574,13 +2560,12 @@ def run_ui_gate(workdir):
                   f"b'XYone two\\nXYone four\\n' [2, 2, 2, 12, 12]); undone, the word at the caret "
                   f"taken and found again {done['text']!r} {done['sel']} (want the file as it "
                   f"was, [1, 0, 3])")
-        print(f"  ui-editor-script      {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-script", ok)
+        return ok, detail
 
     # ---- the vim mode end to end: dw, a search and a line number through the app's own line, x
     # and . made again, and a search finding nothing said so
-    if arm("ui-vim-script"):
-        text_path = editor_text()
+    @arm("ui-vim-script")
+    def _():
         script = os.path.join(workdir, "editor_script.script")
         with open(script, "w", encoding="utf-8") as f:
             f.write("3 type=dw\n5 type=/\n7 type=four\n9 key=enter\n11 type=x\n13 type=:\n"
@@ -2605,58 +2590,58 @@ def run_ui_gate(workdir):
         ok = ok and laid["text"] == b"(block a\n  (port b)\n)\n" and laid["said"] == "gd block"
         detail += (f"; with the app's lookup and layout {laid['text']!r}, said {laid['said']!r} "
                    f"(want b'(block a\\n  (port b)\\n)\\n', 'gd block')")
-        print(f"  ui-vim-script         {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-vim-script", ok)
+        return ok, detail
 
-    if arm("ui-editor-host-edit"):
+    @arm("ui-editor-host-edit")
+    def _():
         ok, detail = doc_flags("editor-host-edit", 8, "a selection through the host's edits before "
                                "it, after it and inside it, a caret under replaced bytes and at an "
                                "insertion, a whole new text changing past the caret, a second "
                                "editor of the same text, and both letting go of the text when it "
                                "is freed")
-        print(f"  ui-editor-host-edit   {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-host-edit", ok)
+        return ok, detail
 
     # ---- elements taken out and moved (spec 14.6)
-    if arm("ui-remove"):
+    @arm("ui-remove")
+    def _():
         ok, detail = doc_flags("remove", 11, "the focus, the focus last seen, a held press and a "
                                "held bar let go of what goes; the next layout whole; a button's "
                                "action and an editor's key taking their own element out, freed as "
                                "the pass ends, a second ask refused; an insert's group closed; a "
                                "root and a row refused, and the focus refused another screen's "
                                "element; freed memory scribbled over", env=_scribbled())
-        print(f"  ui-remove             {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-remove", ok)
+        return ok, detail
 
-    if arm("ui-move"):
+    @arm("ui-move")
+    def _():
         ok, detail = doc_flags("move", 10, "an editor moved under a row keeping its carets, its "
                                "view and the focus, a field its text, each in front of the child "
                                "named or at the end, and the refusals")
-        print(f"  ui-move               {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-move", ok)
+        return ok, detail
 
-    if arm("ui-hidden"):
+    @arm("ui-hidden")
+    def _():
         ok, detail = doc_flags("hidden", 16, "a hidden element takes no room or gap, lays out "
                                "empty and stands where it stood once shown; draws nothing; takes "
                                "no press, wheel, key, Tab or focus, and lets go of a press, a bar "
                                "and the focus; an editor keeps its carets, scroll and wraps, where "
                                "sized to nothing it has one column; a pane neither eases nor "
                                "builds rows; the refusals")
-        print(f"  ui-hidden             {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-hidden", ok)
+        return ok, detail
 
     # ---- an editor shown another text (spec 14.6)
-    if arm("ui-editor-set-doc"):
+    @arm("ui-editor-set-doc")
+    def _():
         ok, detail = doc_flags("set-doc", 9, "a text not shown from its start, the one left no "
                                "longer moving its carets while a second editor keeps its own, "
                                "typing reaching the new text, the same text a no-op, NULL nothing, "
                                "back to the first where it was through the edit made since, a new "
                                "editor placed before its first layout, and a text freed while "
                                "parked on; freed memory scribbled over", env=_scribbled())
-        print(f"  ui-editor-set-doc     {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-set-doc", ok)
+        return ok, detail
 
-    if arm("ui-vim-set-doc"):
+    @arm("ui-vim-set-doc")
+    def _():
         p = _ui_probe("vim-set-doc")
         if not p:
             ok, detail = False, "the probe produced nothing"
@@ -2670,22 +2655,17 @@ def run_ui_gate(workdir):
                       + ("at its address" if reused else
                          "-- not at its address this run, so that case did not stand for its name")
                       + (f"; wrong: {wrong}" if wrong else ""))
-        print(f"  ui-vim-set-doc        {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-vim-set-doc", ok)
+        return ok, detail
 
     # ---- a read-only text (spec 14.7): the standard mode end to end
-    # The text both read-only arms open, written by the first chosen.
+    # The text both read-only arms open.
     ro_text = b"one two\nthree four\n"
+    ro_path = os.path.join(workdir, "editor_read_only.txt")
+    with open(ro_path, "wb") as f:
+        f.write(ro_text)
 
-    @functools.cache
-    def read_only_text():
-        path = os.path.join(workdir, "editor_read_only.txt")
-        with open(path, "wb") as f:
-            f.write(ro_text)
-        return path
-
-    if arm("ui-editor-read-only"):
-        ro_path = read_only_text()
+    @arm("ui-editor-read-only")
+    def _():
         ro_script = os.path.join(workdir, "editor_read_only.script")
         # The word Cmd+D takes is cut with nothing copied before, so the clipboard says the cut
         # copied.
@@ -2701,11 +2681,11 @@ def run_ui_gate(workdir):
         detail = (f"the text {'unchanged' if ro['text'] == ro_text else 'changed'}, selections "
                   f"{ro['sel']}, clipboard {ro['clip']!r}, {ro['refused']} refused (want "
                   f"unchanged, [1, 3, 3], b'one', 4)")
-        print(f"  ui-editor-read-only   {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-read-only", ok)
+        return ok, detail
 
     # ---- the vim mode on a read-only text: the probe, then end to end
-    if arm("ui-vim-read-only"):
+    @arm("ui-vim-read-only")
+    def _():
         ok, detail = doc_flags("vim-read-only", 14, "a visual delete letting the area go with the "
                                "cursor at its start, told with the editor, 3dd and 5J one refusal "
                                "each, . refusing the refused command again and making it once "
@@ -2714,7 +2694,6 @@ def run_ui_gate(workdir):
                                "against vim, what . makes of a refused visual put and 3s once "
                                "writable, and a J, r and ~ that could change nothing beeped at "
                                "rather than refused, a refused r kept for nothing")
-        ro_path = read_only_text()
         ro_script = os.path.join(workdir, "editor_read_only.script")
         # The clipboard yanked first, which none of the refused commands after may change.
         with open(ro_script, "w", encoding="utf-8") as f:
@@ -2732,58 +2711,56 @@ def run_ui_gate(workdir):
                    f"selections {rv['sel']}, clipboard {rv['clip']!r}, {rv['refused']} refused, "
                    f"normal mode {rv['vim'] == 0} (want unchanged, [1, 12, 12], b'one' as yanked "
                    f"first, 7, True)")
-        print(f"  ui-vim-read-only      {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-vim-read-only", ok)
+        return ok, detail
 
-    if arm("ui-vim-read-only-oracle"):
+    @arm("ui-vim-read-only-oracle")
+    def _():
         if not _VIM:
-            print("  ui-vim-read-only-oracle SKIP  (no vim on the path)")
-        else:
+            return None, "(no vim on the path)"
             # With their `o` refused, what these would insert is read as commands, and it holds `q`
             # and `(`: a macro and a sentence motion, which the mode leaves out.
-            absent = {"Goq) (z)<Esc>^da(", "Goq) (z)<Esc>^di(", "Goq (z)<Esc>^da("}
-            cases = _vim_corpus([s for s in _VIM_SEQUENCES if s not in absent])
-            diffs, ran = _vim_oracle(cases, workdir, "read_only", read_only=True)
-            missing = absent - set(_VIM_SEQUENCES)
-            ok = ran == len(cases) and not diffs and not missing
-            shown = _vim_shown(diffs, lambda case: f"{case[3]!r} at {case[1]}:{case[2]}")
-            detail = (f"{len(cases)} cases on a read-only text, vim ran {ran}, {len(diffs)} differ "
-                      f"from it" + (f": {shown}" if shown else "")
-                      + (f"; left out but no longer in the corpus: {sorted(missing)}" if missing
-                         else ""))
-            print(f"  ui-vim-read-only-oracle {'PASS' if ok else 'FAIL'}  {detail}")
-            note("ui-vim-read-only-oracle", ok)
+        absent = {"Goq) (z)<Esc>^da(", "Goq) (z)<Esc>^di(", "Goq (z)<Esc>^da("}
+        cases = _vim_corpus([s for s in _VIM_SEQUENCES if s not in absent])
+        diffs, ran = _vim_oracle(cases, workdir, "read_only", read_only=True)
+        missing = absent - set(_VIM_SEQUENCES)
+        ok = ran == len(cases) and not diffs and not missing
+        shown = _vim_shown(diffs, lambda case: f"{case[3]!r} at {case[1]}:{case[2]}")
+        detail = (f"{len(cases)} cases on a read-only text, vim ran {ran}, {len(diffs)} differ "
+                  f"from it" + (f": {shown}" if shown else "")
+                  + (f"; left out but no longer in the corpus: {sorted(missing)}" if missing
+                     else ""))
+        return ok, detail
 
     # ---- the host's indent and format held to vim's indentexpr and formatexpr (spec 14.9)
-    if arm("ui-vim-layout-oracle"):
+    @arm("ui-vim-layout-oracle")
+    def _():
         if not _VIM:
-            print("  ui-vim-layout-oracle  SKIP  (no vim on the path)")
-        else:
+            return None, "(no vim on the path)"
             # Refused, these leave ( to be read as a command: vim's sentence motion, which the mode
             # leaves out.
-            absent = {"o(<CR>x<Esc>", "A(<CR>x<Esc>", "2O(<Esc>"}
-            runs = []
-            for read_only in (False, True):
-                seqs = [s for s in _VIM_LAYOUT_SEQUENCES if not (read_only and s in absent)]
-                cases = _vim_corpus(seqs, _VIM_LAYOUT_FIXTURES)
-                diffs, ran = _vim_oracle(cases, workdir, "layout_ro" if read_only else "layout",
-                                         read_only=read_only, layout=True)
-                runs.append((len(cases), ran, diffs))
-            missing = absent - set(_VIM_LAYOUT_SEQUENCES)
-            ok = all(ran == n and not diffs for n, ran, diffs in runs) and not missing
-            detail = "; ".join(
-                f"{label}: {n} cases of {len(_VIM_LAYOUT_SEQUENCES)} sequences over "
-                f"{len(_VIM_LAYOUT_FIXTURES)} texts, vim ran {ran}, {len(diffs)} differ"
-                + (f": {_vim_shown(diffs, lambda case: f'{case[3]!r} at {case[1]}:{case[2]}')}"
-                   if diffs else "")
-                for label, (n, ran, diffs) in zip(("writable", "read-only"), runs))
-            if missing:
-                detail += f"; left out but no longer in the corpus: {sorted(missing)}"
-            print(f"  ui-vim-layout-oracle  {'PASS' if ok else 'FAIL'}  {detail}")
-            note("ui-vim-layout-oracle", ok)
+        absent = {"o(<CR>x<Esc>", "A(<CR>x<Esc>", "2O(<Esc>"}
+        runs = []
+        for read_only in (False, True):
+            seqs = [s for s in _VIM_LAYOUT_SEQUENCES if not (read_only and s in absent)]
+            cases = _vim_corpus(seqs, _VIM_LAYOUT_FIXTURES)
+            diffs, ran = _vim_oracle(cases, workdir, "layout_ro" if read_only else "layout",
+                                     read_only=read_only, layout=True)
+            runs.append((len(cases), ran, diffs))
+        missing = absent - set(_VIM_LAYOUT_SEQUENCES)
+        ok = all(ran == n and not diffs for n, ran, diffs in runs) and not missing
+        detail = "; ".join(
+            f"{label}: {n} cases of {len(_VIM_LAYOUT_SEQUENCES)} sequences over "
+            f"{len(_VIM_LAYOUT_FIXTURES)} texts, vim ran {ran}, {len(diffs)} differ"
+            + (f": {_vim_shown(diffs, lambda case: f'{case[3]!r} at {case[1]}:{case[2]}')}"
+               if diffs else "")
+            for label, (n, ran, diffs) in zip(("writable", "read-only"), runs))
+        if missing:
+            detail += f"; left out but no longer in the corpus: {sorted(missing)}"
+        return ok, detail
 
     # ---- a parse's errors, read a few versions back, underlined where the typing since put them
-    if arm("ui-editor-ranges-late"):
+    @arm("ui-editor-ranges-late")
+    def _():
         late_path = os.path.join(workdir, "editor_late.ckt")
         with open(late_path, "w", encoding="utf-8", newline="") as f:
             f.write("(inst a)\n(net b\n(part c)\n")
@@ -2804,8 +2781,7 @@ def run_ui_gate(workdir):
         detail = (f"the parse of the text before 'XYZ' was typed, taken six frames on: errors "
                   f"{errors} (want one at bytes 12 to 13, the unclosed '(' moved past the typing; "
                   f"9 to 10 is the version it read), {red} red pixels under it at {at} (want some)")
-        print(f"  ui-editor-ranges-late {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-editor-ranges-late", ok)
+        return ok, detail
 
     # ---- the palette, end to end
     # The palette opened and typed into, which the click arm takes its second row from.
@@ -2817,7 +2793,8 @@ def run_ui_gate(workdir):
         return _canvas_run(workdir, "palette", "--sheet", "board", "--palette",
                            "--input-script", script, frames=8)
 
-    if arm("ui-type-palette"):
+    @arm("ui-type-palette")
+    def _():
         out, probe = palette_run()
         state = [int(v) for v in probe.get(("palette", "state"), [])]
         field = [int(v) for v in probe.get(("palette", "field"), [])[:4]]
@@ -2831,11 +2808,11 @@ def run_ui_gate(workdir):
             ok = state == [1, 2, 2, 2, 0, 1] and ink > 30
             detail = (f"open/typed/rows/first/lit {state} (want [1, 2, 2, 2, 0, 1]), {ink} px of "
                       f"text in the field (want over 30)")
-        print(f"  ui-type-palette       {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-type-palette", ok)
+        return ok, detail
 
     # ---- a click on a palette row, the pointer read by the engine (spec 14.3)
-    if arm("ui-click-palette"):
+    @arm("ui-click-palette")
+    def _():
         out, probe = palette_run()
         second = [int(v) for v in probe.get(("palette", "second"), [])[:4]]
         if not out or not second:
@@ -2856,11 +2833,11 @@ def run_ui_gate(workdir):
             ok = ran == "3" and state[:1] == [0]
             detail = (f"a click on the second row ran command {ran} (want 3, Zoom out) and the "
                       f"palette is {'closed' if state[:1] == [0] else 'open'} (want closed)")
-        print(f"  ui-click-palette      {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-click-palette", ok)
+        return ok, detail
 
     # ---- the history column, end to end
-    if arm("ui-history-clip"):
+    @arm("ui-history-clip")
+    def _():
         out, probe = _canvas_run(workdir, "history", "--sheet", "board", "--history")
         hist = probe.get(("history", "column"))
         if not out or not hist:
@@ -2881,11 +2858,11 @@ def run_ui_gate(workdir):
             ok = stray == 0 and ink > 5000 and qy0 > cy0 and qy1 < cy1
             detail = (f"{stray} px off the column's colour in its padding above and below the pane "
                       f"(want 0), {ink} px of text in the pane (want over 5000)")
-        print(f"  ui-history-clip       {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-history-clip", ok)
+        return ok, detail
 
     # ---- typing, from the engine to the UI's input (spec 14.2)
-    if arm("ui-typed"):
+    @arm("ui-typed")
+    def _():
         script = os.path.join(workdir, "ui_typed.script")
         with open(script, "w", encoding="utf-8") as f:
             f.write("2 type=aé\\sΩ key=mod+a key=shift+left\n4 key=backspace\n")
@@ -2898,8 +2875,7 @@ def run_ui_gate(workdir):
         want = [["c61", "ce9", "c20", "c3a9", f"k65+{mod}", "k263+1"], ["k259+0"]]
         ok = typed == want
         detail = f"the UI was handed {typed} (want {want})"
-        print(f"  ui-typed              {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-typed", ok)
+        return ok, detail
 
     # ---- glyphs past ASCII, and the box for one the atlas lacks
     def panel_crop(tag, text):
@@ -2910,7 +2886,8 @@ def run_ui_gate(workdir):
         x0, y0, x1, y1 = (int(v) for v in panel[:4])
         return _ppm_array(out)[y0:y1, x0:x1, :3]
 
-    if arm("ui-glyphs"):
+    @arm("ui-glyphs")
+    def _():
         crops = {tag: panel_crop(tag, text) for tag, text in
                  (("blank", " "), ("e", "e"), ("eacute", "é"), ("omega", "Ω"), ("micro", "µ"),
                   ("missing", "你"))}
@@ -2925,10 +2902,9 @@ def run_ui_gate(workdir):
             detail = (f"ink over a space: é {ink['eacute']}, Ω {ink['omega']}, µ {ink['micro']}, "
                       f"the missing box {ink['missing']} px (want each over 40); é differs from e "
                       f"by {accent} px (want over 20)")
-        print(f"  ui-glyphs             {'PASS' if ok else 'FAIL'}  {detail}")
-        note("ui-glyphs", ok)
+        return ok, detail
 
-    return failed
+    return arm.failed
 
 
 def _canvas_editor(probe):

@@ -5,8 +5,9 @@
 import json
 import os
 
-from gatelib.harness import _probe_render, asset
+from gatelib.harness import asset
 from gatelib.images import compare
+from gatelib.probes import _probe_render
 from gatelib.profiling import (
     OCCLUSION_MAT, _fixture_mesh_nodes, _profiled_run, _submit_sum_detail, _timing_delta,
 )
