@@ -31047,6 +31047,23 @@ def _rgb_near(pixel, want, codes):
     return all(abs(int(c) - ((want >> sh) & 255)) <= codes for c, sh in zip(pixel[:3], (16, 8, 0)))
 
 
+def _hex_rgb(code):
+    """A probe's RRGGBB as red, green and blue, floats."""
+    c = int(code, 16)
+    return np.array([(c >> sh) & 255 for sh in (16, 8, 0)], float)
+
+
+def _off_rgb(pixels, rgb, codes):
+    """How many of `pixels` have a channel more than `codes` from `rgb`."""
+    return int((np.abs(pixels - rgb).max(axis=-1) > codes).sum())
+
+
+def _ink_cover(pixels, back, ink):
+    """Each pixel's coverage between two colours: how far it lies from `back` toward `ink`."""
+    span = ink - back
+    return (pixels - back) @ span / (span @ span)
+
+
 def _canvas_wrong_pixels(path, cells):
     """The probe's pixels ("NAME at X Y want RRGGBB") not within 2 codes of the colour each
     wants, each named with the colour it is."""
@@ -31280,7 +31297,9 @@ def run_canvas_gate(workdir):
                      within 1 code; a square whose edges halve pixels, each corner pixel a
                      quarter covered within 2, the product of its edges' ramps and not their
                      minimum; two triangles meeting on a diagonal, the backdrop a quarter of it
-                     at most; and a concave shape and one of five corners drawing nothing.
+                     at most; a concave shape and one of five corners drawing nothing; and a
+                     triangle with a fourth corner placed on an edge in floats, which rounding
+                     turns the other way by a few float steps, drawn, its centroid its colour.
       canvas-caps    the strokes sheet (spec 14.22): a segment and an arc each capped round, butt
                      and square, their areas in closed form within 0.03 px per pixel of edge, as
                      canvas-areas. A round cap adds a disc, a square one the width squared. And a
@@ -31864,27 +31883,23 @@ def run_canvas_gate(workdir):
     else:
         img = _ppm_array(shot)
         boxes = {n: [int(v) for v in seams[n]] for n in names}
-        box_rgb, back_rgb = (np.array([(int(c, 16) >> sh) & 255 for sh in (16, 8, 0)], float)
-                             for c in (colours[1], colours[3]))
-
-        def off(pixels, rgb, codes):
-            return int((np.abs(pixels - rgb).max(axis=-1) > codes).sum())
+        box_rgb, back_rgb = _hex_rgb(colours[1]), _hex_rgb(colours[3])
 
         def inside(n):
             x0, y0, x1, y1 = boxes[n]
             return img[y0:y1, x0:x1]
 
         # The stack's quads meet on pixel boundaries: nothing of the backdrop between them.
-        stack = off(inside("stack"), box_rgb, 2)
+        stack = _off_rgb(inside("stack"), box_rgb, 2)
         # A quad on whole pixels: filled whole, and nothing of it in the 3 pixels round it.
         x0, y0, x1, y1 = boxes["alone"]
         ring = np.ones((y1 - y0 + 6, x1 - x0 + 6), bool)
         ring[3:-3, 3:-3] = False
         around = img[y0 - 3:y1 + 3, x0 - 3:x1 + 3][ring]
-        alone = off(inside("alone"), box_rgb, 2) + off(around, back_rgb, 2)
+        alone = _off_rgb(inside("alone"), box_rgb, 2) + _off_rgb(around, back_rgb, 2)
         # The half quad's right edge through the middle of its last column: that column half way.
         x0, y0, x1, y1 = boxes["half"]
-        half = off(img[y0:y1, x1 - 1], np.floor((box_rgb + back_rgb) / 2), 4)
+        half = _off_rgb(img[y0:y1, x1 - 1], np.floor((box_rgb + back_rgb) / 2), 4)
         # Along a rounded corner's diagonal the edge crosses d by 1.4 pixels a step, so a one-pixel
         # ramp leaves one pixel between the colours; a two-pixel ramp leaves two.
         x0, y0, x1, y1 = boxes["round"]
@@ -31896,10 +31911,9 @@ def run_canvas_gate(workdir):
         # a multisampled target's samples as well, half of it showed. The share of the backdrop in
         # every pixel above the column's last, which is its own edge.
         x0, y0, x1, y1 = boxes["offgrid"]
-        span = box_rgb - back_rgb
-        share = float(((box_rgb - img[y0:y1 - 1, x0:x1]) @ span).max() / (span @ span))
+        share = float((1 - _ink_cover(img[y0:y1 - 1, x0:x1], back_rgb, box_rgb)).max())
         ok = (stack == 0 and alone == 0 and half == 0 and between <= 1
-              and share <= 0.25 + 2 / np.abs(span).max())
+              and share <= 0.25 + 2 / np.abs(box_rgb - back_rgb).max())
         detail = (f"{stack} px of the stack not its colour, {alone} px of the quad on the grid or "
                   f"round it wrong (want 0 each), {half} px of the halved column not half way "
                   f"(want 0), {between} px between the colours on a corner's diagonal (want 1 at "
@@ -31910,24 +31924,19 @@ def run_canvas_gate(workdir):
     shot, probe = _canvas_run(workdir, "lines", "--ui-lines")
     lines = _canvas_sheet(probe, "lines")
     names = ("level", "slant", "hair", "joined", "trapezoid", "square", "quad", "halves", "meeting",
-             "concave", "five")
+             "concave", "five", "straight")
     colours = lines.get("colours", [])
     if not shot or len(colours) != 4 or not all(n in lines for n in names):
         ok, detail = False, "the run failed or printed no lines"
     else:
         img = _ppm_array(shot)[..., :3].astype(float)
-        ink_hex, back_hex = int(colours[1], 16), int(colours[3], 16)
-        ink, back = (np.array([(c >> sh) & 255 for sh in (16, 8, 0)], float)
-                     for c in (ink_hex, back_hex))
+        ink, back = _hex_rgb(colours[1]), _hex_rgb(colours[3])
         span = ink - back
 
         def shape(n):
             # Its width, then its points, in pixels.
             v = [float(t) for t in lines[n]]
             return v[0], np.array(v[1:]).reshape(-1, 2)
-
-        def off(pixels, rgb):
-            return int((np.abs(pixels - rgb).max(axis=-1) > 2).sum())
 
         def box(n, grow):
             # The shape's bounds, grown by `grow` pixels and its half width, as array bounds.
@@ -31937,14 +31946,14 @@ def run_canvas_gate(workdir):
             return x0, y0, x1, y1
 
         def area_error(n):
-            # A pixel's coverage is how far it lies from the backdrop toward the ink; summed round
-            # the shape, against its area: a line's length times width and its ends' disc, a
+            # Its coverage summed round the shape, against its area: a line's a capsule's, a
             # convex shape's by the shoelace.
             w, p = shape(n)
             x0, y0, x1, y1 = box(n, 3)
-            got = float(((img[y0:y1, x0:x1] - back) @ span).sum() / (span @ span))
+            got = float(_ink_cover(img[y0:y1, x0:x1], back, ink).sum())
             if w > 0:
-                want = float(np.linalg.norm(p[1] - p[0])) * w + np.pi * (w / 2) ** 2
+                want = _canvas_area("capsule", {"len": float(np.linalg.norm(p[1] - p[0])),
+                                                "w": w})[0]
             else:
                 q = np.roll(p, -1, axis=0)
                 want = abs(float((p[:, 0] * q[:, 1] - q[:, 0] * p[:, 1]).sum())) / 2
@@ -31954,8 +31963,8 @@ def run_canvas_gate(workdir):
         # the backdrop's, round ends and all.
         w, p = shape("level")
         ax, bx, y, r = int(p[0][0]), int(p[1][0]), int(p[0][1]), int(w // 2)
-        level = (off(img[y - r:y + r, ax:bx], ink)
-                 + off(img[[y - r - 1, y + r], ax - r - 2:bx + r + 2], back))
+        level = (_off_rgb(img[y - r:y + r, ax:bx], ink, 2)
+                 + _off_rgb(img[[y - r - 1, y + r], ax - r - 2:bx + r + 2], back, 2))
         slant, hair = area_error("slant"), area_error("hair")
         # At each join, its pixel and the pixel half way out along the bisector on the outer side,
         # which only the two round ends cover.
@@ -31965,7 +31974,7 @@ def run_canvas_gate(workdir):
             inward = (q - j) / np.linalg.norm(q - j) + (k - j) / np.linalg.norm(k - j)
             for at in (j, j - inward / np.linalg.norm(inward) * (w / 2 - 1)):
                 x, y = np.floor(at).astype(int)
-                joined += not _rgb_near(img[y, x], ink_hex, 2)
+                joined += _off_rgb(img[y, x], ink, 2)
         # A trapezoid whose top and bottom fall just short of a pixel's centre, where the ramp's
         # outer half covers the next row by 0.4: drawn only to its bounds, it misses that row.
         trapezoid = area_error("trapezoid")
@@ -31981,13 +31990,18 @@ def run_canvas_gate(workdir):
         # Two triangles meeting on a diagonal: no pixel inside the pair shows more of the backdrop
         # than a quarter, f(1 - f) for coverages f and 1 - f.
         x0, y0, x1, y1 = box("meeting", -2)
-        meeting = float(((ink - img[y0:y1, x0:x1]) @ span).max() / (span @ span))
+        meeting = float((1 - _ink_cover(img[y0:y1, x0:x1], back, ink)).max())
         # A concave shape and one of five corners draw nothing.
-        refused = sum(off(img[y0:y1, x0:x1], back)
+        refused = sum(_off_rgb(img[y0:y1, x0:x1], back, 2)
                       for x0, y0, x1, y1 in (box("concave", 2), box("five", 2)))
+        # A triangle with a fourth corner on an edge, which rounding turns the other way by a few
+        # float steps, is drawn: its first three corners' centroid its colour.
+        _, p = shape("straight")
+        x, y = np.floor(p[:3].mean(axis=0)).astype(int)
+        straight = _off_rgb(img[y, x], ink, 2)
         ok = (level == 0 and slant <= 0.02 and hair <= 0.05 and joined == 0
               and trapezoid <= 0.01 and square <= 1 and quarter <= 2
-              and meeting <= 0.25 + 2 / np.abs(span).max() and refused == 0)
+              and meeting <= 0.25 + 2 / np.abs(span).max() and refused == 0 and straight == 0)
         detail = (f"{level} px of the level line or the rows beside it wrong (want 0), the slanted "
                   f"line's coverage {slant:.1%} off its area (want 2% at most), the hairline's "
                   f"{hair:.1%} (want 5% at most), {joined} px at the joins not the line's colour "
@@ -31995,7 +32009,8 @@ def run_canvas_gate(workdir):
                   f"square {square} codes off the quad (want 1 at most), a halved square's corner "
                   f"{quarter} codes off a quarter covered (want 2 at most), the backdrop "
                   f"{meeting:.3f} of the triangles' diagonal (want 0.25 at most), {refused} px "
-                  f"drawn by the refused shapes (want 0)")
+                  f"drawn by the refused shapes (want 0), the triangle with a corner on an edge "
+                  f"{'drawn' if straight == 0 else 'refused'} (want drawn)")
     print(f"  canvas-ui-lines     {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-ui-lines", ok)
 

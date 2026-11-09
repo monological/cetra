@@ -1,3 +1,4 @@
+#include <float.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -176,16 +177,25 @@ static float _pixel_points(const UIDrawList* dl) {
                : 0.0f;
 }
 
+// What differs between a primitive's four vertices: the position, the UV and the `border` field.
+typedef struct UICorner {
+    float x, y, u, v;
+    float border[4];
+} UICorner;
+
+// Whether a mode's `border` field is a colour; a line's and a convex shape's holds its geometry.
+static bool _border_is_colour(float mode) {
+    return mode == UI_MODE_FILL || mode == UI_MODE_TEXTURE || mode == UI_MODE_GLYPH;
+}
+
 // The one place geometry enters the list. Every primitive below is this call
 // with different numbers, which is why there is no second place for a clip, the
 // offset or the alpha to be forgotten.
-// Four corners in order round the quad, each with its UV and its `border`
-// field; `rect` is the bounds the shape is measured against, which the offset
-// moves with the corners.
+// Four corners in order round the quad; `rect` is the bounds the shape is
+// measured against, which the offset moves with the corners.
 // False when nothing was pushed.
-static bool _push(UIDrawList* dl, GLuint texture, const float xs[4], const float ys[4],
-                  const float us[4], const float vs[4], const float rect[4], const float color[4],
-                  const float params[4], const float border[4][4]) {
+static bool _push(UIDrawList* dl, GLuint texture, const UICorner corners[4], const float rect[4],
+                  const float color[4], const float params[4]) {
     if (!_reserve_verts(dl, 4) || !_reserve_idx(dl, 6))
         return false;
     UIBatch* batch = _batch_for(dl, texture);
@@ -198,19 +208,23 @@ static bool _push(UIDrawList* dl, GLuint texture, const float xs[4], const float
     // offset and a sliding screen's panels lose their corners.
     const float rc[4] = {rect[0] + dl->offset_x, rect[1] + dl->offset_y, rect[2] + dl->offset_x,
                          rect[3] + dl->offset_y};
+    const bool border_colour = _border_is_colour(params[2]);
 
     const unsigned int base = (unsigned int)dl->vcount;
     for (int i = 0; i < 4; i++) {
         UIVertex* v = &dl->verts[dl->vcount++];
-        v->x = xs[i] + dl->offset_x;
-        v->y = ys[i] + dl->offset_y;
-        v->u = us[i];
-        v->v = vs[i];
+        v->x = corners[i].x + dl->offset_x;
+        v->y = corners[i].y + dl->offset_y;
+        v->u = corners[i].u;
+        v->v = corners[i].v;
         memcpy(v->color, c, sizeof(float) * 4);
         memcpy(v->rect, rc, sizeof(float) * 4);
         memcpy(v->params, params, sizeof(float) * 4);
-        memcpy(v->border, border[i], sizeof(float) * 4);
+        memcpy(v->border, corners[i].border, sizeof(float) * 4);
         v->color[3] *= dl->alpha;
+        // A fading screen fades the border with the fill, or it pops in whole.
+        if (border_colour)
+            v->border[3] *= dl->alpha;
     }
 
     const unsigned int order[6] = {0, 1, 2, 0, 2, 3};
@@ -228,14 +242,6 @@ static bool _push_quad(UIDrawList* dl, GLuint texture, float x0, float y0, float
     if (!dl || x1 <= x0 || y1 <= y0)
         return false;
 
-    static const float no_border[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    const float* b = border ? border : no_border;
-    // A fading screen fades the border with the fill, or it pops in whole.
-    const float bc[4] = {b[0], b[1], b[2], b[3] * dl->alpha};
-    const float borders[4][4] = {{bc[0], bc[1], bc[2], bc[3]},
-                                 {bc[0], bc[1], bc[2], bc[3]},
-                                 {bc[0], bc[1], bc[2], bc[3]},
-                                 {bc[0], bc[1], bc[2], bc[3]}};
     const float rect[4] = {x0, y0, x1, y1};
     const float params[4] = {radius, border_w, mode, 0.0f};
 
@@ -247,11 +253,14 @@ static bool _push_quad(UIDrawList* dl, GLuint texture, float x0, float y0, float
     // what it is given.
     const float px = mode == UI_MODE_FILL && !dl->cur_program ? _pixel_points(dl) : 0.0f;
     x0 -= px, y0 -= px, x1 += px, y1 += px;
-    const float xs[4] = {x0, x1, x1, x0};
-    const float ys[4] = {y0, y0, y1, y1};
-    const float us[4] = {u0, u1, u1, u0};
-    const float vs[4] = {v0, v0, v1, v1};
-    return _push(dl, texture, xs, ys, us, vs, rect, color, params, borders);
+    UICorner c[4] = {{.x = x0, .y = y0, .u = u0, .v = v0},
+                     {.x = x1, .y = y0, .u = u1, .v = v0},
+                     {.x = x1, .y = y1, .u = u1, .v = v1},
+                     {.x = x0, .y = y1, .u = u0, .v = v1}};
+    if (border)
+        for (int i = 0; i < 4; i++)
+            memcpy(c[i].border, border, sizeof(c[i].border));
+    return _push(dl, texture, c, rect, color, params);
 }
 
 // ---------------------------------------------------------------- primitives
@@ -314,14 +323,46 @@ void ui_draw_rounded(UIDrawList* dl, UIRect r, float radius, vec4 fill, vec4 bor
                border_width, UI_MODE_FILL, border);
 }
 
+// One line from a to b, `h` its drawn half width and `e` how far its quad reaches past the segment.
+static void _push_line(UIDrawList* dl, UIPoint a, UIPoint b, float h, float e, const float c[4]) {
+    const float dx = b.x - a.x, dy = b.y - a.y;
+    const float len = sqrtf(dx * dx + dy * dy);
+    // A line of no length is a dot, and any direction draws it.
+    const float tx = len > 0.0f ? dx / len : 1.0f, ty = len > 0.0f ? dy / len : 0.0f;
+    const float along[4] = {-e, len + e, len + e, -e};
+    const float across[4] = {-e, -e, e, e};
+    UICorner corners[4];
+    for (int i = 0; i < 4; i++)
+        corners[i] = (UICorner){.x = a.x + tx * along[i] - ty * across[i],
+                                .y = a.y + ty * along[i] + tx * across[i],
+                                .border = {along[i], across[i], len, 0.0f}};
+    const float rect[4] = {fminf(a.x, b.x) - h, fminf(a.y, b.y) - h, fmaxf(a.x, b.x) + h,
+                           fmaxf(a.y, b.y) + h};
+    const float params[4] = {h, 0.0f, UI_MODE_LINE, 0.0f};
+    _push(dl, dl->white, corners, rect, c, params);
+}
+
 void ui_draw_line(UIDrawList* dl, UIPoint a, UIPoint b, float width, vec4 color) {
+    ui_draw_polyline(dl, (const UIPoint[]){a, b}, 2, width, color);
+}
+
+void ui_draw_polyline(UIDrawList* dl, const UIPoint* points, size_t count, float width,
+                      vec4 color) {
     if (!dl)
         return;
-    if (!(width > 0.0f) || !isfinite(width) || !isfinite(a.x) || !isfinite(a.y) || !isfinite(b.x) ||
-        !isfinite(b.y)) {
-        log_error("ui: a line %g points wide from (%g, %g) to (%g, %g) is not drawn", (double)width,
-                  (double)a.x, (double)a.y, (double)b.x, (double)b.y);
+    if (count > 0 && !points) {
+        log_error("ui: a polyline of %zu points and no array of them", count);
         return;
+    }
+    if (!(width > 0.0f) || !isfinite(width)) {
+        log_error("ui: a line %g points wide is not drawn", (double)width);
+        return;
+    }
+    for (size_t i = 0; i < count; i++) {
+        if (!isfinite(points[i].x) || !isfinite(points[i].y)) {
+            log_error("ui: a line's point %zu is not finite", i);
+            return;
+        }
     }
     float c[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     if (color)
@@ -337,39 +378,8 @@ void ui_draw_line(UIDrawList* dl, UIPoint a, UIPoint b, float width, vec4 color)
     const float h = width * 0.5f;
     // The quad reaches a pixel past the round ends and the sides, so the ramp's outer half is
     // drawn, as a fill's is.
-    const float e = h + px;
-    const float dx = b.x - a.x, dy = b.y - a.y;
-    const float len = sqrtf(dx * dx + dy * dy);
-    // A line of no length is a dot, and any direction draws it.
-    const float tx = len > 0.0f ? dx / len : 1.0f, ty = len > 0.0f ? dy / len : 0.0f;
-    const float along[4] = {-e, len + e, len + e, -e};
-    const float across[4] = {-e, -e, e, e};
-    float xs[4], ys[4], border[4][4];
-    for (int i = 0; i < 4; i++) {
-        xs[i] = a.x + tx * along[i] - ty * across[i];
-        ys[i] = a.y + ty * along[i] + tx * across[i];
-        border[i][0] = along[i];
-        border[i][1] = across[i];
-        border[i][2] = len;
-        border[i][3] = 0.0f;
-    }
-    const float rect[4] = {fminf(a.x, b.x) - h, fminf(a.y, b.y) - h, fmaxf(a.x, b.x) + h,
-                           fmaxf(a.y, b.y) + h};
-    const float params[4] = {h, 0.0f, UI_MODE_LINE, 0.0f};
-    static const float uv[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    _push(dl, dl->white, xs, ys, uv, uv, rect, c, params, border);
-}
-
-void ui_draw_polyline(UIDrawList* dl, const UIPoint* points, size_t count, float width,
-                      vec4 color) {
-    if (!dl)
-        return;
-    if (count > 0 && !points) {
-        log_error("ui: a polyline of %zu points and no array of them", count);
-        return;
-    }
     for (size_t i = 1; i < count; i++)
-        ui_draw_line(dl, points[i - 1], points[i], width, color);
+        _push_line(dl, points[i - 1], points[i], h, h + px, c);
 }
 
 // A convex shape's distance to an edge that never limits it: a triangle's fourth, and an edge of no
@@ -379,7 +389,11 @@ void ui_draw_polyline(UIDrawList* dl, const UIPoint* points, size_t count, float
 void ui_draw_convex(UIDrawList* dl, const UIPoint* corners, size_t count, vec4 color) {
     if (!dl)
         return;
-    if ((count != 3 && count != 4) || !corners) {
+    if (count > 0 && !corners) {
+        log_error("ui: a convex shape of %zu corners and no array of them", count);
+        return;
+    }
+    if (count != 3 && count != 4) {
         log_error("ui: a convex shape takes 3 or 4 corners, not %zu", count);
         return;
     }
@@ -393,9 +407,18 @@ void ui_draw_convex(UIDrawList* dl, const UIPoint* corners, size_t count, vec4 c
             return;
         }
         area2 += p.x * q.y - q.x * p.y;
-        const float turn = (q.x - p.x) * (r.y - q.y) - (q.y - p.y) * (r.x - q.x);
-        left |= turn > 0.0f;
-        right |= turn < 0.0f;
+        const float ax = q.x - p.x, ay = q.y - p.y, bx = r.x - q.x, by = r.y - q.y;
+        const float turn = ax * by - ay * bx;
+        // A corner within rounding of its neighbours' line turns neither way, so a shape whose
+        // corners were computed in floats is not refused for one placed on an edge. A position is
+        // good to a few float steps of its size, which move the turn by that times the edges.
+        const float size =
+            fmaxf(fmaxf(fmaxf(fabsf(p.x), fabsf(p.y)), fmaxf(fabsf(q.x), fabsf(q.y))),
+                  fmaxf(fabsf(r.x), fabsf(r.y)));
+        const float straight =
+            8.0f * FLT_EPSILON * size * (sqrtf(ax * ax + ay * ay) + sqrtf(bx * bx + by * by));
+        left |= turn > straight;
+        right |= turn < -straight;
         x0 = fminf(x0, p.x), y0 = fminf(y0, p.y), x1 = fmaxf(x1, p.x), y1 = fmaxf(y1, p.y);
     }
     if (left && right) {
@@ -406,28 +429,33 @@ void ui_draw_convex(UIDrawList* dl, const UIPoint* corners, size_t count, vec4 c
         log_error("ui: a convex shape of no area is not drawn");
         return;
     }
-    // Its bounds a pixel past, as a fill's are, so the ramp's outer half is drawn.
+    // Each edge as the plane its distance is: an inward unit normal and an offset, positive on the
+    // side the shape lies.
+    const float inward = area2 > 0.0f ? 1.0f : -1.0f;
+    float plane[4][3];
+    for (size_t i = 0; i < 4; i++) {
+        const UIPoint p = corners[i % count], q = corners[(i + 1) % count];
+        const float ex = q.x - p.x, ey = q.y - p.y, len = sqrtf(ex * ex + ey * ey);
+        const bool edge = i < count && len > 0.0f;
+        const float nx = edge ? -inward * ey / len : 0.0f, ny = edge ? inward * ex / len : 0.0f;
+        plane[i][0] = nx;
+        plane[i][1] = ny;
+        plane[i][2] = edge ? -(nx * p.x + ny * p.y) : UI_CONVEX_FAR;
+    }
+    // Its bounds a pixel past, as a fill's are, so the ramp's outer half is drawn; each box corner
+    // carries its distance to each edge.
     const float px = _pixel_points(dl);
     const float xs[4] = {x0 - px, x1 + px, x1 + px, x0 - px};
     const float ys[4] = {y0 - px, y0 - px, y1 + px, y1 + px};
-    // Each box corner's signed distance to each edge, positive on the side the shape lies.
-    const float inward = area2 > 0.0f ? 1.0f : -1.0f;
-    float border[4][4];
+    UICorner box[4];
     for (int k = 0; k < 4; k++) {
-        for (size_t i = 0; i < 4; i++) {
-            border[k][i] = UI_CONVEX_FAR;
-            if (i >= count)
-                continue;
-            const UIPoint p = corners[i], q = corners[(i + 1) % count];
-            const float ex = q.x - p.x, ey = q.y - p.y, len = sqrtf(ex * ex + ey * ey);
-            if (len > 0.0f)
-                border[k][i] = inward * (ex * (ys[k] - p.y) - ey * (xs[k] - p.x)) / len;
-        }
+        box[k] = (UICorner){.x = xs[k], .y = ys[k]};
+        for (int i = 0; i < 4; i++)
+            box[k].border[i] = plane[i][0] * xs[k] + plane[i][1] * ys[k] + plane[i][2];
     }
     const float rect[4] = {x0, y0, x1, y1};
     const float params[4] = {0.0f, 0.0f, UI_MODE_CONVEX, 0.0f};
-    static const float uv[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    _push(dl, dl->white, xs, ys, uv, uv, rect, color, params, border);
+    _push(dl, dl->white, box, rect, color, params);
 }
 
 void ui_draw_textured_quad(UIDrawList* dl, UIRect r, const Texture* tex, vec4 tint) {
@@ -1143,8 +1171,7 @@ bool ui_draw_list_quad_border(const UIDrawList* dl, size_t i, vec4 border, float
     if (!dl || i >= dl->vcount / 4)
         return false;
     const UIVertex* v = &dl->verts[i * 4];
-    // A line's and a convex shape's border field holds its geometry, not a colour.
-    if (v[0].params[2] >= UI_MODE_LINE)
+    if (!_border_is_colour(v[0].params[2]))
         return false;
     if (border)
         memcpy(border, v[0].border, sizeof(float) * 4);

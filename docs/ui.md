@@ -251,13 +251,10 @@ possible. The shader is `ui_vert/frag` (`docs/shaders.md`, Game UI).
     draw hook.
   - Dashes, butt and square ends, mitre joins, concave shapes and shapes of more corners are the
     canvas's (`docs/canvas.md`).
-- **What each mode keeps in the vertex.** `params.z` is the mode: 0 a fill, 1 an image, 2 a glyph, 3
-  a line, 4 a convex shape. `rect` is the shape's bounds in every mode. `params.x` is a fill's
-  corner radius or a line's half width. `border` is a fill's border colour; for a line, each
-  corner's place along the segment and across it and the segment's length; for a convex shape,
-  each corner's signed distance to each edge, positive inside, a triangle's fourth far enough never
-  to limit. Each is affine in the position, so it is exact wherever it is interpolated, and none is
-  a position, so the offset has nothing there to move.
+- **One vertex format for every mode**: a line and a convex shape keep their geometry in the field
+  that is a fill's border colour, as distances affine in the position, so they add no attribute and
+  the offset has nothing there to move. What each field holds in each mode is `UIVertex`'s comment
+  in `ui_draw.c`.
 - `ui_draw_list_quad_count` and `ui_draw_list_quad` read the quads back for the probe, each as the
   rect it was drawn for, a line and a convex shape as their bounds with kind 3 or 4;
   `ui_draw_list_quad_border` returns false for both, which have no border.

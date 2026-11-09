@@ -53,25 +53,24 @@ void main() {
     // pixel quad reaches it.
     float aa = max(length(dFdx(vPos)), 1e-5);
 
-    if (mode == UI_MODE_LINE) {
-        // The distance to the segment, less half the width: the round ends are
-        // where the place along it is clamped to its length.
-        float along = vBorder.x - clamp(vBorder.x, 0.0, vBorder.z);
-        float d = length(vec2(along, vBorder.y)) - vParams.x;
-        float alpha = clamp(0.5 - d / aa, 0.0, 1.0) * vColor.a;
-        if (alpha < 0.003)
-            discard;
-        FragColor = vec4(vColor.rgb, alpha);
-        return;
-    }
-
-    if (mode == UI_MODE_CONVEX) {
-        // The product of the edges' ramps: the box filter's coverage of a
-        // corner between edges at right angles, so a shape on whole pixels
-        // draws as a fill of the same rect. Their minimum would cover a corner
-        // pixel by the lesser edge's share where the box covers the product.
-        vec4 edge = clamp(0.5 + vBorder / aa, 0.0, 1.0);
-        float alpha = edge.x * edge.y * edge.z * edge.w * vColor.a;
+    if (mode == UI_MODE_LINE || mode == UI_MODE_CONVEX) {
+        float cover;
+        if (mode == UI_MODE_LINE) {
+            // The distance to the segment, less half the width: the round
+            // ends are where the place along it is clamped to its length.
+            float along = vBorder.x - clamp(vBorder.x, 0.0, vBorder.z);
+            float d = length(vec2(along, vBorder.y)) - vParams.x;
+            cover = clamp(0.5 - d / aa, 0.0, 1.0);
+        } else {
+            // The product of the edges' ramps: the box filter's coverage of a
+            // corner between edges at right angles, so a shape on whole pixels
+            // draws as a fill of the same rect. Their minimum would cover a
+            // corner pixel by the lesser edge's share where the box covers the
+            // product.
+            vec4 edge = clamp(0.5 + vBorder / aa, 0.0, 1.0);
+            cover = edge.x * edge.y * edge.z * edge.w;
+        }
+        float alpha = cover * vColor.a;
         if (alpha < 0.003)
             discard;
         FragColor = vec4(vColor.rgb, alpha);

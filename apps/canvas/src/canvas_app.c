@@ -3562,7 +3562,7 @@ static UIRect seams_box(size_t i) {
 }
 
 // A colour as 0xRRGGBB, as the gate's probe lines name one.
-static uint32_t seams_rgb(const float c[4]) {
+static uint32_t probe_rgb(const float c[4]) {
     return (uint32_t)lroundf(c[0] * 255.0f) << 16 | (uint32_t)lroundf(c[1] * 255.0f) << 8 |
            (uint32_t)lroundf(c[2] * 255.0f);
 }
@@ -3587,18 +3587,24 @@ static void draw_seams(UIElement* el, UIDrawList* dl, void* user) {
     }
 }
 
-static void build_seams(UISystem* ui, double scale, bool probe) {
+// A screen of one panel over the window, drawn by `draw` with the points in a framebuffer pixel as
+// its user pointer: a sheet whose lengths are pixels.
+static void push_pixel_sheet(UISystem* ui, const char* name, UIDrawFn draw, double scale) {
     static float px;
     px = (float)(1.0 / scale);
-    UIScreen* screen = ui_screen(ui, "seams");
+    UIScreen* screen = ui_screen(ui, name);
     UIElement* panel = ui_panel(ui_screen_root(screen));
     ui_set_size(panel, UI_GROW, 0.0f, UI_GROW, 0.0f);
-    ui_set_draw(panel, draw_seams, &px);
+    ui_set_draw(panel, draw, &px);
     ui_push(ui, screen);
+}
+
+static void build_seams(UISystem* ui, double scale, bool probe) {
+    push_pixel_sheet(ui, "seams", draw_seams, scale);
     if (!probe)
         return;
-    printf("canvas seams colours want %06x backdrop %06x\n", seams_rgb(SEAMS_BOX),
-           seams_rgb(SEAMS_BACKDROP));
+    printf("canvas seams colours want %06x backdrop %06x\n", probe_rgb(SEAMS_BOX),
+           probe_rgb(SEAMS_BACKDROP));
     // Each box rounded outward, so the half quad's last column is the one its edge halves.
     for (size_t i = 0; i < SEAMS_COUNT; i++) {
         const UIRect b = seams_box(i);
@@ -3614,9 +3620,9 @@ static void build_seams(UISystem* ui, double scale, bool probe) {
  * wide, each covering its area; a polyline turning 60 degrees at each join, filled whole at the
  * joins and round them. A trapezoid whose top and bottom fall just short of a pixel's centre,
  * covering its area; a square on whole pixels beside a quad of the same size; a square whose edges
- * halve pixels, a quarter of each corner pixel covered; two triangles meeting on a diagonal; and a
- * concave shape and one of five corners, which draw nothing. Its lengths are framebuffer pixels,
- * from the window's corner.
+ * halve pixels, a quarter of each corner pixel covered; two triangles meeting on a diagonal; a
+ * concave shape and one of five corners, which draw nothing; and a triangle with a corner on an
+ * edge, which draws. Its lengths are framebuffer pixels, from the window's corner.
  */
 static const vec4 LINES_BACKDROP = {0.10f, 0.12f, 0.16f, 1.0f},
                   LINES_INK = {0.95f, 0.80f, 0.35f, 1.0f};
@@ -3676,6 +3682,13 @@ static const struct {
      0.0f,
      5,
      {{390.0f, 190.0f}, {430.0f, 190.0f}, {435.0f, 210.0f}, {410.0f, 230.0f}, {385.0f, 210.0f}}},
+    // A triangle with a fourth corner placed on an edge in floats, a thousandth of the way from
+    // the third corner to the first, where rounding turns it the other way by 1.9e-4.
+    {"straight",
+     LINES_CONVEX,
+     0.0f,
+     4,
+     {{440.3f, 230.7f}, {480.6f, 230.7f}, {470.1f, 190.3f}, {470.070221f, 190.340408f}}},
 };
 #define LINES_COUNT (sizeof(LINES) / sizeof(LINES[0]))
 
@@ -3745,17 +3758,11 @@ static void draw_lines(UIElement* el, UIDrawList* dl, void* user) {
 }
 
 static void build_lines(UISystem* ui, double scale, bool probe) {
-    static float px;
-    px = (float)(1.0 / scale);
-    UIScreen* screen = ui_screen(ui, "lines");
-    UIElement* panel = ui_panel(ui_screen_root(screen));
-    ui_set_size(panel, UI_GROW, 0.0f, UI_GROW, 0.0f);
-    ui_set_draw(panel, draw_lines, &px);
-    ui_push(ui, screen);
+    push_pixel_sheet(ui, "lines", draw_lines, scale);
     if (!probe)
         return;
-    printf("canvas lines colours want %06x backdrop %06x\n", seams_rgb(LINES_INK),
-           seams_rgb(LINES_BACKDROP));
+    printf("canvas lines colours want %06x backdrop %06x\n", probe_rgb(LINES_INK),
+           probe_rgb(LINES_BACKDROP));
     // Each a polyline's width or 0, then its points.
     for (size_t i = 0; i < LINES_COUNT; i++) {
         printf("canvas lines %s %.4f", LINES[i].name, (double)LINES[i].width);

@@ -241,8 +241,7 @@ chain's defaults (what is on, what is lazily allocated) are in
   - **A line and a convex shape add no attribute, uniform or sampler** (spec 14.28): their geometry
     rides the `border` attribute, which they do not need for a colour, as distances affine in the
     position. A line's branch measures the distance to its segment less half its width; a convex
-    shape's multiplies its edges' ramps. `aa`, a pixel's size in points, is taken before any branch,
-    so every fragment of a pixel quad reaches the derivative.
+    shape's multiplies its edges' ramps.
   - The glyph branch takes `fwidth` with no constant smoothing term, which keeps text the same
     weight at any size.
   - **A border is laid over its fill by Porter-Duff over** in straight colour, the box's outer edge
