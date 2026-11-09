@@ -454,9 +454,11 @@ colour for every state; while that colour's alpha is 0 they are the editor's tex
   underline still go by its bytes.
 - **A style's `gutter` and `sign`** (spec 14.16) mark the lines its ranges reach, by the same rule:
   `gutter` fills behind the gutter on each of the line's rows, under the number, and `sign` (a
-  codepoint) is drawn in the gap after the number on its first row, in the text's plain colour.
-  pcb's diff marks a changed line with `-` or `+` and a stronger red or green this way, through the
-  ranges it already keeps.
+  codepoint) is drawn in the gap after the number on its first row, in the style's `sign_colour`
+  (spec 14.26), or the text's plain colour when its alpha is 0. When several styles reach a line,
+  the sign is the last of theirs that has one, in that style's colour. pcb's diff marks a changed
+  line with `-` or `+` and a stronger red or green this way, through the ranges it already keeps,
+  and its code marks a line with an error or a warning with a `>` in its underline's colour.
 
 **Rows the text does not make** (spec 14.16). Every walk of the rows -- the scroll, a row move, a
 click, the draw -- counts the rows a line *shows*, which may differ from the rows it wraps to.
