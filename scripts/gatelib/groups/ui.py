@@ -1752,7 +1752,7 @@ def run_ui_gate(workdir):
             return False, "the probe produced nothing"
         want = {("first", "measures"): 400000, ("again", "measures"): 0,
                 ("changed", "measures"): 4, ("shrunk", "measures"): 4,
-                ("grown", "measures"): 40}
+                ("grown", "measures"): 40, ("shrunk", "row7"): 0}
         wrong = _probe_wrong(p, want)
         shrunk, second = p[("shrunk", "width")][0], p[("second", "width")][0]
         widest = p[("widest", "width")][0]
@@ -1762,7 +1762,8 @@ def run_ui_gate(workdir):
                   f"{p[('changed', 'measures')][0]:.0f} (want 4); the widest shrunk, "
                   f"{widest:.2f} to {shrunk:.2f} (want the next widest, {second:.2f}) with "
                   f"{p[('shrunk', 'measures')][0]:.0f} measured (want 4); ten rows added "
-                  f"{p[('grown', 'measures')][0]:.0f} (want 40)")
+                  f"{p[('grown', 'measures')][0]:.0f} (want 40); shrunk to 5 rows, row 7 "
+                  f"{'still placed' if p.get(('shrunk', 'row7'), [1])[0] else 'gone'} (want gone)")
         return ok, detail
 
     @arm("ui-table-heights")

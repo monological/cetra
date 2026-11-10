@@ -1743,6 +1743,9 @@ static int probe_table_measure(UISystem* ui, const Font* font) {
     ui_table_set_row_count(table, TABLE_ROWS + 10);
     ui_layout(s, 1280.0f, 720.0f);
     printf("ui table-measure grown measures %u\n", table->measures - was);
+    // Shrunk to 5 rows, row 7 is gone at once, not only at the next layout.
+    ui_table_set_row_count(table, 5);
+    printf("ui table-measure shrunk row7 %d\n", ui_table_cell_rect(table, 7, -1, NULL) ? 1 : 0);
     return 0;
 }
 
