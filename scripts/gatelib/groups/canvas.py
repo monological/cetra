@@ -280,7 +280,13 @@ def run_canvas_gate(workdir):
                      at most; a concave shape and one of five corners drawing nothing; and a
                      triangle with a fourth corner placed on an edge in floats, which rounding
                      turns the other way by a few float steps, drawn, its centroid its colour.
-      canvas-caps    the strokes sheet (spec 14.22): a segment and an arc each capped round, butt
+      canvas-ui-table a table of 500 rows (spec 14.30) under a header, its cursor on row 3, its
+                     colours opaque: the header's rule a pixel row of its colour across the
+                     content, within 2 codes; down each gap between two columns, where no cell
+                     draws, the cursor's fill on its row and the table's colour under the titles
+                     and on every other row, though one column's notes are three times its width.
+                     A glyph drawn past its cell lands in a gap.
+      canvas-caps   the strokes sheet (spec 14.22): a segment and an arc each capped round, butt
                      and square, their areas in closed form within 0.03 px per pixel of edge, as
                      canvas-areas. A round cap adds a disc, a square one the width squared. And a
                      wide square-capped segment at 45 degrees alone in its tile, seen through a
@@ -1053,6 +1059,43 @@ def run_canvas_gate(workdir):
                       f"the backdrop {meeting:.3f} of the triangles' diagonal (want 0.25 at most), "
                       f"{refused} px drawn by the refused shapes (want 0), the triangle with a "
                       f"corner on an edge {'drawn' if straight == 0 else 'refused'} (want drawn)")
+        return ok, detail
+
+    @arm("canvas-ui-table")
+    def _():
+        shot, probe = _canvas_run(workdir, "table", "--ui-table")
+        table = _canvas_sheet(probe, "table")
+        gaps = [table.get(f"gap{c}") for c in range(6)]
+        colours = table.get("colours", [])
+        if not shot or len(colours) != 6 or not all(gaps) or "overflow" not in table:
+            return False, "the run failed or printed no table"
+        img = _ppm_array(shot)[..., :3].astype(float)
+        bg, rule_rgb, cursor_rgb = (_hex_rgb(colours[k]) for k in (1, 3, 5))
+
+        def box(name):
+            return [int(round(float(v))) for v in table[name]]
+
+        # The rule's pixel row across the content, the rule's colour.
+        x0, y0, x1, y1 = box("rule")
+        rule = _off_rgb(img[y0:y1, x0:x1], rule_rgb, 2)
+        # The cursor's row and the rest, down each gap between two columns -- a pixel in from
+        # each column's edge -- where no cell draws: the cursor's colour on its row, the table's
+        # above and below it and under the header's titles. A glyph past its cell lands here.
+        cy0, cy1 = box("cursor")[1], box("cursor")[3]
+        hy0, hy1 = box("header")
+        ry0, ry1 = box("rows")
+        cursor = stray = 0
+        for g in gaps:
+            a, b = math.ceil(float(g[0])) + 1, math.floor(float(g[1])) - 1
+            cursor += _off_rgb(img[cy0:cy1, a:b], cursor_rgb, 2)
+            stray += (_off_rgb(img[hy0:hy1, a:b], bg, 2) + _off_rgb(img[ry0:cy0, a:b], bg, 2)
+                      + _off_rgb(img[cy1:ry1, a:b], bg, 2))
+        note, room = (float(v) for v in table["overflow"])
+        ok = rule == 0 and cursor == 0 and stray == 0 and note > room
+        detail = (f"{rule} px of the header's rule not its colour (want 0); {cursor} px of the "
+                  f"cursor's row in the gaps between columns not its fill (want 0); {stray} px "
+                  f"in the gaps elsewhere not the table's colour (want 0), with notes "
+                  f"{note:.0f} points long in a column {room:.0f} wide")
         return ok, detail
 
     # ---- strokes and dashes (spec 14.22)

@@ -48,6 +48,7 @@
 #include "cetra/ui.h"
 #include "cetra/ui_editor.h"
 #include "cetra/ui_editor_vim.h"
+#include "cetra/ui_table.h"
 #include "cetra/util.h"
 
 // Dear ImGui via cimgui, for --gui-click's click handed to the debug GUI.
@@ -3772,6 +3773,123 @@ static void build_lines(UISystem* ui, double scale, bool probe) {
     }
 }
 
+/*
+ * --ui-table (spec 14.30): a stackup's rows in a table over the window, as pcb's board modal shows
+ * them -- each layer's number, a picture of it, its name, weight and thickness, a note and its net
+ * -- with the cursor on row 3. Its colours are opaque, so canvas-ui-table can hold the header's
+ * rule and the cursor's fill to them pixel for pixel, and the gaps between the columns to the
+ * table's own colour: a glyph past its cell would land in one. The note column is narrower than
+ * its notes, which run past it.
+ */
+static const vec4 TABLE_BG = {0.08f, 0.09f, 0.11f, 1.0f}, TABLE_RULE = {0.55f, 0.60f, 0.68f, 1.0f},
+                  TABLE_CURSOR = {0.18f, 0.30f, 0.52f, 1.0f};
+static const UITableColumn TABLE_COLUMNS[] = {
+    {.title = "#", .size = UI_FIT, .align = UI_ALIGN_END},
+    {.title = "", .size = UI_FIXED, .length = 24.0f, .drawn = true},
+    {.title = "Layer", .size = UI_FIT},
+    {.title = "Weight", .size = UI_FIT, .align = UI_ALIGN_END},
+    {.title = "Thick", .size = UI_FIT, .align = UI_ALIGN_END},
+    {.title = "Note", .size = UI_FIXED, .length = 44.0f},
+    {.title = "Net", .size = UI_GROW},
+};
+#define TABLE_COLUMN_COUNT ((int)(sizeof(TABLE_COLUMNS) / sizeof(TABLE_COLUMNS[0])))
+static const char* TABLE_NOTE = "a note running on past its column";
+
+// An even row a copper layer, an odd one the dielectric between two.
+static void table_cell(int row, int column, UITableCell* out, void* user) {
+    (void)user;
+    static char text[32];
+    const bool copper = row % 2 == 0;
+    switch (column) {
+        case 0:
+            snprintf(text, sizeof(text), "%d", row);
+            break;
+        case 2:
+            snprintf(text, sizeof(text), copper ? "L%d" : "Prepreg %d", row / 2 + 1);
+            break;
+        case 3:
+            snprintf(text, sizeof(text), "%s", copper ? "1 oz" : "");
+            break;
+        case 4:
+            snprintf(text, sizeof(text), "%s", copper ? "0.035" : "0.110");
+            break;
+        case 5:
+            snprintf(text, sizeof(text), "%s", row % 5 == 0 ? TABLE_NOTE : "");
+            break;
+        default:
+            snprintf(text, sizeof(text), "%s", copper ? (row % 4 ? "GND" : "SIG") : "");
+            break;
+    }
+    out->text = text;
+}
+
+// The layer's picture: copper a bar across its row, dielectric a fill from edge to edge, so the
+// column runs on from row to row; brighter on the cursor's row.
+static void table_draw(UIDrawList* dl, UIRect cell, int row, int column, bool cursor, void* user) {
+    (void)column;
+    (void)user;
+    const float lift = cursor ? 0.15f : 0.0f;
+    if (row % 2 == 0)
+        ui_draw_quad(dl, (UIRect){cell.x, cell.y + cell.h * 0.3f, cell.w, cell.h * 0.4f},
+                     (vec4){0.85f + lift, 0.55f + lift, 0.25f, 1.0f});
+    else
+        ui_draw_quad(dl, cell, (vec4){0.25f, 0.42f + lift, 0.28f, 1.0f});
+}
+
+// A rect in framebuffer pixels, unrounded.
+static void say_pixels(UIRect r, double s) {
+    printf(" %.3f %.3f %.3f %.3f", r.x * s, r.y * s, (r.x + r.w) * s, (r.y + r.h) * s);
+}
+
+static void build_table(UISystem* ui, const Font* font, int width, int height, double scale,
+                        bool probe) {
+    UITheme theme = *ui_theme(ui);
+    glm_vec4_copy((float*)TABLE_RULE, theme.table_header);
+    glm_vec4_copy((float*)TABLE_CURSOR, theme.table_cursor);
+    ui_set_theme(ui, &theme);
+    UIScreen* screen = ui_screen(ui, "table");
+    UIElement* table = ui_table(ui_screen_root(screen));
+    ui_set_size(table, UI_GROW, 0.0f, UI_GROW, 0.0f);
+    table->spacing = 6.0f;
+    ui_set_style(
+        table, &(UIStyle){.bg = {TABLE_BG[0], TABLE_BG[1], TABLE_BG[2], 1.0f}, .font_size = 13.0f});
+    ui_table_set_columns(table, TABLE_COLUMNS, TABLE_COLUMN_COUNT);
+    ui_table_set_rows(table, 500, &(UITableSource){.cell = table_cell, .draw = table_draw});
+    ui_table_set_cursor(table, 3);
+    ui_push(ui, screen);
+    ui_layout(screen, (float)width, (float)height);
+    if (!probe)
+        return;
+    // The header's rule along its foot and the cursor's row, the header above the rule and the
+    // rows under it, and each gap between two columns, all in framebuffer pixels.
+    UIRect row3 = {0}, row0 = {0};
+    ui_table_cell_rect(table, 3, -1, &row3);
+    ui_table_cell_rect(table, 0, -1, &row0);
+    const float pixel = (float)(1.0 / scale);
+    const UIRect rule = {row0.x, row0.y - pixel, row0.w, pixel};
+    printf("canvas table colours bg %06x rule %06x cursor %06x\n", probe_rgb(TABLE_BG),
+           probe_rgb(TABLE_RULE), probe_rgb(TABLE_CURSOR));
+    printf("canvas table rule");
+    say_pixels(rule, scale);
+    printf("\ncanvas table cursor");
+    say_pixels(row3, scale);
+    printf("\ncanvas table header %.3f %.3f\n", (double)(table->rect.y + 6.0f) * scale,
+           (double)rule.y * scale);
+    printf("canvas table rows %.3f %.3f\n", (double)row0.y * scale,
+           (double)(table->rect.y + table->rect.h - 6.0f) * scale);
+    for (int c = 0; c + 1 < TABLE_COLUMN_COUNT; c++) {
+        UIRect a, b;
+        ui_table_cell_rect(table, 0, c, &a);
+        ui_table_cell_rect(table, 0, c + 1, &b);
+        printf("canvas table gap%d %.3f %.3f\n", c, (double)(a.x + a.w) * scale,
+               (double)b.x * scale);
+    }
+    UIRect note;
+    ui_table_cell_rect(table, 0, 5, &note);
+    printf("canvas table overflow %.3f %.3f\n",
+           (double)ui_text_width(font, 13.0f, 0.0f, TABLE_NOTE), (double)note.w);
+}
+
 static void usage(const char* argv0) {
     fprintf(
         stderr,
@@ -3785,7 +3903,7 @@ static void usage(const char* argv0) {
         "[--palette]\n"
         "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim] [--read-only]\n"
         "          [--editor-fold FIRST,LAST] [--editor-filler LINE,ROWS] [--refuse-close]\n"
-        "          [--ui-borders] [--ui-seams] [--ui-lines] [--dash LENGTH,GAP (mm)]\n"
+        "          [--ui-borders] [--ui-seams] [--ui-lines] [--ui-table] [--dash LENGTH,GAP (mm)]\n"
         "          [--dash-min-px PX]\n"
         "          [--cap round|butt|square] [--join round|mitre|bevel] [--fade STRENGTH,ROOM]\n",
         argv0);
@@ -3805,7 +3923,7 @@ static const char* IDENTITY_PASS = "#version 330 core\n"
 int main(int argc, char** argv) {
     bool headless = false, mirror = false, probe = false, picture = false, edit_thread = false;
     bool split = false, with_ui = false, budget = false, idle = false, ui_enter = false,
-         borders = false, seams = false, lines = false;
+         borders = false, seams = false, lines = false, table = false;
     bool history = false, palette = false, font_sheet = false, vim = false;
     const char* editor_files[EDITOR_FILES_MAX];
     int editor_count = 0;
@@ -3923,6 +4041,8 @@ int main(int argc, char** argv) {
             seams = true;
         } else if (strcmp(argv[i], "--ui-lines") == 0) {
             lines = true;
+        } else if (strcmp(argv[i], "--ui-table") == 0) {
+            table = true;
         } else if (strcmp(argv[i], "--dash") == 0 && more) {
             double on = 0.0, off = 0.0;
             if (sscanf(argv[++i], "%lf,%lf", &on, &off) != 2) {
@@ -4063,7 +4183,8 @@ int main(int argc, char** argv) {
     g_engine = engine;
     g_home_view = g_views[0];
     UISystem* ui = NULL;
-    if (with_ui || history || palette || font_sheet || editor_count || borders || seams || lines) {
+    if (with_ui || history || palette || font_sheet || editor_count || borders || seams || lines ||
+        table) {
         ui = create_ui_system(engine);
         ui_set_font(ui, font, 18.0f);
         ui_attach(ui, engine);
@@ -4144,6 +4265,8 @@ int main(int argc, char** argv) {
         build_seams(ui, ctx.fb_scale, probe);
     if (lines)
         build_lines(ui, ctx.fb_scale, probe);
+    if (table)
+        build_table(ui, font, width, height, ctx.fb_scale, probe);
     fflush(stdout);
 
     engine_add_overlay(engine, draw_view, NULL, 0);
