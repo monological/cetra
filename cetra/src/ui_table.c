@@ -54,6 +54,13 @@ struct UITable {
     int placed;
     float pixel, step;
     int reveal; // the row a reveal asked for before its height was known; -1 for none
+
+    // The cursor's row, -1 for none; whether a turn of keys is under way and moved it, so
+    // on_cursor is told once at its end.
+    int cursor;
+    bool in_keys, moved;
+    UIActionFn on_cursor;
+    void* cursor_user;
 };
 
 struct UITable* ui_table_make(void) {
@@ -62,6 +69,7 @@ struct UITable* ui_table_make(void) {
         t->stale_lo = INT_MAX;
         t->titles_stale = true;
         t->reveal = -1;
+        t->cursor = -1;
     }
     return t;
 }
@@ -183,6 +191,7 @@ void ui_table_set_rows(UIElement* table, int count, const UITableSource* source)
     t->count = count;
     _measure_all(t);
     t->reveal = -1;
+    t->cursor = -1;
     table->scroll = table->scroll_target = 0.0f;
 }
 
@@ -202,6 +211,8 @@ void ui_table_set_row_count(UIElement* table, int count) {
         t->widest_stale = true;
     t->stale_hi = t->stale_hi < count ? t->stale_hi : count;
     t->count = count;
+    if (t->cursor >= count)
+        t->cursor = -1;
 }
 
 void ui_table_rows_changed(UIElement* table, int first, int count) {
@@ -557,9 +568,20 @@ static void _draw_header(UIDrawList* dl, const UITable* t, const UIStyle* s, con
     ui_draw_quad(dl, (UIRect){head.x, head.y + head.h - t->pixel, head.w, t->pixel}, hs.fg);
 }
 
-// The rows in view, column by column under each column's clip: a text cell's lines, or a drawn
-// cell handed its rect under a clip of its own.
-static void _draw_rows(UIDrawList* dl, const UIElement* el, const UIStyle* s) {
+// What is drawn behind the cursor's row: the theme's, else its selection colour, else the engine's.
+static void _cursor_colour(const UITheme* theme, vec4 out) {
+    if (theme->table_cursor[3] > 0.0f)
+        glm_vec4_copy((float*)theme->table_cursor, out);
+    else if (theme->selection[3] > 0.0f)
+        glm_vec4_copy((float*)theme->selection, out);
+    else
+        glm_vec4_copy((vec4){0.25f, 0.45f, 0.85f, 0.55f}, out);
+}
+
+// The rows in view: the cursor's fill behind its row, then column by column under each column's
+// clip a text cell's lines, or a drawn cell handed its rect under a clip of its own.
+static void _draw_rows(UIDrawList* dl, const UIElement* el, const UIStyle* s,
+                       const UITheme* theme) {
     const UITable* t = el->table;
     const UIRect view = _rows_view(t);
     if (t->placed == 0 || view.h <= 0.0f)
@@ -567,6 +589,14 @@ static void _draw_rows(UIDrawList* dl, const UIElement* el, const UIStyle* s) {
     const double scroll = el->scroll;
     const int first = _row_at(t, scroll), last = _row_at(t, scroll + (double)view.h);
     ui_push_clip(dl, view);
+    if (t->cursor >= first && t->cursor <= last) {
+        vec4 fill = {0};
+        _cursor_colour(theme, fill);
+        ui_draw_quad(dl,
+                     (UIRect){view.x, view.y + (float)(t->tops[t->cursor] - scroll), view.w,
+                              t->heights[t->cursor]},
+                     fill);
+    }
     for (int c = 0; c < t->column_count; c++) {
         const UITableColumn* col = &t->columns[c];
         const float x = t->content.x + t->x[c];
@@ -577,7 +607,7 @@ static void _draw_rows(UIDrawList* dl, const UIElement* el, const UIStyle* s) {
                 if (!t->source.draw)
                     continue;
                 ui_push_clip(dl, cell);
-                t->source.draw(dl, cell, r, c, false, t->source.user);
+                t->source.draw(dl, cell, r, c, r == t->cursor, t->source.user);
                 ui_pop_clip(dl);
                 continue;
             }
@@ -611,36 +641,188 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
     ui_push_clip(dl, t->content);
     if (t->header_h > 0.0f)
         _draw_header(dl, t, s, ui_theme(ui));
-    _draw_rows(dl, el, s);
+    _draw_rows(dl, el, s, ui_theme(ui));
     ui_pop_clip(dl);
     return INFINITY;
 }
 
-// ---- The keys and the pointer
+// ---- The cursor
 
-static bool _key(const UISystem* ui, UIElement* el, UIRect content, const InputKeyEvent* ev) {
-    (void)ui;
-    (void)el;
-    (void)content;
-    (void)ev;
-    return false;
+// Whether the cursor may stand on row `row`.
+static bool _holds(const UITable* t, int row) {
+    return row >= 0 && row < t->count && (!t->source.holds || t->source.holds(row, t->source.user));
 }
 
+// The first row from `from` on, stepping `dir`, that holds the cursor; -1 for none.
+static int _holding(const UITable* t, int from, int dir) {
+    for (int r = from; r >= 0 && r < t->count; r += dir)
+        if (_holds(t, r))
+            return r;
+    return -1;
+}
+
+// Where `by` rows that hold it take the cursor from `from`, stopping at the first and the last. No
+// cursor stands before the first going down and past the last going up, so the first Down puts it
+// on the first row and Up on the last.
+static int _stepped(const UITable* t, int from, int by) {
+    const int dir = by < 0 ? -1 : 1;
+    int steps = by < 0 ? -by : by;
+    int at = from;
+    if (at < 0) {
+        at = _holding(t, dir > 0 ? 0 : t->count - 1, dir);
+        if (at < 0)
+            return -1;
+        steps--;
+    }
+    for (; steps > 0; steps--) {
+        const int next = _holding(t, at + dir, dir);
+        if (next < 0)
+            break;
+        at = next;
+    }
+    return at;
+}
+
+// A view's rows on from the cursor, by `dir`: the row a view's height from its top, or the nearest
+// on from it that holds the cursor, else the nearest back.
+static int _paged(const UIElement* el, int dir) {
+    const UITable* t = el->table;
+    if (t->cursor < 0 || t->cursor >= t->placed)
+        return _stepped(t, t->cursor, dir);
+    const double y = t->tops[t->cursor] + (double)dir * (double)_rows_view(t).h;
+    const int row = y > 0.0 ? _row_at(t, y) : 0;
+    const int on = _holding(t, row, dir);
+    return on >= 0 ? on : _holding(t, row, -dir);
+}
+
+// The cursor put on `row`, -1 for none, and its row shown; true when it moved.
+static bool _put(UIElement* el, int row) {
+    UITable* t = el->table;
+    const bool moved = row != t->cursor;
+    t->cursor = row;
+    if (row >= 0)
+        _reveal(el, row);
+    return moved;
+}
+
+// The person moved the cursor: on_cursor told now, or at the end of a turn of keys, once.
+static void _person_moved(UIElement* el) {
+    UITable* t = el->table;
+    if (t->in_keys)
+        t->moved = true;
+    else if (t->on_cursor)
+        t->on_cursor(el, t->cursor_user);
+}
+
+int ui_table_cursor(const UIElement* table) {
+    const UITable* t = _seen("ui_table_cursor", table);
+    return t ? t->cursor : -1;
+}
+
+void ui_table_set_cursor(UIElement* table, int row) {
+    const UITable* t = _table("ui_table_set_cursor", table);
+    if (!t)
+        return;
+    if (row != -1 && !_holds(t, row)) {
+        log_error("ui_table_set_cursor: row %d is out of range or cannot hold the cursor", row);
+        return;
+    }
+    _put(table, row);
+}
+
+void ui_table_move_cursor(UIElement* table, int by) {
+    const UITable* t = _table("ui_table_move_cursor", table);
+    if (!t || by == 0)
+        return;
+    const int to = _stepped(t, t->cursor, by);
+    if (to >= 0 && _put(table, to))
+        _person_moved(table);
+}
+
+void ui_table_set_on_cursor(UIElement* table, UIActionFn on_cursor, void* user) {
+    UITable* t = _table("ui_table_set_on_cursor", table);
+    if (!t)
+        return;
+    t->on_cursor = on_cursor;
+    t->cursor_user = user;
+}
+
+// ---- The keys and the pointer
+
+static void _keys_begin(UIElement* el) {
+    UITable* t = el->table;
+    t->in_keys = true;
+    t->moved = false;
+}
+
+static void _keys_end(UIElement* el) {
+    UITable* t = el->table;
+    t->in_keys = false;
+    if (t->moved) {
+        t->moved = false;
+        _person_moved(el);
+    }
+}
+
+// Up and Down a row that holds the cursor, Page Up and Page Down a view, Home and End the first and
+// the last; any other key, and every character, is the screen's.
+static bool _key(const UISystem* ui, UIElement* el, UIRect content, const InputKeyEvent* ev) {
+    (void)ui;
+    (void)content;
+    const UITable* t = el->table;
+    int to;
+    switch (ev->key) {
+        case GLFW_KEY_UP:
+            to = _stepped(t, t->cursor, -1);
+            break;
+        case GLFW_KEY_DOWN:
+            to = _stepped(t, t->cursor, 1);
+            break;
+        case GLFW_KEY_PAGE_UP:
+            to = _paged(el, -1);
+            break;
+        case GLFW_KEY_PAGE_DOWN:
+            to = _paged(el, 1);
+            break;
+        case GLFW_KEY_HOME:
+            to = _holding(t, 0, 1);
+            break;
+        case GLFW_KEY_END:
+            to = _holding(t, t->count - 1, -1);
+            break;
+        default:
+            return false;
+    }
+    if (to >= 0 && _put(el, to))
+        _person_moved(el);
+    return true;
+}
+
+// A press on a row that holds the cursor puts it there; one on the header, below the last row or
+// on a row that cannot hold it does nothing.
 static void _press(const UISystem* ui, UIElement* el, UIRect content, float x, float y, int mods,
                    double time) {
     (void)ui;
-    (void)el;
     (void)content;
     (void)x;
-    (void)y;
     (void)mods;
     (void)time;
+    const UITable* t = el->table;
+    const UIRect view = _rows_view(t);
+    if (!t->laid || t->placed == 0 || y < view.y || y >= view.y + view.h)
+        return;
+    const double at = (double)(y - view.y) + (double)el->scroll;
+    const int row = _row_at(t, at);
+    if (at < t->tops[t->placed] && _holds(t, row) && _put(el, row))
+        _person_moved(el);
 }
 
 const UIWidgetOps ui_table_ops = {
     .content = _content,
     .width = _width,
     .place = _place,
+    .keys_begin = _keys_begin,
+    .keys_end = _keys_end,
     .key = _key,
     .press = _press,
     .draw = _draw,

@@ -1858,6 +1858,105 @@ static int probe_table_view(UISystem* ui) {
     return 0;
 }
 
+// The cursor stands on no row that is a multiple of 4: not the first, 0, nor the last, 100.
+static bool cursor_holds(int row, void* user) {
+    (void)user;
+    return row % 4 != 0;
+}
+
+static int g_cursor_calls;
+
+static void on_cursor(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    g_cursor_calls++;
+}
+
+static bool take_down(UIElement* el, const InputKeyEvent* key, void* user) {
+    (void)el;
+    (void)user;
+    return key->key == GLFW_KEY_DOWN;
+}
+
+// A table of 101 rows, focused, its cursor on none.
+static UIElement* cursor_fixture(UISystem* ui) {
+    UIElement* table = table_fixture(ui, "table-cursor", 900.0f, 300.0f);
+    ui_table_set_columns(table, TABLE_COLUMNS, TABLE_COLUMN_COUNT);
+    ui_table_set_rows(table, 101, &(UITableSource){.cell = table_cell, .holds = cursor_holds});
+    ui_table_set_on_cursor(table, on_cursor, NULL);
+    ui_set_focus(ui_top(ui), table);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    return table;
+}
+
+// The cursor, whether its row is in view, and the on_cursor calls since the last say, as `label`.
+static void say_cursor(const UIElement* table, const char* label) {
+    const int row = ui_table_cursor(table);
+    printf("ui table-cursor %s row %d\n", label, row);
+    printf("ui table-cursor %s shown %d\n", label,
+           ui_table_cell_rect(table, row, -1, NULL) ? 1 : 0);
+    printf("ui table-cursor %s calls %d\n", label, g_cursor_calls);
+    g_cursor_calls = 0;
+}
+
+// A press, and its release, at the middle of row `row`.
+static void press_row(UISystem* ui, const UIElement* table, int row) {
+    UIRect r = {0};
+    ui_table_cell_rect(table, row, -1, &r);
+    const float x = r.x + 50.0f, y = r.y + r.h * 0.5f;
+    pass(ui,
+         &(UIInput){.pointer_x = x, .pointer_y = y, .pointer_pressed = true, .pointer_down = true});
+    pass(ui, &(UIInput){.pointer_x = x, .pointer_y = y, .pointer_released = true});
+}
+
+static int probe_table_cursor(UISystem* ui) {
+    UIElement* table = cursor_fixture(ui);
+    say_cursor(table, "none");
+    one_key(ui, GLFW_KEY_DOWN, 0);
+    say_cursor(table, "first");
+    // Three Downs in one pass, over row 4, and one on_cursor for them.
+    ev_key(GLFW_KEY_DOWN, 0);
+    ev_key(GLFW_KEY_DOWN, 0);
+    ev_key(GLFW_KEY_DOWN, 0);
+    type_pass(ui);
+    say_cursor(table, "down3");
+    one_key(ui, GLFW_KEY_UP, 0);
+    say_cursor(table, "up");
+    one_key(ui, GLFW_KEY_END, 0);
+    say_cursor(table, "end");
+    one_key(ui, GLFW_KEY_END, 0);
+    say_cursor(table, "endagain");
+    one_key(ui, GLFW_KEY_HOME, 0);
+    say_cursor(table, "home");
+    // The view under a header a row tall, for the page Page Down moves by.
+    UIRect r1 = {0};
+    ui_table_cell_rect(table, 1, -1, &r1);
+    printf("ui table-cursor row height %.6f\n", (double)r1.h);
+    printf("ui table-cursor view height %.6f\n", (double)(table->rect.h - 2.0f * TABLE_PAD - r1.h));
+    one_key(ui, GLFW_KEY_PAGE_DOWN, 0);
+    say_cursor(table, "pagedown");
+    ui_table_set_cursor(table, 50);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    say_cursor(table, "set");
+    // Rows above the cursor's, in view: 49 holds it and 48 does not.
+    press_row(ui, table, 49);
+    say_cursor(table, "press");
+    press_row(ui, table, 48);
+    say_cursor(table, "pressno");
+    // From none, Up lands on the last row that holds it.
+    ui_table_set_cursor(table, -1);
+    one_key(ui, GLFW_KEY_UP, 0);
+    say_cursor(table, "upnone");
+    // A host's move, outside a pass: told at once.
+    ui_table_move_cursor(table, -2);
+    say_cursor(table, "moved");
+    // The hook is handed each key first: one taking Down leaves the cursor.
+    ui_set_on_key(table, take_down, NULL);
+    one_key(ui, GLFW_KEY_DOWN, 0);
+    say_cursor(table, "hooked");
+    return 0;
+}
+
 // Row 0's column rects, as the last layout placed them, into `out`.
 static void table_columns_at(const UIElement* table, UIRect* out, int columns) {
     for (int c = 0; c < columns; c++)
@@ -1897,6 +1996,15 @@ static int probe_table_refused(UISystem* ui) {
     printf("ui table-refused child made %.6f\n", child ? 1.0 : 0.0);
     printf("ui table-refused child count %zu\n", table->child_count);
     printf("ui table-refused child kept %.6f\n", table_kept(ui, table, was, TABLE_COLUMN_COUNT));
+    // A cursor out of range, or on a row that cannot hold it, leaves it where it was.
+    ui_table_set_rows(table, 100, &(UITableSource){.cell = table_cell, .holds = cursor_holds});
+    ui_table_set_cursor(table, 3);
+    ui_table_set_cursor(table, 100);
+    printf("ui table-refused past cursor %d\n", ui_table_cursor(table));
+    ui_table_set_cursor(table, -2);
+    printf("ui table-refused negative cursor %d\n", ui_table_cursor(table));
+    ui_table_set_cursor(table, 4);
+    printf("ui table-refused unheld cursor %d\n", ui_table_cursor(table));
     // The most columns are taken: a full table is not a refusal.
     ui_table_set_columns(table, many, UI_TABLE_COLUMNS_MOST);
     ui_layout(ui_top(ui), 1280.0f, 720.0f);
@@ -2058,6 +2166,8 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_table_heights(game, ui, font);
     if (!strcmp(which, "table-view"))
         return probe_table_view(ui);
+    if (!strcmp(which, "table-cursor"))
+        return probe_table_cursor(ui);
     if (!strcmp(which, "table-refused"))
         return probe_table_refused(ui);
     return -1;

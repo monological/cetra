@@ -617,7 +617,18 @@ def run_ui_gate(workdir):
                      its bottom at the view's.
       ui-table-refused no columns, 33 columns, a drawn FIT column and an element
                      made under a table are each refused and leave the table's
-                     columns where they stood; 32 columns are taken.
+                     columns where they stood, and a cursor past the rows, below
+                     none or on a row that cannot hold it leaves the cursor; 32
+                     columns are taken.
+      ui-table-cursor no cursor at first; Down puts it on the first row that holds
+                     it, three Downs in one pass skip the row that cannot and call
+                     on_cursor once, Up skips it back, End and Home reach the last
+                     and the first and End again calls nothing, Page Down moves a
+                     view's rows; ui_table_set_cursor calls nothing; a press on a
+                     row that holds it moves it there and one on a row that cannot
+                     does not; Up from none lands on the last; a host's move is
+                     told at once; a key hook taking Down leaves the cursor. Every
+                     cursor's row is in view.
       ui-max-size    a fitting pane of 30 rows held to 200 points is that tall and
                      scrolls; a growing child held to 100 takes it and its siblings
                      share the rest; two held and centred leave the rest to the
@@ -1809,11 +1820,42 @@ def run_ui_gate(workdir):
             return False, "the probe produced nothing"
         want = {("set", "kept"): 1, ("none", "kept"): 1, ("many", "kept"): 1,
                 ("drawnfit", "kept"): 1, ("child", "made"): 0, ("child", "count"): 0,
-                ("child", "kept"): 1, ("most", "last"): 1}
+                ("child", "kept"): 1, ("most", "last"): 1, ("past", "cursor"): 3,
+                ("negative", "cursor"): 3, ("unheld", "cursor"): 3}
         wrong = _probe_wrong(p, want)
         ok = not wrong
         detail = ("no columns, 33, a drawn FIT column and a child each refused with the "
-                  "columns kept, 32 taken" + (f"; wrong: {wrong}" if wrong else ""))
+                  "columns kept, a cursor past the rows, below none and on a row that cannot "
+                  "hold it refused with the cursor kept, 32 columns taken"
+                  + (f"; wrong: {wrong}" if wrong else ""))
+        return ok, detail
+
+    @arm("ui-table-cursor")
+    def _():
+        p = _ui_probe("table-cursor")
+        if not p:
+            return False, "the probe produced nothing"
+        row_h, view = p[("row", "height")][0], p[("view", "height")][0]
+        # Page Down from row 1: the row a view below its top, or the next holding the cursor.
+        paged = math.floor((row_h + view) / row_h)
+        while paged % 4 == 0:
+            paged += 1
+        steps = [("none", -1, 0), ("first", 1, 1), ("down3", 5, 1), ("up", 3, 1),
+                 ("end", 99, 1), ("endagain", 99, 0), ("home", 1, 1), ("pagedown", paged, 1),
+                 ("set", 50, 0), ("press", 49, 1), ("pressno", 49, 0), ("upnone", 99, 1),
+                 ("moved", 97, 1), ("hooked", 97, 0)]
+        wrong = []
+        for label, row, calls in steps:
+            got = (p.get((label, "row"), [None])[0], p.get((label, "calls"), [None])[0])
+            shown = p.get((label, "shown"), [None])[0]
+            if got != (row, calls) or shown != (0 if row < 0 else 1):
+                wrong.append(f"{label}: row {got[0]} with {got[1]} calls, shown {shown} "
+                             f"(want {row}, {calls}, {0 if row < 0 else 1})")
+        ok = not wrong
+        detail = ("rows that are multiples of 4 cannot hold the cursor; "
+                  + ("; ".join(wrong) if wrong else
+                     f"every step lands where it should, Page Down on {paged}, each row shown "
+                     f"and on_cursor once a pass the person moved it"))
         return ok, detail
 
     # ---- the most an element measures, and lengths that are none
