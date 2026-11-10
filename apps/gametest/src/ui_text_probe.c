@@ -18,6 +18,7 @@
 #include "cetra/internal/ui_field.h" // a field's caret and rows, which the field arms read
 #include "cetra/internal/ui_text.h"  // a label's lines, which the wrap arms count
 #include "cetra/text.h"
+#include "cetra/ui_table.h"
 
 #define PROBE_SIZE 22.0f
 
@@ -1625,6 +1626,224 @@ static int probe_baseline(const Game* game, UISystem* ui, const Font* font) {
     return 0;
 }
 
+// ---- the table (spec 14.30)
+
+#define TABLE_ROWS 100000
+#define TABLE_GAP  10.0f
+#define TABLE_PAD  5.0f
+
+// Column 0's widest cell, at row 90,000, far past any view, until it is shrunk; the next widest at
+// row 50. Every other cell of column 0 is "name" and of the others "7".
+static const char* WIDEST = "the widest name of them all";
+static const char* SECOND = "the second widest name";
+static bool g_widest_shrunk;
+static int g_cells_asked; // the source's cell calls
+
+static void table_cell(int row, int column, UITableCell* out, void* user) {
+    (void)user;
+    g_cells_asked++;
+    out->text = "7";
+    if (column == 0)
+        out->text = row == 90000 && !g_widest_shrunk ? WIDEST : row == 50 ? SECOND : "name";
+}
+
+// A FIT column fitting its widest cell, a FIT column narrower than its title, a FIXED, a SHARE and
+// two GROW columns.
+static const UITableColumn TABLE_COLUMNS[] = {
+    {.title = "Name", .size = UI_FIT},
+    {.title = "A long column title", .size = UI_FIT},
+    {.title = "Fixed", .size = UI_FIXED, .length = 80.0f},
+    {.title = "Share", .size = UI_SHARE, .length = 0.3f},
+    {.title = "Grow", .size = UI_GROW},
+    {.title = "Grow", .size = UI_GROW},
+};
+#define TABLE_COLUMN_COUNT ((int)(sizeof(TABLE_COLUMNS) / sizeof(TABLE_COLUMNS[0])))
+
+// A `w` by `h` table at the top left of a screen that is not modal, padded TABLE_PAD and its
+// columns TABLE_GAP apart.
+static UIElement* table_fixture(UISystem* ui, const char* name, float w, float h) {
+    UIScreen* s = ui_screen(ui, name);
+    ui_screen_set_modal(s, false);
+    UIElement* table = ui_table(ui_screen_root(s));
+    ui_set_size(table, UI_FIXED, w, UI_FIXED, h);
+    table->spacing = TABLE_GAP;
+    for (int i = 0; i < 4; i++)
+        table->padding[i] = TABLE_PAD;
+    ui_push(ui, s);
+    return table;
+}
+
+// Row `row`'s cell rects, the whole row's first, as `which` `prefix`row and `prefix`c0 on.
+static void say_cells(const char* which, const char* prefix, const UIElement* table, int row,
+                      int columns) {
+    for (int c = -1; c < columns; c++) {
+        UIRect r;
+        if (!ui_table_cell_rect(table, row, c, &r))
+            continue;
+        char label[32];
+        if (c < 0)
+            snprintf(label, sizeof(label), "%srow", prefix);
+        else
+            snprintf(label, sizeof(label), "%sc%d", prefix, c);
+        ui_probe_rect(which, label, r);
+    }
+}
+
+static int probe_table_columns(UISystem* ui, const Font* font) {
+    static const float widths[] = {900.0f, 701.0f};
+    for (int k = 0; k < 2; k++) {
+        UIElement* table = table_fixture(ui, "table-columns", widths[k], 300.0f);
+        ui_table_set_columns(table, TABLE_COLUMNS, TABLE_COLUMN_COUNT);
+        ui_table_set_rows(table, TABLE_ROWS, &(UITableSource){.cell = table_cell});
+        ui_layout(ui_top(ui), 1280.0f, 720.0f);
+        char prefix[16];
+        snprintf(prefix, sizeof(prefix), "w%d", (int)widths[k]);
+        say_cells("table-columns", prefix, table, 0, TABLE_COLUMN_COUNT);
+        ui_pop(ui);
+    }
+    printf("ui table-columns widest width %.6f\n",
+           (double)ui_text_width(font, PROBE_SIZE, 0.0f, WIDEST));
+    printf("ui table-columns title width %.6f\n",
+           (double)ui_text_width(font, PROBE_SIZE, 0.0f, TABLE_COLUMNS[1].title));
+    printf("ui table-columns gap points %.6f\n", (double)TABLE_GAP);
+    return 0;
+}
+
+// Column 0's width as the last layout placed it.
+static float first_width(const UIElement* table) {
+    UIRect r = {0};
+    ui_table_cell_rect(table, 0, 0, &r);
+    return r.w;
+}
+
+static int probe_table_measure(UISystem* ui, const Font* font) {
+    UIElement* table = table_fixture(ui, "table-measure", 900.0f, 300.0f);
+    UIScreen* s = ui_top(ui);
+    ui_table_set_columns(table, TABLE_COLUMNS, 4);
+    ui_table_set_rows(table, TABLE_ROWS, &(UITableSource){.cell = table_cell});
+    ui_layout(s, 1280.0f, 720.0f);
+    printf("ui table-measure first measures %u\n", table->measures);
+    unsigned was = table->measures;
+    ui_layout(s, 1280.0f, 720.0f);
+    printf("ui table-measure again measures %u\n", table->measures - was);
+    ui_table_rows_changed(table, 5, 1);
+    ui_layout(s, 1280.0f, 720.0f);
+    printf("ui table-measure changed measures %u\n", table->measures - was);
+    // The widest cell shrunk: column 0 narrows to the next widest.
+    printf("ui table-measure widest width %.6f\n", (double)first_width(table));
+    g_widest_shrunk = true;
+    was = table->measures;
+    ui_table_rows_changed(table, 90000, 1);
+    ui_layout(s, 1280.0f, 720.0f);
+    printf("ui table-measure shrunk measures %u\n", table->measures - was);
+    printf("ui table-measure shrunk width %.6f\n", (double)first_width(table));
+    printf("ui table-measure second width %.6f\n",
+           (double)ui_text_width(font, PROBE_SIZE, 0.0f, SECOND));
+    was = table->measures;
+    ui_table_set_row_count(table, TABLE_ROWS + 10);
+    ui_layout(s, 1280.0f, 720.0f);
+    printf("ui table-measure grown measures %u\n", table->measures - was);
+    return 0;
+}
+
+// Row 1's first cell three lines, every other cell one.
+static void heights_cell(int row, int column, UITableCell* out, void* user) {
+    (void)user;
+    out->text = row == 1 && column == 0 ? "one\ntwo\nthree" : "one";
+}
+
+// Row `row` 50 points and one more for each row before it.
+static float heights_height(int row, void* user) {
+    (void)user;
+    return 50.0f + (float)row;
+}
+
+static const UITableColumn HEIGHTS_COLUMNS[] = {
+    {.title = "Words", .size = UI_FIT},
+    {.size = UI_GROW},
+};
+
+static const UITableColumn UNTITLED_COLUMNS[] = {
+    {.size = UI_FIT},
+    {.size = UI_GROW},
+};
+
+// Rows 0 and 1's heights, how far row 1 starts past row 0's end, and row 0's top below the
+// content's, as `prefix`.
+static void say_heights(const UIElement* table, const char* prefix) {
+    UIRect r0 = {0}, r1 = {0};
+    ui_table_cell_rect(table, 0, -1, &r0);
+    ui_table_cell_rect(table, 1, -1, &r1);
+    printf("ui table-heights %s heights %.6f %.6f\n", prefix, (double)r0.h, (double)r1.h);
+    printf("ui table-heights %s meet %.6f\n", prefix, (double)(r1.y - (r0.y + r0.h)));
+    printf("ui table-heights %s header %.6f\n", prefix,
+           (double)(r0.y - (table->rect.y + TABLE_PAD)));
+}
+
+static int probe_table_heights(UISystem* ui, const Font* font) {
+    UIElement* lined = table_fixture(ui, "table-heights", 600.0f, 300.0f);
+    ui_table_set_columns(lined, HEIGHTS_COLUMNS, 2);
+    ui_table_set_rows(lined, 2000, &(UITableSource){.cell = heights_cell});
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+    say_heights(lined, "lined");
+    ui_pop(ui);
+    UIElement* own = table_fixture(ui, "table-heights-own", 600.0f, 300.0f);
+    ui_table_set_columns(own, UNTITLED_COLUMNS, 2);
+    ui_table_set_rows(own, 2000, &(UITableSource){.cell = heights_cell, .height = heights_height});
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+    say_heights(own, "own");
+    printf("ui table-heights line height %.6f\n", (double)ui_line_height(font, PROBE_SIZE, 1.0f));
+    printf("ui table-heights row padding %.6f\n", 2.0);
+    return 0;
+}
+
+// Row 0's column rects, as the last layout placed them, into `out`.
+static void table_columns_at(const UIElement* table, UIRect* out, int columns) {
+    for (int c = 0; c < columns; c++)
+        if (!ui_table_cell_rect(table, 0, c, &out[c]))
+            out[c] = (UIRect){-1.0f, -1.0f, -1.0f, -1.0f};
+}
+
+// Laid out again, whether the table's columns still stand where `was` holds them, and none past
+// them.
+static double table_kept(UISystem* ui, const UIElement* table, const UIRect* was, int columns) {
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+    UIRect now[UI_TABLE_COLUMNS_MOST + 1];
+    table_columns_at(table, now, columns);
+    const bool past = ui_table_cell_rect(table, 0, columns, NULL);
+    return !past && memcmp(now, was, (size_t)columns * sizeof(UIRect)) == 0 ? 1.0 : 0.0;
+}
+
+static int probe_table_refused(UISystem* ui) {
+    UIElement* table = table_fixture(ui, "table-refused", 900.0f, 300.0f);
+    ui_table_set_columns(table, TABLE_COLUMNS, TABLE_COLUMN_COUNT);
+    ui_table_set_rows(table, 100, &(UITableSource){.cell = table_cell});
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+    UIRect was[TABLE_COLUMN_COUNT];
+    table_columns_at(table, was, TABLE_COLUMN_COUNT);
+    printf("ui table-refused set kept %.6f\n", table_kept(ui, table, was, TABLE_COLUMN_COUNT));
+    ui_table_set_columns(table, TABLE_COLUMNS, 0);
+    printf("ui table-refused none kept %.6f\n", table_kept(ui, table, was, TABLE_COLUMN_COUNT));
+    UITableColumn many[UI_TABLE_COLUMNS_MOST + 1];
+    for (int c = 0; c <= UI_TABLE_COLUMNS_MOST; c++)
+        many[c] = (UITableColumn){.size = UI_FIXED, .length = 10.0f};
+    ui_table_set_columns(table, many, UI_TABLE_COLUMNS_MOST + 1);
+    printf("ui table-refused many kept %.6f\n", table_kept(ui, table, was, TABLE_COLUMN_COUNT));
+    const UITableColumn drawn_fit = {.size = UI_FIT, .drawn = true};
+    ui_table_set_columns(table, &drawn_fit, 1);
+    printf("ui table-refused drawnfit kept %.6f\n", table_kept(ui, table, was, TABLE_COLUMN_COUNT));
+    const UIElement* child = ui_panel(table);
+    printf("ui table-refused child made %.6f\n", child ? 1.0 : 0.0);
+    printf("ui table-refused child count %zu\n", table->child_count);
+    printf("ui table-refused child kept %.6f\n", table_kept(ui, table, was, TABLE_COLUMN_COUNT));
+    // The most columns are taken: a full table is not a refusal.
+    ui_table_set_columns(table, many, UI_TABLE_COLUMNS_MOST);
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+    printf("ui table-refused most last %.6f\n",
+           ui_table_cell_rect(table, 0, UI_TABLE_COLUMNS_MOST - 1, NULL) ? 1.0 : 0.0);
+    return 0;
+}
+
 // ---- UTF-8
 
 static int probe_utf8(void) {
@@ -1770,5 +1989,13 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_rows_anchor(ui);
     if (!strcmp(which, "rows-focus"))
         return probe_rows_focus(ui);
+    if (!strcmp(which, "table-columns"))
+        return probe_table_columns(ui, font);
+    if (!strcmp(which, "table-measure"))
+        return probe_table_measure(ui, font);
+    if (!strcmp(which, "table-heights"))
+        return probe_table_heights(ui, font);
+    if (!strcmp(which, "table-refused"))
+        return probe_table_refused(ui);
     return -1;
 }

@@ -191,6 +191,22 @@ static UIStyle _default_style(UIKind kind, UIState state) {
             if (_shows_focus(state))
                 _focus_border(&s, 0.6f, 1.0f);
             break;
+        case UI_TABLE:
+            // The editor's surface: a list fills its pane as a text does.
+            s.fg[0] = s.fg[1] = s.fg[2] = 0.90f;
+            s.fg[3] = 1.0f;
+            s.bg[0] = 0.07f;
+            s.bg[1] = 0.075f;
+            s.bg[2] = 0.09f;
+            s.bg[3] = 1.0f;
+            s.border[0] = s.border[1] = s.border[2] = 1.0f;
+            s.border[3] = 0.10f;
+            s.border_width = 1.0f;
+            s.corner_radius = 4.0f;
+            s.padding[0] = s.padding[1] = s.padding[2] = s.padding[3] = 6.0f;
+            if (_shows_focus(state))
+                _focus_border(&s, 0.6f, 1.0f);
+            break;
         case UI_SCROLL:
             // A window onto its content: no fill and no padding of its own, a faint thumb, and a
             // subtle border while the focus is inside it.
@@ -299,6 +315,8 @@ static const UIStyle* _theme_entry(const UITheme* t, UIKind kind, UIState state)
             return &t->text_field[state];
         case UI_EDITOR:
             return &t->editor[state];
+        case UI_TABLE:
+            return &t->table[state];
         default:
             return &t->panel[state];
     }
@@ -361,6 +379,10 @@ static UIStyle _resolve(const UISystem* ui, const UIElement* el, UIState state) 
 // ------------------------------------------------------------------ elements
 
 static UIElement* _new_element(UIElement* parent, UIKind kind) {
+    if (parent && parent->kind == UI_TABLE) {
+        log_error("ui: a table holds no elements; its cells are its source's");
+        return NULL;
+    }
     UIElement* el = calloc(1, sizeof(UIElement));
     if (!el) {
         log_error("ui: out of memory creating an element");
@@ -373,8 +395,9 @@ static UIElement* _new_element(UIElement* parent, UIKind kind) {
     el->size_mode[1] = UI_FIT;
     el->align_main = UI_ALIGN_START;
     el->align_cross = UI_ALIGN_START;
-    el->focusable = (kind == UI_BUTTON || kind == UI_TOGGLE || kind == UI_SLIDER ||
-                     kind == UI_SELECTOR || kind == UI_TEXT_FIELD || kind == UI_EDITOR);
+    el->focusable =
+        (kind == UI_BUTTON || kind == UI_TOGGLE || kind == UI_SLIDER || kind == UI_SELECTOR ||
+         kind == UI_TEXT_FIELD || kind == UI_EDITOR || kind == UI_TABLE);
     el->parent = parent;
 
     if (parent) {
@@ -460,6 +483,7 @@ static void _free_element(UIElement* el) {
     _drop_lines(el);
     ui_field_free(el->field);
     ui_editor_free(el->editor);
+    ui_table_free(el->table);
     _rows_free(el->rows);
     free(el->style);
     free(el);
@@ -524,6 +548,16 @@ UIElement* ui_scroll(UIElement* parent) {
     return _new_element(parent, UI_SCROLL);
 }
 
+UIElement* ui_table(UIElement* parent) {
+    UIElement* el = _new_element(parent, UI_TABLE);
+    if (!el)
+        return NULL;
+    el->table = ui_table_make();
+    if (!el->table)
+        log_error("ui_table: out of memory");
+    return el;
+}
+
 UIElement* ui_text_field(UIElement* parent, unsigned flags, UIActionFn on_submit, void* user) {
     UIElement* el = _new_element(parent, UI_TEXT_FIELD);
     if (!el)
@@ -573,6 +607,8 @@ static const UIWidgetOps* _ops(const UIElement* el) {
         return &ui_field_ops;
     if (el && el->kind == UI_EDITOR && el->editor)
         return &ui_editor_ops;
+    if (el && el->kind == UI_TABLE && el->table)
+        return &ui_table_ops;
     return NULL;
 }
 
@@ -857,6 +893,9 @@ static float _intrinsic(const UISystem* ui, UIElement* el, int axis) {
         default:
             break;
     }
+    const UIWidgetOps* ops = _ops(el);
+    if (ops && ops->content)
+        v = ops->content(ui, el, &s, axis);
 
     float pad[4];
     _padding_from(el, &s, pad);
@@ -867,6 +906,10 @@ static float _spacing_of(const UISystem* ui, const UIElement* el) {
     if (el->spacing != 0.0f)
         return el->spacing > 0.0f ? el->spacing : 0.0f;
     return ui->theme.spacing > 0.0f ? ui->theme.spacing : 8.0f;
+}
+
+float ui_element_spacing(const UISystem* ui, const UIElement* el) {
+    return _spacing_of(ui, el);
 }
 
 // The same rule for a caller that has no style in hand and must resolve one.
@@ -1499,6 +1542,10 @@ void ui_move(UIElement* el, UIElement* parent, const UIElement* before) {
         log_error("ui_move: an element does not move into itself or under itself");
         return;
     }
+    if (parent->kind == UI_TABLE) {
+        log_error("ui_move: a table holds no elements; its cells are its source's");
+        return;
+    }
     const UIScreen* screen = _screen_of(el);
     if (!screen) {
         log_error("ui_move: an element taken out does not move");
@@ -1780,14 +1827,19 @@ static bool _scroll_place(const UISystem* ui, const UIElement* el, UIScrollPlace
     return ops && ops->scroll && ops->scroll(el, place);
 }
 
+// The strip an element's bar runs down: the one its place names, else its whole rect.
+static UIRect _bar_strip(const UIElement* el, const UIScrollPlace* place) {
+    return place->along.w > 0.0f ? place->along : el->rect;
+}
+
 /*
- * The bar of an element that scrolls: where it is scrolled, the track along its right edge and the
- * thumb in it. False when there is no bar. ONE definition, read by the draw and by the press alike,
- * for a pane and an editor both.
+ * The bar of an element that scrolls: where it is scrolled, the track along its strip's right edge
+ * and the thumb in it. False when there is no bar. ONE definition, read by the draw and by the
+ * press alike, for a pane, an editor and a table.
  */
 static bool _bar(const UISystem* ui, const UIElement* el, UIScrollPlace* place, UIRect* track,
                  UIRect* thumb) {
-    return _scroll_place(ui, el, place) && ui_bar_place(el->rect, place, track, thumb);
+    return _scroll_place(ui, el, place) && ui_bar_place(_bar_strip(el, place), place, track, thumb);
 }
 
 static void _emit_pane(UISystem* ui, UIElement* el, const UIStyle* s);
@@ -1827,7 +1879,8 @@ static void _emit(UISystem* ui, UIElement* el) {
                 ui_draw_rect(dl, el->rect, &s);
                 break;
             case UI_TEXT_FIELD:
-            case UI_EDITOR: {
+            case UI_EDITOR:
+            case UI_TABLE: {
                 const UIWidgetOps* ops = _ops(el);
                 if (!ops) {
                     ui_draw_rect(dl, el->rect, &s);
@@ -1981,9 +2034,9 @@ static bool _ease(UIElement* el, float dt) {
     el->t_value = _ease_toward(el->t_value, value_target, k, UI_WEIGHT_SNAP);
     bool moving =
         el->t_hover != hover_target || el->t_focus != focus_target || el->t_value != value_target;
-    // A pane's scroll eases after a key or a reveal, by the same rate, onto its target within a
-    // tenth of a point: the 1/1024 of a weight would be a thousand points' tail.
-    if (el->kind == UI_SCROLL && el->scroll != el->scroll_target) {
+    // A pane's scroll, and a table's, eases after a key or a reveal, by the same rate, onto its
+    // target within a tenth of a point: the 1/1024 of a weight would be a thousand points' tail.
+    if (el->scroll != el->scroll_target) {
         el->scroll = _ease_toward(el->scroll, el->scroll_target, k, UI_SCROLL_SNAP);
         moving |= el->scroll != el->scroll_target;
     }
@@ -2078,6 +2131,10 @@ static float _scroll_step(const UISystem* ui) {
         return ui->theme.scroll_step;
     const float size = ui->theme.font_size > 0.0f ? ui->theme.font_size : ui->font_size;
     return size > 0.0f ? size : 16.0f;
+}
+
+float ui_scroll_step(const UISystem* ui) {
+    return _scroll_step(ui);
 }
 
 static void _scroll_to(const UISystem* ui, UIElement* pane, float target, bool now) {
@@ -2444,7 +2501,8 @@ static void _update(UISystem* ui, const UIInput* in, float width, float height) 
         UIScrollPlace place;
         UIRect track, thumb;
         if (el && _bar(ui, el, &place, &track, &thumb) &&
-            in->pointer_x >= el->rect.x + el->rect.w - UI_BAR_HIT) {
+            in->pointer_x >= el->rect.x + el->rect.w - UI_BAR_HIT &&
+            in->pointer_y >= _bar_strip(el, &place).y) {
             on_bar = true;
             if (in->pointer_y >= thumb.y && in->pointer_y < thumb.y + thumb.h) {
                 ui->bar_drag = el;
@@ -2504,7 +2562,7 @@ static void _update(UISystem* ui, const UIInput* in, float width, float height) 
                                  in->pointer_y, in->pointer_mods, in->time);
     }
     // A held field or editor selects to the pointer, from the captured element as a slider does.
-    if (_ops(ui->pressed) && in->pointer_down && !in->pointer_pressed)
+    if (_ops(ui->pressed) && _ops(ui->pressed)->drag && in->pointer_down && !in->pointer_pressed)
         _ops(ui->pressed)
             ->drag(ui, ui->pressed, _content_rect(ui, ui->pressed), in->pointer_x, in->pointer_y);
     // A held slider tracks the pointer: pressing anywhere on the row jumps the

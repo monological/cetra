@@ -4,8 +4,8 @@
 /*
  * What the UI's own files share, private to them: the engine a system was made with, the scroll bar
  * every element that scrolls draws, and the table of calls through which ui.c lays out, routes
- * input to and draws an element that keeps state of its own -- the text field and the code editor
- * -- so that ui.c names no such kind but where it picks the table.
+ * input to and draws an element that keeps state of its own -- the text field, the code editor and
+ * the table -- so that ui.c names no such kind but where it picks the calls.
  */
 
 #include "input.h"
@@ -18,6 +18,10 @@ struct Engine* ui_system_engine(const UISystem* ui);
 // The layouts a system has run so far: two elements a place saw under the same count were placed
 // by one layout.
 uint64_t ui_system_layouts(const UISystem* ui);
+// The gap between an element's children: its own spacing, else the theme's, else 8.
+float ui_element_spacing(const UISystem* ui, const UIElement* el);
+// The points one unit of the wheel scrolls: the theme's step, else its font size.
+float ui_scroll_step(const UISystem* ui);
 
 // The bar: its width, its inset from the element's edge, its shortest thumb, and the strip along
 // the element's right edge a press lands on it from.
@@ -27,9 +31,11 @@ uint64_t ui_system_layouts(const UISystem* ui);
 #define UI_BAR_HIT   14.0f
 
 // Where an element that scrolls is, in units of its own: how much shows, how much there is, how
-// far along it the view is, 0..1, and how far a unit of the wheel moves it.
+// far along it the view is, 0..1, and how far a unit of the wheel moves it; and the strip its bar
+// runs down, none wide for the element's whole rect.
 typedef struct UIScrollPlace {
     float view, total, at, step;
+    UIRect along;
 } UIScrollPlace;
 
 // A bar's track along `rect`'s right edge and its thumb: the thumb's length the share in view and
@@ -44,9 +50,11 @@ float ui_bar_at(UIRect track, UIRect thumb, float y, float grab);
  * the element's content rect, its rect less its padding.
  */
 typedef struct UIWidgetOps {
-    // The layout's, either NULL: its content's width once the width pass has given it one, which
-    // its height may count on; and its content rect once every rect is placed, which the input
-    // pass and the draw then read.
+    // The layout's, any NULL: what its content measures along `axis` (0 across), its padding
+    // aside, which a FIT axis hugs; its content's width once the width pass has given it one,
+    // which its height may count on; and its content rect once every rect is placed, which the
+    // input pass and the draw then read.
+    float (*content)(const UISystem* ui, UIElement* el, const UIStyle* s, int axis);
     void (*width)(const UISystem* ui, UIElement* el, const UIStyle* s, float width);
     void (*place)(const UISystem* ui, UIElement* el, UIRect content);
     // Around the keys it takes in one turn of a pass; NULL for none.
@@ -71,5 +79,10 @@ typedef struct UIWidgetOps {
 
 extern const UIWidgetOps ui_field_ops;
 extern const UIWidgetOps ui_editor_ops;
+extern const UIWidgetOps ui_table_ops;
+
+// A table's own state, made empty and freed with its element.
+struct UITable* ui_table_make(void);
+void ui_table_free(struct UITable* t);
 
 #endif // _UI_INTERNAL_H_

@@ -34,9 +34,10 @@ _UI_HEADER = os.path.join(ROOT, "cetra", "src", "ui.h")
 
 # What ui.h is allowed to export, in its order. Spelled out rather than counted, so
 # adding an element fails by NAME and the failure says which one arrived. The pane and
-# the field are spec 14.2's, which argued for them, and the code editor spec 14.4's.
+# the field are spec 14.2's, which argued for them, the code editor spec 14.4's and the
+# table spec 14.30's.
 _UI_KINDS = ["ui_panel", "ui_label", "ui_button", "ui_toggle", "ui_slider", "ui_selector",
-             "ui_scroll", "ui_text_field", "ui_editor"]
+             "ui_scroll", "ui_table", "ui_text_field", "ui_editor"]
 
 
 def _ui_probe(case, env=None):
@@ -532,8 +533,8 @@ def run_ui_gate(workdir):
                      look different, or the last comparison would prove nothing.
       ui-elements-closed ui.h exports exactly the element constructors the
                      list names, six since spec 12.2, the pane and the field
-                     since 14.2 and the code editor since 14.4. The scope
-                     ratchet, asserted rather than promised.
+                     since 14.2, the code editor since 14.4 and the table since
+                     14.30. The scope ratchet, asserted rather than promised.
       ui-settings-roundtrip write, read back into a ZEROED struct, and every field
                      survives; the window mode rides the file as a name; an absent
                      file leaves defaults rather than zeros; and apply reaches the
@@ -591,6 +592,26 @@ def run_ui_gate(workdir):
                      where it was.
       ui-rows-focus  the focused row stays built and focused when the pane is
                      scrolled far from it, beside the rows in view.
+      ui-table-columns a table's columns (spec 14.30), as exact rects at 900 and 701
+                     points: a FIT column as wide as its widest cell, which is row
+                     90,000 of 100,000, far past the view; a FIT column narrower
+                     than its title as wide as the title; a FIXED column its
+                     length; a SHARE of 0.3 that share of the width less the gaps,
+                     rounded down; two GROW columns halving the rest; each column
+                     the spacing past the last, its start on a whole point of the
+                     content.
+      ui-table-measure 100,000 rows of 4 columns measure 400,000 cells once, laying
+                     out again measures none, a row marked changed measures 4, the
+                     widest cell shrunk narrows its column to the next widest, and
+                     ten rows added measure 40.
+      ui-table-heights a row of one line and a row of three are their lines at the
+                     line height and 2 points of padding above and below; a
+                     source's heights win; the rows meet with no gap; the first row
+                     starts under the header, one line and its padding tall, or at
+                     the content's top with no titles.
+      ui-table-refused no columns, 33 columns, a drawn FIT column and an element
+                     made under a table are each refused and leave the table's
+                     columns where they stood; 32 columns are taken.
       ui-max-size    a fitting pane of 30 rows held to 200 points is that tall and
                      scrolls; a growing child held to 100 takes it and its siblings
                      share the rest; two held and centred leave the rest to the
@@ -1672,6 +1693,93 @@ def run_ui_gate(workdir):
             detail = (f"focused row built {p[('first', 'built')][0]:.0f}; scrolled to "
                       f"{p[('far', 'scroll')][0]:.0f}, kept {p[('far', 'kept')][0]:.0f} with "
                       f"{held:.0f} rows held (want at most {held_most + 1})")
+        return ok, detail
+
+    # ---- the table (spec 14.30)
+    @arm("ui-table-columns")
+    def _():
+        p = _ui_probe("table-columns")
+        if not p:
+            return False, "the probe produced nothing"
+        widest, title = p[("widest", "width")][0], p[("title", "width")][0]
+        gap = p[("gap", "points")][0]
+        wrong = []
+        for width in (900, 701):
+            row = p.get((f"w{width}row", "rect"))
+            cols = [p.get((f"w{width}c{c}", "rect")) for c in range(6)]
+            if not row or not all(cols):
+                wrong.append(f"{width}: no rects")
+                continue
+            inner = row[2]
+            share = math.floor(0.3 * (inner - 5 * gap))
+            grow = (inner - 5 * gap - widest - title - 80 - share) / 2
+            want = [widest, title, 80.0, share, grow, grow]
+            at = 0.0
+            for c, (got, w) in enumerate(zip(cols, want)):
+                start = got[0] - row[0]
+                if not close(got[2], w, 1e-3) or start != math.floor(at + 1e-4):
+                    wrong.append(f"{width} column {c} at {start:.3f} {got[2]:.3f} wide "
+                                 f"(want {math.floor(at + 1e-4):.0f} and {w:.3f})")
+                at += w + gap
+        ok = not wrong
+        detail = (f"FIT {widest:.2f} (its widest cell, row 90,000), FIT {title:.2f} (its "
+                  f"title), FIXED 80, SHARE 0.3 rounded down, two GROW halving the rest, "
+                  f"{gap:.0f} apart at 900 and 701 points"
+                  + (": " + "; ".join(wrong) if wrong else ": every rect as the rule gives it"))
+        return ok, detail
+
+    @arm("ui-table-measure")
+    def _():
+        p = _ui_probe("table-measure")
+        if not p:
+            return False, "the probe produced nothing"
+        want = {("first", "measures"): 400000, ("again", "measures"): 0,
+                ("changed", "measures"): 4, ("shrunk", "measures"): 4,
+                ("grown", "measures"): 40}
+        wrong = _probe_wrong(p, want)
+        shrunk, second = p[("shrunk", "width")][0], p[("second", "width")][0]
+        widest = p[("widest", "width")][0]
+        ok = not wrong and close(shrunk, second, 1e-3) and widest > shrunk
+        detail = (f"measured {p[('first', 'measures')][0]:.0f} cells (want 400000), again "
+                  f"{p[('again', 'measures')][0]:.0f} (want 0), a row changed "
+                  f"{p[('changed', 'measures')][0]:.0f} (want 4); the widest shrunk, "
+                  f"{widest:.2f} to {shrunk:.2f} (want the next widest, {second:.2f}) with "
+                  f"{p[('shrunk', 'measures')][0]:.0f} measured (want 4); ten rows added "
+                  f"{p[('grown', 'measures')][0]:.0f} (want 40)")
+        return ok, detail
+
+    @arm("ui-table-heights")
+    def _():
+        p = _ui_probe("table-heights")
+        if not p:
+            return False, "the probe produced nothing"
+        line, pad = p[("line", "height")][0], p[("row", "padding")][0]
+        lined, own = p[("lined", "heights")], p[("own", "heights")]
+        one, three = line + 2 * pad, 3 * line + 2 * pad
+        meets = [p[("lined", "meet")][0], p[("own", "meet")][0]]
+        header, bare = p[("lined", "header")][0], p[("own", "header")][0]
+        ok = (close(lined[0], one) and close(lined[1], three) and close(own[0], 50.0)
+              and close(own[1], 51.0) and all(close(m, 0.0) for m in meets)
+              and close(header, one) and close(bare, 0.0))
+        detail = (f"rows of one and three lines {lined[0]:.2f} and {lined[1]:.2f} (want "
+                  f"{one:.2f} and {three:.2f}), the source's {own[0]:.0f} and {own[1]:.0f} "
+                  f"(want 50 and 51), meeting {meets[0]:.2f} and {meets[1]:.2f} apart (want 0); "
+                  f"the first row {header:.2f} under the content's top (want the header's "
+                  f"{one:.2f}), and {bare:.2f} with no titles (want 0)")
+        return ok, detail
+
+    @arm("ui-table-refused")
+    def _():
+        p = _ui_probe("table-refused")
+        if not p:
+            return False, "the probe produced nothing"
+        want = {("set", "kept"): 1, ("none", "kept"): 1, ("many", "kept"): 1,
+                ("drawnfit", "kept"): 1, ("child", "made"): 0, ("child", "count"): 0,
+                ("child", "kept"): 1, ("most", "last"): 1}
+        wrong = _probe_wrong(p, want)
+        ok = not wrong
+        detail = ("no columns, 33, a drawn FIT column and a child each refused with the "
+                  "columns kept, 32 taken" + (f"; wrong: {wrong}" if wrong else ""))
         return ok, detail
 
     # ---- the most an element measures, and lengths that are none

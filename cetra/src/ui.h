@@ -315,6 +315,7 @@ typedef enum {
     UI_SCROLL,
     UI_TEXT_FIELD,
     UI_EDITOR,
+    UI_TABLE,
     UI_KIND_COUNT
 } UIKind;
 
@@ -385,6 +386,12 @@ typedef struct UITheme {
     struct GlyphCache* editor_face;                // borrowed; NULL draws no text
     float editor_size;                             // points; 0 = 13
     UIEditorStyle editor_styles[UI_EDITOR_STYLES]; // a span's or a range's style, by its index
+    // A table (spec 14.30): `bg` behind its rows, `fg` its text, FOCUS its border while it takes
+    // the keys.
+    UIStyle table[UI_STATE_COUNT];
+    vec4 table_header; // its header's titles and the rule under them; alpha 0 = its text at 60%
+    vec4 table_cursor; // behind the cursor's row; alpha 0 = the selection colour
+    float table_row_padding; // points above and below a row's lines; 0 = 2
 } UITheme;
 
 typedef struct UIElement UIElement;
@@ -429,6 +436,7 @@ struct UIElement {
     float scroll, scroll_target, scroll_content;
     struct UIField* field;   // a text field's buffer, caret and editing; ui_field_* reads it
     struct UIEditor* editor; // a code editor's carets, rows and scroll; ui_editor_* reads it
+    struct UITable* table;   // a table's columns, measures and cursor; ui_table_* reads it
     // A pane's virtual rows (ui_scroll_set_rows): their heights and where each starts, and which
     // child holds which row. `row_builds` counts the rows built, a test of the building.
     struct UIRows* rows;
@@ -599,6 +607,11 @@ UIRect ui_slider_track(const UISystem* ui, const UIElement* el);
  * content has nothing to scroll.
  */
 UIElement* ui_scroll(UIElement* parent);
+// A TABLE (spec 14.30): rows the app's source fills, lined up in columns sized across every row,
+// under a header that stays while they scroll, with a cursor on a row the keys move. Its calls are
+// ui_table_*, in ui_table.h. Give it a height -- grown or fixed -- or let it fit its rows up to its
+// max_size, past which it scrolls. It holds no elements: one made under it is refused.
+UIElement* ui_table(UIElement* parent);
 // Scrolls every pane round `el` by the least that shows it whole, easing there; nothing for an
 // element hidden or under a hidden one.
 void ui_scroll_into_view(const UISystem* ui, UIElement* el);
