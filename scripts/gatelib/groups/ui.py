@@ -608,7 +608,13 @@ def run_ui_gate(workdir):
                      line height and 2 points of padding above and below; a
                      source's heights win; the rows meet with no gap; the first row
                      starts under the header, one line and its padding tall, or at
-                     the content's top with no titles.
+                     the content's top with no titles; scrolled 1,000 points by the
+                     wheel, the header's rule stays a pixel above the rows and the
+                     rows move up by the scroll.
+      ui-table-view  of 100,000 rows only those in view are drawn, counted by the
+                     source's calls in a draw: at most the rows the view holds and
+                     one more, by the columns; row 50,000 scrolled to is shown with
+                     its bottom at the view's.
       ui-table-refused no columns, 33 columns, a drawn FIT column and an element
                      made under a table are each refused and leave the table's
                      columns where they stood; 32 columns are taken.
@@ -1758,14 +1764,42 @@ def run_ui_gate(workdir):
         one, three = line + 2 * pad, 3 * line + 2 * pad
         meets = [p[("lined", "meet")][0], p[("own", "meet")][0]]
         header, bare = p[("lined", "header")][0], p[("own", "header")][0]
+        pixel = p[("pixel", "points")][0]
+        rule, scrolled_rule = p[("rule", "top")][0], p[("scrolled", "rule")][0]
+        scrolled, row37 = p[("scrolled", "by")][0], p[("scrolled", "row37")][0]
+        # Row 37's top: rows of one line but row 1, of three.
+        want37 = one + (one + three + 35 * one) - 1000.0
         ok = (close(lined[0], one) and close(lined[1], three) and close(own[0], 50.0)
               and close(own[1], 51.0) and all(close(m, 0.0) for m in meets)
-              and close(header, one) and close(bare, 0.0))
+              and close(header, one) and close(bare, 0.0) and close(scrolled, 1000.0)
+              and close(rule, one - pixel) and close(scrolled_rule, rule)
+              and close(row37, want37))
         detail = (f"rows of one and three lines {lined[0]:.2f} and {lined[1]:.2f} (want "
                   f"{one:.2f} and {three:.2f}), the source's {own[0]:.0f} and {own[1]:.0f} "
                   f"(want 50 and 51), meeting {meets[0]:.2f} and {meets[1]:.2f} apart (want 0); "
                   f"the first row {header:.2f} under the content's top (want the header's "
-                  f"{one:.2f}), and {bare:.2f} with no titles (want 0)")
+                  f"{one:.2f}), and {bare:.2f} with no titles (want 0); scrolled {scrolled:.0f} "
+                  f"(want 1000), the rule at {rule:.2f} then {scrolled_rule:.2f} (want "
+                  f"{one - pixel:.2f} both), row 37 at {row37:.2f} (want {want37:.2f})")
+        return ok, detail
+
+    @arm("ui-table-view")
+    def _():
+        p = _ui_probe("table-view")
+        if not p:
+            return False, "the probe produced nothing"
+        calls, far_calls = p[("drawn", "calls")][0], p[("far", "calls")][0]
+        columns = p[("text", "columns")][0]
+        row_h, view = p[("row", "height")][0], p[("view", "height")][0]
+        most = (math.ceil(view / row_h) + 1) * columns
+        least = math.floor(view / row_h) * columns
+        bottom, view_bottom = p.get(("far", "bottom"), [0.0, -1.0])
+        ok = (least <= calls <= most and least <= far_calls <= most
+              and p[("far", "shown")][0] == 1 and close(bottom, view_bottom))
+        detail = (f"{calls:.0f} cells asked at the top and {far_calls:.0f} at row 50,000 (want "
+                  f"{least:.0f} to {most:.0f}: {view:.0f} points of {row_h:.0f}-point rows by "
+                  f"{columns:.0f} columns); row 50,000 shown {p[('far', 'shown')][0]:.0f}, its "
+                  f"bottom {bottom:.1f} (want the view's {view_bottom:.1f})")
         return ok, detail
 
     @arm("ui-table-refused")

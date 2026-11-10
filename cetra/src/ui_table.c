@@ -53,6 +53,7 @@ struct UITable {
     float x[UI_TABLE_COLUMNS_MOST], w[UI_TABLE_COLUMNS_MOST];
     int placed;
     float pixel, step;
+    int reveal; // the row a reveal asked for before its height was known; -1 for none
 };
 
 struct UITable* ui_table_make(void) {
@@ -60,6 +61,7 @@ struct UITable* ui_table_make(void) {
     if (t) {
         t->stale_lo = INT_MAX;
         t->titles_stale = true;
+        t->reveal = -1;
     }
     return t;
 }
@@ -180,6 +182,7 @@ void ui_table_set_rows(UIElement* table, int count, const UITableSource* source)
     t->source = *source;
     t->count = count;
     _measure_all(t);
+    t->reveal = -1;
     table->scroll = table->scroll_target = 0.0f;
 }
 
@@ -397,7 +400,51 @@ static void _width(const UISystem* ui, UIElement* el, const UIStyle* s, float wi
     _settle(ui, el, s);
 }
 
-// The columns across the content, and the scroll held inside the rows.
+// How far the rows can scroll; 0 while they fit.
+static float _most(const UITable* t) {
+    return fmaxf(_total(t) - _rows_view(t).h, 0.0f);
+}
+
+// The row at `y` down the rows, as the last layout placed them: the last that starts at or above
+// it.
+static int _row_at(const UITable* t, double y) {
+    int lo = 0, hi = t->placed;
+    while (hi - lo > 1) {
+        const int mid = lo + (hi - lo) / 2;
+        if (t->tops[mid] <= y)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
+// The least scroll from where the rows are going that shows row `row` whole: its top, if it is
+// taller than the view.
+static float _reveal_target(const UIElement* el, int row) {
+    const UITable* t = el->table;
+    const float view = _rows_view(t).h, target = el->scroll_target;
+    const float y0 = (float)t->tops[row], y1 = y0 + t->heights[row];
+    if (y0 < target)
+        return y0;
+    if (y1 > target + view)
+        return y1 - view < y0 ? y1 - view : y0;
+    return target;
+}
+
+// The rows eased toward the least scroll that shows row `row`: now, if the last layout placed it,
+// else at the next, once it is measured.
+static void _reveal(UIElement* el, int row) {
+    UITable* t = el->table;
+    if (!t->laid || row >= t->placed || t->every || t->stale[row]) {
+        t->reveal = row;
+        return;
+    }
+    el->scroll_target = glm_clamp(_reveal_target(el, row), 0.0f, _most(t));
+}
+
+// The columns across the content, the scroll held inside the rows, and a row a reveal asked for
+// before it was measured shown.
 static void _place(const UISystem* ui, UIElement* el, UIRect content) {
     UITable* t = el->table;
     const Engine* engine = ui_system_engine(ui);
@@ -409,11 +456,53 @@ static void _place(const UISystem* ui, UIElement* el, UIRect content) {
     t->laid = true;
     t->placed = t->count;
     _across(ui, el, content.w);
-    const float total = _total(t);
-    const float most = fmaxf(total - _rows_view(t).h, 0.0f);
-    el->scroll_content = total;
+    const float most = _most(t);
+    el->scroll_content = _total(t);
+    if (t->reveal >= 0 && t->reveal < t->count)
+        el->scroll_target = _reveal_target(el, t->reveal);
+    t->reveal = -1;
     el->scroll = glm_clamp(el->scroll, 0.0f, most);
     el->scroll_target = glm_clamp(el->scroll_target, 0.0f, most);
+}
+
+void ui_table_scroll_to_row(const UISystem* ui, UIElement* table, int row) {
+    (void)ui;
+    UITable* t = _table("ui_table_scroll_to_row", table);
+    if (!t)
+        return;
+    if (row < 0 || row >= t->count) {
+        log_error("ui_table_scroll_to_row: no row %d of %d", row, t->count);
+        return;
+    }
+    _reveal(table, row);
+}
+
+// ---- Scrolling, which the wheel and the bar drive, in points
+
+// The rows' view of them, the bar beside the rows alone; false while every row shows.
+static bool _scroll(const UIElement* el, UIScrollPlace* place) {
+    const UITable* t = el->table;
+    if (!t->laid)
+        return false;
+    const UIRect view = _rows_view(t);
+    const float most = _most(t);
+    *place = (UIScrollPlace){
+        .view = view.h,
+        .total = _total(t),
+        .at = most > 0.0f ? el->scroll / most : 0.0f,
+        .step = t->step,
+        .along = {el->rect.x, view.y, el->rect.w, el->rect.y + el->rect.h - view.y},
+    };
+    return most > 0.0f;
+}
+
+// The wheel and the bar move the rows at once: what eases is a reveal.
+static void _scroll_to(UIElement* el, float at) {
+    el->scroll = el->scroll_target = glm_clamp(at, 0.0f, 1.0f) * _most(el->table);
+}
+
+static void _scroll_by(UIElement* el, float by) {
+    el->scroll = el->scroll_target = glm_clamp(el->scroll_target + by, 0.0f, _most(el->table));
 }
 
 bool ui_table_cell_rect(const UIElement* table, int row, int column, UIRect* out) {
@@ -433,13 +522,97 @@ bool ui_table_cell_rect(const UIElement* table, int row, int column, UIRect* out
 
 // ---- Drawing
 
+// `lines` lines of `text` centred down `cell`, across it by `align`, in `s`; clipped to the cell
+// only when they are taller than it, since the column's clip holds them across.
+static void _draw_lines(UIDrawList* dl, UIRect cell, const char* text, int lines, const UIStyle* s,
+                        UIAlign align) {
+    const float h = (float)lines * ui_line_height(s->font, s->font_size, s->line_spacing);
+    const bool over = h > cell.h;
+    if (over)
+        ui_push_clip(dl, cell);
+    ui_draw_text(dl, (UIRect){cell.x, cell.y + (cell.h - h) * 0.5f, cell.w, h}, text, s, align);
+    if (over)
+        ui_pop_clip(dl);
+}
+
+// The header: each title in its column's alignment, and a pixel's rule along its foot, in the
+// header's colour.
+static void _draw_header(UIDrawList* dl, const UITable* t, const UIStyle* s, const UITheme* theme) {
+    UIStyle hs = *s;
+    if (theme->table_header[3] > 0.0f)
+        glm_vec4_copy((float*)theme->table_header, hs.fg);
+    else
+        hs.fg[3] *= 0.6f;
+    const UIRect head = {t->content.x, t->content.y, t->content.w, t->header_h};
+    for (int c = 0; c < t->column_count; c++) {
+        const char* title = t->columns[c].title;
+        const int lines = _lines_of(title);
+        if (lines == 0)
+            continue;
+        const UIRect cell = {head.x + t->x[c], head.y, t->w[c], head.h};
+        ui_push_clip(dl, cell);
+        _draw_lines(dl, cell, title, lines, &hs, t->columns[c].align);
+        ui_pop_clip(dl);
+    }
+    ui_draw_quad(dl, (UIRect){head.x, head.y + head.h - t->pixel, head.w, t->pixel}, hs.fg);
+}
+
+// The rows in view, column by column under each column's clip: a text cell's lines, or a drawn
+// cell handed its rect under a clip of its own.
+static void _draw_rows(UIDrawList* dl, const UIElement* el, const UIStyle* s) {
+    const UITable* t = el->table;
+    const UIRect view = _rows_view(t);
+    if (t->placed == 0 || view.h <= 0.0f)
+        return;
+    const double scroll = el->scroll;
+    const int first = _row_at(t, scroll), last = _row_at(t, scroll + (double)view.h);
+    ui_push_clip(dl, view);
+    for (int c = 0; c < t->column_count; c++) {
+        const UITableColumn* col = &t->columns[c];
+        const float x = t->content.x + t->x[c];
+        ui_push_clip(dl, (UIRect){x, view.y, t->w[c], view.h});
+        for (int r = first; r <= last; r++) {
+            const UIRect cell = {x, view.y + (float)(t->tops[r] - scroll), t->w[c], t->heights[r]};
+            if (col->drawn) {
+                if (!t->source.draw)
+                    continue;
+                ui_push_clip(dl, cell);
+                t->source.draw(dl, cell, r, c, false, t->source.user);
+                ui_pop_clip(dl);
+                continue;
+            }
+            UITableCell out = {0};
+            t->source.cell(r, c, &out, t->source.user);
+            const int lines = _lines_of(out.text);
+            if (lines == 0)
+                continue;
+            UIStyle cs = *s;
+            if (out.colour[3] > 0.0f)
+                glm_vec4_copy(out.colour, cs.fg);
+            _draw_lines(dl, cell, out.text, lines, &cs, col->align);
+        }
+        ui_pop_clip(dl);
+    }
+    ui_pop_clip(dl);
+}
+
+// Its box, its header and its rows, inside its content: the bar is ui.c's, over them.
 static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect content,
                     bool focused, double now, bool blink) {
     (void)content;
     (void)focused;
     (void)now;
     (void)blink;
-    ui_draw_rect(ui_draw_list(ui), el->rect, s);
+    UIDrawList* dl = ui_draw_list(ui);
+    ui_draw_rect(dl, el->rect, s);
+    const UITable* t = el->table;
+    if (!t->laid)
+        return INFINITY;
+    ui_push_clip(dl, t->content);
+    if (t->header_h > 0.0f)
+        _draw_header(dl, t, s, ui_theme(ui));
+    _draw_rows(dl, el, s);
+    ui_pop_clip(dl);
     return INFINITY;
 }
 
@@ -471,4 +644,7 @@ const UIWidgetOps ui_table_ops = {
     .key = _key,
     .press = _press,
     .draw = _draw,
+    .scroll = _scroll,
+    .scroll_to = _scroll_to,
+    .scroll_by = _scroll_by,
 };

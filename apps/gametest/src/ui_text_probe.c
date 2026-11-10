@@ -1780,12 +1780,44 @@ static void say_heights(const UIElement* table, const char* prefix) {
            (double)(r0.y - (table->rect.y + TABLE_PAD)));
 }
 
-static int probe_table_heights(UISystem* ui, const Font* font) {
+// The y of the header's rule as the table last drew it: the fill a pixel tall across its content.
+static float rule_y(UISystem* ui, const UIElement* table, float pixel) {
+    ui_build(ui, 1280.0f, 720.0f, 1.0f);
+    const UIDrawList* dl = ui_draw_list(ui);
+    const float across = table->rect.w - 2.0f * TABLE_PAD;
+    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
+        UIRect r;
+        int kind = 0;
+        ui_draw_list_quad(dl, i, &r, NULL, &kind);
+        if (kind == 0 && fabsf(r.h - pixel) < 1e-4f && fabsf(r.w - across) < 1e-4f)
+            return r.y;
+    }
+    return -1.0f;
+}
+
+static int probe_table_heights(const Game* game, UISystem* ui, const Font* font) {
     UIElement* lined = table_fixture(ui, "table-heights", 600.0f, 300.0f);
     ui_table_set_columns(lined, HEIGHTS_COLUMNS, 2);
     ui_table_set_rows(lined, 2000, &(UITableSource){.cell = heights_cell});
     ui_layout(ui_top(ui), 1280.0f, 720.0f);
     say_heights(lined, "lined");
+    // The rows scrolled 1,000 points by ten wheel units of 100: the header and its rule stay.
+    const float pixel = probe_pixel(game, 1280.0f);
+    printf("ui table-heights rule top %.6f\n",
+           (double)(rule_y(ui, lined, pixel) - (lined->rect.y + TABLE_PAD)));
+    UITheme theme = *ui_theme(ui);
+    theme.scroll_step = 100.0f;
+    ui_set_theme(ui, &theme);
+    pass(ui, &(UIInput){.pointer_x = lined->rect.x + 100.0f,
+                        .pointer_y = lined->rect.y + 150.0f,
+                        .wheel_y = -10.0f});
+    printf("ui table-heights scrolled by %.6f\n", (double)lined->scroll);
+    printf("ui table-heights scrolled rule %.6f\n",
+           (double)(rule_y(ui, lined, pixel) - (lined->rect.y + TABLE_PAD)));
+    UIRect r = {0};
+    ui_table_cell_rect(lined, 37, -1, &r);
+    printf("ui table-heights scrolled row37 %.6f\n", (double)(r.y - (lined->rect.y + TABLE_PAD)));
+    printf("ui table-heights pixel points %.6f\n", (double)pixel);
     ui_pop(ui);
     UIElement* own = table_fixture(ui, "table-heights-own", 600.0f, 300.0f);
     ui_table_set_columns(own, UNTITLED_COLUMNS, 2);
@@ -1794,6 +1826,35 @@ static int probe_table_heights(UISystem* ui, const Font* font) {
     say_heights(own, "own");
     printf("ui table-heights line height %.6f\n", (double)ui_line_height(font, PROBE_SIZE, 1.0f));
     printf("ui table-heights row padding %.6f\n", 2.0);
+    return 0;
+}
+
+// Of 100,000 rows only those in view are drawn: the source's calls in a draw, against the rows the
+// view holds; then row 50,000 scrolled to is in view.
+static int probe_table_view(UISystem* ui) {
+    UIElement* table = table_fixture(ui, "table-view", 900.0f, 300.0f);
+    ui_table_set_columns(table, TABLE_COLUMNS, TABLE_COLUMN_COUNT);
+    ui_table_set_rows(table, TABLE_ROWS, &(UITableSource){.cell = table_cell});
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+    UIRect row0 = {0};
+    ui_table_cell_rect(table, 0, -1, &row0);
+    g_cells_asked = 0;
+    ui_build(ui, 1280.0f, 720.0f, 1.0f);
+    printf("ui table-view drawn calls %d\n", g_cells_asked);
+    printf("ui table-view text columns %d\n", TABLE_COLUMN_COUNT);
+    printf("ui table-view row height %.6f\n", (double)row0.h);
+    printf("ui table-view view height %.6f\n",
+           (double)(table->rect.y + table->rect.h - TABLE_PAD - row0.y));
+    ui_table_scroll_to_row(ui, table, 50000);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    UIRect far = {0};
+    const bool shown = ui_table_cell_rect(table, 50000, -1, &far);
+    printf("ui table-view far shown %d\n", shown ? 1 : 0);
+    printf("ui table-view far bottom %.6f %.6f\n", (double)(far.y + far.h),
+           (double)(table->rect.y + table->rect.h - TABLE_PAD));
+    g_cells_asked = 0;
+    ui_build(ui, 1280.0f, 720.0f, 1.0f);
+    printf("ui table-view far calls %d\n", g_cells_asked);
     return 0;
 }
 
@@ -1994,7 +2055,9 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
     if (!strcmp(which, "table-measure"))
         return probe_table_measure(ui, font);
     if (!strcmp(which, "table-heights"))
-        return probe_table_heights(ui, font);
+        return probe_table_heights(game, ui, font);
+    if (!strcmp(which, "table-view"))
+        return probe_table_view(ui);
     if (!strcmp(which, "table-refused"))
         return probe_table_refused(ui);
     return -1;
