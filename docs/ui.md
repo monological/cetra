@@ -124,10 +124,13 @@ app's. The spec says what else was rejected.
   only when the app marks it changed (`ui_table_rows_changed`) or adds it
   (`ui_table_set_row_count`). New columns, new rows, or a new face, size, tracking, line spacing
   or row padding measure them all. The cells measured count into `UIElement.measures`.
-- **A FIT column is its widest cell over every row**, its title's included, found again over what
-  is kept whenever a row was measured or taken off. A row that was the widest and shrinks narrows
-  its column. Fitting to the widest seen so far, as Dear ImGui does, would widen the columns as the
-  person scrolls.
+- **A FIT column is its widest cell over every row**, its title's included. A cell measured wider
+  raises it at once. A cell that was the widest and shrank, or a row taken off, has its column
+  found again over what is kept, so a changed or added row costs its own measure, not a walk of
+  every row. The tops are summed again from the first row whose height changed. Fitting to the
+  widest seen so far, as Dear ImGui does, would widen the columns as the person scrolls.
+- **What is placed, pressed and searched is bounded by the rows summed**, not by the count, which
+  a call between layouts runs ahead of: a row taken off is gone at once.
 - **The columns across** are CSS grid's tracks in the element's four modes. FIXED and FIT come
   first; then SHARE takes its share of the width less the gaps, rounded down to a whole point; then
   GROW splits what is left evenly. The gap is the table's `spacing`. Each column's start is the
