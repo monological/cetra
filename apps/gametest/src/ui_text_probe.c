@@ -1659,9 +1659,11 @@ static const UITableColumn TABLE_COLUMNS[] = {
 };
 #define TABLE_COLUMN_COUNT ((int)(sizeof(TABLE_COLUMNS) / sizeof(TABLE_COLUMNS[0])))
 
-// A `w` by `h` table at the top left of a screen that is not modal, padded TABLE_PAD and its
-// columns TABLE_GAP apart.
-static UIElement* table_fixture(UISystem* ui, const char* name, float w, float h) {
+// A `w` by `h` table of `columns` and `rows` rows read through `source`, on a screen that is not
+// modal, padded TABLE_PAD and its columns TABLE_GAP apart; not yet laid out.
+static UIElement* table_fixture(UISystem* ui, const char* name, float w, float h,
+                                const UITableColumn* columns, int column_count, int rows,
+                                const UITableSource* source) {
     UIScreen* s = ui_screen(ui, name);
     ui_screen_set_modal(s, false);
     UIElement* table = ui_table(ui_screen_root(s));
@@ -1669,8 +1671,19 @@ static UIElement* table_fixture(UISystem* ui, const char* name, float w, float h
     table->spacing = TABLE_GAP;
     for (int i = 0; i < 4; i++)
         table->padding[i] = TABLE_PAD;
+    ui_table_set_columns(table, columns, column_count);
+    ui_table_set_rows(table, rows, source);
     ui_push(ui, s);
     return table;
+}
+
+// The top and the bottom of a fixture's content, inside its padding.
+static float content_top(const UIElement* table) {
+    return table->rect.y + TABLE_PAD;
+}
+
+static float content_bottom(const UIElement* table) {
+    return table->rect.y + table->rect.h - TABLE_PAD;
 }
 
 // Row `row`'s cell rects, the whole row's first, as `which` `prefix`row and `prefix`c0 on.
@@ -1692,9 +1705,9 @@ static void say_cells(const char* which, const char* prefix, const UIElement* ta
 static int probe_table_columns(UISystem* ui, const Font* font) {
     static const float widths[] = {900.0f, 701.0f};
     for (int k = 0; k < 2; k++) {
-        UIElement* table = table_fixture(ui, "table-columns", widths[k], 300.0f);
-        ui_table_set_columns(table, TABLE_COLUMNS, TABLE_COLUMN_COUNT);
-        ui_table_set_rows(table, TABLE_ROWS, &(UITableSource){.cell = table_cell});
+        const UIElement* table =
+            table_fixture(ui, "table-columns", widths[k], 300.0f, TABLE_COLUMNS, TABLE_COLUMN_COUNT,
+                          TABLE_ROWS, &(UITableSource){.cell = table_cell});
         ui_layout(ui_top(ui), 1280.0f, 720.0f);
         char prefix[16];
         snprintf(prefix, sizeof(prefix), "w%d", (int)widths[k]);
@@ -1717,10 +1730,9 @@ static float first_width(const UIElement* table) {
 }
 
 static int probe_table_measure(UISystem* ui, const Font* font) {
-    UIElement* table = table_fixture(ui, "table-measure", 900.0f, 300.0f);
+    UIElement* table = table_fixture(ui, "table-measure", 900.0f, 300.0f, TABLE_COLUMNS, 4,
+                                     TABLE_ROWS, &(UITableSource){.cell = table_cell});
     UIScreen* s = ui_top(ui);
-    ui_table_set_columns(table, TABLE_COLUMNS, 4);
-    ui_table_set_rows(table, TABLE_ROWS, &(UITableSource){.cell = table_cell});
     ui_layout(s, 1280.0f, 720.0f);
     printf("ui table-measure first measures %u\n", table->measures);
     unsigned was = table->measures;
@@ -1779,8 +1791,7 @@ static void say_heights(const UIElement* table, const char* prefix) {
     ui_table_cell_rect(table, 1, -1, &r1);
     printf("ui table-heights %s heights %.6f %.6f\n", prefix, (double)r0.h, (double)r1.h);
     printf("ui table-heights %s meet %.6f\n", prefix, (double)(r1.y - (r0.y + r0.h)));
-    printf("ui table-heights %s header %.6f\n", prefix,
-           (double)(r0.y - (table->rect.y + TABLE_PAD)));
+    printf("ui table-heights %s header %.6f\n", prefix, (double)(r0.y - content_top(table)));
 }
 
 // The y of the header's rule as the table last drew it: the fill a pixel tall across its content.
@@ -1799,15 +1810,14 @@ static float rule_y(UISystem* ui, const UIElement* table, float pixel) {
 }
 
 static int probe_table_heights(const Game* game, UISystem* ui, const Font* font) {
-    UIElement* lined = table_fixture(ui, "table-heights", 600.0f, 300.0f);
-    ui_table_set_columns(lined, HEIGHTS_COLUMNS, 2);
-    ui_table_set_rows(lined, 2000, &(UITableSource){.cell = heights_cell});
+    UIElement* lined = table_fixture(ui, "table-heights", 600.0f, 300.0f, HEIGHTS_COLUMNS, 2, 2000,
+                                     &(UITableSource){.cell = heights_cell});
     ui_layout(ui_top(ui), 1280.0f, 720.0f);
     say_heights(lined, "lined");
     // The rows scrolled 1,000 points by ten wheel units of 100: the header and its rule stay.
     const float pixel = probe_pixel(game, 1280.0f);
     printf("ui table-heights rule top %.6f\n",
-           (double)(rule_y(ui, lined, pixel) - (lined->rect.y + TABLE_PAD)));
+           (double)(rule_y(ui, lined, pixel) - content_top(lined)));
     UITheme theme = *ui_theme(ui);
     theme.scroll_step = 100.0f;
     ui_set_theme(ui, &theme);
@@ -1816,15 +1826,15 @@ static int probe_table_heights(const Game* game, UISystem* ui, const Font* font)
                         .wheel_y = -10.0f});
     printf("ui table-heights scrolled by %.6f\n", (double)lined->scroll);
     printf("ui table-heights scrolled rule %.6f\n",
-           (double)(rule_y(ui, lined, pixel) - (lined->rect.y + TABLE_PAD)));
+           (double)(rule_y(ui, lined, pixel) - content_top(lined)));
     UIRect r = {0};
     ui_table_cell_rect(lined, 37, -1, &r);
-    printf("ui table-heights scrolled row37 %.6f\n", (double)(r.y - (lined->rect.y + TABLE_PAD)));
+    printf("ui table-heights scrolled row37 %.6f\n", (double)(r.y - content_top(lined)));
     printf("ui table-heights pixel points %.6f\n", (double)pixel);
     ui_pop(ui);
-    UIElement* own = table_fixture(ui, "table-heights-own", 600.0f, 300.0f);
-    ui_table_set_columns(own, UNTITLED_COLUMNS, 2);
-    ui_table_set_rows(own, 2000, &(UITableSource){.cell = heights_cell, .height = heights_height});
+    const UIElement* own =
+        table_fixture(ui, "table-heights-own", 600.0f, 300.0f, UNTITLED_COLUMNS, 2, 2000,
+                      &(UITableSource){.cell = heights_cell, .height = heights_height});
     ui_layout(ui_top(ui), 1280.0f, 720.0f);
     say_heights(own, "own");
     printf("ui table-heights line height %.6f\n", (double)ui_line_height(font, PROBE_SIZE, 1.0f));
@@ -1835,9 +1845,9 @@ static int probe_table_heights(const Game* game, UISystem* ui, const Font* font)
 // Of 100,000 rows only those in view are drawn: the source's calls in a draw, against the rows the
 // view holds; then row 50,000 scrolled to is in view.
 static int probe_table_view(UISystem* ui) {
-    UIElement* table = table_fixture(ui, "table-view", 900.0f, 300.0f);
-    ui_table_set_columns(table, TABLE_COLUMNS, TABLE_COLUMN_COUNT);
-    ui_table_set_rows(table, TABLE_ROWS, &(UITableSource){.cell = table_cell});
+    UIElement* table =
+        table_fixture(ui, "table-view", 900.0f, 300.0f, TABLE_COLUMNS, TABLE_COLUMN_COUNT,
+                      TABLE_ROWS, &(UITableSource){.cell = table_cell});
     ui_layout(ui_top(ui), 1280.0f, 720.0f);
     UIRect row0 = {0};
     ui_table_cell_rect(table, 0, -1, &row0);
@@ -1846,15 +1856,14 @@ static int probe_table_view(UISystem* ui) {
     printf("ui table-view drawn calls %d\n", g_cells_asked);
     printf("ui table-view text columns %d\n", TABLE_COLUMN_COUNT);
     printf("ui table-view row height %.6f\n", (double)row0.h);
-    printf("ui table-view view height %.6f\n",
-           (double)(table->rect.y + table->rect.h - TABLE_PAD - row0.y));
+    printf("ui table-view view height %.6f\n", (double)(content_bottom(table) - row0.y));
     ui_table_scroll_to_row(ui, table, 50000);
     pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
     UIRect far = {0};
     const bool shown = ui_table_cell_rect(table, 50000, -1, &far);
     printf("ui table-view far shown %d\n", shown ? 1 : 0);
     printf("ui table-view far bottom %.6f %.6f\n", (double)(far.y + far.h),
-           (double)(table->rect.y + table->rect.h - TABLE_PAD));
+           (double)content_bottom(table));
     g_cells_asked = 0;
     ui_build(ui, 1280.0f, 720.0f, 1.0f);
     printf("ui table-view far calls %d\n", g_cells_asked);
@@ -1883,9 +1892,9 @@ static bool take_down(UIElement* el, const InputKeyEvent* key, void* user) {
 
 // A table of 101 rows, focused, its cursor on none.
 static UIElement* cursor_fixture(UISystem* ui) {
-    UIElement* table = table_fixture(ui, "table-cursor", 900.0f, 300.0f);
-    ui_table_set_columns(table, TABLE_COLUMNS, TABLE_COLUMN_COUNT);
-    ui_table_set_rows(table, 101, &(UITableSource){.cell = table_cell, .holds = cursor_holds});
+    UIElement* table =
+        table_fixture(ui, "table-cursor", 900.0f, 300.0f, TABLE_COLUMNS, TABLE_COLUMN_COUNT, 101,
+                      &(UITableSource){.cell = table_cell, .holds = cursor_holds});
     ui_table_set_on_cursor(table, on_cursor, NULL);
     ui_set_focus(ui_top(ui), table);
     pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
@@ -1978,9 +1987,8 @@ static double table_kept(UISystem* ui, const UIElement* table, const UIRect* was
 }
 
 static int probe_table_refused(UISystem* ui) {
-    UIElement* table = table_fixture(ui, "table-refused", 900.0f, 300.0f);
-    ui_table_set_columns(table, TABLE_COLUMNS, TABLE_COLUMN_COUNT);
-    ui_table_set_rows(table, 100, &(UITableSource){.cell = table_cell});
+    UIElement* table = table_fixture(ui, "table-refused", 900.0f, 300.0f, TABLE_COLUMNS,
+                                     TABLE_COLUMN_COUNT, 100, &(UITableSource){.cell = table_cell});
     ui_layout(ui_top(ui), 1280.0f, 720.0f);
     UIRect was[TABLE_COLUMN_COUNT];
     table_columns_at(table, was, TABLE_COLUMN_COUNT);

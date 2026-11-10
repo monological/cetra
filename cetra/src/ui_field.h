@@ -22,7 +22,5 @@ void ui_field_inspect(const UIElement* el, int* cursor, int* select_start, int* 
 // The element's runs were set: the field's rows are broken again in their faces now, for an edit
 // or an append before the next layout.
 void ui_field_runs_changed(UIElement* el);
-// The height of the field's content: one line, or its rows up to its most.
-float ui_field_content_height(const UIElement* el);
 
 #endif // _UI_FIELD_H_

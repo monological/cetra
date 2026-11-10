@@ -23,6 +23,15 @@ float ui_element_spacing(const UISystem* ui, const UIElement* el);
 // The points one unit of the wheel scrolls: the theme's step, else its font size.
 float ui_scroll_step(const UISystem* ui);
 
+// What scrolls in points through UIElement.scroll, a pane or a table: the least scroll from
+// `target` that shows [y0, y1] whole through `view` points, its top if it is taller.
+float ui_least_scroll(float target, float y0, float y1, float view);
+// Its scroll held inside `content` points seen through `view`, following its end if it does; the
+// scroll it is drawn at.
+float ui_scroll_settle(UIElement* el, float content, float view);
+// What is drawn behind selected text or a list's cursor: the theme's selection, else the engine's.
+void ui_selection_colour(const UITheme* theme, vec4 out);
+
 // The bar: its width, its inset from the element's edge, its shortest thumb, and the strip along
 // the element's right edge a press lands on it from.
 #define UI_BAR_W     6.0f

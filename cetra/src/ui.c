@@ -174,6 +174,7 @@ static UIStyle _default_style(UIKind kind, UIState state) {
                 s.fg[0] = s.fg[1] = s.fg[2] = 0.45f;
             break;
         case UI_EDITOR:
+        case UI_TABLE:
             // The field's well, squarer and with less padding: a code editor fills its pane.
             s.fg[0] = 0.86f;
             s.fg[1] = 0.87f;
@@ -190,22 +191,9 @@ static UIStyle _default_style(UIKind kind, UIState state) {
             s.padding[0] = s.padding[1] = s.padding[2] = s.padding[3] = 6.0f;
             if (_shows_focus(state))
                 _focus_border(&s, 0.6f, 1.0f);
-            break;
-        case UI_TABLE:
-            // The editor's surface: a list fills its pane as a text does.
-            s.fg[0] = s.fg[1] = s.fg[2] = 0.90f;
-            s.fg[3] = 1.0f;
-            s.bg[0] = 0.07f;
-            s.bg[1] = 0.075f;
-            s.bg[2] = 0.09f;
-            s.bg[3] = 1.0f;
-            s.border[0] = s.border[1] = s.border[2] = 1.0f;
-            s.border[3] = 0.10f;
-            s.border_width = 1.0f;
-            s.corner_radius = 4.0f;
-            s.padding[0] = s.padding[1] = s.padding[2] = s.padding[3] = 6.0f;
-            if (_shows_focus(state))
-                _focus_border(&s, 0.6f, 1.0f);
+            // A table's text is the controls' grey: a list fills its pane as a text does.
+            if (kind == UI_TABLE)
+                s.fg[0] = s.fg[1] = s.fg[2] = 0.90f;
             break;
         case UI_SCROLL:
             // A window onto its content: no fill and no padding of its own, a faint thumb, and a
@@ -246,6 +234,13 @@ static UIStyle _default_style(UIKind kind, UIState state) {
             break;
     }
     return s;
+}
+
+void ui_selection_colour(const UITheme* theme, vec4 out) {
+    if (theme->selection[3] > 0.0f)
+        glm_vec4_copy((float*)theme->selection, out);
+    else
+        glm_vec4_copy((vec4){0.25f, 0.45f, 0.85f, 0.55f}, out);
 }
 
 static bool _vec4_absent(const vec4 v) {
@@ -378,11 +373,18 @@ static UIStyle _resolve(const UISystem* ui, const UIElement* el, UIState state) 
 
 // ------------------------------------------------------------------ elements
 
+// Whether `parent` refuses an element under it, logged under `fn`'s name: a table, whose cells are
+// its source's.
+static bool _refuses_children(const char* fn, const UIElement* parent) {
+    if (!parent || parent->kind != UI_TABLE)
+        return false;
+    log_error("%s: a table holds no elements; its cells are its source's", fn);
+    return true;
+}
+
 static UIElement* _new_element(UIElement* parent, UIKind kind) {
-    if (parent && parent->kind == UI_TABLE) {
-        log_error("ui: a table holds no elements; its cells are its source's");
+    if (_refuses_children("ui", parent))
         return NULL;
-    }
     UIElement* el = calloc(1, sizeof(UIElement));
     if (!el) {
         log_error("ui: out of memory creating an element");
@@ -886,13 +888,11 @@ static float _intrinsic(const UISystem* ui, UIElement* el, int axis) {
             if (axis == 1)
                 v += UI_FURNITURE_GAP + UI_TRACK_H;
             break;
-        case UI_TEXT_FIELD:
-            if (axis == 1)
-                v = ui_field_content_height(el);
-            break;
         default:
             break;
     }
+    // An element with state of its own says what its content measures, a text field's rows and a
+    // table's columns and rows.
     const UIWidgetOps* ops = _ops(el);
     if (ops && ops->content)
         v = ops->content(ui, el, &s, axis);
@@ -975,7 +975,7 @@ static void _rows_tops(const UISystem* ui, UIElement* pane) {
 
 // The least scroll from `target` that shows [y0, y1] of a pane's content whole through `view`
 // points -- its top, if it is taller than the view.
-static float _least_scroll(float target, float y0, float y1, float view) {
+float ui_least_scroll(float target, float y0, float y1, float view) {
     if (y0 < target)
         return y0;
     if (y1 > target + view)
@@ -986,8 +986,8 @@ static float _least_scroll(float target, float y0, float y1, float view) {
 // The least scroll from the pane's target that shows row `index` whole.
 static float _row_reveal_target(const UIElement* pane, int index, float view) {
     const struct UIRows* r = pane->rows;
-    return _least_scroll(pane->scroll_target, r->top[index], r->top[index] + r->height[index],
-                         view);
+    return ui_least_scroll(pane->scroll_target, r->top[index], r->top[index] + r->height[index],
+                           view);
 }
 
 // The row at `y` down a pane's content: the last that starts at or above it.
@@ -1194,7 +1194,7 @@ static void _measure(const UISystem* ui, UIElement* el, int axis) {
  * inside what the content allows, and moved to the end if it was at the end, the content grew and
  * the pane follows its end. A pane that follows begins at its end, since nothing has been seen.
  */
-static float _scroll_settle(UIElement* el, float content, float view) {
+float ui_scroll_settle(UIElement* el, float content, float view) {
     const float was_max = glm_max(el->scroll_content - view, 0.0f);
     const float max = glm_max(content - view, 0.0f);
     if (el->follow_end && content > el->scroll_content && el->scroll_target >= was_max - 0.5f)
@@ -1265,7 +1265,7 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
             if (ui_scroll_find_row(el, r->reveal))
                 r->reveal = -1;
         }
-        const float scroll = _scroll_settle(el, r->top[r->count], in_len);
+        const float scroll = ui_scroll_settle(el, r->top[r->count], in_len);
         for (size_t i = 0; i < el->child_count; i++) {
             UIElement* c = el->children[i];
             const int row = r->child_row[i] < r->count ? r->child_row[i] : r->count;
@@ -1334,7 +1334,7 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
     }
     // A pane's content runs on past it, moved up by its scroll; the rects stay window positions.
     if (el->kind == UI_SCROLL && axis == 1)
-        cursor -= _scroll_settle(el, used, in_len);
+        cursor -= ui_scroll_settle(el, used, in_len);
 
     for (size_t i = 0; i < el->child_count; i++) {
         UIElement* c = el->children[i];
@@ -1542,10 +1542,8 @@ void ui_move(UIElement* el, UIElement* parent, const UIElement* before) {
         log_error("ui_move: an element does not move into itself or under itself");
         return;
     }
-    if (parent->kind == UI_TABLE) {
-        log_error("ui_move: a table holds no elements; its cells are its source's");
+    if (_refuses_children("ui_move", parent))
         return;
-    }
     const UIScreen* screen = _screen_of(el);
     if (!screen) {
         log_error("ui_move: an element taken out does not move");
@@ -1830,6 +1828,12 @@ static bool _scroll_place(const UISystem* ui, const UIElement* el, UIScrollPlace
 // The strip an element's bar runs down: the one its place names, else its whole rect.
 static UIRect _bar_strip(const UIElement* el, const UIScrollPlace* place) {
     return place->along.w > 0.0f ? place->along : el->rect;
+}
+
+// Where a press is on the bar: the strip's right UI_BAR_HIT points.
+static UIRect _bar_grip(const UIElement* el, const UIScrollPlace* place) {
+    const UIRect s = _bar_strip(el, place);
+    return (UIRect){s.x + s.w - UI_BAR_HIT, s.y, UI_BAR_HIT, s.h};
 }
 
 /*
@@ -2171,7 +2175,7 @@ static void _reveal(const UISystem* ui, UIElement* el) {
         // `el` down the pane's content, from where the pane draws it now.
         const UIRect view = _content_rect(ui, p);
         const float y0 = el->rect.y - view.y + p->scroll;
-        _scroll_to(ui, p, _least_scroll(p->scroll_target, y0, y0 + el->rect.h, view.h), false);
+        _scroll_to(ui, p, ui_least_scroll(p->scroll_target, y0, y0 + el->rect.h, view.h), false);
     }
 }
 
@@ -2501,8 +2505,7 @@ static void _update(UISystem* ui, const UIInput* in, float width, float height) 
         UIScrollPlace place;
         UIRect track, thumb;
         if (el && _bar(ui, el, &place, &track, &thumb) &&
-            in->pointer_x >= el->rect.x + el->rect.w - UI_BAR_HIT &&
-            in->pointer_y >= _bar_strip(el, &place).y) {
+            ui_rect_hit(_bar_grip(el, &place), in->pointer_x, in->pointer_y)) {
             on_bar = true;
             if (in->pointer_y >= thumb.y && in->pointer_y < thumb.y + thumb.h) {
                 ui->bar_drag = el;

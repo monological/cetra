@@ -347,9 +347,13 @@ static void _width(const UISystem* ui, UIElement* el, const UIStyle* s, float wi
     _break_rows(f);
 }
 
-float ui_field_content_height(const UIElement* el) {
+// What the layout measures: nothing across, since a field's width is its own, and down one line
+// or its rows up to its most.
+static float _content(const UISystem* ui, UIElement* el, const UIStyle* s, int axis) {
+    (void)ui;
+    (void)s;
     const UIField* f = el->field;
-    if (!f)
+    if (!f || axis == 0)
         return 0.0f;
     size_t rows = 1;
     if (f->flags & UI_FIELD_MULTILINE) {
@@ -852,10 +856,8 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
 
     // The selection, behind the text, row by row.
     if (_has_selection(f)) {
-        const UITheme* theme = ui_theme(ui);
-        vec4 tint = {0.25f, 0.45f, 0.85f, 0.55f};
-        if (theme->selection[3] > 0.0f)
-            glm_vec4_copy((float*)theme->selection, tint);
+        vec4 tint = {0};
+        ui_selection_colour(ui_theme(ui), tint);
         int lo, hi;
         _selection(f, &lo, &hi);
         for (size_t i = first; i < last; i++) {
@@ -902,6 +904,7 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
 }
 
 const UIWidgetOps ui_field_ops = {
+    .content = _content,
     .width = _width,
     .keys_begin = _keys_begin,
     .keys_end = _keys_end,

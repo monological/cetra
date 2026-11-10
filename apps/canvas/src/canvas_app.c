@@ -3794,6 +3794,7 @@ static const UITableColumn TABLE_COLUMNS[] = {
 };
 #define TABLE_COLUMN_COUNT ((int)(sizeof(TABLE_COLUMNS) / sizeof(TABLE_COLUMNS[0])))
 static const char* TABLE_NOTE = "a note running on past its column";
+static const float TABLE_PAD = 6.0f;
 
 // An even row a copper layer, an odd one the dielectric between two.
 static void table_cell(int row, int column, UITableCell* out, void* user) {
@@ -3803,24 +3804,25 @@ static void table_cell(int row, int column, UITableCell* out, void* user) {
     switch (column) {
         case 0:
             snprintf(text, sizeof(text), "%d", row);
+            out->text = text;
             break;
         case 2:
             snprintf(text, sizeof(text), copper ? "L%d" : "Prepreg %d", row / 2 + 1);
+            out->text = text;
             break;
         case 3:
-            snprintf(text, sizeof(text), "%s", copper ? "1 oz" : "");
+            out->text = copper ? "1 oz" : "";
             break;
         case 4:
-            snprintf(text, sizeof(text), "%s", copper ? "0.035" : "0.110");
+            out->text = copper ? "0.035" : "0.110";
             break;
         case 5:
-            snprintf(text, sizeof(text), "%s", row % 5 == 0 ? TABLE_NOTE : "");
+            out->text = row % 5 == 0 ? TABLE_NOTE : "";
             break;
         default:
-            snprintf(text, sizeof(text), "%s", copper ? (row % 4 ? "GND" : "SIG") : "");
+            out->text = copper ? (row % 4 ? "GND" : "SIG") : "";
             break;
     }
-    out->text = text;
 }
 
 // The layer's picture: copper a bar across its row, dielectric a fill from edge to edge, so the
@@ -3836,11 +3838,6 @@ static void table_draw(UIDrawList* dl, UIRect cell, int row, int column, bool cu
         ui_draw_quad(dl, cell, (vec4){0.25f, 0.42f + lift, 0.28f, 1.0f});
 }
 
-// A rect in framebuffer pixels, unrounded.
-static void say_pixels(UIRect r, double s) {
-    printf(" %.3f %.3f %.3f %.3f", r.x * s, r.y * s, (r.x + r.w) * s, (r.y + r.h) * s);
-}
-
 static void build_table(UISystem* ui, const Font* font, int width, int height, double scale,
                         bool probe) {
     UITheme theme = *ui_theme(ui);
@@ -3851,6 +3848,8 @@ static void build_table(UISystem* ui, const Font* font, int width, int height, d
     UIElement* table = ui_table(ui_screen_root(screen));
     ui_set_size(table, UI_GROW, 0.0f, UI_GROW, 0.0f);
     table->spacing = 6.0f;
+    for (int i = 0; i < 4; i++)
+        table->padding[i] = TABLE_PAD;
     ui_set_style(
         table, &(UIStyle){.bg = {TABLE_BG[0], TABLE_BG[1], TABLE_BG[2], 1.0f}, .font_size = 13.0f});
     ui_table_set_columns(table, TABLE_COLUMNS, TABLE_COLUMN_COUNT);
@@ -3861,22 +3860,24 @@ static void build_table(UISystem* ui, const Font* font, int width, int height, d
     if (!probe)
         return;
     // The header's rule along its foot and the cursor's row, the header above the rule and the
-    // rows under it, and each gap between two columns, all in framebuffer pixels.
+    // rows under it, all boxes in framebuffer pixels, and each gap between two columns unrounded.
     UIRect row3 = {0}, row0 = {0};
     ui_table_cell_rect(table, 3, -1, &row3);
     ui_table_cell_rect(table, 0, -1, &row0);
     const float pixel = (float)(1.0 / scale);
+    const float top = table->rect.y + TABLE_PAD, bottom = table->rect.y + table->rect.h - TABLE_PAD;
     const UIRect rule = {row0.x, row0.y - pixel, row0.w, pixel};
     printf("canvas table colours bg %06x rule %06x cursor %06x\n", probe_rgb(TABLE_BG),
            probe_rgb(TABLE_RULE), probe_rgb(TABLE_CURSOR));
     printf("canvas table rule");
-    say_pixels(rule, scale);
+    say_box(rule, scale);
     printf("\ncanvas table cursor");
-    say_pixels(row3, scale);
-    printf("\ncanvas table header %.3f %.3f\n", (double)(table->rect.y + 6.0f) * scale,
-           (double)rule.y * scale);
-    printf("canvas table rows %.3f %.3f\n", (double)row0.y * scale,
-           (double)(table->rect.y + table->rect.h - 6.0f) * scale);
+    say_box(row3, scale);
+    printf("\ncanvas table header");
+    say_box((UIRect){row0.x, top, row0.w, rule.y - top}, scale);
+    printf("\ncanvas table rows");
+    say_box((UIRect){row0.x, row0.y, row0.w, bottom - row0.y}, scale);
+    printf("\n");
     for (int c = 0; c + 1 < TABLE_COLUMN_COUNT; c++) {
         UIRect a, b;
         ui_table_cell_rect(table, 0, c, &a);

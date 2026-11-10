@@ -24,39 +24,39 @@ struct UITable {
     UITableSource source;
     int count;
 
-    // Each cell's widest line as last measured, row by row, `stride` cells to a row; each row's
-    // height, and where it starts below the header, count + 1 of them. Doubles, since 100,000 rows
-    // reach millions of points, past which a float cannot hold a sum to a point.
+    // Each cell's widest line as last measured, row by row, a column to a cell; each row's height,
+    // and where it starts below the header. Doubles, since 100,000 rows reach millions of points,
+    // past which a float cannot hold a sum to a point. The tops are summed for the first `summed`
+    // rows, which a shrink lowers and a measure raises to the count: what is placed, pressed and
+    // searched is bounded by it, never by the count, which may run ahead of the sums.
     float* widths;
     float* heights;
     double* tops;
     bool* stale; // a row to measure at the next layout
     size_t widths_capacity, heights_capacity, tops_capacity, stale_capacity;
-    int stride;
+    int summed;
     int stale_lo, stale_hi; // every stale row, in [lo, hi)
-    bool every;             // every row stale, whatever `stale` says
+    bool every;             // every row and title stale, whatever `stale` says
     bool widest_stale;      // a row taken off may have been a column's widest
 
     // What the measures are for: another face, size, tracking, line spacing or row padding
     // measures every row and every title again.
     const Font* font;
     float size, tracking, line_spacing, row_padding;
-    bool titles_stale;
     float widest[UI_TABLE_COLUMNS_MOST];      // a column's cells', over every row
     float title_width[UI_TABLE_COLUMNS_MOST]; // its title's
     float header_h;                           // 0 for no header
 
     // As the last layout placed it: its content rect, each column's start in it and width, the
-    // rows it placed, the points of a pixel and a wheel unit's.
+    // points of a pixel and a wheel unit's.
     bool laid;
     UIRect content;
     float x[UI_TABLE_COLUMNS_MOST], w[UI_TABLE_COLUMNS_MOST];
-    int placed;
     float pixel, step;
     int reveal; // the row a reveal asked for before its height was known; -1 for none
 
     // The cursor's row, -1 for none; whether a turn of keys is under way and moved it, so
-    // on_cursor is told once at its end.
+    // on_cursor is told once at its end, after a hook's ui_table_move_cursor too.
     int cursor;
     bool in_keys, moved;
     UIActionFn on_cursor;
@@ -67,7 +67,6 @@ struct UITable* ui_table_make(void) {
     UITable* t = calloc(1, sizeof(UITable));
     if (t) {
         t->stale_lo = INT_MAX;
-        t->titles_stale = true;
         t->reveal = -1;
         t->cursor = -1;
     }
@@ -119,12 +118,6 @@ static bool _reserve(UITable* t, int rows, int columns) {
     return false;
 }
 
-// Every row and every title measured again at the next layout.
-static void _measure_all(UITable* t) {
-    t->every = true;
-    t->titles_stale = true;
-}
-
 // Rows [lo, hi) measured again at the next layout.
 static void _measure_rows(UITable* t, int lo, int hi) {
     for (int r = lo; r < hi; r++)
@@ -174,7 +167,7 @@ void ui_table_set_columns(UIElement* table, const UITableColumn* columns, int co
         t->columns[c].title = titles[c];
     }
     t->column_count = count;
-    _measure_all(t);
+    t->every = true;
 }
 
 void ui_table_set_rows(UIElement* table, int count, const UITableSource* source) {
@@ -189,7 +182,8 @@ void ui_table_set_rows(UIElement* table, int count, const UITableSource* source)
         return;
     t->source = *source;
     t->count = count;
-    _measure_all(t);
+    t->summed = 0;
+    t->every = true;
     t->reveal = -1;
     t->cursor = -1;
     table->scroll = table->scroll_target = 0.0f;
@@ -205,11 +199,17 @@ void ui_table_set_row_count(UIElement* table, int count) {
     }
     if (!_reserve(t, count, t->column_count))
         return;
-    if (count > t->count)
+    if (count > t->count) {
+        // Nothing yet, so the measure finds a widest raised and every height changed.
+        const size_t n = (size_t)(count - t->count);
+        memset(&t->widths[(size_t)t->count * (size_t)t->column_count], 0,
+               n * (size_t)t->column_count * sizeof(float));
+        memset(&t->heights[t->count], 0, n * sizeof(float));
         _measure_rows(t, t->count, count);
-    else
+    } else
         t->widest_stale = true;
     t->stale_hi = t->stale_hi < count ? t->stale_hi : count;
+    t->summed = t->summed < count ? t->summed : count;
     t->count = count;
     if (t->cursor >= count)
         t->cursor = -1;
@@ -219,8 +219,12 @@ void ui_table_rows_changed(UIElement* table, int first, int count) {
     UITable* t = _table("ui_table_rows_changed", table);
     if (!t)
         return;
-    const long long lo = first > 0 ? first : 0, hi = (long long)first + count;
-    _measure_rows(t, (int)lo, (int)(hi < t->count ? hi : t->count));
+    if (first < 0 || count < 0 || (long long)first + count > t->count) {
+        log_error("ui_table_rows_changed: rows %d to %lld are not among the %d", first,
+                  (long long)first + count, t->count);
+        return;
+    }
+    _measure_rows(t, first, first + count);
 }
 
 // ---- Measuring
@@ -260,34 +264,61 @@ static void _measure_titles(const UISystem* ui, UITable* t, const UIStyle* s, fl
         lines = n > lines ? n : lines;
     }
     t->header_h = lines > 0 ? (float)lines * line_h + 2.0f * t->row_padding : 0.0f;
-    t->titles_stale = false;
 }
 
-// Row `r` measured: each text cell's widest line, counted into `measures`, and its height.
-static void _measure_row(const UISystem* ui, UIElement* el, const UIStyle* s, int r, float line_h) {
+/*
+ * Row `r` measured: each text cell's widest line, counted into `measures`, and its height. A cell
+ * as wide as its column's widest or wider raises it; one that was the widest and shrank marks its
+ * column in `*rescan`, whose widest is found again over every row -- NULL while every row is
+ * measured, which finds every widest. True when the height changed.
+ */
+static bool _measure_row(const UISystem* ui, UIElement* el, const UIStyle* s, int r, float line_h,
+                         uint32_t* rescan) {
     UITable* t = el->table;
     int lines = 0;
     for (int c = 0; c < t->column_count; c++) {
-        float* w = &t->widths[(size_t)r * (size_t)t->stride + (size_t)c];
+        float* w = &t->widths[(size_t)r * (size_t)t->column_count + (size_t)c];
+        const float was = *w;
         *w = 0.0f;
-        if (t->columns[c].drawn)
-            continue;
-        UITableCell cell = {0};
-        t->source.cell(r, c, &cell, t->source.user);
-        *w = _text_width(ui, s, cell.text);
-        const int n = _lines_of(cell.text);
-        lines = n > lines ? n : lines;
-        el->measures++;
+        if (!t->columns[c].drawn) {
+            UITableCell cell = {0};
+            t->source.cell(r, c, &cell, t->source.user);
+            *w = _text_width(ui, s, cell.text);
+            const int n = _lines_of(cell.text);
+            lines = n > lines ? n : lines;
+            el->measures++;
+        }
+        if (*w >= t->widest[c])
+            t->widest[c] = *w;
+        else if (rescan && was >= t->widest[c])
+            *rescan |= 1u << c;
     }
-    t->heights[r] = t->source.height
+    const float h = t->source.height
                         ? fmaxf(t->source.height(r, t->source.user), 0.0f)
                         : (float)(lines > 1 ? lines : 1) * line_h + 2.0f * t->row_padding;
+    const bool changed = h != t->heights[r];
+    t->heights[r] = h;
+    return changed;
+}
+
+// Each marked column's widest found again over every row kept, in one pass down the rows.
+static void _rescan(UITable* t, uint32_t columns) {
+    for (int c = 0; c < t->column_count; c++)
+        if (columns & (1u << c))
+            t->widest[c] = 0.0f;
+    for (int r = 0; r < t->count; r++) {
+        const float* row = &t->widths[(size_t)r * (size_t)t->column_count];
+        for (int c = 0; c < t->column_count; c++)
+            if (columns & (1u << c))
+                t->widest[c] = fmaxf(t->widest[c], row[c]);
+    }
 }
 
 /*
  * What is stale measured: every row and title after the columns, the rows or the style changed,
- * else the rows marked. Then, if anything was, each column's widest over every row kept and the
- * rows' tops summed again: a row that was a column's widest and shrank narrows it.
+ * else the rows marked. A column is scanned again only where its widest shrank or a row was taken
+ * off, and the tops summed again only from the first row whose height changed or was never summed:
+ * a row changed or added costs its own measure, not a walk of every row.
  */
 static void _settle(const UISystem* ui, UIElement* el, const UIStyle* s) {
     UITable* t = el->table;
@@ -299,40 +330,38 @@ static void _settle(const UISystem* ui, UIElement* el, const UIStyle* s) {
         t->tracking = s->tracking;
         t->line_spacing = s->line_spacing;
         t->row_padding = pad;
-        _measure_all(t);
+        t->every = true;
     }
     const float line_h = ui_line_height(s->font, s->font_size, s->line_spacing);
-    if (t->titles_stale)
-        _measure_titles(ui, t, s, line_h);
     const bool every = t->every;
+    if (every) {
+        _measure_titles(ui, t, s, line_h);
+        memset(t->widest, 0, sizeof(t->widest));
+        t->summed = 0;
+    }
     const int lo = every ? 0 : t->stale_lo, hi = every ? t->count : t->stale_hi;
-    if (every)
-        t->stride = t->column_count;
-    bool measured = false;
+    uint32_t rescan = 0;
+    int from = t->summed;
     for (int r = lo; r < hi; r++) {
         if (!every && !t->stale[r])
             continue;
         t->stale[r] = false;
-        _measure_row(ui, el, s, r, line_h);
-        measured = true;
+        if (_measure_row(ui, el, s, r, line_h, every ? NULL : &rescan) && r < from)
+            from = r;
     }
-    if (every)
-        memset(t->stale, 0, (size_t)t->count * sizeof(bool));
     t->every = false;
     t->stale_lo = INT_MAX;
     t->stale_hi = 0;
-    if (!measured && !every && !t->widest_stale)
-        return;
+    if (t->widest_stale && !every)
+        rescan = ~0u;
+    if (rescan)
+        _rescan(t, rescan);
     t->widest_stale = false;
-    for (int c = 0; c < t->column_count; c++) {
-        float most = 0.0f;
-        for (int r = 0; r < t->count; r++)
-            most = fmaxf(most, t->widths[(size_t)r * (size_t)t->stride + (size_t)c]);
-        t->widest[c] = most;
-    }
-    t->tops[0] = 0.0;
-    for (int r = 0; r < t->count; r++)
+    if (from == 0)
+        t->tops[0] = 0.0;
+    for (int r = from; r < t->count; r++)
         t->tops[r + 1] = t->tops[r] + (double)t->heights[r];
+    t->summed = t->count;
 }
 
 // A column's width before the room across is shared: a FIT column its widest cell or its title, a
@@ -378,9 +407,9 @@ static void _across(const UISystem* ui, UIElement* el, float width) {
     }
 }
 
-// Every row's height summed; none before any row is measured.
+// The rows' heights as summed; none before any row is measured.
 static float _total(const UITable* t) {
-    return t->tops ? (float)t->tops[t->count] : 0.0f;
+    return t->tops ? (float)t->tops[t->summed] : 0.0f;
 }
 
 // The rows' view: the content under the header.
@@ -416,10 +445,9 @@ static float _most(const UITable* t) {
     return fmaxf(_total(t) - _rows_view(t).h, 0.0f);
 }
 
-// The row at `y` down the rows, as the last layout placed them: the last that starts at or above
-// it.
+// The row at `y` down the rows as summed: the last that starts at or above it.
 static int _row_at(const UITable* t, double y) {
-    int lo = 0, hi = t->placed;
+    int lo = 0, hi = t->summed;
     while (hi - lo > 1) {
         const int mid = lo + (hi - lo) / 2;
         if (t->tops[mid] <= y)
@@ -430,24 +458,18 @@ static int _row_at(const UITable* t, double y) {
     return lo;
 }
 
-// The least scroll from where the rows are going that shows row `row` whole: its top, if it is
-// taller than the view.
+// The least scroll from where the rows are going that shows row `row` whole.
 static float _reveal_target(const UIElement* el, int row) {
     const UITable* t = el->table;
-    const float view = _rows_view(t).h, target = el->scroll_target;
-    const float y0 = (float)t->tops[row], y1 = y0 + t->heights[row];
-    if (y0 < target)
-        return y0;
-    if (y1 > target + view)
-        return y1 - view < y0 ? y1 - view : y0;
-    return target;
+    const float y0 = (float)t->tops[row];
+    return ui_least_scroll(el->scroll_target, y0, y0 + t->heights[row], _rows_view(t).h);
 }
 
-// The rows eased toward the least scroll that shows row `row`: now, if the last layout placed it,
-// else at the next, once it is measured.
+// The rows eased toward the least scroll that shows row `row`: now, if every row is measured and
+// summed as it stands, else at the next layout, from the tops it sums.
 static void _reveal(UIElement* el, int row) {
     UITable* t = el->table;
-    if (!t->laid || row >= t->placed || t->every || t->stale[row]) {
+    if (!t->laid || t->every || t->stale_lo != INT_MAX || t->summed != t->count) {
         t->reveal = row;
         return;
     }
@@ -465,15 +487,11 @@ static void _place(const UISystem* ui, UIElement* el, UIRect content) {
     t->step = ui_scroll_step(ui);
     t->content = content;
     t->laid = true;
-    t->placed = t->count;
     _across(ui, el, content.w);
-    const float most = _most(t);
-    el->scroll_content = _total(t);
-    if (t->reveal >= 0 && t->reveal < t->count)
+    if (t->reveal >= 0 && t->reveal < t->summed)
         el->scroll_target = _reveal_target(el, t->reveal);
     t->reveal = -1;
-    el->scroll = glm_clamp(el->scroll, 0.0f, most);
-    el->scroll_target = glm_clamp(el->scroll_target, 0.0f, most);
+    ui_scroll_settle(el, _total(t), _rows_view(t).h);
 }
 
 void ui_table_scroll_to_row(const UISystem* ui, UIElement* table, int row) {
@@ -518,7 +536,7 @@ static void _scroll_by(UIElement* el, float by) {
 
 bool ui_table_cell_rect(const UIElement* table, int row, int column, UIRect* out) {
     const UITable* t = _seen("ui_table_cell_rect", table);
-    if (!t || !t->laid || row < 0 || row >= t->placed || column < -1 || column >= t->column_count)
+    if (!t || !t->laid || row < 0 || row >= t->summed || column < -1 || column >= t->column_count)
         return false;
     const UIRect view = _rows_view(t);
     const float y = view.y + (float)(t->tops[row] - (double)table->scroll);
@@ -568,14 +586,12 @@ static void _draw_header(UIDrawList* dl, const UITable* t, const UIStyle* s, con
     ui_draw_quad(dl, (UIRect){head.x, head.y + head.h - t->pixel, head.w, t->pixel}, hs.fg);
 }
 
-// What is drawn behind the cursor's row: the theme's, else its selection colour, else the engine's.
+// What is drawn behind the cursor's row: the theme's, else the selection colour.
 static void _cursor_colour(const UITheme* theme, vec4 out) {
     if (theme->table_cursor[3] > 0.0f)
         glm_vec4_copy((float*)theme->table_cursor, out);
-    else if (theme->selection[3] > 0.0f)
-        glm_vec4_copy((float*)theme->selection, out);
     else
-        glm_vec4_copy((vec4){0.25f, 0.45f, 0.85f, 0.55f}, out);
+        ui_selection_colour(theme, out);
 }
 
 // The rows in view: the cursor's fill behind its row, then column by column under each column's
@@ -584,7 +600,7 @@ static void _draw_rows(UIDrawList* dl, const UIElement* el, const UIStyle* s,
                        const UITheme* theme) {
     const UITable* t = el->table;
     const UIRect view = _rows_view(t);
-    if (t->placed == 0 || view.h <= 0.0f)
+    if (t->summed == 0 || view.h <= 0.0f)
         return;
     const double scroll = el->scroll;
     const int first = _row_at(t, scroll), last = _row_at(t, scroll + (double)view.h);
@@ -687,7 +703,7 @@ static int _stepped(const UITable* t, int from, int by) {
 // on from it that holds the cursor, else the nearest back.
 static int _paged(const UIElement* el, int dir) {
     const UITable* t = el->table;
-    if (t->cursor < 0 || t->cursor >= t->placed)
+    if (t->cursor < 0 || t->cursor >= t->summed)
         return _stepped(t, t->cursor, dir);
     const double y = t->tops[t->cursor] + (double)dir * (double)_rows_view(t).h;
     const int row = y > 0.0 ? _row_at(t, y) : 0;
@@ -714,6 +730,12 @@ static void _person_moved(UIElement* el) {
         t->on_cursor(el, t->cursor_user);
 }
 
+// The person put the cursor on `row`, -1 for nowhere to go: on_cursor follows if it moved.
+static void _person_put(UIElement* el, int row) {
+    if (row >= 0 && _put(el, row))
+        _person_moved(el);
+}
+
 int ui_table_cursor(const UIElement* table) {
     const UITable* t = _seen("ui_table_cursor", table);
     return t ? t->cursor : -1;
@@ -734,9 +756,7 @@ void ui_table_move_cursor(UIElement* table, int by) {
     const UITable* t = _table("ui_table_move_cursor", table);
     if (!t || by == 0)
         return;
-    const int to = _stepped(t, t->cursor, by);
-    if (to >= 0 && _put(table, to))
-        _person_moved(table);
+    _person_put(table, _stepped(t, t->cursor, by));
 }
 
 void ui_table_set_on_cursor(UIElement* table, UIActionFn on_cursor, void* user) {
@@ -750,9 +770,7 @@ void ui_table_set_on_cursor(UIElement* table, UIActionFn on_cursor, void* user) 
 // ---- The keys and the pointer
 
 static void _keys_begin(UIElement* el) {
-    UITable* t = el->table;
-    t->in_keys = true;
-    t->moved = false;
+    el->table->in_keys = true;
 }
 
 static void _keys_end(UIElement* el) {
@@ -793,8 +811,7 @@ static bool _key(const UISystem* ui, UIElement* el, UIRect content, const InputK
         default:
             return false;
     }
-    if (to >= 0 && _put(el, to))
-        _person_moved(el);
+    _person_put(el, to);
     return true;
 }
 
@@ -809,12 +826,12 @@ static void _press(const UISystem* ui, UIElement* el, UIRect content, float x, f
     (void)time;
     const UITable* t = el->table;
     const UIRect view = _rows_view(t);
-    if (!t->laid || t->placed == 0 || y < view.y || y >= view.y + view.h)
+    if (!t->laid || t->summed == 0 || y < view.y || y >= view.y + view.h)
         return;
     const double at = (double)(y - view.y) + (double)el->scroll;
     const int row = _row_at(t, at);
-    if (at < t->tops[t->placed] && _holds(t, row) && _put(el, row))
-        _person_moved(el);
+    if (at < t->tops[t->summed] && _holds(t, row))
+        _person_put(el, row);
 }
 
 const UIWidgetOps ui_table_ops = {

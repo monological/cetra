@@ -1845,16 +1845,15 @@ def run_ui_gate(workdir):
                  ("end", 99, 1), ("endagain", 99, 0), ("home", 1, 1), ("pagedown", paged, 1),
                  ("set", 50, 0), ("press", 49, 1), ("pressno", 49, 0), ("upnone", 99, 1),
                  ("moved", 97, 1), ("hooked", 97, 0)]
-        wrong = []
+        want = {}
         for label, row, calls in steps:
-            got = (p.get((label, "row"), [None])[0], p.get((label, "calls"), [None])[0])
-            shown = p.get((label, "shown"), [None])[0]
-            if got != (row, calls) or shown != (0 if row < 0 else 1):
-                wrong.append(f"{label}: row {got[0]} with {got[1]} calls, shown {shown} "
-                             f"(want {row}, {calls}, {0 if row < 0 else 1})")
+            want[(label, "row")] = row
+            want[(label, "calls")] = calls
+            want[(label, "shown")] = 0 if row < 0 else 1
+        wrong = _probe_wrong(p, want)
         ok = not wrong
         detail = ("rows that are multiples of 4 cannot hold the cursor; "
-                  + ("; ".join(wrong) if wrong else
+                  + (f"wrong: {wrong}" if wrong else
                      f"every step lands where it should, Page Down on {paged}, each row shown "
                      f"and on_cursor once a pass the person moved it"))
         return ok, detail

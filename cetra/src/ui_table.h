@@ -57,7 +57,7 @@ void ui_table_set_rows(UIElement* table, int count, const UITableSource* source)
 // A cursor on a row taken off is on none.
 void ui_table_set_row_count(UIElement* table, int count);
 // Rows `first` to `first + count` changed: measured again at the next layout and drawn as the
-// source now gives them.
+// source now gives them. Refused by name for rows not among the table's.
 void ui_table_rows_changed(UIElement* table, int first, int count);
 
 // The cursor's row; -1 for none.
@@ -69,7 +69,9 @@ void ui_table_set_cursor(UIElement* table, int row);
 // The cursor moved `by` rows that can hold it, stopping at the first and the last, as the keys move
 // it: on_cursor follows. What a host's own keys call -- pcb's j and k.
 void ui_table_move_cursor(UIElement* table, int by);
-// Once after a pass in which the person moved the cursor: a key, a press, ui_table_move_cursor.
+// Told when the person moved the cursor: once at the end of a turn of the table's keys, however
+// many moved it, ui_table_move_cursor from its key hook among them; at once for a press, and for
+// ui_table_move_cursor anywhere else. Never for a cursor left where it was.
 void ui_table_set_on_cursor(UIElement* table, UIActionFn on_cursor, void* user);
 
 // The least scroll that shows row `row`, easing there.
