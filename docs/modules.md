@@ -170,6 +170,7 @@ linked doc explains the subsystem. `cetra/src/ext/` is vendored and not listed.
 | `ui_text.h` | Private: the UI's one text walk for measuring, breaking, drawing and caret placement. See `docs/ui.md`. |
 | `ui_internal.h`, `ui_hooks.h` | Private: what the UI's files share, and what a test reads of the system. See `docs/ui.md`. |
 | `ui_field.c/h` | The text field, on stb_textedit. See `docs/ui.md`. |
+| `ui_table.c/h` | The table element: columns sized across every row, rows read from the app's source, a header and a cursor. See `docs/ui.md`. |
 | `ui_typing.c/h` | Private: the platform's editing conventions, shared by the field and the editor. See `docs/ui.md`. |
 | `fuzzy.c/h` | `fuzzy_match`: an in-order match, a score and the matched positions. See `docs/ui.md`. |
 | `text_doc.c/h`, `text_doc_edit.h` | The code editor's text, apart from the editors showing it; the edit half is private. See `docs/ui.md`. |

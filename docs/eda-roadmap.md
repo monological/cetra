@@ -17,7 +17,7 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-09: 14.29, the gate suite in files._
+_Last updated: 2026-11-10: 14.30, a table in the UI._
 
 ---
 
@@ -66,8 +66,8 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 | 9 | What the panes and the fonts need of the UI | **Built** | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
 
-Specs 14.7, 14.9 to 14.21 and 14.23 to 14.28 are the smaller changes pcb's window asked for, listed under
-"Not among the nine". Spec 14.8 was not asked for by pcb: a headless run waits for the textures its
+Specs 14.7, 14.9 to 14.21, 14.23 to 14.28 and 14.30 are the smaller changes pcb's window asked
+for, listed under "Not among the nine". Spec 14.8 was not asked for by pcb: a headless run waits for the textures its
 start-up asked for before frame 1 (`docs/architecture.md`, Render Pipeline), which `pcb render`
 gets for free. Nor was 14.29, which splits the gate suite into files (`docs/verification.md`,
 Running the gates).
@@ -510,6 +510,13 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
   and program under its one-pixel edge, so a modal's panels draw them in order with their fills.
   The canvas could not: it is an overlay under the UI's, so a modal covers it (`docs/ui.md`, The
   draw list).
+- **A table in the UI** -- spec 14.30, built, from pcb 7.4.2's board modal, whose stackup rows laid
+  their columns out by hand in a draw hook, unnamed and run together: `ui_table`, a tenth kind of
+  element, argued as the closed list asks. Its columns are sized across every row in the four
+  modes an element is, as CSS grid's tracks are. Its rows are read from the app's source as
+  `NSTableView` reads them, measured once and again only where they change, so 100,000 rows cost
+  their measures and none is an element. It has a header that stays and a cursor the keys and a
+  press move. pcb's parts, nets and checks will be lists too (`docs/ui.md`, The table).
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the

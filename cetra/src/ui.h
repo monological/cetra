@@ -269,8 +269,9 @@ size_t ui_text_wrap_point(const Font* font, float size, float tracking, const ch
  * The element tree.
  *
  * THE ELEMENT LIST IS CLOSED: panel, label, button, toggle, slider, selector,
- * and since spec 14.2, which argued for them, the scrolling pane and the text
- * field. That is not a stage the layer is passing through on its way to a widget
+ * the scrolling pane and the text field (spec 14.2), the code editor (spec 14.4)
+ * and the table (spec 14.30), each later kind argued for by its spec. That is not
+ * a stage the layer is passing through on its way to a widget
  * toolkit -- it is the property that keeps this a UI layer instead of a worse
  * Dear ImGui. Another kind is a later spec with its own argument, never a patch
  * to this one.

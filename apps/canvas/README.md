@@ -85,6 +85,10 @@ first frame after which nothing asks for another.
   triangles meeting on a diagonal and two shapes the UI refuses, which `canvas-ui-lines` holds to
   their areas and to the one-pixel edge. Under them is a graph staged as pcb's board modal draws
   one: gridlines, three curves, and a trace's picture with a dimension line and arrowheads.
+- `--ui-table` shows a stackup's 500 rows in a table over the window: a header, an END-aligned
+  number column, a drawn picture column, FIT columns, a note column narrower than its notes, a GROW
+  column, and the cursor on row 3. `canvas-ui-table` holds the header's rule, the cursor's fill and
+  the gaps between columns to their colours.
 
 The app reads the UI's input through `ui_input_read` alone and keeps no pointer state of its own.
 

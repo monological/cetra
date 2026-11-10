@@ -12,9 +12,11 @@ the game.
 
 ## The element tree and layout
 
-**The element list is closed**: panel, label, button, toggle, slider, selector, the scrolling pane
-(`ui_scroll`), the text field (`ui_text_field`) and the code editor (`ui_editor`). Three escape
-hatches sit under it, each keeping strictly more than the last:
+**The element list is closed**, ten kinds: panel, label, button, toggle, slider, selector, the
+scrolling pane (`ui_scroll`), the table (`ui_table`), the text field (`ui_text_field`) and the code
+editor (`ui_editor`). A kind past the first six is a spec's own argument; `ui-elements-closed`
+holds `ui.h` to the list. Three escape hatches sit under it, each keeping strictly more than the
+last:
 - the draw-list primitives keep nothing of the tree;
 - `ui_set_element_program` keeps layout, focus and input and swaps only the fragment stage;
 - `ui_set_draw` keeps layout, focus and input while the app paints, and a panel taking the keys
@@ -59,9 +61,9 @@ was given.
   `align_cross`: each child with a baseline moves down until its first line stands on the deepest
   one's, and the row is as tall as its lowest child then reaches. A label's baseline is its top
   padding plus its face's ascent; a row on the baseline's is its line; any other panel's is its
-  first child's, where that child stands in it. A control, a field, an editor, a scrolling pane, a
-  column that centres or ends its children, an element with no text, and a child stretched across
-  the row have none and stand at the top.
+  first child's, where that child stands in it. A control, a field, an editor, a table, a scrolling
+  pane, a column that centres or ends its children, an element with no text, and a child stretched
+  across the row have none and stand at the top.
 - **Each element keeps its baseline** (`UIElement.baseline`), set as the measure finishes its height,
   its children's first, so the arrange reads what the measure found. Asked live instead, a row asks
   its first child three times and nested rows cost three to the power of their depth.
@@ -102,9 +104,62 @@ field is refused by name: a field's text is `ui_field_set_text` and its hint
 - **A built row is reached with `ui_scroll_find_row`**, NULL while it is not built and valid until
   the next layout, so an app changes one in place (appending to a streamed message) rather than
   rebuilding with `ui_scroll_rows_changed`.
-- **A bar is drawn only inside its element**, its insets included, a pane's and an editor's alike:
-  an element sized to nothing, or narrower than the bar and its insets, has none, drawn or pressed
-  (spec 14.17).
+- **A bar is drawn only inside its element**, its insets included, a pane's, an editor's and a
+  table's alike: an element sized to nothing, or narrower than the bar and its insets, has none,
+  drawn or pressed (spec 14.17).
+
+### The table (`ui_table.c`)
+
+A table (`ui_table`, spec 14.30) shows rows the app's source fills, lined up in columns under a
+header, with a cursor on a row. It makes no element for a cell. It asks the source
+(`UITableSource`) for a cell's text, a drawn cell, a row's height and whether the cursor may stand
+on a row, so a list of 100,000 rows costs its measures and nothing per row it does not show. It is
+a kind of its own rather than columns on a scrolling pane: a FIT column has to see the rows not
+built, so the pane would need a source anyway, and the header and the cursor would still be the
+app's. The spec says what else was rejected.
+
+- **Every row is measured once.** Each cell's widest line goes through the UI's one text walk and
+  is kept, as is each row's height, with the rows' tops summed as doubles: 100,000 rows run to
+  millions of points, past which a float cannot hold a sum to a point. A row is measured again
+  only when the app marks it changed (`ui_table_rows_changed`) or adds it
+  (`ui_table_set_row_count`). New columns, new rows, or a new face, size, tracking, line spacing
+  or row padding measure them all. The cells measured count into `UIElement.measures`.
+- **A FIT column is its widest cell over every row**, its title's included, found again over what
+  is kept whenever a row was measured or taken off. A row that was the widest and shrinks narrows
+  its column. Fitting to the widest seen so far, as Dear ImGui does, would widen the columns as the
+  person scrolls.
+- **The columns across** are CSS grid's tracks in the element's four modes. FIXED and FIT come
+  first; then SHARE takes its share of the width less the gaps, rounded down to a whole point; then
+  GROW splits what is left evenly. The gap is the table's `spacing`. Each column's start is the
+  floor of the running sum, so it stands on a whole point of the content while its width stays what
+  was measured. Columns wider than the table run past it and are clipped. A FIT table measures its
+  FIT and FIXED columns and the gaps across. Down, it measures its header and every row; a growing
+  one measures its header alone, as a growing pane asks nothing of its parent.
+- **A row's height** is its tallest cell's lines at the line height, plus `table_row_padding`
+  above and below. A source's `height` replaces that whole, padding and all. The rows meet with no
+  gap, so a drawn column runs on from row to row.
+- **The header** is one row at the content's top: each title in its column's alignment, and a
+  pixel's rule along its foot in `table_header`. It does not scroll, and the bar runs beside the
+  rows alone (`UIScrollPlace.along`). No title, no header.
+- **Only the rows in view are drawn**, found by a binary search of the tops. The cursor's fill comes
+  first. Each column is then drawn under one clip for its run of rows, rather than a clip a cell,
+  which would split the draw list's batches at every cell. A cell's lines are clipped to the cell
+  only when they are taller than its row. A drawn cell is handed its rect under a clip of its own.
+- **The scroll is the element's own** `scroll` and `scroll_target`, as a pane's, so a reveal
+  eases; the wheel and the bar move it at once. A reveal asked before its row is measured is taken
+  at the next layout.
+- **The cursor** stands only on rows the source's `holds` allows. No cursor counts as before the
+  first row going down and past the last going up: the first Down puts it on the first row, Up on
+  the last. Up and Down move it a row, Page Up and Page Down the row a view's height from its top,
+  and Home and End to the ends. A press on a row puts it there. Each shows its row.
+- **on_cursor follows a move the person made**, once: in a turn of keys it is told at the turn's
+  end, and that includes a host moving it with `ui_table_move_cursor` from its key hook. A press,
+  or a host's move outside a pass, is told at once. `ui_table_set_cursor` is not told.
+- **Keys go to its hook first**, as a field's do. A key it does not use goes to the screen: Tab,
+  Esc, and every character.
+- Refused by name: no columns, more than `UI_TABLE_COLUMNS_MOST`, a drawn FIT column (which has no
+  text to fit), a source with no `cell`, a cursor on a row that cannot hold it, and an element made
+  under a table or moved into one.
 
 ### Removing, moving and hiding elements
 
