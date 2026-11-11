@@ -781,7 +781,6 @@ void ui_set_on_key(UIElement* el, UIKeyFn on_key, void* user) {
 void ui_set_measure(UIElement* el, UIMeasureFn measure, void* user) {
     if (!el)
         return;
-    // Every other kind measures its own content, and two measures would leave which wins unsaid.
     if (el->kind != UI_PANEL) {
         log_error("ui_set_measure: only a panel is measured by its app; this kind measures its own "
                   "content");
@@ -906,20 +905,19 @@ static float _intrinsic(const UISystem* ui, UIElement* el, int axis) {
         default:
             break;
     }
-    // An element with state of its own says what its content measures, a text field's rows and a
-    // table's columns and rows.
-    const UIWidgetOps* ops = _ops(el);
-    if (ops && ops->content)
-        v = ops->content(ui, el, &s, axis);
-
     float pad[4];
     _padding_from(el, &s, pad);
-    // A panel the app measures: down, from the width the width pass gave it. An answer below 0 or
-    // not a number is none, since it would reach every rect laid out after it.
-    if (el->measure) {
-        const float room = axis == 1 ? fmaxf(el->rect.w - pad[1] - pad[3], 0.0f) : 0.0f;
-        const float said = el->measure(el, axis, room, el->measure_user);
-        v = isfinite(said) && said > 0.0f ? said : 0.0f;
+    // An element with state of its own says what its content measures, a text field's rows and a
+    // table's columns and rows; a panel its app measures, the larger of that and its text. Down,
+    // the app is given the width the width pass left inside the padding. An answer below 0 or not a
+    // number is none, since it would reach every rect laid out after it.
+    const UIWidgetOps* ops = _ops(el);
+    if (ops && ops->content) {
+        v = ops->content(ui, el, &s, axis);
+    } else if (el->measure) {
+        const float width = axis == 1 ? fmaxf(el->rect.w - pad[1] - pad[3], 0.0f) : INFINITY;
+        const float said = el->measure(el, axis, width, el->measure_user);
+        v = isfinite(said) && said > v ? said : v;
     }
     return axis == 0 ? v + pad[1] + pad[3] : v + pad[0] + pad[2];
 }

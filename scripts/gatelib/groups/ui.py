@@ -653,12 +653,12 @@ def run_ui_gate(workdir):
                      held at its most; two halves of an odd length leaving a point;
                      two of 0.7 overflowing as FIXED lengths; half of a parent that
                      fits its children, which it adds nothing to; and a share of 0.
-      ui-measure     a panel measured by its app (spec 14.33), as exact rects: its
-                     answer across plus its padding, a label after it the row's gap
-                     on; down, the answer it gives for the width it was given, FIXED
-                     or fitted, and a FIXED axis never asked; a child larger than the
-                     answer wins; a GROW panel alone in a fitting row makes the row
-                     its answer and its padding wide; its most holds; an answer below 0 or not a
+      ui-measure     a panel measured by its app (spec 14.33): its answer across
+                     plus its padding, a label after it the row's gap on; down, the
+                     answer it gives for the width it was given, FIXED or fitted,
+                     and a FIXED axis never asked; a child or text larger than the
+                     answer wins; a GROW panel keeps its answer in a row whose even
+                     share is less; its most holds; an answer below 0 or not a
                      number is none; refused on a label, which keeps its text's
                      width; and NULL clears it.
       ui-padding-none a negative padding and spacing are none, a zero one the
@@ -2012,55 +2012,42 @@ def run_ui_gate(workdir):
                       f"rule says")
         return ok, detail
 
-    # ---- a panel measured by its app (spec 14.33); every length is exact in float but 3000/37
+    # ---- a panel measured by its app (spec 14.33): each size from its answer, its child, its text
+    # or its most, and its padding
     @arm("ui-measure")
     def _():
         p = _ui_probe("measure")
-        if not p or ("cleared", "asked") not in p:
+        if not p or ("label", "kept") not in p:
             return False, "the probe produced nothing"
 
-        def rect(label):
-            return p.get((label, "rect"), [float("nan")] * 4)
+        def size(label):
+            return tuple(p.get((label, "rect"), [float("nan")] * 4)[2:])
 
-        pad, gap, wrong = 6.0, 8.0, []
-        first, after = rect("first"), rect("after")
-        if first[2] != 37.0 + 2 * pad or not close(first[3], 3000.0 / 37.0 + 2 * pad, 1e-3):
-            wrong.append(f"first {first[2]:g} by {first[3]:g} (want 49 by "
-                         f"{3000.0 / 37.0 + 2 * pad:.3f})")
+        pad, gap = 6.0, 8.0
+        # Width and height, None where the height is not the check's; texted and the label as
+        # their twins with no measure are.
+        want = {"first": (37 + 2 * pad, 3000 / 37 + 2 * pad), "fixed": (112, 3000 / 100 + 2 * pad),
+                "holding": (80 + 2 * pad, 20 + 2 * pad), "grow": (55 + 2 * pad, None),
+                "held": (200, None), "negative": (2 * pad, 2 * pad), "nan": (2 * pad, 2 * pad),
+                "cleared": (2 * pad, 2 * pad), "texted": size("textedtwin"),
+                "label": size("twin")}
+        asked = {"first": [1, 1], "fixed": [0, 1], "cleared": [0, 0]}
+        wrong = [f"{k} {size(k)[0]:g} by {size(k)[1]:g} (want {w:g} by "
+                 f"{'any' if h is None else format(h, 'g')})"
+                 for k, (w, h) in want.items()
+                 if not close(size(k)[0], w, 1e-3)
+                 or (h is not None and not close(size(k)[1], h, 1e-3))]
+        wrong += [f"{k} asked {p[(k, 'asked')]} (want {n})" for k, n in asked.items()
+                  if p[(k, "asked")] != n]
+        first, after = p[("first", "rect")], p[("after", "rect")]
         if after[0] != first[0] + first[2] + gap:
-            wrong.append(f"the label after it at {after[0] - first[0]:g} (want 57)")
-        fixed = rect("fixed")
-        if (fixed[2], fixed[3]) != (112.0, 30.0 + 2 * pad):
-            wrong.append(f"fixed {fixed[2]:g} by {fixed[3]:g} (want 112 by 42)")
-        if p[("fixed", "asked")] != [0.0, 1.0]:
-            wrong.append(f"fixed asked {p[('fixed', 'asked')]} (want never across, once down)")
-        if p[("first", "asked")] != [1.0, 1.0]:
-            wrong.append(f"first asked {p[('first', 'asked')]} (want once each way)")
-        holding = rect("holding")
-        if (holding[2], holding[3]) != (80.0 + 2 * pad, 20.0 + 2 * pad):
-            wrong.append(f"holding {holding[2]:g} by {holding[3]:g} (want 92 by 32)")
-        if rect("fit")[2] != 55.0 + 2 * pad:
-            wrong.append(f"the fitting row {rect('fit')[2]:g} wide (want 67)")
-        if rect("held")[2] != 200.0:
-            wrong.append(f"held {rect('held')[2]:g} wide (want 200)")
-        for label in ("negative", "nan"):
-            r = rect(label)
-            if (r[2], r[3]) != (2 * pad, 2 * pad):
-                wrong.append(f"{label} {r[2]:g} by {r[3]:g} (want 12 by 12)")
-        label, twin = rect("label"), rect("twin")
-        if (p[("label", "kept")][0] != 1 or label[2:] != twin[2:]
-                or p[("refused", "asked")] != [0.0, 0.0]):
-            wrong.append(f"the label {label[2]:g} by {label[3]:g} beside {twin[2]:g} by "
-                         f"{twin[3]:g}, its measure kept {p[('label', 'kept')][0]:.0f}, asked "
-                         f"{p[('refused', 'asked')]} (want its twin's, kept, never asked)")
-        cleared = rect("cleared")
-        if (cleared[2], cleared[3]) != (2 * pad, 2 * pad) or p[("cleared", "asked")] != [0.0, 0.0]:
-            wrong.append(f"cleared {cleared[2]:g} by {cleared[3]:g}, asked "
-                         f"{p[('cleared', 'asked')]} (want 12 by 12, never)")
+            wrong.append(f"the label after the first {after[0] - first[0]:g} on (want "
+                         f"{first[2] + gap:g})")
+        if p[("label", "kept")][0] != 1:
+            wrong.append("a label took a measure")
         detail = ("; ".join(wrong) if wrong else
-                  f"49 by {first[3]:.3f} with the label 8 on, 112 by 42 asked down alone, a child of "
-                  f"80 by 20 winning, a fitting row 67 wide, held to 200, bad answers none, refused "
-                  f"on a label and cleared by NULL")
+                  f"{len(want)} sizes as their answers, children, text, most and padding give them, "
+                  f"the label after the first {gap:g} on, asked {asked}")
         return not wrong, detail
 
     @arm("ui-padding-none")

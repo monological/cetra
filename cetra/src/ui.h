@@ -429,9 +429,9 @@ typedef void (*UIDrawFn)(UIElement* el, UIDrawList* dl, void* user);
 // key taken takes the character it makes with it.
 typedef bool (*UIKeyFn)(UIElement* el, const InputKeyEvent* key, void* user);
 // What a panel's content measures along `axis` (0 across, 1 down), in points inside its padding.
-// Across, `room` is 0; down, it is the width the panel was given, as a wrapping label's height is
-// taken from its width.
-typedef float (*UIMeasureFn)(const UIElement* el, int axis, float room, void* user);
+// `width` is the content's: INFINITY across, before the width pass has given one, and down the
+// width it gave, as a wrapping label's height is taken from its width.
+typedef float (*UIMeasureFn)(const UIElement* el, int axis, float width, void* user);
 
 struct UIElement {
     // ENGINE-OWNED: the layout pass and the input pass write these; read them,
@@ -728,9 +728,10 @@ void ui_set_text(UIElement* el, const char* text);
 bool ui_set_text_runs(UIElement* el, const UITextRun* runs, size_t count);
 void ui_set_style(UIElement* el, const UIStyle* style);
 void ui_set_draw(UIElement* el, UIDrawFn draw, void* user);
-// A panel's content measured by its app as well as by its children, at every layout: a FIT axis
-// hugs the larger, and a GROW axis takes it as its least; an answer below 0 or not a number is
-// none. NULL for none. Refused by name on any other kind, which measures its own content.
+// A panel's content measured by its app as well as by its text and its children: a FIT axis hugs
+// the largest, and a GROW axis takes it as its least; an answer below 0 or not a number is none.
+// Asked at every layout, several a frame, so a dear answer is the app's to keep. NULL for none.
+// Refused by name on any other kind, which measures its own content.
 void ui_set_measure(UIElement* el, UIMeasureFn measure, void* user);
 // The keys and characters `el` is handed while it holds the focus, before it acts on them; NULL
 // none. It then takes the keys as a text field does. Refused by name on a button, toggle, slider or

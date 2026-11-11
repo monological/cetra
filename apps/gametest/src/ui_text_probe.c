@@ -1305,36 +1305,44 @@ static int probe_max_size(UISystem* ui) {
 
 // ---- a panel measured by its app (spec 14.33)
 
-// What a measured panel's measure answers, and how many times each axis asked it. Down, a `down`
-// of 3000 answers 3000 over the room, as a drawing that scales to its width does.
+// What a measured panel's measure answers, and how many times each axis asked it. Down, with
+// `over_width`, it answers `down` over the width it is given, as a drawing that scales to its width
+// does.
 typedef struct Measured {
     float across, down;
-    bool over_room;
+    bool over_width;
     unsigned asked[2];
 } Measured;
 
-static float measured_answer(const UIElement* el, int axis, float room, void* user) {
+static float measured_answer(const UIElement* el, int axis, float width, void* user) {
     (void)el;
     Measured* m = user;
     m->asked[axis]++;
     if (axis == 0)
         return m->across;
-    return m->over_room && room > 0.0f ? m->down / room : m->down;
+    return m->over_width ? m->down / width : m->down;
 }
 
-// A panel FIT both ways with 6 points of padding each side, measured by m, in `parent`.
-static UIElement* measured_panel(UIElement* parent, Measured* m) {
+// A panel FIT both ways with 6 points of padding each side, in `parent`.
+static UIElement* padded_panel(UIElement* parent) {
     UIElement* p = ui_panel(parent);
     ui_set_size(p, UI_FIT, 0.0f, UI_FIT, 0.0f);
     for (int i = 0; i < 4; i++)
         p->padding[i] = 6.0f;
+    return p;
+}
+
+// That panel measured by m.
+static UIElement* measured_panel(UIElement* parent, Measured* m) {
+    UIElement* p = padded_panel(parent);
     ui_set_measure(p, measured_answer, m);
     return p;
 }
 
-static void measure_rect(const char* label, const UIElement* el) {
-    printf("ui measure %s rect %.6f %.6f %.6f %.6f\n", label, (double)el->rect.x,
-           (double)el->rect.y, (double)el->rect.w, (double)el->rect.h);
+// The case's elements as rects, each by its label.
+static void measure_rects(const char* const* labels, const UIElement* const* els, size_t n) {
+    for (size_t i = 0; i < n; i++)
+        ui_probe_rect("measure", labels[i], els[i]->rect);
 }
 
 static int probe_measure(UISystem* ui) {
@@ -1351,23 +1359,31 @@ static int probe_measure(UISystem* ui) {
     ui_set_size(row, UI_FIT, 0.0f, UI_FIT, 0.0f);
     const UIElement* first = measured_panel(row, &across);
     const UIElement* after = ui_label(row, "after");
-    // FIXED across, 100 points of room inside its padding: asked down alone.
+    // FIXED across, 100 points of width inside its padding: asked down alone.
     static Measured fixed = {37.0f, 3000.0f, true, {0}};
     UIElement* wide = measured_panel(root, &fixed);
     ui_set_size(wide, UI_FIXED, 112.0f, UI_FIT, 0.0f);
     // A child larger than the answer: the panel is the child's size.
     static Measured small = {10.0f, 5.0f, false, {0}};
     UIElement* holding = measured_panel(root, &small);
-    ui_set_size(ui_panel(holding), UI_FIXED, 80.0f, UI_FIXED, 20.0f);
-    // GROW, alone in a FIT row with no padding: the row as wide as the answer.
+    fixed_panel(holding, 80.0f, 20.0f);
+    // Text wider than the answer: the panel is its text's size, as its twin with no measure is.
+    static Measured narrow = {1.0f, 1.0f, false, {0}};
+    UIElement* texted = measured_panel(root, &narrow);
+    ui_set_text(texted, "words");
+    UIElement* texted_twin = padded_panel(root);
+    ui_set_text(texted_twin, "words");
+    // GROW beside another GROW of no padding in a 60-point row, narrower than its 55 and padding:
+    // no room is left to share, and it keeps them, its answer the least it takes.
     static Measured grown = {55.0f, 7.0f, false, {0}};
-    UIElement* fit = ui_panel(root);
-    fit->dir = UI_ROW;
-    for (int i = 0; i < 4; i++)
-        fit->padding[i] = -1.0f;
-    ui_set_size(fit, UI_FIT, 0.0f, UI_FIT, 0.0f);
-    UIElement* grow = measured_panel(fit, &grown);
+    UIElement* tight = bare_row(root);
+    tight->size[0] = 60.0f;
+    UIElement* grow = measured_panel(tight, &grown);
     ui_set_size(grow, UI_GROW, 0.0f, UI_FIT, 0.0f);
+    UIElement* other = fixed_panel(tight, 0.0f, 10.0f);
+    other->size_mode[0] = UI_GROW;
+    for (int i = 0; i < 4; i++)
+        other->padding[i] = -1.0f;
     // Held to its most.
     static Measured big = {500.0f, 5.0f, false, {0}};
     UIElement* held = measured_panel(root, &big);
@@ -1387,22 +1403,16 @@ static int probe_measure(UISystem* ui) {
     ui_set_measure(cleared, NULL, NULL);
     ui_push(ui, s);
     ui_layout(ui_top(ui), 1280.0f, 720.0f);
-    measure_rect("first", first);
-    measure_rect("after", after);
-    measure_rect("fixed", wide);
-    measure_rect("holding", holding);
-    measure_rect("fit", fit);
-    measure_rect("held", held);
-    measure_rect("negative", negative);
-    measure_rect("nan", not_number);
-    measure_rect("label", label);
-    measure_rect("twin", twin);
-    measure_rect("cleared", cleared);
+    static const char* const LABELS[] = {"first",      "after", "fixed",  "holding",  "texted",
+                                         "textedtwin", "grow",  "held",   "negative", "nan",
+                                         "label",      "twin",  "cleared"};
+    const UIElement* const els[] = {first, after,    wide,       holding, texted, texted_twin, grow,
+                                    held,  negative, not_number, label,   twin,   cleared};
+    measure_rects(LABELS, els, sizeof els / sizeof els[0]);
     printf("ui measure first asked %u %u\n", across.asked[0], across.asked[1]);
     printf("ui measure fixed asked %u %u\n", fixed.asked[0], fixed.asked[1]);
-    printf("ui measure label kept %d\n", label->measure == NULL);
-    printf("ui measure refused asked %u %u\n", refused.asked[0], refused.asked[1]);
     printf("ui measure cleared asked %u %u\n", gone.asked[0], gone.asked[1]);
+    printf("ui measure label kept %d\n", label->measure == NULL);
     return 0;
 }
 
