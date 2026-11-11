@@ -50,6 +50,14 @@ static inline UIRect ui_rect_inset(UIRect r, float t, float right, float b, floa
     return (UIRect){r.x + l, r.y + t, r.w - l - right, r.h - t - b};
 }
 
+// Where two rects overlap; of no width or height where they do not.
+static inline UIRect ui_rect_meet(UIRect a, UIRect b) {
+    const float x0 = a.x > b.x ? a.x : b.x, y0 = a.y > b.y ? a.y : b.y;
+    const float x1 = a.x + a.w < b.x + b.w ? a.x + a.w : b.x + b.w;
+    const float y1 = a.y + a.h < b.y + b.h ? a.y + a.h : b.y + b.h;
+    return (UIRect){x0, y0, x1 > x0 ? x1 - x0 : 0.0f, y1 > y0 ? y1 - y0 : 0.0f};
+}
+
 // A string's horizontal alignment in the rect it is drawn into, a label's included; an element's
 // children's placement along its flow and across it.
 typedef enum {
@@ -60,6 +68,16 @@ typedef enum {
     // line stands on the deepest one's; START anywhere else.
     UI_ALIGN_BASELINE = 3,
 } UIAlign;
+
+// A box's corners, for UIStyle.corners (spec 14.32). ALL draws as 0 does, and says so against a
+// level below that names some.
+#define UI_CORNER_TOP_LEFT     1u
+#define UI_CORNER_TOP_RIGHT    2u
+#define UI_CORNER_BOTTOM_RIGHT 4u
+#define UI_CORNER_BOTTOM_LEFT  8u
+#define UI_CORNERS_TOP         (UI_CORNER_TOP_LEFT | UI_CORNER_TOP_RIGHT)
+#define UI_CORNERS_BOTTOM      (UI_CORNER_BOTTOM_LEFT | UI_CORNER_BOTTOM_RIGHT)
+#define UI_CORNERS_ALL         (UI_CORNERS_TOP | UI_CORNERS_BOTTOM)
 
 /*
  * How one element looks. Every field's ZERO is "inherit or absent", which is
@@ -73,14 +91,6 @@ typedef enum {
  * border on focus" or "no padding on the left" against a level below that sets
  * one, because the field that would say so is the field that means inherit.
  */
-// A box's corners, for UIStyle.corners (spec 14.32).
-#define UI_CORNER_TOP_LEFT     1u
-#define UI_CORNER_TOP_RIGHT    2u
-#define UI_CORNER_BOTTOM_RIGHT 4u
-#define UI_CORNER_BOTTOM_LEFT  8u
-#define UI_CORNERS_TOP         (UI_CORNER_TOP_LEFT | UI_CORNER_TOP_RIGHT)
-#define UI_CORNERS_BOTTOM      (UI_CORNER_BOTTOM_LEFT | UI_CORNER_BOTTOM_RIGHT)
-
 typedef struct UIStyle {
     vec4 bg;     // fill; alpha 0 = no fill drawn
     vec4 fg;     // text

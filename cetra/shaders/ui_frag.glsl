@@ -4,7 +4,9 @@ in vec2 vUV;
 in vec4 vColor;
 in vec2 vPos;
 in vec4 vRect;
-in vec4 vParams; // x corner radius or a line's half width, y border width, z mode, w a glyph's edge
+// x corner radius or a line's half width, y border width, z mode, w a glyph's edge or the corners a
+// fill or an image rounds
+in vec4 vParams;
 // The border's colour; a line's place along and across it and its length; a convex shape's distance
 // to each edge, positive inside.
 in vec4 vBorder;

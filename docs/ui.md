@@ -109,9 +109,10 @@ field is refused by name: a field's text is `ui_field_set_text` and its hint
   drawn or pressed (spec 14.17).
 - **A pane places content shorter than its view by `align_main`**, as any element places what is
   left over, before its scroll is settled: `UI_ALIGN_CENTER` stands it in the middle.
-- **The wheel scrolls the deepest thing under the pointer with somewhere to scroll** (spec 14.32).
-  One that scrolls but whose content all shows passes it to the next one round it, so a table or an
-  editor in a pane, all of it shown, scrolls the pane.
+- **The wheel and a press on a bar reach the deepest thing under the pointer with somewhere to
+  scroll** (spec 14.32). One that scrolls but whose content all shows passes them to the next one
+  round it, so a table or an editor in a pane, all of it shown, leaves the pane's wheel and the
+  pane's bar to the pane.
 
 ### The table (`ui_table.c`)
 
@@ -157,20 +158,23 @@ app's. The spec says what else was rejected.
   eases; the wheel and the bar move it at once. A reveal asked before its row is measured is taken
   at the next layout.
 - **In a scrolling pane** (spec 14.32) a table measured as tall as its rows is scrolled by the pane,
-  beside whatever stands with it there. At `place`, which runs after the whole layout, it keeps what
-  the panes round it show (`ui_shown_rect`: the root's rect met with each pane's clip), and reads
-  everything else from that:
-  - its header stands at the top of what shows while the table's top is above it, and goes up with
-    the last row once that rises past it; the rows pass under it;
-  - the rows drawn, pressed, paged by and found by `ui_table_cell_rect` are those shown under the
-    header;
-  - the cursor's row, which its own rows cannot scroll to, is shown by the panes round it, whole
-    under the header, as a focus moved to is;
-  - `ui_table_header_rect` says where the header stands, for an element beside the table drawing
-    level with its rows: its own title level with the header, its rows kept under it.
+  beside whatever stands with it there. At `place`, which runs after the whole layout, it reads what
+  the panes round it show (`ui_shown_rect`: the root's rect met with each pane's clip, in the pane's
+  normal state, since geometry does not change with the focus) and keeps two rects from it:
+  - where its header stands: at the top of what shows while the table's top is above it, going up
+    with the last row once that rises past it; the rows pass under it;
+  - what of its rows shows under the header: the rows drawn, pressed, paged by and found by
+    `ui_table_cell_rect`.
 
-  A table no pane scrolls shows the window, and its header stands at its content's top: its rows
-  shown are its rows' view, as before.
+  A row revealed -- the cursor moved, or `ui_table_scroll_to_row` -- is shown nearest first, as a
+  browser's `scrollIntoView`: in the table's own rows, then in each pane round it, whole under the
+  header. Taking the focus, the table asks the panes to show its cursor's row rather than its top
+  (`UIWidgetOps.reveal`). `ui_table_header_rect` says where the header stands, for an element beside
+  the table drawing level with its rows: its own title level with the header, its rows kept under
+  it.
+
+  A table no pane scrolls shows the window, and its header stands at its content's top: the rows it
+  shows are its rows' view, as before.
 - **Heights alone asked again** (`ui_table_heights_changed`, spec 14.32): every row's height from
   the source's `height`, no cell's text measured, the tops summed again from the first that
   changed. For rows sized to the room the app has, as a resize changes it.
@@ -306,7 +310,8 @@ possible. The shader is `ui_vert/frag` (`docs/shaders.md`, Game UI).
 - **The draw list's offset moves the rounded-corner rect, the clips and `uRect` with the
   vertices**, which a slide transition and a scrolled pane need.
 - **Some corners rounded** (spec 14.32): `UIStyle.corners` names the corners `corner_radius`
-  rounds, `UI_CORNER_*` or'd, 0 for all four, as every zero in a style inherits. It rides a fill's
+  rounds, `UI_CORNER_*` or'd, 0 for all four, as every zero in a style inherits; `UI_CORNERS_ALL`
+  says all four against a level below that names some. It rides a fill's
   last vertex parameter, which a glyph's edge rides in its own mode, so it costs no attribute; the
   border rounds with the fill. A strip along a rounded box's foot rounds its bottom corners alone.
 - **A line's height and where its baseline stands** are public, for a draw hook placing words it

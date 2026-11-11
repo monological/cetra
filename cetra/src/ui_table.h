@@ -78,7 +78,8 @@ void ui_table_move_cursor(UIElement* table, int by);
 // ui_table_move_cursor anywhere else. Never for a cursor left where it was.
 void ui_table_set_on_cursor(UIElement* table, UIActionFn on_cursor, void* user);
 
-// The least scroll that shows row `row`, easing there.
+// The least scroll that shows row `row`, easing there: of its own rows, then of each scrolling pane
+// round it, the row whole under the header.
 void ui_table_scroll_to_row(const UISystem* ui, UIElement* table, int row);
 // Where row `row`'s cell in `column` stands, in window points, as the last layout placed it, the
 // whole row's for column -1; false for a row not in view: out of the table's own, out of what the

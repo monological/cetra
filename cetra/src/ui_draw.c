@@ -39,7 +39,9 @@ typedef struct UIVertex {
     float u, v;
     float color[4];
     float rect[4]; // min.xy, max.xy -- the quad's own bounds, for the corner SDF; else the shape's
-    float params[4]; // corner radius or a line's half width, border width, mode, a glyph's edge
+    // Corner radius or a line's half width, border width, mode; and a glyph's edge, or the corners
+    // a fill or an image rounds (UIStyle.corners, 0 for all four).
+    float params[4];
     // The border's colour. A line's: this corner's place along the segment from its start and
     // across it, and the segment's length. A convex shape's: this corner's signed distance to each
     // edge, positive inside. In points, each affine in the position and so exact wherever it is
@@ -272,11 +274,10 @@ void ui_draw_quad(UIDrawList* dl, UIRect r, vec4 color) {
                UI_MODE_FILL, NULL);
 }
 
-// The corners a style rounds, on the quad just pushed: a fill's last parameter, which a glyph's
-// edge rides in its own mode. 0, every corner, stays 0.
-static void _quad_corners(UIDrawList* dl, unsigned corners) {
+// The quad just pushed given its last parameter: a glyph's edge, or the corners a fill rounds.
+static void _last_quad_w(UIDrawList* dl, float w) {
     for (size_t k = dl->vcount - 4; k < dl->vcount; k++)
-        dl->verts[k].params[3] = (float)(corners & 15u);
+        dl->verts[k].params[3] = w;
 }
 
 void ui_draw_rect(UIDrawList* dl, UIRect r, const UIStyle* style) {
@@ -312,7 +313,7 @@ void ui_draw_rect(UIDrawList* dl, UIRect r, const UIStyle* style) {
     if (_push_quad(dl, dl->white, r.x, r.y, r.x + r.w, r.y + r.h, 0, 0, 1, 1, style->bg,
                    style->corner_radius, has_border ? style->border_width : 0.0f, UI_MODE_FILL,
                    style->border))
-        _quad_corners(dl, style->corners);
+        _last_quad_w(dl, (float)(style->corners & UI_CORNERS_ALL));
 }
 
 void ui_draw_border(UIDrawList* dl, UIRect r, const UIStyle* style) {
@@ -321,7 +322,7 @@ void ui_draw_border(UIDrawList* dl, UIRect r, const UIStyle* style) {
         return;
     if (_push_quad(dl, dl->white, r.x, r.y, r.x + r.w, r.y + r.h, 0, 0, 1, 1, clear,
                    style->corner_radius, style->border_width, UI_MODE_FILL, style->border))
-        _quad_corners(dl, style->corners);
+        _last_quad_w(dl, (float)(style->corners & UI_CORNERS_ALL));
 }
 
 void ui_draw_rounded(UIDrawList* dl, UIRect r, float radius, vec4 fill, vec4 border,
@@ -545,16 +546,10 @@ void ui_push_clip(UIDrawList* dl, UIRect r) {
     // Where it lands, as the quads it clips do.
     r.x += dl->offset_x;
     r.y += dl->offset_y;
-    // Intersect with the enclosing clip, so a child cannot escape its parent
-    // whatever order the rects arrive in.
-    if (dl->clip_depth > 0) {
-        const UIRect p = dl->clip[dl->clip_depth - 1];
-        const float x0 = r.x > p.x ? r.x : p.x;
-        const float y0 = r.y > p.y ? r.y : p.y;
-        const float x1 = (r.x + r.w < p.x + p.w) ? r.x + r.w : p.x + p.w;
-        const float y1 = (r.y + r.h < p.y + p.h) ? r.y + r.h : p.y + p.h;
-        r = (UIRect){x0, y0, x1 > x0 ? x1 - x0 : 0.0f, y1 > y0 ? y1 - y0 : 0.0f};
-    }
+    // Met with the enclosing clip, so a child cannot escape its parent whatever order the rects
+    // arrive in.
+    if (dl->clip_depth > 0)
+        r = ui_rect_meet(r, dl->clip[dl->clip_depth - 1]);
     dl->clip[dl->clip_depth++] = r;
 }
 
@@ -964,8 +959,7 @@ void ui_text_draw_span(UIDrawList* dl, const UIText* t, size_t from, size_t to, 
         // up a coverage bitmap's, which the quad's last parameter carries.
         if (_push_quad(dl, s.font->atlas_texture_id, x0, y0, x1, y1, g->u0, g->v0, g->u1, g->v1,
                        s.color, 0.0f, 0.0f, UI_MODE_GLYPH, NULL))
-            for (size_t k = dl->vcount - 4; k < dl->vcount; k++)
-                dl->verts[k].params[3] = s.font->is_sdf ? s.font->sdf_edge : 0.5f;
+            _last_quad_w(dl, s.font->is_sdf ? s.font->sdf_edge : 0.5f);
         pen_x += s.advance;
     }
 }

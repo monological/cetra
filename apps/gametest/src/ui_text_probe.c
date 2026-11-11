@@ -2074,7 +2074,6 @@ static int probe_table_pane(UISystem* ui) {
     const float row_h = row0.h, header_h = head.h;
     printf("ui table-pane table height %.6f %.6f\n", (double)table->rect.h,
            (double)(header_h + PANE_TABLE_ROWS * row_h));
-    printf("ui table-pane pane height %.6f\n", (double)PANE_H);
     // The wheel over the table, whose rows all show in it, scrolls the pane: three units of 100.
     UITheme theme = *ui_theme(ui);
     theme.scroll_step = 100.0f;
@@ -2129,6 +2128,25 @@ static int probe_table_pane(UISystem* ui) {
     one_key(ui, GLFW_KEY_PAGE_DOWN, 0);
     printf("ui table-pane page cursor %d %d\n", ui_table_cursor(table),
            30 + (int)floorf((PANE_H - header_h) / row_h));
+    // The focus let go and given back, the pane where the cursor's row shows: the pane stays there,
+    // the cursor's row shown, rather than going to the table's top.
+    pane_at(ui, pane, pane->scroll_target);
+    ui_set_focus(ui_top(ui), NULL);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    const float kept = pane->scroll_target;
+    ui_set_focus(ui_top(ui), table);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    printf("ui table-pane focus kept %.6f %.6f\n", (double)kept, (double)pane->scroll_target);
+    // A press on the pane's bar below its thumb, over the table, every row of which shows: the
+    // pane's bar takes it, paging the pane, and the cursor stays.
+    pane_at(ui, pane, 0.0f);
+    const int cursor = ui_table_cursor(table);
+    const float bx = pane->rect.x + pane->rect.w - 4.0f, by = pane->rect.y + PANE_H - 10.0f;
+    pass(ui, &(UIInput){
+                 .pointer_x = bx, .pointer_y = by, .pointer_pressed = true, .pointer_down = true});
+    pass(ui, &(UIInput){.pointer_x = bx, .pointer_y = by, .pointer_released = true});
+    printf("ui table-pane bar scroll %.6f\n", (double)pane->scroll_target);
+    printf("ui table-pane bar cursor %d %d\n", ui_table_cursor(table), cursor);
     ui_pop(ui);
     // A pane centring a table of 3 rows, shorter than it.
     UIElement *centred_pane, *centred_side;

@@ -637,7 +637,10 @@ def run_ui_gate(workdir):
                      it is below the header, and only the rows shown are drawn;
                      the cursor keyed down to row 30 is shown whole under the
                      header by the pane, and Page Down moves by the rows the pane
-                     shows; a pane centres a table shorter than it.
+                     shows; the focus let go and given back leaves the pane where
+                     the cursor's row shows; a press on the pane's bar over the
+                     table pages the pane and leaves the cursor; a pane centres a
+                     table shorter than it.
       ui-max-size    a fitting pane of 30 rows held to 200 points is that tall and
                      scrolls; a growing child held to 100 takes it and its siblings
                      share the rest; two held and centred leave the rest to the
@@ -1892,27 +1895,35 @@ def run_ui_gate(workdir):
         side = p[("wheel", "side")][0]
         cursor, under, foot = (p[("reveal", k)][0] for k in ("cursor", "under", "foot"))
         paged, page_want = p[("page", "cursor")]
+        kept, refocused = p[("focus", "kept")]
+        bar = p[("bar", "scroll")][0]
+        bar_cursor, cursor_before = p[("bar", "cursor")]
         above, below = p[("centred", "gaps")]
         checks = {
-            "the table as tall as its header and rows": abs(tall - rows) <= 1e-3,
-            "the wheel over the table scrolls the pane 300": abs(wheel_pane - 300.0) <= 1e-3
+            "the table as tall as its header and rows": close(tall, rows, 1e-3),
+            "the wheel over the table scrolls the pane 300": close(wheel_pane, 300.0, 1e-3)
             and wheel_table == 0.0,
-            "the header held at the pane's top": abs(held) <= 1e-3,
+            "the header held at the pane's top": close(held, 0.0, 1e-3),
             "each row shown exactly when below the header": wrong == 0 and row0 == 0,
             "only the rows shown drawn": 0 < calls <= (shown + 1) * columns,
-            "the wheel over the panel scrolls the pane 100": abs(side - 100.0) <= 1e-3,
+            "the wheel over the panel scrolls the pane 100": close(side, 100.0, 1e-3),
             "row 30 shown whole under the header": cursor == 30 and under >= -1e-3
             and foot >= -1e-3 and min(under, foot) <= 1e-3,
             "Page Down by the rows shown": paged == page_want,
+            "the focus given back keeps the cursor's row": kept > 0.0
+            and close(refocused, kept, 1e-3),
+            "the pane's bar pressed over the table": bar > 0.0 and bar_cursor == cursor_before,
             "a table shorter than its pane centred": abs(above - below) <= 1.0 and above > 0.0,
         }
-        failed = [name for name, held_ok in checks.items() if not held_ok]
+        failed = [name for name, passed in checks.items() if not passed]
         detail = (f"held {held:+.2f} from the pane's top, {wrong:.0f} rows shown wrongly; "
                   f"{calls:.0f} cells drawn for {shown:.0f} rows shown of {columns:.0f} columns; "
                   f"the wheel moved the pane {wheel_pane:.0f} over the table and {side:.0f} over "
                   f"the panel; row {cursor:.0f} {under:.2f} under the header and {foot:.2f} above "
-                  f"the foot; Page Down to {paged:.0f} (want {page_want:.0f}); centred "
-                  f"{above:.1f} and {below:.1f}"
+                  f"the foot; Page Down to {paged:.0f} (want {page_want:.0f}); the focus given "
+                  f"back left the pane at {refocused:.0f} (want {kept:.0f}); the bar pressed "
+                  f"paged the pane to {bar:.0f} with the cursor on {bar_cursor:.0f} (want "
+                  f"{cursor_before:.0f}); centred {above:.1f} and {below:.1f}"
                   + (f"; failed: {', '.join(failed)}" if failed else ""))
         return not failed, detail
 

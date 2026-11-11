@@ -3838,12 +3838,17 @@ static void table_draw(UIDrawList* dl, UIRect cell, int row, int column, bool cu
         ui_draw_quad(dl, cell, (vec4){0.25f, 0.42f + lift, 0.28f, 1.0f});
 }
 
-static void build_table(UISystem* ui, const Font* font, int width, int height, double scale,
-                        bool probe) {
+// The theme's header and cursor in the table's opaque colours, which the arms hold pixels to.
+static void table_theme(UISystem* ui) {
     UITheme theme = *ui_theme(ui);
     glm_vec4_copy((float*)TABLE_RULE, theme.table_header);
     glm_vec4_copy((float*)TABLE_CURSOR, theme.table_cursor);
     ui_set_theme(ui, &theme);
+}
+
+static void build_table(UISystem* ui, const Font* font, int width, int height, double scale,
+                        bool probe) {
+    table_theme(ui);
     UIScreen* screen = ui_screen(ui, "table");
     UIElement* table = ui_table(ui_screen_root(screen));
     ui_set_size(table, UI_GROW, 0.0f, UI_GROW, 0.0f);
@@ -3925,23 +3930,21 @@ static void draw_pane_side(UIElement* el, UIDrawList* dl, void* user) {
     ui_pop_clip(dl);
 }
 
+#define PANE_CLEAR {1.0f, 1.0f, 1.0f, 0.0f} // no fill or border, which an all-zero colour is not
+
 static void build_table_pane(UISystem* ui, int width, int height, double scale, bool probe) {
-    UITheme theme = *ui_theme(ui);
-    glm_vec4_copy((float*)TABLE_RULE, theme.table_header);
-    glm_vec4_copy((float*)TABLE_CURSOR, theme.table_cursor);
-    ui_set_theme(ui, &theme);
+    table_theme(ui);
     UIScreen* screen = ui_screen(ui, "table-pane");
-    static const vec4 CLEAR = {1.0f, 1.0f, 1.0f, 0.0f};
     UIElement* back = ui_panel(ui_screen_root(screen));
     ui_set_size(back, UI_GROW, 0.0f, UI_GROW, 0.0f);
     ui_set_style(back, &(UIStyle){.bg = {PANE_BACK[0], PANE_BACK[1], PANE_BACK[2], 1.0f},
-                                  .border = {CLEAR[0], CLEAR[1], CLEAR[2], CLEAR[3]},
+                                  .border = PANE_CLEAR,
                                   .padding = {40.0f, 40.0f, 40.0f, 40.0f}});
     UIElement* box = ui_panel(back);
     ui_set_size(box, UI_GROW, 0.0f, UI_GROW, 0.0f);
     box->spacing = -1.0f;
     ui_set_style(box, &(UIStyle){.bg = {TABLE_BG[0], TABLE_BG[1], TABLE_BG[2], 1.0f},
-                                 .border = {CLEAR[0], CLEAR[1], CLEAR[2], CLEAR[3]},
+                                 .border = PANE_CLEAR,
                                  .corner_radius = PANE_RADIUS});
     UIElement* pane = ui_scroll(box);
     ui_set_size(pane, UI_GROW, 0.0f, UI_GROW, 0.0f);
@@ -3965,8 +3968,7 @@ static void build_table_pane(UISystem* ui, int width, int height, double scale, 
     // show round.
     UIElement* clear[] = {pane, row, side};
     for (size_t e = 0; e < sizeof(clear) / sizeof(clear[0]); e++)
-        ui_set_style(clear[e], &(UIStyle){.bg = {CLEAR[0], CLEAR[1], CLEAR[2], CLEAR[3]},
-                                          .border = {CLEAR[0], CLEAR[1], CLEAR[2], CLEAR[3]}});
+        ui_set_style(clear[e], &(UIStyle){.bg = PANE_CLEAR, .border = PANE_CLEAR});
     UITableColumn columns[PANE_COLUMN_COUNT];
     for (int c = 0; c < PANE_COLUMN_COUNT; c++)
         columns[c] = TABLE_COLUMNS[PANE_COLUMN_OF[c]];
@@ -3975,7 +3977,7 @@ static void build_table_pane(UISystem* ui, int width, int height, double scale, 
     UIElement* strip = ui_panel(box);
     ui_set_size(strip, UI_GROW, 0.0f, UI_FIXED, 24.0f);
     ui_set_style(strip, &(UIStyle){.bg = {PANE_STRIP[0], PANE_STRIP[1], PANE_STRIP[2], 1.0f},
-                                   .border = {CLEAR[0], CLEAR[1], CLEAR[2], CLEAR[3]},
+                                   .border = PANE_CLEAR,
                                    .corner_radius = PANE_RADIUS,
                                    .corners = UI_CORNERS_BOTTOM});
     ui_push(ui, screen);
@@ -3985,29 +3987,24 @@ static void build_table_pane(UISystem* ui, int width, int height, double scale, 
     ui_layout(screen, (float)width, (float)height);
     if (!probe)
         return;
-    // The header's rule along its foot, held at the pane's top; a pixel square in each of the
-    // strip's corners, a pixel in.
+    // The header's rule along its foot, held at the pane's top; the pixel a pixel in from each of
+    // the strip's corners, its fill at the top and the backdrop at the foot.
     UIRect head = {0};
     ui_table_header_rect(table, &head);
     const float pixel = (float)(1.0 / scale);
-    printf("canvas pane colours back %06x strip %06x rule %06x\n", probe_rgb(PANE_BACK),
-           probe_rgb(PANE_STRIP), probe_rgb(TABLE_RULE));
+    printf("canvas pane colours rule %06x\n", probe_rgb(TABLE_RULE));
     printf("canvas pane held %.3f %.3f\n", (double)head.y * scale, (double)pane->rect.y * scale);
     printf("canvas pane rule");
     say_box((UIRect){head.x, head.y + head.h - pixel, head.w, pixel}, scale);
     printf("\n");
     const UIRect s = strip->rect;
-    const float x0 = s.x + pixel, x1 = s.x + s.w - 2.0f * pixel;
-    const float y0 = s.y + pixel, y1 = s.y + s.h - 2.0f * pixel;
-    const struct {
-        const char* name;
-        float x, y;
-    } corners[] = {{"tl", x0, y0}, {"tr", x1, y0}, {"bl", x0, y1}, {"br", x1, y1}};
-    for (size_t k = 0; k < sizeof(corners) / sizeof(corners[0]); k++) {
-        printf("canvas pane %s", corners[k].name);
-        say_box((UIRect){corners[k].x, corners[k].y, pixel, pixel}, scale);
-        printf("\n");
-    }
+    const long x0 = lround(s.x * scale) + 1, x1 = lround((s.x + s.w) * scale) - 2;
+    const long y0 = lround(s.y * scale) + 1, y1 = lround((s.y + s.h) * scale) - 2;
+    const uint32_t fill = probe_rgb(PANE_STRIP), backdrop = probe_rgb(PANE_BACK);
+    printf("canvas pane tl at %ld %ld want %06x\n", x0, y0, fill);
+    printf("canvas pane tr at %ld %ld want %06x\n", x1, y0, fill);
+    printf("canvas pane bl at %ld %ld want %06x\n", x0, y1, backdrop);
+    printf("canvas pane br at %ld %ld want %06x\n", x1, y1, backdrop);
 }
 
 static void usage(const char* argv0) {

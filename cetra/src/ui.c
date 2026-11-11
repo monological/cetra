@@ -2019,24 +2019,6 @@ static void _emit_pane(UISystem* ui, UIElement* el, const UIStyle* s) {
         ui_draw_rounded(dl, thumb, UI_BAR_W * 0.5f, (float*)s->fg, NULL, 0.0f);
 }
 
-UIRect ui_shown_rect(const UISystem* ui, const UIElement* el) {
-    const UIElement* root = el;
-    while (root->parent)
-        root = root->parent;
-    UIRect shown = root->rect;
-    for (const UIElement* p = el->parent; p; p = p->parent) {
-        if (p->kind != UI_SCROLL)
-            continue;
-        const UIStyle s = _resolve(ui, p, _state_of(p));
-        const UIRect clip = _pane_clip(p, &s);
-        const float x0 = fmaxf(shown.x, clip.x), y0 = fmaxf(shown.y, clip.y);
-        const float x1 = fminf(shown.x + shown.w, clip.x + clip.w);
-        const float y1 = fminf(shown.y + shown.h, clip.y + clip.h);
-        shown = (UIRect){x0, y0, fmaxf(x1 - x0, 0.0f), fmaxf(y1 - y0, 0.0f)};
-    }
-    return shown;
-}
-
 // One eased value a step toward its target, and onto it once within `snap` of it: an exponential
 // approach never arrives, and a UI that asks for frames until it is still would ask for them
 // forever. A weight snaps within a quarter of an 8-bit code.
@@ -2131,19 +2113,27 @@ static UIElement* _scroller_at(UIElement* el, float x, float y) {
     return _deepest_at(el, x, y, _scrolls);
 }
 
-// The nearest element round `el` that scrolls, or NULL.
-static UIElement* _scroller_round(UIElement* el) {
-    for (UIElement* p = el->parent; p; p = p->parent)
-        if (_scrolls(p))
+// The nearest element round `el` that `claims` accepts, or NULL.
+static UIElement* _round(const UIElement* el, bool (*claims)(const UIElement*)) {
+    for (UIElement* p = el ? el->parent : NULL; p; p = p->parent)
+        if (claims(p))
             return p;
     return NULL;
 }
 
 // The pane round `el`, the nearest, or NULL.
-static UIElement* _pane_of(UIElement* el) {
-    for (UIElement* p = el ? el->parent : NULL; p; p = p->parent)
-        if (p->kind == UI_SCROLL)
-            return p;
+static UIElement* _pane_of(const UIElement* el) {
+    return _round(el, _is_pane);
+}
+
+// The deepest element under the point with somewhere to scroll, its place in `*place`, or NULL: one
+// that scrolls but shows all it holds passes the point to the one round it, so a table or an editor
+// in a pane, all of it shown, leaves its wheel and its bar to the pane.
+static UIElement* _scrolling_at(const UISystem* ui, UIElement* root, float x, float y,
+                                UIScrollPlace* place) {
+    for (UIElement* el = _scroller_at(root, x, y); el; el = _round(el, _scrolls))
+        if (_scroll_place(ui, el, place))
+            return el;
     return NULL;
 }
 
@@ -2197,11 +2187,11 @@ static void _scroll_at(const UISystem* ui, UIElement* el, float at) {
 }
 
 /*
- * Scrolls every pane round `el` by the least that shows it whole -- or its top, if it is taller
- * than the pane -- measured where the pane is going rather than where it is drawn mid-ease, so a
- * reveal during a reveal does not overshoot.
+ * Each pane round `el` scrolled by the least that shows the span whole -- or its top, if it is
+ * taller than the pane -- measured where the pane is going rather than where it is drawn mid-ease,
+ * so a reveal during a reveal does not overshoot.
  */
-void ui_reveal_span(const UISystem* ui, UIElement* el, float y0, float y1) {
+void ui_reveal_span(const UISystem* ui, const UIElement* el, float y0, float y1) {
     for (UIElement* p = _pane_of(el); p; p = _pane_of(p)) {
         // The span down the pane's content, from where the pane draws it now.
         const UIRect view = _content_rect(ui, p);
@@ -2210,9 +2200,31 @@ void ui_reveal_span(const UISystem* ui, UIElement* el, float y0, float y1) {
     }
 }
 
+// An element taking the focus shown in the panes round it: the span it names (a table's cursor's
+// row), else its whole rect.
 static void _reveal(const UISystem* ui, UIElement* el) {
-    if (el)
-        ui_reveal_span(ui, el, el->rect.y, el->rect.y + el->rect.h);
+    if (!el)
+        return;
+    float y0 = el->rect.y, y1 = el->rect.y + el->rect.h;
+    const UIWidgetOps* ops = _ops(el);
+    if (ops && ops->reveal)
+        ops->reveal(el, &y0, &y1);
+    ui_reveal_span(ui, el, y0, y1);
+}
+
+/*
+ * The clips are a pane's in its normal state, as the layout resolves every element: geometry does
+ * not change with the focus. The default pane draws a border only while the focus is in it, so
+ * while it is, what it draws stops a border's width inside this.
+ */
+UIRect ui_shown_rect(const UISystem* ui, const UIElement* el) {
+    const UIScreen* screen = _screen_of(el);
+    UIRect shown = screen && screen->root ? screen->root->rect : (UIRect){0};
+    for (const UIElement* p = _pane_of(el); p; p = _pane_of(p)) {
+        const UIStyle s = _resolve(ui, p, UI_STATE_NORMAL);
+        shown = ui_rect_meet(shown, _pane_clip(p, &s));
+    }
+    return shown;
 }
 
 UIElement* ui_scroll_find_row(const UIElement* pane, int index) {
@@ -2534,11 +2546,12 @@ static void _update(UISystem* ui, const UIInput* in, float width, float height) 
         _reveal(ui, app_set);
 
     // A bar, a pane's or an editor's: a press on it is a press on the bar and on nothing under it,
-    // and the thumb held follows the pointer down the track.
+    // and the thumb held follows the pointer down the track. The bar is that of the deepest thing
+    // under the pointer with somewhere to scroll, as the wheel's below.
     bool on_bar = false;
     if (in->pointer_pressed) {
-        UIElement* el = _scroller_at(top->root, in->pointer_x, in->pointer_y);
         UIScrollPlace place;
+        UIElement* el = _scrolling_at(ui, top->root, in->pointer_x, in->pointer_y, &place);
         UIRect track, thumb;
         if (el && _bar(ui, el, &place, &track, &thumb) &&
             ui_rect_hit(_bar_grip(el, &place), in->pointer_x, in->pointer_y)) {
@@ -2563,18 +2576,13 @@ static void _update(UISystem* ui, const UIInput* in, float width, float height) 
             _scroll_at(ui, el, ui_bar_at(track, thumb, in->pointer_y, ui->bar_grab));
     }
 
-    // The wheel scrolls the deepest thing under the pointer with somewhere to scroll, at once: one
-    // whose content all shows passes it to the one round it, so a table or an editor in a pane, all
-    // of it shown, scrolls the pane. A trackpad's own momentum is already in what it sends.
+    // The wheel scrolls the deepest thing under the pointer with somewhere to scroll, at once. A
+    // trackpad's own momentum is already in what it sends.
     if (in->wheel_y != 0.0f) {
         UIScrollPlace place;
-        for (UIElement* el = _scroller_at(top->root, in->pointer_x, in->pointer_y); el;
-             el = _scroller_round(el)) {
-            if (_scroll_place(ui, el, &place)) {
-                _scroll_by(ui, el, -in->wheel_y * place.step, true);
-                break;
-            }
-        }
+        UIElement* el = _scrolling_at(ui, top->root, in->pointer_x, in->pointer_y, &place);
+        if (el)
+            _scroll_by(ui, el, -in->wheel_y * place.step, true);
     }
 
     UIElement* hovered =

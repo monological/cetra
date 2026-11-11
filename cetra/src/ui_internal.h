@@ -30,11 +30,12 @@ float ui_least_scroll(float target, float y0, float y1, float view);
 // scroll it is drawn at.
 float ui_scroll_settle(UIElement* el, float content, float view);
 // The part of the window the scrolling panes round `el` show, as the last layout placed them: the
-// meet of what each one's clip lets through; the root's rect with no pane round it.
+// meet of what each one's clip lets through in its normal state; the root's rect with no pane round
+// it.
 UIRect ui_shown_rect(const UISystem* ui, const UIElement* el);
 // Every pane round `el` scrolled, easing, by the least that shows the window's rows [y0, y1) whole,
 // measured from where each pane is going: as a focus moved to is shown.
-void ui_reveal_span(const UISystem* ui, UIElement* el, float y0, float y1);
+void ui_reveal_span(const UISystem* ui, const UIElement* el, float y0, float y1);
 // What is drawn behind selected text or a list's cursor: the theme's selection, else the engine's.
 void ui_selection_colour(const UITheme* theme, vec4 out);
 
@@ -90,6 +91,9 @@ typedef struct UIWidgetOps {
     bool (*scroll)(const UIElement* el, UIScrollPlace* place);
     void (*scroll_to)(UIElement* el, float at);
     void (*scroll_by)(UIElement* el, float by);
+    // The span of the window, [*y0, *y1), the panes round it show as it takes the focus, set where
+    // it names one; NULL, or left as given, for its whole rect.
+    void (*reveal)(const UIElement* el, float* y0, float* y1);
 } UIWidgetOps;
 
 extern const UIWidgetOps ui_field_ops;

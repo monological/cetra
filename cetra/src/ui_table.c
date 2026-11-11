@@ -48,15 +48,15 @@ struct UITable {
     float title_width[UI_TABLE_COLUMNS_MOST]; // its title's
     float header_h;                           // 0 for no header
 
-    // As the last layout placed it: its content rect, each column's start in it and width, the
-    // points of a pixel and a wheel unit's; what the panes round it show, and where its header
-    // stands, held at the top of that while its own top is above it.
+    // As the last layout placed it: its content rect; where its header stands, held at the top of
+    // what the panes round it show while its own top is above that; what of its rows shows under
+    // the header; each column's start in the content and width; the points of a pixel and a wheel
+    // unit's.
     bool laid;
-    UIRect content, shown;
+    UIRect content, head, rows;
     float x[UI_TABLE_COLUMNS_MOST], w[UI_TABLE_COLUMNS_MOST];
-    float pixel, step, header_y;
-    int reveal;    // the row a reveal asked for before its height was known; -1 for none
-    int shown_row; // a row to show in the panes round it at the next place; -1 for none
+    float pixel, step;
+    int reveal; // a row to show at the next place, in its rows and the panes round it; -1 for none
 
     // The cursor's row, -1 for none; whether a turn of keys is under way and moved it, so
     // on_cursor is told once at its end, after a hook's ui_table_move_cursor too.
@@ -70,7 +70,7 @@ struct UITable* ui_table_make(void) {
     UITable* t = calloc(1, sizeof(UITable));
     if (t) {
         t->stale_lo = INT_MAX;
-        t->reveal = t->shown_row = -1;
+        t->reveal = -1;
         t->cursor = -1;
     }
     return t;
@@ -275,6 +275,11 @@ static void _measure_titles(const UISystem* ui, UITable* t, const UIStyle* s, fl
     t->header_h = lines > 0 ? (float)lines * line_h + 2.0f * t->row_padding : 0.0f;
 }
 
+// Row `r`'s height as the source's `height` gives it, none below 0.
+static float _source_height(const UITable* t, int r) {
+    return fmaxf(t->source.height(r, t->source.user), 0.0f);
+}
+
 /*
  * Row `r` measured: each text cell's widest line, counted into `measures`, and its height. A cell
  * as wide as its column's widest or wider raises it; one that was the widest and shrank marks its
@@ -303,7 +308,7 @@ static bool _measure_row(const UISystem* ui, UIElement* el, const UIStyle* s, in
             *rescan |= 1u << c;
     }
     const float h = t->source.height
-                        ? fmaxf(t->source.height(r, t->source.user), 0.0f)
+                        ? _source_height(t, r)
                         : (float)(lines > 1 ? lines : 1) * line_h + 2.0f * t->row_padding;
     const bool changed = h != t->heights[r];
     t->heights[r] = h;
@@ -369,7 +374,7 @@ static void _settle(const UISystem* ui, UIElement* el, const UIStyle* s) {
     // Every row's height asked again where only the heights changed, no cell measured.
     if (t->heights_stale && !every) {
         for (int r = 0; r < t->count; r++) {
-            const float h = fmaxf(t->source.height(r, t->source.user), 0.0f);
+            const float h = _source_height(t, r);
             if (r < from && h != t->heights[r])
                 from = r;
             t->heights[r] = h;
@@ -437,13 +442,14 @@ static UIRect _rows_view(const UITable* t) {
     return (UIRect){t->content.x, t->content.y + t->header_h, t->content.w, h};
 }
 
-// What of the rows' view shows: met with what the panes round the table show, from the header's
-// foot down. The rows' view itself for a table no pane scrolls.
-static UIRect _rows_shown(const UITable* t) {
-    const UIRect view = _rows_view(t);
-    const float top = fmaxf(fmaxf(view.y, t->shown.y), t->header_y + t->header_h);
-    const float bottom = fminf(view.y + view.h, t->shown.y + t->shown.h);
-    return (UIRect){view.x, top, view.w, fmaxf(bottom - top, 0.0f)};
+// Where row `row` starts in the window with the rows scrolled `scroll`; and the inverse, how far
+// down the rows window row `y` is.
+static float _row_y(const UITable* t, int row, double scroll) {
+    return _rows_view(t).y + (float)(t->tops[row] - scroll);
+}
+
+static double _down_rows(const UITable* t, float y, double scroll) {
+    return (double)(y - _rows_view(t).y) + scroll;
 }
 
 // Across, its columns' own widths and the gaps, a SHARE or GROW one none; down, its header and
@@ -494,20 +500,22 @@ static float _reveal_target(const UIElement* el, int row) {
 }
 
 // The rows eased toward the least scroll that shows row `row`: now, if every row is measured and
-// summed as it stands, else at the next layout, from the tops it sums. Where its rows cannot scroll
-// to it, the panes round it show it, at the next place.
+// summed as it stands; and at the next place, from the tops it sums, with the panes round the table
+// showing it too.
 static void _reveal(UIElement* el, int row) {
     UITable* t = el->table;
-    t->shown_row = row;
-    if (!t->laid || t->every || t->stale_lo != INT_MAX || t->summed != t->count) {
-        t->reveal = row;
-        return;
-    }
-    el->scroll_target = glm_clamp(_reveal_target(el, row), 0.0f, _most(t));
+    t->reveal = row;
+    if (t->laid && !t->every && t->stale_lo == INT_MAX && t->summed == t->count)
+        el->scroll_target = glm_clamp(_reveal_target(el, row), 0.0f, _most(t));
 }
 
-// The columns across the content, the scroll held inside the rows, and a row a reveal asked for
-// before it was measured shown.
+/*
+ * The columns across the content and the scroll held inside the rows; the header held at the top
+ * of what the panes round the table show while its top is above it, going up with the last row once
+ * that rises past it, and the rows shown from its foot down; and a row a reveal asked for shown,
+ * nearest first as a browser's scrollIntoView: in the rows, then in each pane round the table,
+ * where the rows are going, whole under the header.
+ */
 static void _place(const UISystem* ui, UIElement* el, UIRect content) {
     UITable* t = el->table;
     const Engine* engine = ui_system_engine(ui);
@@ -518,23 +526,32 @@ static void _place(const UISystem* ui, UIElement* el, UIRect content) {
     t->content = content;
     t->laid = true;
     _across(ui, el, content.w);
-    if (t->reveal >= 0 && t->reveal < t->summed)
-        el->scroll_target = _reveal_target(el, t->reveal);
+    const int row = t->reveal;
+    const bool revealed = row >= 0 && row < t->summed;
     t->reveal = -1;
+    if (revealed)
+        el->scroll_target = _reveal_target(el, row);
     ui_scroll_settle(el, _total(t), _rows_view(t).h);
-    // The header held at the top of what the panes show while the table's top is above it, and
-    // going up with the last row once that rises past it.
-    t->shown = ui_shown_rect(ui, el);
-    t->header_y = content.y;
-    if (t->shown.y > content.y)
-        t->header_y = fminf(t->shown.y, content.y + content.h - t->header_h);
-    // A row the rows cannot scroll to, shown whole by the panes round the table, under the header.
-    const int row = t->shown_row;
-    t->shown_row = -1;
-    if (row >= 0 && row < t->summed && _most(t) <= 0.0f) {
-        const float y = _rows_view(t).y + (float)(t->tops[row] - (double)el->scroll);
+    const UIRect shown = ui_shown_rect(ui, el), view = _rows_view(t);
+    const float head_y = fmaxf(content.y, fminf(shown.y, content.y + content.h - t->header_h));
+    t->head = (UIRect){content.x, head_y, content.w, t->header_h};
+    const float top = head_y + t->header_h, bottom = fminf(view.y + view.h, shown.y + shown.h);
+    t->rows = (UIRect){view.x, top, view.w, fmaxf(bottom - top, 0.0f)};
+    if (revealed) {
+        const float y = _row_y(t, row, el->scroll_target);
         ui_reveal_span(ui, el, y - t->header_h, y + t->heights[row]);
     }
+}
+
+// As it takes the focus, the panes round it show its cursor's row, whole under the header, rather
+// than its top: a table as tall as its rows would otherwise put the cursor out of view.
+static void _focus_span(const UIElement* el, float* y0, float* y1) {
+    const UITable* t = el->table;
+    if (!t->laid || t->cursor < 0 || t->cursor >= t->summed)
+        return;
+    const float y = _row_y(t, t->cursor, el->scroll_target);
+    *y0 = y - t->header_h;
+    *y1 = y + t->heights[t->cursor];
 }
 
 void ui_table_scroll_to_row(const UISystem* ui, UIElement* table, int row) {
@@ -581,10 +598,9 @@ bool ui_table_cell_rect(const UIElement* table, int row, int column, UIRect* out
     const UITable* t = _seen("ui_table_cell_rect", table);
     if (!t || !t->laid || row < 0 || row >= t->summed || column < -1 || column >= t->column_count)
         return false;
-    const UIRect shown = _rows_shown(t);
-    const float y = _rows_view(t).y + (float)(t->tops[row] - (double)table->scroll);
+    const float y = _row_y(t, row, table->scroll);
     const float h = t->heights[row];
-    if (y >= shown.y + shown.h || y + h <= shown.y)
+    if (y >= t->rows.y + t->rows.h || y + h <= t->rows.y)
         return false;
     if (out)
         *out = column < 0 ? (UIRect){t->content.x, y, t->content.w, h}
@@ -597,7 +613,7 @@ bool ui_table_header_rect(const UIElement* table, UIRect* out) {
     if (!t || !t->laid || t->header_h <= 0.0f)
         return false;
     if (out)
-        *out = (UIRect){t->content.x, t->header_y, t->content.w, t->header_h};
+        *out = t->head;
     return true;
 }
 
@@ -624,7 +640,7 @@ static void _draw_header(UIDrawList* dl, const UITable* t, const UIStyle* s, con
         glm_vec4_copy((float*)theme->table_header, hs.fg);
     else
         hs.fg[3] *= 0.6f;
-    const UIRect head = {t->content.x, t->header_y, t->content.w, t->header_h};
+    const UIRect head = t->head;
     for (int c = 0; c < t->column_count; c++) {
         const char* title = t->columns[c].title;
         const int lines = _lines_of(title);
@@ -651,29 +667,25 @@ static void _cursor_colour(const UITheme* theme, vec4 out) {
 static void _draw_rows(UIDrawList* dl, const UIElement* el, const UIStyle* s,
                        const UITheme* theme) {
     const UITable* t = el->table;
-    const UIRect shown = _rows_shown(t);
+    const UIRect shown = t->rows;
     if (t->summed == 0 || shown.h <= 0.0f)
         return;
-    // A row's top in the window is its top down the rows, from the rows' view's top, less the
-    // scroll; what shows starts `from` down the rows.
-    const float top = _rows_view(t).y;
-    const double scroll = el->scroll, from = (double)(shown.y - top) + scroll;
+    const double scroll = el->scroll, from = _down_rows(t, shown.y, scroll);
     const int first = _row_at(t, from), last = _row_at(t, from + (double)shown.h);
     ui_push_clip(dl, shown);
     if (t->cursor >= first && t->cursor <= last) {
         vec4 fill = {0};
         _cursor_colour(theme, fill);
-        ui_draw_quad(dl,
-                     (UIRect){shown.x, top + (float)(t->tops[t->cursor] - scroll), shown.w,
-                              t->heights[t->cursor]},
-                     fill);
+        ui_draw_quad(
+            dl, (UIRect){shown.x, _row_y(t, t->cursor, scroll), shown.w, t->heights[t->cursor]},
+            fill);
     }
     for (int c = 0; c < t->column_count; c++) {
         const UITableColumn* col = &t->columns[c];
         const float x = t->content.x + t->x[c];
         ui_push_clip(dl, (UIRect){x, shown.y, t->w[c], shown.h});
         for (int r = first; r <= last; r++) {
-            const UIRect cell = {x, top + (float)(t->tops[r] - scroll), t->w[c], t->heights[r]};
+            const UIRect cell = {x, _row_y(t, r, scroll), t->w[c], t->heights[r]};
             if (col->drawn) {
                 if (!t->source.draw)
                     continue;
@@ -760,7 +772,7 @@ static int _paged(const UIElement* el, int dir) {
     const UITable* t = el->table;
     if (t->cursor < 0 || t->cursor >= t->summed)
         return _stepped(t, t->cursor, dir);
-    const double y = t->tops[t->cursor] + (double)dir * (double)_rows_shown(t).h;
+    const double y = t->tops[t->cursor] + (double)dir * (double)t->rows.h;
     const int row = y > 0.0 ? _row_at(t, y) : 0;
     const int on = _holding(t, row, dir);
     return on >= 0 ? on : _holding(t, row, -dir);
@@ -880,10 +892,9 @@ static void _press(const UISystem* ui, UIElement* el, UIRect content, float x, f
     (void)mods;
     (void)time;
     const UITable* t = el->table;
-    const UIRect shown = _rows_shown(t);
-    if (!t->laid || t->summed == 0 || y < shown.y || y >= shown.y + shown.h)
+    if (!t->laid || t->summed == 0 || y < t->rows.y || y >= t->rows.y + t->rows.h)
         return;
-    const double at = (double)(y - _rows_view(t).y) + (double)el->scroll;
+    const double at = _down_rows(t, y, el->scroll);
     const int row = _row_at(t, at);
     if (at < t->tops[t->summed] && _holds(t, row))
         _person_put(el, row);
@@ -901,4 +912,5 @@ const UIWidgetOps ui_table_ops = {
     .scroll = _scroll,
     .scroll_to = _scroll_to,
     .scroll_by = _scroll_by,
+    .reveal = _focus_span,
 };

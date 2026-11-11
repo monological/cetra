@@ -1108,26 +1108,19 @@ def run_canvas_gate(workdir):
         shot, probe = _canvas_run(workdir, "table_pane", "--ui-table-pane")
         pane = _canvas_sheet(probe, "pane")
         colours = pane.get("colours", [])
-        corners = [pane.get(k) for k in ("tl", "tr", "bl", "br")]
-        if not shot or len(colours) != 6 or "held" not in pane or not all(corners):
+        corners = {k: pane[k] for k in ("tl", "tr", "bl", "br") if k in pane}
+        if not shot or len(colours) != 2 or "held" not in pane or len(corners) != 4:
             return False, "the run failed or printed no pane"
         img = _ppm_array(shot)[..., :3].astype(float)
-        back, strip, rule_rgb = (_hex_rgb(colours[k]) for k in (1, 3, 5))
         head_y, pane_y = (float(v) for v in pane["held"])
         x0, y0, x1, y1 = (int(v) for v in pane["rule"])
-        rule = _off_rgb(img[y0:y1, x0:x1], rule_rgb, 2)
-
-        def corner(tokens, rgb):
-            cx0, cy0, cx1, cy1 = (int(v) for v in tokens)
-            return _off_rgb(img[cy0:cy1, cx0:cx1], rgb, 2)
-
-        top = corner(corners[0], strip) + corner(corners[1], strip)
-        bottom = corner(corners[2], back) + corner(corners[3], back)
-        ok = abs(head_y - pane_y) <= 1.0 and rule == 0 and top == 0 and bottom == 0
+        rule = _off_rgb(img[y0:y1, x0:x1], _hex_rgb(colours[1]), 2)
+        wrong = _canvas_wrong_pixels(shot, corners)
+        ok = abs(head_y - pane_y) <= 1.0 and rule == 0 and not wrong
         detail = (f"the header at {head_y:.1f} px with the pane's top at {pane_y:.1f} (want "
                   f"within 1), {rule} px of its rule not its colour (want 0); the strip's top "
-                  f"corners {top} px off its fill and its bottom ones {bottom} px off the "
-                  f"backdrop (want 0 both)")
+                  f"corners its fill and its bottom ones the backdrop"
+                  + (f", but {'; '.join(wrong)}" if wrong else ""))
         return ok, detail
 
     # ---- strokes and dashes (spec 14.22)
