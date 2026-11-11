@@ -17,7 +17,7 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-10: 14.30, a table in the UI._
+_Last updated: 2026-11-10: 14.31, a baseline for a draw hook._
 
 ---
 
@@ -66,10 +66,10 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 | 9 | What the panes and the fonts need of the UI | **Built** | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
 
-Specs 14.7, 14.9 to 14.21, 14.23 to 14.28 and 14.30 are the smaller changes pcb's window asked
-for, listed under "Not among the nine". Spec 14.8 was not asked for by pcb: a headless run waits for the textures its
-start-up asked for before frame 1 (`docs/architecture.md`, Render Pipeline), which `pcb render`
-gets for free. Nor was 14.29, which splits the gate suite into files (`docs/verification.md`,
+Specs 14.7, 14.9 to 14.21, 14.23 to 14.28, 14.30 and 14.31 are the smaller changes pcb's window
+asked for, listed under "Not among the nine". Spec 14.8 was not asked for by pcb: a headless run
+waits for the textures its start-up asked for before frame 1 (`docs/architecture.md`, Render
+Pipeline), which `pcb render` gets for free. Nor was 14.29, which splits the gate suite into files (`docs/verification.md`,
 Running the gates).
 
 **Order**: 1, 2, 5, 6, 6a and 9 are built, in that order; the canvas went first because the
@@ -517,6 +517,11 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
   `NSTableView` reads them, measured once and again only where they change, so 100,000 rows cost
   their measures and none is an element. It has a header that stays and a cursor the keys and a
   press move. pcb's parts, nets and checks will be lists too (`docs/ui.md`, The table).
+- **A baseline for a draw hook** -- spec 14.31, built, from pcb 7.4.2's board modal, whose graph
+  of Z against frequency kept a whole line for the frequencies along its foot and read high in its
+  room: `ui_line_ascent`, beside `ui_line_height`, where `ui_draw_text` stands a line below the top
+  it is given, so a hook drawing its own words ends their row at the baseline (`docs/ui.md`, The
+  draw list).
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the

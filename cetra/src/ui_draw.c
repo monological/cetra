@@ -577,6 +577,12 @@ float ui_line_height(const Font* font, float size, float line_spacing) {
     return lh * (line_spacing > 0.0f ? line_spacing : 1.0f);
 }
 
+float ui_line_ascent(const Font* font, float size) {
+    if (!font || font->base_size <= 0.0f || size <= 0.0f)
+        return 0.0f;
+    return font->ascent * (size / font->base_size);
+}
+
 UIText ui_text_make(const UIDrawList* dl, const char* text, size_t length, const UIStyle* style,
                     const UITextRun* runs, size_t run_count) {
     static const float default_fg[4] = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -770,7 +776,7 @@ float ui_text_line_height(const UIText* t, float line_spacing) {
 }
 
 float ui_text_baseline(const UIText* t, float top) {
-    return _text_ok(t) ? top + t->font->ascent * (t->size / t->font->base_size) : top;
+    return top + ui_line_ascent(t->font, t->size);
 }
 
 // The measures dropped, for a text that changed or is now in another style.

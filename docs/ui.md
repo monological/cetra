@@ -282,6 +282,11 @@ possible. The shader is `ui_vert/frag` (`docs/shaders.md`, Game UI).
   of its glyphs.
 - **The draw list's offset moves the rounded-corner rect, the clips and `uRect` with the
   vertices**, which a slide transition and a scrolled pane need.
+- **A line's height and where its baseline stands** are public, for a draw hook placing words it
+  draws itself: `ui_line_height`, and `ui_line_ascent` (spec 14.31), the face's ascent at a size,
+  how far below the top `ui_draw_text` is given a line stands. The UI's own text stands there by
+  the same function, so a hook that ends a row of words at their baseline ends it where they are
+  drawn.
 - **An edge is one pixel wide, centred on it** (spec 14.23): a box filter's coverage of the shape's
   outline, so a shape on the pixel grid fills its pixels whole and two meeting on a pixel boundary
   leave nothing between them. A fill is drawn a pixel past its rect, so the ramp is its edge's only

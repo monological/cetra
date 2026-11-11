@@ -1626,6 +1626,44 @@ static int probe_baseline(const Game* game, UISystem* ui, const Font* font) {
     return 0;
 }
 
+// A baseline asked of the UI (spec 14.31): ui_line_ascent at 14 and 28 points against the face's
+// ascent scaled to each; a label of each size with no padding, its glyph standing that far below
+// its top; and with no face, none.
+static int probe_line_ascent(const Game* game, UISystem* ui, const Font* font) {
+    const float width = 1280.0f;
+    static const float SIZES[] = {14.0f, 28.0f};
+    enum { COUNT = sizeof(SIZES) / sizeof(SIZES[0]) };
+    UIScreen* s = ui_screen(ui, "line-ascent");
+    const UIElement* labels[COUNT];
+    for (size_t i = 0; i < COUNT; i++) {
+        UIElement* label = sized_x(ui_screen_root(s), SIZES[i]);
+        for (int k = 0; k < 4; k++)
+            label->padding[k] = -1.0f;
+        labels[i] = label;
+    }
+    ui_push(ui, s);
+    ui_build(ui, width, 720.0f, 1.0f);
+    UIRect quads[COUNT];
+    vec4 colors[COUNT];
+    const size_t n = glyph_quads(ui, quads, colors, COUNT);
+    printf("ui line-ascent glyphs count %zu\n", n);
+    printf("ui line-ascent pixel size %.6f\n", (double)probe_pixel(game, width));
+    for (size_t i = 0; i < COUNT; i++) {
+        const float ascent = ui_line_ascent(font, SIZES[i]);
+        printf("ui line-ascent face%zu off %.6f\n", i,
+               (double)(ascent - font->ascent * (SIZES[i] / font->base_size)));
+        if (i >= n)
+            continue;
+        float pen, baseline;
+        quad_origin(font, quads[i], 'x', SIZES[i], &pen, &baseline);
+        printf("ui line-ascent glyph%zu off %.6f\n", i,
+               (double)(baseline - (labels[i]->rect.y + ascent)));
+    }
+    printf("ui line-ascent none face %.6f\n", (double)ui_line_ascent(NULL, SIZES[0]));
+    ui_pop(ui);
+    return 0;
+}
+
 // ---- the table (spec 14.30)
 
 #define TABLE_ROWS 100000
@@ -2157,6 +2195,8 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_label_padding(game, ui, font);
     if (!strcmp(which, "baseline"))
         return probe_baseline(game, ui, font);
+    if (!strcmp(which, "line-ascent"))
+        return probe_line_ascent(game, ui, font);
     if (!strcmp(which, "control-lines"))
         return probe_control_lines(ui);
     if (!strcmp(which, "text-mesh"))

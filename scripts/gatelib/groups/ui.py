@@ -657,6 +657,12 @@ def run_ui_gate(workdir):
                      as its lowest child reaches, the padded label moved down onto
                      the line. Within a framebuffer pixel, the grid a glyph's
                      corner is snapped to.
+      ui-line-ascent ui_line_ascent (spec 14.31) at 14 and 28 points is the face's
+                     ascent scaled to each, read from the face and not the
+                     function; a label of each size with no padding stands its
+                     glyph that far below its top, within half a pixel; with no
+                     face it is 0. Returning the line height fails both; the UI's
+                     own baseline a point off fails the glyphs alone.
       ui-control-lines a button and a slider whose text is two lines draw it through
                      the lines their height was measured from: the button's two
                      rows sit on its centre exactly as one row does, and the
@@ -1986,6 +1992,23 @@ def run_ui_gate(workdir):
                       f"(want within {snap:.2f}); the row's own at {own:.2f}; the textless panel "
                       f"{top:+.2f} from the row's top (want 0); the row {height:.2f} tall, its "
                       f"lowest child reaching {reach:.2f}")
+        return ok, detail
+
+    @arm("ui-line-ascent")
+    def _():
+        p = _ui_probe("line-ascent")
+        count = p.get(("glyphs", "count"), [0])[0] if p else 0
+        if count != 2:
+            return False, f"the probe drew {count} glyphs (want 2)"
+        snap = p[("pixel", "size")][0] * 0.5 + 0.01
+        faces = [p[(f"face{i}", "off")][0] for i in range(2)]
+        glyphs = [p[(f"glyph{i}", "off")][0] for i in range(2)]
+        none = p[("none", "face")][0]
+        ok = (all(abs(v) <= 1e-4 for v in faces) and all(abs(v) <= snap for v in glyphs)
+              and none == 0.0)
+        detail = (f"at 14 and 28 points, {faces[0]:+.4f} and {faces[1]:+.4f} off the face's ascent "
+                  f"(want 0); each label's glyph {glyphs[0]:+.2f} and {glyphs[1]:+.2f} off its top "
+                  f"and that (want within {snap:.2f}); with no face {none:.2f} (want 0)")
         return ok, detail
 
     @arm("ui-control-lines")

@@ -258,6 +258,9 @@ void ui_set_draw_program(UIDrawList* dl, struct ShaderProgram* program, UIRect r
  */
 float ui_text_width(const Font* font, float size, float tracking, const char* text);
 float ui_line_height(const Font* font, float size, float line_spacing);
+// How far below a line's top its baseline stands: its face's ascent at `size` points, where
+// ui_draw_text sets a line it is given the top of. 0 with no face.
+float ui_line_ascent(const Font* font, float size);
 // The byte offset at which `text` exceeds `max_width`, breaking on the last
 // word boundary at or before it. Returns the length when the whole string fits,
 // so a caller loops until it consumes the string.
