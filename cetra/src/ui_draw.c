@@ -272,6 +272,13 @@ void ui_draw_quad(UIDrawList* dl, UIRect r, vec4 color) {
                UI_MODE_FILL, NULL);
 }
 
+// The corners a style rounds, on the quad just pushed: a fill's last parameter, which a glyph's
+// edge rides in its own mode. 0, every corner, stays 0.
+static void _quad_corners(UIDrawList* dl, unsigned corners) {
+    for (size_t k = dl->vcount - 4; k < dl->vcount; k++)
+        dl->verts[k].params[3] = (float)(corners & 15u);
+}
+
 void ui_draw_rect(UIDrawList* dl, UIRect r, const UIStyle* style) {
     if (!dl)
         return;
@@ -302,17 +309,19 @@ void ui_draw_rect(UIDrawList* dl, UIRect r, const UIStyle* style) {
         return;
     }
 
-    _push_quad(dl, dl->white, r.x, r.y, r.x + r.w, r.y + r.h, 0, 0, 1, 1, style->bg,
-               style->corner_radius, has_border ? style->border_width : 0.0f, UI_MODE_FILL,
-               style->border);
+    if (_push_quad(dl, dl->white, r.x, r.y, r.x + r.w, r.y + r.h, 0, 0, 1, 1, style->bg,
+                   style->corner_radius, has_border ? style->border_width : 0.0f, UI_MODE_FILL,
+                   style->border))
+        _quad_corners(dl, style->corners);
 }
 
 void ui_draw_border(UIDrawList* dl, UIRect r, const UIStyle* style) {
     static const float clear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     if (!dl || !style || style->border[3] <= 0.0f || style->border_width <= 0.0f)
         return;
-    _push_quad(dl, dl->white, r.x, r.y, r.x + r.w, r.y + r.h, 0, 0, 1, 1, clear,
-               style->corner_radius, style->border_width, UI_MODE_FILL, style->border);
+    if (_push_quad(dl, dl->white, r.x, r.y, r.x + r.w, r.y + r.h, 0, 0, 1, 1, clear,
+                   style->corner_radius, style->border_width, UI_MODE_FILL, style->border))
+        _quad_corners(dl, style->corners);
 }
 
 void ui_draw_rounded(UIDrawList* dl, UIRect r, float radius, vec4 fill, vec4 border,

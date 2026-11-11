@@ -100,7 +100,13 @@ void main() {
     vec2 half_size = (vRect.zw - vRect.xy) * 0.5;
     vec2 centre = (vRect.zw + vRect.xy) * 0.5;
     float radius = clamp(vParams.x, 0.0, min(half_size.x, half_size.y));
-    float d = sdRoundBox(vPos - centre, half_size, radius);
+    // The corners rounded, UIStyle.corners riding a fill's last parameter: top-left 1, top-right
+    // 2, bottom-right 4, bottom-left 8, down the window, 0 for all four. Each quadrant of the box
+    // takes the radius or none; a square corner is the same expression at r = 0.
+    vec2 p = vPos - centre;
+    int corners = int(vParams.w + 0.5);
+    int corner = p.y < 0.0 ? (p.x < 0.0 ? 1 : 2) : (p.x < 0.0 ? 8 : 4);
+    float d = sdRoundBox(p, half_size, corners == 0 || (corners & corner) != 0 ? radius : 0.0);
     float inside = clamp(0.5 - d / aa, 0.0, 1.0);
 
     vec4 fill = vColor;

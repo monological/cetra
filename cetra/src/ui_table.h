@@ -59,6 +59,10 @@ void ui_table_set_row_count(UIElement* table, int count);
 // Rows `first` to `first + count` changed: measured again at the next layout and drawn as the
 // source now gives them. Refused by name for rows not among the table's.
 void ui_table_rows_changed(UIElement* table, int first, int count);
+// Every row's height asked of the source's `height` again at the next layout, its cells' widths
+// kept: for rows sized to the room the app has, as that room changes. Nothing to do for a source
+// with no `height`, whose rows are as tall as their lines.
+void ui_table_heights_changed(UIElement* table);
 
 // The cursor's row; -1 for none.
 int ui_table_cursor(const UIElement* table);

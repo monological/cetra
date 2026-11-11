@@ -3891,6 +3891,125 @@ static void build_table(UISystem* ui, const Font* font, int width, int height, d
            (double)ui_text_width(font, 13.0f, 0.0f, TABLE_NOTE), (double)note.w);
 }
 
+/*
+ * --ui-table-pane (spec 14.32): --ui-table's rows in a scrolling pane beside a drawn panel, as
+ * pcb's board modal holds its stack's picture beside the layers' words, the pane scrolled so the
+ * table's header is held at its top; and along the rounded box's foot a strip with only its bottom
+ * corners rounded. Its colours are opaque, so canvas-ui-table-pane holds the header's rule at the
+ * pane's top, and the strip's top corners to its fill and its bottom ones to the backdrop.
+ */
+static const vec4 PANE_BACK = {0.30f, 0.12f, 0.12f, 1.0f}, PANE_STRIP = {0.20f, 0.45f, 0.30f, 1.0f};
+static const int PANE_COLUMN_OF[] = {0, 2, 3, 4, 6}; // TABLE_COLUMNS kept: none drawn
+#define PANE_COLUMN_COUNT ((int)(sizeof(PANE_COLUMN_OF) / sizeof(PANE_COLUMN_OF[0])))
+#define PANE_ROWS         60
+#define PANE_SCROLL       200.0f
+#define PANE_RADIUS       10.0f
+static UIElement* g_pane_table;
+
+static void pane_cell(int row, int column, UITableCell* out, void* user) {
+    table_cell(row, PANE_COLUMN_OF[column], out, user);
+}
+
+// The layers drawn beside the table, each level with its row, kept under its held header.
+static void draw_pane_side(UIElement* el, UIDrawList* dl, void* user) {
+    (void)user;
+    UIRect head;
+    const float top = ui_table_header_rect(g_pane_table, &head) ? head.y + head.h : el->rect.y;
+    ui_push_clip(dl, (UIRect){el->rect.x, top, el->rect.w, el->rect.y + el->rect.h - top});
+    const int cursor = ui_table_cursor(g_pane_table);
+    for (int r = 0; r < PANE_ROWS; r++) {
+        UIRect row;
+        if (ui_table_cell_rect(g_pane_table, r, -1, &row))
+            table_draw(dl, (UIRect){el->rect.x, row.y, el->rect.w, row.h}, r, 1, r == cursor, NULL);
+    }
+    ui_pop_clip(dl);
+}
+
+static void build_table_pane(UISystem* ui, int width, int height, double scale, bool probe) {
+    UITheme theme = *ui_theme(ui);
+    glm_vec4_copy((float*)TABLE_RULE, theme.table_header);
+    glm_vec4_copy((float*)TABLE_CURSOR, theme.table_cursor);
+    ui_set_theme(ui, &theme);
+    UIScreen* screen = ui_screen(ui, "table-pane");
+    static const vec4 CLEAR = {1.0f, 1.0f, 1.0f, 0.0f};
+    UIElement* back = ui_panel(ui_screen_root(screen));
+    ui_set_size(back, UI_GROW, 0.0f, UI_GROW, 0.0f);
+    ui_set_style(back, &(UIStyle){.bg = {PANE_BACK[0], PANE_BACK[1], PANE_BACK[2], 1.0f},
+                                  .border = {CLEAR[0], CLEAR[1], CLEAR[2], CLEAR[3]},
+                                  .padding = {40.0f, 40.0f, 40.0f, 40.0f}});
+    UIElement* box = ui_panel(back);
+    ui_set_size(box, UI_GROW, 0.0f, UI_GROW, 0.0f);
+    box->spacing = -1.0f;
+    ui_set_style(box, &(UIStyle){.bg = {TABLE_BG[0], TABLE_BG[1], TABLE_BG[2], 1.0f},
+                                 .border = {CLEAR[0], CLEAR[1], CLEAR[2], CLEAR[3]},
+                                 .corner_radius = PANE_RADIUS});
+    UIElement* pane = ui_scroll(box);
+    ui_set_size(pane, UI_GROW, 0.0f, UI_GROW, 0.0f);
+    UIElement* row = ui_panel(pane);
+    row->dir = UI_ROW;
+    row->spacing = 6.0f;
+    ui_set_size(row, UI_GROW, 0.0f, UI_FIT, 0.0f);
+    UIElement* side = ui_panel(row);
+    ui_set_size(side, UI_FIXED, 24.0f, UI_GROW, 0.0f);
+    ui_set_draw(side, draw_pane_side, NULL);
+    UIElement* table = g_pane_table = ui_table(row);
+    ui_set_size(table, UI_GROW, 0.0f, UI_FIT, 0.0f);
+    table->spacing = 6.0f;
+    ui_set_style(
+        table, &(UIStyle){.bg = {TABLE_BG[0], TABLE_BG[1], TABLE_BG[2], 1.0f}, .font_size = 13.0f});
+    UIElement* bare[] = {box, pane, row, side, table};
+    for (size_t e = 0; e < sizeof(bare) / sizeof(bare[0]); e++)
+        for (int i = 0; i < 4; i++)
+            bare[e]->padding[i] = -1.0f;
+    // The pane, the row and the panel drawn into draw nothing of their own, so the box's corners
+    // show round.
+    UIElement* clear[] = {pane, row, side};
+    for (size_t e = 0; e < sizeof(clear) / sizeof(clear[0]); e++)
+        ui_set_style(clear[e], &(UIStyle){.bg = {CLEAR[0], CLEAR[1], CLEAR[2], CLEAR[3]},
+                                          .border = {CLEAR[0], CLEAR[1], CLEAR[2], CLEAR[3]}});
+    UITableColumn columns[PANE_COLUMN_COUNT];
+    for (int c = 0; c < PANE_COLUMN_COUNT; c++)
+        columns[c] = TABLE_COLUMNS[PANE_COLUMN_OF[c]];
+    ui_table_set_columns(table, columns, PANE_COLUMN_COUNT);
+    ui_table_set_rows(table, PANE_ROWS, &(UITableSource){.cell = pane_cell});
+    UIElement* strip = ui_panel(box);
+    ui_set_size(strip, UI_GROW, 0.0f, UI_FIXED, 24.0f);
+    ui_set_style(strip, &(UIStyle){.bg = {PANE_STRIP[0], PANE_STRIP[1], PANE_STRIP[2], 1.0f},
+                                   .border = {CLEAR[0], CLEAR[1], CLEAR[2], CLEAR[3]},
+                                   .corner_radius = PANE_RADIUS,
+                                   .corners = UI_CORNERS_BOTTOM});
+    ui_push(ui, screen);
+    ui_layout(screen, (float)width, (float)height);
+    ui_table_set_cursor(table, 20);
+    pane->scroll = pane->scroll_target = PANE_SCROLL;
+    ui_layout(screen, (float)width, (float)height);
+    if (!probe)
+        return;
+    // The header's rule along its foot, held at the pane's top; a pixel square in each of the
+    // strip's corners, a pixel in.
+    UIRect head = {0};
+    ui_table_header_rect(table, &head);
+    const float pixel = (float)(1.0 / scale);
+    printf("canvas pane colours back %06x strip %06x rule %06x\n", probe_rgb(PANE_BACK),
+           probe_rgb(PANE_STRIP), probe_rgb(TABLE_RULE));
+    printf("canvas pane held %.3f %.3f\n", (double)head.y * scale, (double)pane->rect.y * scale);
+    printf("canvas pane rule");
+    say_box((UIRect){head.x, head.y + head.h - pixel, head.w, pixel}, scale);
+    printf("\n");
+    const UIRect s = strip->rect;
+    const float x0 = s.x + pixel, x1 = s.x + s.w - 2.0f * pixel;
+    const float y0 = s.y + pixel, y1 = s.y + s.h - 2.0f * pixel;
+    const struct {
+        const char* name;
+        float x, y;
+    } corners[] = {{"tl", x0, y0}, {"tr", x1, y0}, {"bl", x0, y1}, {"br", x1, y1}};
+    for (size_t k = 0; k < sizeof(corners) / sizeof(corners[0]); k++) {
+        printf("canvas pane %s", corners[k].name);
+        say_box((UIRect){corners[k].x, corners[k].y, pixel, pixel}, scale);
+        printf("\n");
+    }
+}
+
 static void usage(const char* argv0) {
     fprintf(
         stderr,
@@ -3904,7 +4023,8 @@ static void usage(const char* argv0) {
         "[--palette]\n"
         "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim] [--read-only]\n"
         "          [--editor-fold FIRST,LAST] [--editor-filler LINE,ROWS] [--refuse-close]\n"
-        "          [--ui-borders] [--ui-seams] [--ui-lines] [--ui-table] [--dash LENGTH,GAP (mm)]\n"
+        "          [--ui-borders] [--ui-seams] [--ui-lines] [--ui-table] [--ui-table-pane]\n"
+        "          [--dash LENGTH,GAP (mm)]\n"
         "          [--dash-min-px PX]\n"
         "          [--cap round|butt|square] [--join round|mitre|bevel] [--fade STRENGTH,ROOM]\n",
         argv0);
@@ -3924,7 +4044,7 @@ static const char* IDENTITY_PASS = "#version 330 core\n"
 int main(int argc, char** argv) {
     bool headless = false, mirror = false, probe = false, picture = false, edit_thread = false;
     bool split = false, with_ui = false, budget = false, idle = false, ui_enter = false,
-         borders = false, seams = false, lines = false, table = false;
+         borders = false, seams = false, lines = false, table = false, table_pane = false;
     bool history = false, palette = false, font_sheet = false, vim = false;
     const char* editor_files[EDITOR_FILES_MAX];
     int editor_count = 0;
@@ -4044,6 +4164,8 @@ int main(int argc, char** argv) {
             lines = true;
         } else if (strcmp(argv[i], "--ui-table") == 0) {
             table = true;
+        } else if (strcmp(argv[i], "--ui-table-pane") == 0) {
+            table_pane = true;
         } else if (strcmp(argv[i], "--dash") == 0 && more) {
             double on = 0.0, off = 0.0;
             if (sscanf(argv[++i], "%lf,%lf", &on, &off) != 2) {
@@ -4185,7 +4307,7 @@ int main(int argc, char** argv) {
     g_home_view = g_views[0];
     UISystem* ui = NULL;
     if (with_ui || history || palette || font_sheet || editor_count || borders || seams || lines ||
-        table) {
+        table || table_pane) {
         ui = create_ui_system(engine);
         ui_set_font(ui, font, 18.0f);
         ui_attach(ui, engine);
@@ -4268,6 +4390,8 @@ int main(int argc, char** argv) {
         build_lines(ui, ctx.fb_scale, probe);
     if (table)
         build_table(ui, font, width, height, ctx.fb_scale, probe);
+    if (table_pane)
+        build_table_pane(ui, width, height, ctx.fb_scale, probe);
     fflush(stdout);
 
     engine_add_overlay(engine, draw_view, NULL, 0);

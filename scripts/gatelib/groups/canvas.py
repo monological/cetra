@@ -286,6 +286,11 @@ def run_canvas_gate(workdir):
                      draws, the cursor's fill on its row and the table's colour under the titles
                      and on every other row, though one column's notes are three times its width.
                      A glyph drawn past its cell lands in a gap.
+      canvas-ui-table-pane that table in a scrolling pane beside a drawn panel (spec 14.32),
+                     scrolled 200 points: the header held at the pane's top, its rule a pixel row
+                     of its colour there within 2 codes; and a strip along the rounded box's foot
+                     with only its bottom corners rounded: a pixel in from each top corner its
+                     fill, from each bottom corner the backdrop.
       canvas-caps    the strokes sheet (spec 14.22): a segment and an arc each capped round, butt
                      and square, their areas in closed form within 0.03 px per pixel of edge, as
                      canvas-areas. A round cap adds a disc, a square one the width squared. And a
@@ -1096,6 +1101,33 @@ def run_canvas_gate(workdir):
                   f"cursor's row in the gaps between columns not its fill (want 0); {stray} px "
                   f"in the gaps elsewhere not the table's colour (want 0), with notes "
                   f"{note:.0f} points long in a column {room:.0f} wide")
+        return ok, detail
+
+    @arm("canvas-ui-table-pane")
+    def _():
+        shot, probe = _canvas_run(workdir, "table_pane", "--ui-table-pane")
+        pane = _canvas_sheet(probe, "pane")
+        colours = pane.get("colours", [])
+        corners = [pane.get(k) for k in ("tl", "tr", "bl", "br")]
+        if not shot or len(colours) != 6 or "held" not in pane or not all(corners):
+            return False, "the run failed or printed no pane"
+        img = _ppm_array(shot)[..., :3].astype(float)
+        back, strip, rule_rgb = (_hex_rgb(colours[k]) for k in (1, 3, 5))
+        head_y, pane_y = (float(v) for v in pane["held"])
+        x0, y0, x1, y1 = (int(v) for v in pane["rule"])
+        rule = _off_rgb(img[y0:y1, x0:x1], rule_rgb, 2)
+
+        def corner(tokens, rgb):
+            cx0, cy0, cx1, cy1 = (int(v) for v in tokens)
+            return _off_rgb(img[cy0:cy1, cx0:cx1], rgb, 2)
+
+        top = corner(corners[0], strip) + corner(corners[1], strip)
+        bottom = corner(corners[2], back) + corner(corners[3], back)
+        ok = abs(head_y - pane_y) <= 1.0 and rule == 0 and top == 0 and bottom == 0
+        detail = (f"the header at {head_y:.1f} px with the pane's top at {pane_y:.1f} (want "
+                  f"within 1), {rule} px of its rule not its colour (want 0); the strip's top "
+                  f"corners {top} px off its fill and its bottom ones {bottom} px off the "
+                  f"backdrop (want 0 both)")
         return ok, detail
 
     # ---- strokes and dashes (spec 14.22)

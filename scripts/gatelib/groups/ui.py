@@ -610,7 +610,8 @@ def run_ui_gate(workdir):
                      starts under the header, one line and its padding tall, or at
                      the content's top with no titles; scrolled 1,000 points by the
                      wheel, the header's rule stays a pixel above the rows and the
-                     rows move up by the scroll.
+                     rows move up by the scroll; the source's heights doubled and
+                     asked again alone (spec 14.32) are taken with no cell measured.
       ui-table-view  of 100,000 rows only those in view are drawn, counted by the
                      source's calls in a draw: at most the rows the view holds and
                      one more, by the columns; row 50,000 scrolled to is shown with
@@ -1796,18 +1797,24 @@ def run_ui_gate(workdir):
         scrolled, row37 = p[("scrolled", "by")][0], p[("scrolled", "row37")][0]
         # Row 37's top: rows of one line but row 1, of three.
         want37 = one + (one + three + 35 * one) - 1000.0
+        # The source's heights doubled and asked again alone (spec 14.32): no cell measured.
+        doubled = p.get(("doubled", "heights"), [0.0, 0.0])
+        doubled_measures = p.get(("doubled", "measures"), [-1])[0]
         ok = (close(lined[0], one) and close(lined[1], three) and close(own[0], 50.0)
               and close(own[1], 51.0) and all(close(m, 0.0) for m in meets)
               and close(header, one) and close(bare, 0.0) and close(scrolled, 1000.0)
               and close(rule, one - pixel) and close(scrolled_rule, rule)
-              and close(row37, want37))
+              and close(row37, want37) and close(doubled[0], 100.0)
+              and close(doubled[1], 102.0) and doubled_measures == 0)
         detail = (f"rows of one and three lines {lined[0]:.2f} and {lined[1]:.2f} (want "
                   f"{one:.2f} and {three:.2f}), the source's {own[0]:.0f} and {own[1]:.0f} "
                   f"(want 50 and 51), meeting {meets[0]:.2f} and {meets[1]:.2f} apart (want 0); "
                   f"the first row {header:.2f} under the content's top (want the header's "
                   f"{one:.2f}), and {bare:.2f} with no titles (want 0); scrolled {scrolled:.0f} "
                   f"(want 1000), the rule at {rule:.2f} then {scrolled_rule:.2f} (want "
-                  f"{one - pixel:.2f} both), row 37 at {row37:.2f} (want {want37:.2f})")
+                  f"{one - pixel:.2f} both), row 37 at {row37:.2f} (want {want37:.2f}); the "
+                  f"source's doubled and asked again alone {doubled[0]:.0f} and {doubled[1]:.0f} "
+                  f"(want 100 and 102) with {doubled_measures:.0f} cells measured (want 0)")
         return ok, detail
 
     @arm("ui-table-view")

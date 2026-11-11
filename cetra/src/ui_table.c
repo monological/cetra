@@ -38,6 +38,7 @@ struct UITable {
     int stale_lo, stale_hi; // every stale row, in [lo, hi)
     bool every;             // every row and title stale, whatever `stale` says
     bool widest_stale;      // a row taken off may have been a column's widest
+    bool heights_stale;     // every row's height to ask of the source again, its cells kept
 
     // What the measures are for: another face, size, tracking, line spacing or row padding
     // measures every row and every title again.
@@ -229,6 +230,12 @@ void ui_table_rows_changed(UIElement* table, int first, int count) {
     _measure_rows(t, first, first + count);
 }
 
+void ui_table_heights_changed(UIElement* table) {
+    UITable* t = _table("ui_table_heights_changed", table);
+    if (t && t->source.height)
+        t->heights_stale = true;
+}
+
 // ---- Measuring
 
 // The points above and below a row's lines, and a header's.
@@ -359,6 +366,16 @@ static void _settle(const UISystem* ui, UIElement* el, const UIStyle* s) {
     if (rescan)
         _rescan(t, rescan);
     t->widest_stale = false;
+    // Every row's height asked again where only the heights changed, no cell measured.
+    if (t->heights_stale && !every) {
+        for (int r = 0; r < t->count; r++) {
+            const float h = fmaxf(t->source.height(r, t->source.user), 0.0f);
+            if (r < from && h != t->heights[r])
+                from = r;
+            t->heights[r] = h;
+        }
+    }
+    t->heights_stale = false;
     if (from == 0)
         t->tops[0] = 0.0;
     for (int r = from; r < t->count; r++)

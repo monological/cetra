@@ -73,12 +73,21 @@ typedef enum {
  * border on focus" or "no padding on the left" against a level below that sets
  * one, because the field that would say so is the field that means inherit.
  */
+// A box's corners, for UIStyle.corners (spec 14.32).
+#define UI_CORNER_TOP_LEFT     1u
+#define UI_CORNER_TOP_RIGHT    2u
+#define UI_CORNER_BOTTOM_RIGHT 4u
+#define UI_CORNER_BOTTOM_LEFT  8u
+#define UI_CORNERS_TOP         (UI_CORNER_TOP_LEFT | UI_CORNER_TOP_RIGHT)
+#define UI_CORNERS_BOTTOM      (UI_CORNER_BOTTOM_LEFT | UI_CORNER_BOTTOM_RIGHT)
+
 typedef struct UIStyle {
     vec4 bg;     // fill; alpha 0 = no fill drawn
     vec4 fg;     // text
     vec4 border; // alpha 0 = no border drawn
     float border_width;
     float corner_radius;
+    unsigned corners; // the corners corner_radius rounds, UI_CORNER_* or'd; 0 = all four
     float padding[4]; // top, right, bottom, left
     float font_size;  // 0 = inherit
     Font* font;       // NULL = inherit

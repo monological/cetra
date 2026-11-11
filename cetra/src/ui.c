@@ -268,6 +268,8 @@ static void _inherit(UIStyle* into, const UIStyle* from) {
         into->border_width = from->border_width;
     if (into->corner_radius == 0.0f)
         into->corner_radius = from->corner_radius;
+    if (into->corners == 0)
+        into->corners = from->corners;
     for (int i = 0; i < 4; i++)
         if (into->padding[i] == 0.0f)
             into->padding[i] = from->padding[i];

@@ -1805,10 +1805,12 @@ static void heights_cell(int row, int column, UITableCell* out, void* user) {
     out->text = row == 1 && column == 0 ? "one\ntwo\nthree" : "one";
 }
 
-// Row `row` 50 points and one more for each row before it.
+static float g_heights_scale = 1.0f; // the source's heights times this, so they can change
+
+// Row `row` 50 points and one more for each row before it, times g_heights_scale.
 static float heights_height(int row, void* user) {
     (void)user;
-    return 50.0f + (float)row;
+    return (50.0f + (float)row) * g_heights_scale;
 }
 
 static const UITableColumn HEIGHTS_COLUMNS[] = {
@@ -1870,11 +1872,19 @@ static int probe_table_heights(const Game* game, UISystem* ui, const Font* font)
     printf("ui table-heights scrolled row37 %.6f\n", (double)(r.y - content_top(lined)));
     printf("ui table-heights pixel points %.6f\n", (double)pixel);
     ui_pop(ui);
-    const UIElement* own =
+    UIElement* own =
         table_fixture(ui, "table-heights-own", 600.0f, 300.0f, UNTITLED_COLUMNS, 2, 2000,
                       &(UITableSource){.cell = heights_cell, .height = heights_height});
     ui_layout(ui_top(ui), 1280.0f, 720.0f);
     say_heights(own, "own");
+    // The source's heights doubled and asked again alone (spec 14.32): no cell measured.
+    g_heights_scale = 2.0f;
+    const unsigned measured = own->measures;
+    ui_table_heights_changed(own);
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+    g_heights_scale = 1.0f;
+    say_heights(own, "doubled");
+    printf("ui table-heights doubled measures %u\n", own->measures - measured);
     printf("ui table-heights line height %.6f\n", (double)ui_line_height(font, PROBE_SIZE, 1.0f));
     printf("ui table-heights row padding %.6f\n", 2.0);
     return 0;
