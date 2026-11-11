@@ -629,6 +629,14 @@ def run_ui_gate(workdir):
                      does not; Up from none lands on the last; a host's move is
                      told at once; a key hook taking Down leaves the cursor. Every
                      cursor's row is in view.
+      ui-table-pane  a table in a pane (spec 14.32), as tall as its rows beside a
+                     panel: the wheel over the table, whose rows all show, scrolls
+                     the pane, and over the panel too; scrolled 300, the header is
+                     held at the pane's top, a row is in view exactly when some of
+                     it is below the header, and only the rows shown are drawn;
+                     the cursor keyed down to row 30 is shown whole under the
+                     header by the pane, and Page Down moves by the rows the pane
+                     shows; a pane centres a table shorter than it.
       ui-max-size    a fitting pane of 30 rows held to 200 points is that tall and
                      scrolls; a growing child held to 100 takes it and its siblings
                      share the rest; two held and centred leave the rest to the
@@ -1864,6 +1872,42 @@ def run_ui_gate(workdir):
                      f"every step lands where it should, Page Down on {paged}, each row shown "
                      f"and on_cursor once a pass the person moved it"))
         return ok, detail
+
+    @arm("ui-table-pane")
+    def _():
+        p = _ui_probe("table-pane")
+        if not p or ("centred", "gaps") not in p:
+            return False, "the probe produced nothing"
+        tall, rows = p[("table", "height")]
+        wheel_pane, wheel_table = p[("wheel", "table")]
+        held, wrong, row0 = (p[("held", k)][0] for k in ("top", "wrong", "row0"))
+        calls, shown, columns = (p[("drawn", k)][0] for k in ("calls", "shown", "columns"))
+        side = p[("wheel", "side")][0]
+        cursor, under, foot = (p[("reveal", k)][0] for k in ("cursor", "under", "foot"))
+        paged, page_want = p[("page", "cursor")]
+        above, below = p[("centred", "gaps")]
+        checks = {
+            "the table as tall as its header and rows": abs(tall - rows) <= 1e-3,
+            "the wheel over the table scrolls the pane 300": abs(wheel_pane - 300.0) <= 1e-3
+            and wheel_table == 0.0,
+            "the header held at the pane's top": abs(held) <= 1e-3,
+            "each row shown exactly when below the header": wrong == 0 and row0 == 0,
+            "only the rows shown drawn": 0 < calls <= (shown + 1) * columns,
+            "the wheel over the panel scrolls the pane 100": abs(side - 100.0) <= 1e-3,
+            "row 30 shown whole under the header": cursor == 30 and under >= -1e-3
+            and foot >= -1e-3 and min(under, foot) <= 1e-3,
+            "Page Down by the rows shown": paged == page_want,
+            "a table shorter than its pane centred": abs(above - below) <= 1.0 and above > 0.0,
+        }
+        failed = [name for name, held_ok in checks.items() if not held_ok]
+        detail = (f"held {held:+.2f} from the pane's top, {wrong:.0f} rows shown wrongly; "
+                  f"{calls:.0f} cells drawn for {shown:.0f} rows shown of {columns:.0f} columns; "
+                  f"the wheel moved the pane {wheel_pane:.0f} over the table and {side:.0f} over "
+                  f"the panel; row {cursor:.0f} {under:.2f} under the header and {foot:.2f} above "
+                  f"the foot; Page Down to {paged:.0f} (want {page_want:.0f}); centred "
+                  f"{above:.1f} and {below:.1f}"
+                  + (f"; failed: {', '.join(failed)}" if failed else ""))
+        return not failed, detail
 
     # ---- the most an element measures, and lengths that are none
     @arm("ui-max-size")

@@ -77,7 +77,13 @@ void ui_table_set_on_cursor(UIElement* table, UIActionFn on_cursor, void* user);
 // The least scroll that shows row `row`, easing there.
 void ui_table_scroll_to_row(const UISystem* ui, UIElement* table, int row);
 // Where row `row`'s cell in `column` stands, in window points, as the last layout placed it, the
-// whole row's for column -1; false for a row not in view.
+// whole row's for column -1; false for a row not in view: out of the table's own, out of what the
+// scrolling panes round it show, or under its header.
 bool ui_table_cell_rect(const UIElement* table, int row, int column, UIRect* out);
+// Where its header stands, in window points, as the last layout placed it: at its content's top, or
+// held at the top of what the scrolling panes round it show while its top is above that. False with
+// no header, or before the first layout. For an element beside the table drawing level with its
+// rows: its own title level with the header, its rows kept under it.
+bool ui_table_header_rect(const UIElement* table, UIRect* out);
 
 #endif // _UI_TABLE_H_

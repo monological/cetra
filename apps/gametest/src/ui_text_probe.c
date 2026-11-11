@@ -2007,6 +2007,130 @@ static int probe_table_cursor(UISystem* ui) {
     return 0;
 }
 
+// ---- a table in a pane (spec 14.32)
+
+#define PANE_TABLE_ROWS 40
+#define PANE_TABLE_COLS 4
+#define PANE_H          200.0f
+
+// A pane PANE_H tall, none of it padding or border, over a row of a panel 100 points wide and a
+// table of `rows` rows as tall as its rows, neither padded: on a screen of its own, pushed and laid
+// out.
+static UIElement* pane_table_fixture(UISystem* ui, const char* name, int rows, UIElement** pane,
+                                     UIElement** side) {
+    UIScreen* s = ui_screen(ui, name);
+    ui_screen_set_modal(s, false);
+    *pane = ui_scroll(ui_screen_root(s));
+    ui_set_size(*pane, UI_FIXED, 600.0f, UI_FIXED, PANE_H);
+    ui_set_style(*pane, &(UIStyle){.border = {1.0f, 1.0f, 1.0f, 0.0f}});
+    UIElement* row = ui_panel(*pane);
+    row->dir = UI_ROW;
+    row->spacing = -1.0f;
+    ui_set_size(row, UI_GROW, 0.0f, UI_FIT, 0.0f);
+    *side = ui_panel(row);
+    ui_set_size(*side, UI_FIXED, 100.0f, UI_GROW, 0.0f);
+    UIElement* table = ui_table(row);
+    ui_set_size(table, UI_GROW, 0.0f, UI_FIT, 0.0f);
+    UIElement* bare[] = {*pane, row, *side, table};
+    for (size_t e = 0; e < sizeof(bare) / sizeof(bare[0]); e++)
+        for (int k = 0; k < 4; k++)
+            bare[e]->padding[k] = -1.0f;
+    ui_table_set_columns(table, TABLE_COLUMNS, PANE_TABLE_COLS);
+    ui_table_set_rows(table, rows, &(UITableSource){.cell = table_cell});
+    ui_push(ui, s);
+    ui_layout(s, 1280.0f, 720.0f);
+    return table;
+}
+
+// The pane scrolled to `at` at once, and laid out there.
+static void pane_at(UISystem* ui, UIElement* pane, float at) {
+    pane->scroll = pane->scroll_target = at;
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+}
+
+/*
+ * A table in a pane: the table as tall as its rows, the pane scrolling it beside a panel. Scrolled,
+ * the header is held at the pane's top and a row is in view only below it; only the rows shown are
+ * drawn; the wheel over the table and over the panel scrolls the pane; the cursor moved down past
+ * the pane's foot is shown by the pane under the header, and Page Down moves by the rows the pane
+ * shows. Then a pane centring a table shorter than it.
+ */
+static int probe_table_pane(UISystem* ui) {
+    UIElement *pane, *side;
+    UIElement* table = pane_table_fixture(ui, "table-pane", PANE_TABLE_ROWS, &pane, &side);
+    UIRect head = {0}, row0 = {0};
+    ui_table_header_rect(table, &head);
+    ui_table_cell_rect(table, 0, -1, &row0);
+    const float row_h = row0.h, header_h = head.h;
+    printf("ui table-pane table height %.6f %.6f\n", (double)table->rect.h,
+           (double)(header_h + PANE_TABLE_ROWS * row_h));
+    printf("ui table-pane pane height %.6f\n", (double)PANE_H);
+    // The wheel over the table, whose rows all show in it, scrolls the pane: three units of 100.
+    UITheme theme = *ui_theme(ui);
+    theme.scroll_step = 100.0f;
+    ui_set_theme(ui, &theme);
+    pass(ui, &(UIInput){.pointer_x = table->rect.x + 150.0f,
+                        .pointer_y = pane->rect.y + 100.0f,
+                        .wheel_y = -3.0f});
+    printf("ui table-pane wheel table %.6f %.6f\n", (double)pane->scroll, (double)table->scroll);
+    // Scrolled 300: the header held at the pane's top; each row in view exactly when some of it is
+    // below the header's foot and above the pane's.
+    pane_at(ui, pane, 300.0f);
+    ui_table_header_rect(table, &head);
+    printf("ui table-pane held top %.6f\n", (double)(head.y - pane->rect.y));
+    const float header_foot = head.y + head.h, pane_foot = pane->rect.y + PANE_H;
+    const float rows_top = table->rect.y + header_h; // where row 0 starts, scrolled
+    int wrong = 0, shown = 0;
+    for (int r = 0; r < PANE_TABLE_ROWS; r++) {
+        const float top = rows_top + (float)r * row_h;
+        const bool want = top + row_h > header_foot + 1e-3f && top < pane_foot - 1e-3f;
+        const bool got = ui_table_cell_rect(table, r, -1, NULL);
+        wrong += got != want;
+        shown += want;
+    }
+    printf("ui table-pane held wrong %d\n", wrong);
+    printf("ui table-pane held row0 %d\n", ui_table_cell_rect(table, 0, -1, NULL) ? 1 : 0);
+    // Only the rows shown are drawn.
+    g_cells_asked = 0;
+    ui_build(ui, 1280.0f, 720.0f, 1.0f);
+    printf("ui table-pane drawn calls %d\n", g_cells_asked);
+    printf("ui table-pane drawn shown %d\n", shown);
+    printf("ui table-pane drawn columns %d\n", PANE_TABLE_COLS);
+    // The wheel over the panel beside it scrolls the pane too.
+    pane_at(ui, pane, 0.0f);
+    pass(ui, &(UIInput){.pointer_x = side->rect.x + 50.0f,
+                        .pointer_y = pane->rect.y + 100.0f,
+                        .wheel_y = -1.0f});
+    printf("ui table-pane wheel side %.6f\n", (double)pane->scroll);
+    // The cursor moved by keys from the first row to row 30: the pane is going where row 30 shows
+    // whole under the header.
+    pane_at(ui, pane, 0.0f);
+    ui_set_focus(ui_top(ui), table);
+    for (int k = 0; k < 31; k++)
+        ev_key(GLFW_KEY_DOWN, 0);
+    type_pass(ui);
+    const float target = pane->scroll_target;
+    const float top30 = header_h + 30.0f * row_h - target; // down the pane's view
+    printf("ui table-pane reveal cursor %d\n", ui_table_cursor(table));
+    printf("ui table-pane reveal under %.6f\n", (double)(top30 - header_h));
+    printf("ui table-pane reveal foot %.6f\n", (double)(PANE_H - (top30 + row_h)));
+    // Page Down moves by the rows the pane shows under the header.
+    pane_at(ui, pane, target);
+    one_key(ui, GLFW_KEY_PAGE_DOWN, 0);
+    printf("ui table-pane page cursor %d %d\n", ui_table_cursor(table),
+           30 + (int)floorf((PANE_H - header_h) / row_h));
+    ui_pop(ui);
+    // A pane centring a table of 3 rows, shorter than it.
+    UIElement *centred_pane, *centred_side;
+    pane_table_fixture(ui, "table-pane-centred", 3, &centred_pane, &centred_side);
+    centred_pane->align_main = UI_ALIGN_CENTER;
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+    const UIElement* row = centred_pane->children[0];
+    printf("ui table-pane centred gaps %.6f %.6f\n", (double)(row->rect.y - centred_pane->rect.y),
+           (double)(centred_pane->rect.y + PANE_H - (row->rect.y + row->rect.h)));
+    return 0;
+}
+
 // Row 0's column rects, as the last layout placed them, into `out`.
 static void table_columns_at(const UIElement* table, UIRect* out, int columns) {
     for (int c = 0; c < columns; c++)
@@ -2219,6 +2343,8 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_table_view(ui);
     if (!strcmp(which, "table-cursor"))
         return probe_table_cursor(ui);
+    if (!strcmp(which, "table-pane"))
+        return probe_table_pane(ui);
     if (!strcmp(which, "table-refused"))
         return probe_table_refused(ui);
     return -1;
