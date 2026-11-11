@@ -311,7 +311,8 @@ possible. The shader is `ui_vert/frag` (`docs/shaders.md`, Game UI).
   vertices**, which a slide transition and a scrolled pane need.
 - **Some corners rounded** (spec 14.32): `UIStyle.corners` names the corners `corner_radius`
   rounds, `UI_CORNER_*` or'd, 0 for all four, as every zero in a style inherits; `UI_CORNERS_ALL`
-  says all four against a level below that names some. It rides a fill's
+  says all four against a level below that names some. A `corner_radius` of -1 is square against a
+  level below that rounds, as the default panel does by 10: the draw takes a radius below 0 as 0. It rides a fill's
   last vertex parameter, which a glyph's edge rides in its own mode, so it costs no attribute; the
   border rounds with the fill. A strip along a rounded box's foot rounds its bottom corners alone.
 - **A line's height and where its baseline stands** are public, for a draw hook placing words it

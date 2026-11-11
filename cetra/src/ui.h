@@ -96,11 +96,11 @@ typedef struct UIStyle {
     vec4 fg;     // text
     vec4 border; // alpha 0 = no border drawn
     float border_width;
-    float corner_radius;
-    unsigned corners; // the corners corner_radius rounds, UI_CORNER_* or'd; 0 = all four
-    float padding[4]; // top, right, bottom, left
-    float font_size;  // 0 = inherit
-    Font* font;       // NULL = inherit
+    float corner_radius; // points; -1 = square against a level below that rounds
+    unsigned corners;    // the corners corner_radius rounds, UI_CORNER_* or'd; 0 = all four
+    float padding[4];    // top, right, bottom, left
+    float font_size;     // 0 = inherit
+    Font* font;          // NULL = inherit
 
     /*
      * Typography, per element and themeable like everything else here.

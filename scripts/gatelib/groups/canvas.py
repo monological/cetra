@@ -288,9 +288,11 @@ def run_canvas_gate(workdir):
                      A glyph drawn past its cell lands in a gap.
       canvas-ui-table-pane that table in a scrolling pane beside a drawn panel (spec 14.32),
                      scrolled 200 points: the header held at the pane's top, its rule a pixel row
-                     of its colour there within 2 codes; and a strip along the rounded box's foot
+                     of its colour there within 2 codes; a strip along the rounded box's foot
                      with only its bottom corners rounded: a pixel in from each top corner its
-                     fill, from each bottom corner the backdrop.
+                     fill, from each bottom corner the backdrop; and a strip along the backdrop's
+                     foot at a radius of -1, under the theme's rounded panel: a pixel in from
+                     each of its corners its fill.
       canvas-caps    the strokes sheet (spec 14.22): a segment and an arc each capped round, butt
                      and square, their areas in closed form within 0.03 px per pixel of edge, as
                      canvas-areas. A round cap adds a disc, a square one the width squared. And a
@@ -1108,8 +1110,9 @@ def run_canvas_gate(workdir):
         shot, probe = _canvas_run(workdir, "table_pane", "--ui-table-pane")
         pane = _canvas_sheet(probe, "pane")
         colours = pane.get("colours", [])
-        corners = {k: pane[k] for k in ("tl", "tr", "bl", "br") if k in pane}
-        if not shot or len(colours) != 2 or "held" not in pane or len(corners) != 4:
+        names = [p + c for p in ("", "square-") for c in ("tl", "tr", "bl", "br")]
+        corners = {k: pane[k] for k in names if k in pane}
+        if not shot or len(colours) != 2 or "held" not in pane or len(corners) != len(names):
             return False, "the run failed or printed no pane"
         img = _ppm_array(shot)[..., :3].astype(float)
         head_y, pane_y = (float(v) for v in pane["held"])
@@ -1119,7 +1122,8 @@ def run_canvas_gate(workdir):
         ok = abs(head_y - pane_y) <= 1.0 and rule == 0 and not wrong
         detail = (f"the header at {head_y:.1f} px with the pane's top at {pane_y:.1f} (want "
                   f"within 1), {rule} px of its rule not its colour (want 0); the strip's top "
-                  f"corners its fill and its bottom ones the backdrop"
+                  f"corners its fill and its bottom ones the backdrop; the square strip's four "
+                  f"its fill"
                   + (f", but {'; '.join(wrong)}" if wrong else ""))
         return ok, detail
 

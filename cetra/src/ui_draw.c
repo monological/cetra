@@ -311,8 +311,8 @@ void ui_draw_rect(UIDrawList* dl, UIRect r, const UIStyle* style) {
     }
 
     if (_push_quad(dl, dl->white, r.x, r.y, r.x + r.w, r.y + r.h, 0, 0, 1, 1, style->bg,
-                   style->corner_radius, has_border ? style->border_width : 0.0f, UI_MODE_FILL,
-                   style->border))
+                   fmaxf(style->corner_radius, 0.0f), has_border ? style->border_width : 0.0f,
+                   UI_MODE_FILL, style->border))
         _last_quad_w(dl, (float)(style->corners & UI_CORNERS_ALL));
 }
 
@@ -321,7 +321,8 @@ void ui_draw_border(UIDrawList* dl, UIRect r, const UIStyle* style) {
     if (!dl || !style || style->border[3] <= 0.0f || style->border_width <= 0.0f)
         return;
     if (_push_quad(dl, dl->white, r.x, r.y, r.x + r.w, r.y + r.h, 0, 0, 1, 1, clear,
-                   style->corner_radius, style->border_width, UI_MODE_FILL, style->border))
+                   fmaxf(style->corner_radius, 0.0f), style->border_width, UI_MODE_FILL,
+                   style->border))
         _last_quad_w(dl, (float)(style->corners & UI_CORNERS_ALL));
 }
 

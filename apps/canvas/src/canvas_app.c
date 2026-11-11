@@ -3899,11 +3899,14 @@ static void build_table(UISystem* ui, const Font* font, int width, int height, d
 /*
  * --ui-table-pane (spec 14.32): --ui-table's rows in a scrolling pane beside a drawn panel, as
  * pcb's board modal holds its stack's picture beside the layers' words, the pane scrolled so the
- * table's header is held at its top; and along the rounded box's foot a strip with only its bottom
- * corners rounded. Its colours are opaque, so canvas-ui-table-pane holds the header's rule at the
- * pane's top, and the strip's top corners to its fill and its bottom ones to the backdrop.
+ * table's header is held at its top; along the rounded box's foot a strip with only its bottom
+ * corners rounded; and along the backdrop's foot a strip square at a radius of -1, under the
+ * theme's rounded panel. Its colours are opaque, so canvas-ui-table-pane holds the header's rule at
+ * the pane's top, the strip's top corners to its fill and its bottom ones to the backdrop, and the
+ * square strip's every corner to its fill.
  */
-static const vec4 PANE_BACK = {0.30f, 0.12f, 0.12f, 1.0f}, PANE_STRIP = {0.20f, 0.45f, 0.30f, 1.0f};
+static const vec4 PANE_BACK = {0.30f, 0.12f, 0.12f, 1.0f}, PANE_STRIP = {0.20f, 0.45f, 0.30f, 1.0f},
+                  PANE_SQUARE = {0.45f, 0.35f, 0.15f, 1.0f};
 static const int PANE_COLUMN_OF[] = {0, 2, 3, 4, 6}; // TABLE_COLUMNS kept: none drawn
 #define PANE_COLUMN_COUNT ((int)(sizeof(PANE_COLUMN_OF) / sizeof(PANE_COLUMN_OF[0])))
 #define PANE_ROWS         60
@@ -3931,6 +3934,17 @@ static void draw_pane_side(UIElement* el, UIDrawList* dl, void* user) {
 }
 
 #define PANE_CLEAR {1.0f, 1.0f, 1.0f, 0.0f} // no fill or border, which an all-zero colour is not
+
+// The pixel a pixel in from each of r's corners and the colour wanted there, `top` at the top two
+// and `bottom` at the bottom two, as "canvas pane <name>tl at X Y want RRGGBB".
+static void say_corners(const char* name, UIRect r, double scale, uint32_t top, uint32_t bottom) {
+    const long x0 = lround(r.x * scale) + 1, x1 = lround((r.x + r.w) * scale) - 2;
+    const long y0 = lround(r.y * scale) + 1, y1 = lround((r.y + r.h) * scale) - 2;
+    printf("canvas pane %stl at %ld %ld want %06x\n", name, x0, y0, top);
+    printf("canvas pane %str at %ld %ld want %06x\n", name, x1, y0, top);
+    printf("canvas pane %sbl at %ld %ld want %06x\n", name, x0, y1, bottom);
+    printf("canvas pane %sbr at %ld %ld want %06x\n", name, x1, y1, bottom);
+}
 
 static void build_table_pane(UISystem* ui, int width, int height, double scale, bool probe) {
     table_theme(ui);
@@ -3980,6 +3994,11 @@ static void build_table_pane(UISystem* ui, int width, int height, double scale, 
                                    .border = PANE_CLEAR,
                                    .corner_radius = PANE_RADIUS,
                                    .corners = UI_CORNERS_BOTTOM});
+    UIElement* square = ui_panel(back);
+    ui_set_size(square, UI_GROW, 0.0f, UI_FIXED, 24.0f);
+    ui_set_style(square, &(UIStyle){.bg = {PANE_SQUARE[0], PANE_SQUARE[1], PANE_SQUARE[2], 1.0f},
+                                    .border = PANE_CLEAR,
+                                    .corner_radius = -1.0f});
     ui_push(ui, screen);
     ui_layout(screen, (float)width, (float)height);
     ui_table_set_cursor(table, 20);
@@ -3987,8 +4006,8 @@ static void build_table_pane(UISystem* ui, int width, int height, double scale, 
     ui_layout(screen, (float)width, (float)height);
     if (!probe)
         return;
-    // The header's rule along its foot, held at the pane's top; the pixel a pixel in from each of
-    // the strip's corners, its fill at the top and the backdrop at the foot.
+    // The header's rule along its foot, held at the pane's top; the strip's corners, its fill at
+    // the top and the backdrop at the foot; the square strip's, its fill at all four.
     UIRect head = {0};
     ui_table_header_rect(table, &head);
     const float pixel = (float)(1.0 / scale);
@@ -3997,14 +4016,9 @@ static void build_table_pane(UISystem* ui, int width, int height, double scale, 
     printf("canvas pane rule");
     say_box((UIRect){head.x, head.y + head.h - pixel, head.w, pixel}, scale);
     printf("\n");
-    const UIRect s = strip->rect;
-    const long x0 = lround(s.x * scale) + 1, x1 = lround((s.x + s.w) * scale) - 2;
-    const long y0 = lround(s.y * scale) + 1, y1 = lround((s.y + s.h) * scale) - 2;
-    const uint32_t fill = probe_rgb(PANE_STRIP), backdrop = probe_rgb(PANE_BACK);
-    printf("canvas pane tl at %ld %ld want %06x\n", x0, y0, fill);
-    printf("canvas pane tr at %ld %ld want %06x\n", x1, y0, fill);
-    printf("canvas pane bl at %ld %ld want %06x\n", x0, y1, backdrop);
-    printf("canvas pane br at %ld %ld want %06x\n", x1, y1, backdrop);
+    say_corners("", strip->rect, scale, probe_rgb(PANE_STRIP), probe_rgb(PANE_BACK));
+    const uint32_t square_fill = probe_rgb(PANE_SQUARE);
+    say_corners("square-", square->rect, scale, square_fill, square_fill);
 }
 
 static void usage(const char* argv0) {
