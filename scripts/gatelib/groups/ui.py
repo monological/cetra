@@ -661,8 +661,9 @@ def run_ui_gate(workdir):
                      ascent scaled to each, read from the face and not the
                      function; a label of each size with no padding stands its
                      glyph that far below its top, within half a pixel; with no
-                     face it is 0. Returning the line height fails both; the UI's
-                     own baseline a point off fails the glyphs alone.
+                     face it is 0. Returning the line height fails on the face,
+                     the glyphs moving with it; the UI's own baseline a point off
+                     fails on the glyphs alone.
       ui-control-lines a button and a slider whose text is two lines draw it through
                      the lines their height was measured from: the button's two
                      rows sit on its centre exactly as one row does, and the
