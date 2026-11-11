@@ -428,6 +428,10 @@ typedef void (*UIDrawFn)(UIElement* el, UIDrawList* dl, void* user);
 // A key or a character the focused element is handed before it acts on it; true takes it, and a
 // key taken takes the character it makes with it.
 typedef bool (*UIKeyFn)(UIElement* el, const InputKeyEvent* key, void* user);
+// What a panel's content measures along `axis` (0 across, 1 down), in points inside its padding.
+// Across, `room` is 0; down, it is the width the panel was given, as a wrapping label's height is
+// taken from its width.
+typedef float (*UIMeasureFn)(const UIElement* el, int axis, float room, void* user);
 
 struct UIElement {
     // ENGINE-OWNED: the layout pass and the input pass write these; read them,
@@ -474,6 +478,8 @@ struct UIElement {
     UIStyle* style;                // ui_set_style (owned copy); NULL = the theme's
     UIDrawFn draw;                 // ui_set_draw
     void* draw_user;               //   "
+    UIMeasureFn measure;           // ui_set_measure
+    void* measure_user;            //   "
     UIKeyFn on_key;                // ui_set_on_key
     void* on_key_user;             //   "
     struct ShaderProgram* program; // ui_set_element_program
@@ -722,6 +728,10 @@ void ui_set_text(UIElement* el, const char* text);
 bool ui_set_text_runs(UIElement* el, const UITextRun* runs, size_t count);
 void ui_set_style(UIElement* el, const UIStyle* style);
 void ui_set_draw(UIElement* el, UIDrawFn draw, void* user);
+// A panel's content measured by its app as well as by its children, at every layout: a FIT axis
+// hugs the larger, and a GROW axis takes it as its least; an answer below 0 or not a number is
+// none. NULL for none. Refused by name on any other kind, which measures its own content.
+void ui_set_measure(UIElement* el, UIMeasureFn measure, void* user);
 // The keys and characters `el` is handed while it holds the focus, before it acts on them; NULL
 // none. It then takes the keys as a text field does. Refused by name on a button, toggle, slider or
 // selector, whose own keys and navigation it would stop, and on a code editor, whose keys are its

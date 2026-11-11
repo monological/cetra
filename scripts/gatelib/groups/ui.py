@@ -653,6 +653,14 @@ def run_ui_gate(workdir):
                      held at its most; two halves of an odd length leaving a point;
                      two of 0.7 overflowing as FIXED lengths; half of a parent that
                      fits its children, which it adds nothing to; and a share of 0.
+      ui-measure     a panel measured by its app (spec 14.33), as exact rects: its
+                     answer across plus its padding, a label after it the row's gap
+                     on; down, the answer it gives for the width it was given, FIXED
+                     or fitted, and a FIXED axis never asked; a child larger than the
+                     answer wins; a GROW panel alone in a fitting row makes the row
+                     its answer and its padding wide; its most holds; an answer below 0 or not a
+                     number is none; refused on a label, which keeps its text's
+                     width; and NULL clears it.
       ui-padding-none a negative padding and spacing are none, a zero one the
                      style's and the theme's, and the padding goes per side.
       ui-label-padding a label's text is drawn inside its padding: its first line's
@@ -2003,6 +2011,57 @@ def run_ui_gate(workdir):
                       f"two halves leaving a point, two past 1, under a FIT parent and of 0 as the "
                       f"rule says")
         return ok, detail
+
+    # ---- a panel measured by its app (spec 14.33); every length is exact in float but 3000/37
+    @arm("ui-measure")
+    def _():
+        p = _ui_probe("measure")
+        if not p or ("cleared", "asked") not in p:
+            return False, "the probe produced nothing"
+
+        def rect(label):
+            return p.get((label, "rect"), [float("nan")] * 4)
+
+        pad, gap, wrong = 6.0, 8.0, []
+        first, after = rect("first"), rect("after")
+        if first[2] != 37.0 + 2 * pad or not close(first[3], 3000.0 / 37.0 + 2 * pad, 1e-3):
+            wrong.append(f"first {first[2]:g} by {first[3]:g} (want 49 by "
+                         f"{3000.0 / 37.0 + 2 * pad:.3f})")
+        if after[0] != first[0] + first[2] + gap:
+            wrong.append(f"the label after it at {after[0] - first[0]:g} (want 57)")
+        fixed = rect("fixed")
+        if (fixed[2], fixed[3]) != (112.0, 30.0 + 2 * pad):
+            wrong.append(f"fixed {fixed[2]:g} by {fixed[3]:g} (want 112 by 42)")
+        if p[("fixed", "asked")] != [0.0, 1.0]:
+            wrong.append(f"fixed asked {p[('fixed', 'asked')]} (want never across, once down)")
+        if p[("first", "asked")] != [1.0, 1.0]:
+            wrong.append(f"first asked {p[('first', 'asked')]} (want once each way)")
+        holding = rect("holding")
+        if (holding[2], holding[3]) != (80.0 + 2 * pad, 20.0 + 2 * pad):
+            wrong.append(f"holding {holding[2]:g} by {holding[3]:g} (want 92 by 32)")
+        if rect("fit")[2] != 55.0 + 2 * pad:
+            wrong.append(f"the fitting row {rect('fit')[2]:g} wide (want 67)")
+        if rect("held")[2] != 200.0:
+            wrong.append(f"held {rect('held')[2]:g} wide (want 200)")
+        for label in ("negative", "nan"):
+            r = rect(label)
+            if (r[2], r[3]) != (2 * pad, 2 * pad):
+                wrong.append(f"{label} {r[2]:g} by {r[3]:g} (want 12 by 12)")
+        label, twin = rect("label"), rect("twin")
+        if (p[("label", "kept")][0] != 1 or label[2:] != twin[2:]
+                or p[("refused", "asked")] != [0.0, 0.0]):
+            wrong.append(f"the label {label[2]:g} by {label[3]:g} beside {twin[2]:g} by "
+                         f"{twin[3]:g}, its measure kept {p[('label', 'kept')][0]:.0f}, asked "
+                         f"{p[('refused', 'asked')]} (want its twin's, kept, never asked)")
+        cleared = rect("cleared")
+        if (cleared[2], cleared[3]) != (2 * pad, 2 * pad) or p[("cleared", "asked")] != [0.0, 0.0]:
+            wrong.append(f"cleared {cleared[2]:g} by {cleared[3]:g}, asked "
+                         f"{p[('cleared', 'asked')]} (want 12 by 12, never)")
+        detail = ("; ".join(wrong) if wrong else
+                  f"49 by {first[3]:.3f} with the label 8 on, 112 by 42 asked down alone, a child of "
+                  f"80 by 20 winning, a fitting row 67 wide, held to 200, bad answers none, refused "
+                  f"on a label and cleared by NULL")
+        return not wrong, detail
 
     @arm("ui-padding-none")
     def _():

@@ -57,6 +57,13 @@ was given.
   rest whatever it measures; a weight on GROW was rejected because it misses by the gap a nested
   split measures. A SHARE axis measures 0, so a FIT parent is the size of its other children and the
   share is of what that comes to.
+- **A panel can be measured by its app** (`ui_set_measure`, spec 14.33), for something it draws
+  whose size the layout cannot see, such as a column of values a hook paints beside a plot.
+  - Each axis that measures content asks the app's measure: across with no room, and down with the
+    width the width pass gave the panel, as a wrapping label's height is taken from its width.
+  - The panel measures as the larger of the answer and its children. A FIXED or SHARE axis asks
+    nothing. An answer below 0, or not a number, is none.
+  - Only a panel takes one, since every other kind measures its own content.
 - **`UI_ALIGN_BASELINE` lines a row's children up by their text** (spec 14.13), as a row's
   `align_cross`: each child with a baseline moves down until its first line stands on the deepest
   one's, and the row is as tall as its lowest child then reaches. A label's baseline is its top
