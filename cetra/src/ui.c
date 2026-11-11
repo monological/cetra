@@ -2107,8 +2107,8 @@ static UIElement* _pane_at(UIElement* el, float x, float y) {
     return _deepest_at(el, x, y, _is_pane);
 }
 
-// The deepest element that scrolls showing the point, or NULL: what the wheel and a press on a bar
-// reach, so an editor in a pane scrolls itself and not the pane.
+// The deepest element that scrolls showing the point, or NULL: where the wheel and a press on a bar
+// start, so an editor in a pane with somewhere to scroll scrolls itself and not the pane.
 static UIElement* _scroller_at(UIElement* el, float x, float y) {
     return _deepest_at(el, x, y, _scrolls);
 }
