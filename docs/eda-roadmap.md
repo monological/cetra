@@ -17,7 +17,7 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-10: 14.31, a baseline for a draw hook._
+_Last updated: 2026-11-10: 14.32, a table in a scrolling pane._
 
 ---
 
@@ -66,7 +66,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 | 9 | What the panes and the fonts need of the UI | **Built** | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
 
-Specs 14.7, 14.9 to 14.21, 14.23 to 14.28, 14.30 and 14.31 are the smaller changes pcb's window
+Specs 14.7, 14.9 to 14.21, 14.23 to 14.28 and 14.30 to 14.32 are the smaller changes pcb's window
 asked for, listed under "Not among the nine". Spec 14.8 was not asked for by pcb: a headless run
 waits for the textures its start-up asked for before frame 1 (`docs/architecture.md`, Render
 Pipeline), which `pcb render` gets for free. Nor was 14.29, which splits the gate suite into files (`docs/verification.md`,
@@ -522,6 +522,14 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
   room: `ui_line_ascent`, beside `ui_line_height`, where `ui_draw_text` stands a line below the top
   it is given, so a hook drawing its own words ends their row at the baseline (`docs/ui.md`, The
   draw list).
+- **A table in a scrolling pane** -- spec 14.32, built, from pcb 7.4.2's board modal, which holds
+  its stack's picture beside the layers' table and wants the two to scroll together, the picture
+  not a column of the table: a table as tall as its rows in a `ui_scroll`, its header held at the
+  pane's top, the rows drawn those the pane shows, its cursor's row shown by the pane, and
+  `ui_table_header_rect` for what stands beside it; the wheel passing on from what has nothing to
+  scroll. With it, from the same modal's review: `UIStyle.corners`, so a strip along a rounded
+  box's foot rounds its bottom corners alone, and `ui_table_heights_changed`, rows sized to the
+  room asked again with no cell measured (`docs/ui.md`, The table, Scrolling panes, The draw list).
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the

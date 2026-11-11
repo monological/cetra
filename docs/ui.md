@@ -107,6 +107,11 @@ field is refused by name: a field's text is `ui_field_set_text` and its hint
 - **A bar is drawn only inside its element**, its insets included, a pane's, an editor's and a
   table's alike: an element sized to nothing, or narrower than the bar and its insets, has none,
   drawn or pressed (spec 14.17).
+- **A pane places content shorter than its view by `align_main`**, as any element places what is
+  left over, before its scroll is settled: `UI_ALIGN_CENTER` stands it in the middle.
+- **The wheel scrolls the deepest thing under the pointer with somewhere to scroll** (spec 14.32).
+  One that scrolls but whose content all shows passes it to the next one round it, so a table or an
+  editor in a pane, all of it shown, scrolls the pane.
 
 ### The table (`ui_table.c`)
 
@@ -151,6 +156,24 @@ app's. The spec says what else was rejected.
 - **The scroll is the element's own** `scroll` and `scroll_target`, as a pane's, so a reveal
   eases; the wheel and the bar move it at once. A reveal asked before its row is measured is taken
   at the next layout.
+- **In a scrolling pane** (spec 14.32) a table measured as tall as its rows is scrolled by the pane,
+  beside whatever stands with it there. At `place`, which runs after the whole layout, it keeps what
+  the panes round it show (`ui_shown_rect`: the root's rect met with each pane's clip), and reads
+  everything else from that:
+  - its header stands at the top of what shows while the table's top is above it, and goes up with
+    the last row once that rises past it; the rows pass under it;
+  - the rows drawn, pressed, paged by and found by `ui_table_cell_rect` are those shown under the
+    header;
+  - the cursor's row, which its own rows cannot scroll to, is shown by the panes round it, whole
+    under the header, as a focus moved to is;
+  - `ui_table_header_rect` says where the header stands, for an element beside the table drawing
+    level with its rows: its own title level with the header, its rows kept under it.
+
+  A table no pane scrolls shows the window, and its header stands at its content's top: its rows
+  shown are its rows' view, as before.
+- **Heights alone asked again** (`ui_table_heights_changed`, spec 14.32): every row's height from
+  the source's `height`, no cell's text measured, the tops summed again from the first that
+  changed. For rows sized to the room the app has, as a resize changes it.
 - **The cursor** stands only on rows the source's `holds` allows. No cursor counts as before the
   first row going down and past the last going up: the first Down puts it on the first row, Up on
   the last. Up and Down move it a row, Page Up and Page Down the row a view's height from its top,
@@ -282,6 +305,10 @@ possible. The shader is `ui_vert/frag` (`docs/shaders.md`, Game UI).
   of its glyphs.
 - **The draw list's offset moves the rounded-corner rect, the clips and `uRect` with the
   vertices**, which a slide transition and a scrolled pane need.
+- **Some corners rounded** (spec 14.32): `UIStyle.corners` names the corners `corner_radius`
+  rounds, `UI_CORNER_*` or'd, 0 for all four, as every zero in a style inherits. It rides a fill's
+  last vertex parameter, which a glyph's edge rides in its own mode, so it costs no attribute; the
+  border rounds with the fill. A strip along a rounded box's foot rounds its bottom corners alone.
 - **A line's height and where its baseline stands** are public, for a draw hook placing words it
   draws itself: `ui_line_height`, and `ui_line_ascent` (spec 14.31), the face's ascent at a size,
   how far below the top `ui_draw_text` is given a line stands. The UI's own text stands there by

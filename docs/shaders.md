@@ -237,7 +237,9 @@ chain's defaults (what is on, what is lazily allocated) are in
 - **Game UI:** `ui_vert/frag`, one program for every UI primitive, chosen per vertex by a `mode`
   attribute: a flat fill, a textured quad, an SDF glyph, a line or a convex shape.
   - Rounded corners and borders are an exact signed-distance evaluation, so a radius costs no
-    vertices; their edge is a one-pixel ramp (`docs/ui.md`, The draw list).
+    vertices; their edge is a one-pixel ramp (`docs/ui.md`, The draw list). **The corners a style
+    rounds** (spec 14.32) ride a fill's `params.w`, a mask, which a glyph's edge rides in its own
+    branch: each quadrant of the box takes the radius or none, 0 rounding all four.
   - **A line and a convex shape add no attribute, uniform or sampler** (spec 14.28): their geometry
     rides the `border` attribute, which they do not need for a colour, as distances affine in the
     position. A line's branch measures the distance to its segment less half its width; a convex
