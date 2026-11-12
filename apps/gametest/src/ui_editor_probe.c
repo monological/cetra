@@ -978,6 +978,23 @@ static void press_drag(UISystem* ui, float x0, float y0, float x1, float y1, int
     ui_build(ui, 1280.0f, 720.0f, 1.0f);
 }
 
+// A press at (x, y) and its release, each a tenth of a second after the last pass: clicks this way
+// are one run of presses.
+static void quick_click(UISystem* ui, float x, float y) {
+    ui_update(ui,
+              &(UIInput){.pointer_x = x,
+                         .pointer_y = y,
+                         .pointer_pressed = true,
+                         .pointer_down = true,
+                         .time = (g_key_time += 0.1)},
+              1280.0f, 720.0f);
+    ui_update(
+        ui,
+        &(UIInput){
+            .pointer_x = x, .pointer_y = y, .pointer_released = true, .time = (g_key_time += 0.1)},
+        1280.0f, 720.0f);
+}
+
 // The editor's one selection is (anchor, head).
 static bool one_selection(const UIElement* ed, size_t anchor, size_t head) {
     const TextSelection* s = NULL;
@@ -1179,6 +1196,16 @@ static int probe_editor_carets(UISystem* ui) {
               1280.0f, 720.0f);
     const size_t clicked[] = {0, 9};
     say_flag("editor-carets", "alt_click", "two", selections_are(ed, clicked, 2));
+    // Quick clicks inside "three": two take the word, a third its line with its break, and a
+    // fourth a caret again, the run wrapping at three.
+    ui_editor_point_of(ed, 10, &x, &y);
+    quick_click(ui, x + 1.0f, y + 4.0f);
+    quick_click(ui, x + 1.0f, y + 4.0f);
+    say_flag("editor-carets", "double_click", "word", one_selection(ed, 8, 13));
+    quick_click(ui, x + 1.0f, y + 4.0f);
+    say_flag("editor-carets", "triple_click", "line", one_selection(ed, 8, 14));
+    quick_click(ui, x + 1.0f, y + 4.0f);
+    say_flag("editor-carets", "fourth_click", "caret", one_selection(ed, 10, 10));
     // The bar's thumb dragged scrolls the view, and a drag in the text after it selects: the bar
     // is the UI's, and lets go when the pointer does.
     char lines[200 * 8];

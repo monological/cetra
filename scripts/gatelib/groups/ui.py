@@ -820,7 +820,9 @@ def run_ui_gate(workdir):
                      merged; five lines pasted one to each caret; Cmd+D taking the
                      word and then its next matches; Esc back to the primary; a
                      caret added a row below twice at its column; Option+click
-                     adding one; and find's next match selected. Run with freed
+                     adding one; a double click taking a word, a triple its line
+                     and a fourth a caret again; and find's next match selected.
+                     Run with freed
                      memory scribbled over: the bar's place is summed from the
                      rows above the first line, which a new editor once left unset,
                      and the drag on the bar read that garbage (spec 14.6's review).
@@ -2547,10 +2549,11 @@ def run_ui_gate(workdir):
 
     @arm("ui-editor-carets")
     def _():
-        ok, detail = doc_flags("editor-carets", 11, "typing at five carets as one action, "
+        ok, detail = doc_flags("editor-carets", 14, "typing at five carets as one action, "
                                "overlapping selections merged, five lines pasted one to each "
                                "caret, Cmd+D's word and next matches, Esc to the primary, a caret "
-                               "added a row below twice, Option+click, a drag in the text "
+                               "added a row below twice, Option+click, a double click's word, a "
+                               "triple's line and a fourth click's caret, a drag in the text "
                                "selecting after the bar's thumb was dragged, find's next match, "
                                "touching selections typed over each landing after its own text, "
                                "and a caret merged into a selection it starts; freed memory "
