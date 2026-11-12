@@ -2812,6 +2812,32 @@ void ui_input_read(UIInput* in, const Engine* engine) {
     in->time = _ui_clock(engine);
 }
 
+// Two presses this close in time and place are one run.
+#define UI_PRESS_SECONDS 0.4
+#define UI_PRESS_POINTS  4.0f
+
+int ui_presses_add(UIPresses* run, double time, float x, float y, int cycle) {
+    if (!run) {
+        log_error("ui_presses_add: NULL run");
+        return 0;
+    }
+    const bool again = run->count > 0 && time - run->time < UI_PRESS_SECONDS &&
+                       fabsf(x - run->x) < UI_PRESS_POINTS && fabsf(y - run->y) < UI_PRESS_POINTS;
+    run->count = again && (!cycle || run->count < cycle) ? run->count + 1 : 1;
+    run->time = time;
+    run->x = x;
+    run->y = y;
+    return run->count;
+}
+
+void ui_presses_end(UIPresses* run) {
+    if (!run) {
+        log_error("ui_presses_end: NULL run");
+        return;
+    }
+    run->count = 0;
+}
+
 static void _ui_overlay(Engine* engine, void* user) {
     UISystem* ui = user;
     if (!ui || !engine)

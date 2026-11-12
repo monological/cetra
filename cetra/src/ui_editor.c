@@ -151,7 +151,7 @@ struct UIEditor {
     uint64_t led;
     uint64_t placed;
     // A run of presses, and the unit the last took, which a drag extends by.
-    UITypingPresses presses;
+    UIPresses presses;
     size_t grab_from, grab_to;
     UITypingCaret caret;
     // The last line wrapped: its row starts, which line at which version, columns and tab stops,
@@ -1100,7 +1100,7 @@ static bool _show(UIEditor* ed, TextDoc* doc) {
     _park(ed);
     ed->serial = ++g_serials;
     ed->wrapped_line = SIZE_MAX;
-    ed->presses = (UITypingPresses){0};
+    ui_presses_end(&ed->presses);
     ed->grab_from = ed->grab_to = 0;
     ed->caret.moved = true;
     ed->pending.kind = PENDING_NONE;
@@ -1865,7 +1865,7 @@ static void _press(const UISystem* ui, UIElement* el, UIRect content, float x, f
     UIEditor* ed = _of(el);
     if (!ed)
         return;
-    const int presses = ui_typing_press(&ed->presses, time, x, y, 3);
+    const int presses = ui_presses_add(&ed->presses, time, x, y, 3);
     const TextSelection u = _unit(ed, ui_editor_offset_at(el, x, y), presses);
     // On the fold's own row, past any fillers above it.
     size_t line, row;

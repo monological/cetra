@@ -804,6 +804,21 @@ typedef struct UIInput {
 // the app's, from its own bindings, before or after this.
 void ui_input_read(UIInput* in, const struct Engine* engine);
 
+// A run of presses: the last one's time, on UIInput.time, and place, and how many so far.
+typedef struct UIPresses {
+    double time;
+    float x, y;
+    int count;
+} UIPresses;
+
+// A press at (x, y) at `time`, counted into the run when it is close enough to the last in time
+// and place: how many the run now holds, from 1 -- 2 a double click, 3 a triple -- back to 1
+// after `cycle` when it is not 0.
+int ui_presses_add(UIPresses* run, double time, float x, float y, int cycle);
+
+// The run ended, so the next press begins one.
+void ui_presses_end(UIPresses* run);
+
 /*
  * The INPUT pass. Lay the top screen out, hit-test the pointer, move focus,
  * activate, fire callbacks, and settle whether the UI is holding input.

@@ -67,8 +67,8 @@ struct UIField {
     // The caret, the selection and the edits as a turn of keys began (_keys_begin).
     int was_cursor, was_start, was_end;
     unsigned was_edits;
-    UITypingCaret caret;     // its blink, on the draw's clock
-    UITypingPresses presses; // the pointer's run of presses, on the input's clock
+    UITypingCaret caret; // its blink, on the draw's clock
+    UIPresses presses;   // the pointer's run of presses, on the input's clock
 
     UIActionFn on_change;
     void* change_user;
@@ -763,7 +763,7 @@ static void _press(const UISystem* ui, UIElement* el, UIRect content, float x, f
     if (!f)
         return;
     const float lx = x - content.x + f->scroll_x, ly = y - content.y + f->scroll_y;
-    const int presses = ui_typing_press(&f->presses, now, x, y, 0);
+    const int presses = ui_presses_add(&f->presses, now, x, y, 0);
     if (mods & GLFW_MOD_SHIFT)
         stb_textedit_drag(f, &f->state, lx, ly);
     else

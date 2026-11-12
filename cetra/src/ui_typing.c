@@ -133,17 +133,6 @@ size_t ui_typing_clean(const char* in, size_t len, char* out, bool lines, bool t
     return k;
 }
 
-int ui_typing_press(UITypingPresses* p, double now, float x, float y, int cycle) {
-    const bool again = p->count > 0 && now - p->time < UI_TYPING_PRESS_SECONDS &&
-                       fabsf(x - p->x) < UI_TYPING_PRESS_POINTS &&
-                       fabsf(y - p->y) < UI_TYPING_PRESS_POINTS;
-    p->count = again && (!cycle || p->count < cycle) ? p->count + 1 : 1;
-    p->time = now;
-    p->x = x;
-    p->y = y;
-    return p->count;
-}
-
 bool ui_typing_caret_lit(UITypingCaret* c, double now, bool blink, double* wake) {
     if (c->moved) {
         c->since = now;

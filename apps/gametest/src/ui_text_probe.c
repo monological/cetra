@@ -736,6 +736,29 @@ static int probe_field_undo(UISystem* ui) {
     return 0;
 }
 
+// A run of presses as an app counts one (spec 14.34): three close together in time and place, then
+// one late and one far, each beginning again; a cycle of three wrapping on the fourth; a run ended
+// beginning again.
+static int probe_presses(void) {
+    UIPresses run = {0};
+    const int first = ui_presses_add(&run, 1.0, 10.0f, 10.0f, 0);
+    const int second = ui_presses_add(&run, 1.2, 12.0f, 11.0f, 0);
+    const int third = ui_presses_add(&run, 1.4, 12.0f, 11.0f, 0);
+    printf("ui presses run count %d %d %d\n", first, second, third);
+    const int late = ui_presses_add(&run, 2.0, 12.0f, 11.0f, 0);
+    const int far = ui_presses_add(&run, 2.1, 30.0f, 11.0f, 0);
+    printf("ui presses apart count %d %d\n", late, far);
+    UIPresses cycled = {0};
+    int counts[4];
+    for (int k = 0; k < 4; k++)
+        counts[k] = ui_presses_add(&cycled, 0.1 * k, 5.0f, 5.0f, 3);
+    printf("ui presses cycle count %d %d %d %d\n", counts[0], counts[1], counts[2], counts[3]);
+    ui_presses_add(&run, 3.0, 5.0f, 5.0f, 0);
+    ui_presses_end(&run);
+    printf("ui presses ended count %d\n", ui_presses_add(&run, 3.1, 5.0f, 5.0f, 0));
+    return 0;
+}
+
 // The caret's quad in the list: the 1.5-point bar the focused field draws.
 static bool caret_quad(UISystem* ui, UIRect* out) {
     const UIDrawList* dl = ui_draw_list(ui);
@@ -2432,6 +2455,8 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_field_clipboard(game, ui);
     if (!strcmp(which, "field-undo"))
         return probe_field_undo(ui);
+    if (!strcmp(which, "presses"))
+        return probe_presses();
     if (!strcmp(which, "field-caret-x"))
         return probe_field_caret_x(ui, font);
     if (!strcmp(which, "field-scroll-x"))

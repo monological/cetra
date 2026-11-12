@@ -709,6 +709,9 @@ def run_ui_gate(workdir):
                      pastes nor takes typing -- all through the engine's
                      clipboard, which headless is its own.
       ui-field-undo  typing undoes and redoes a word at a time.
+      ui-presses     a run of presses as an app counts one: three close in time
+                     and place 1, 2, 3; a late one and a far one 1; a cycle of
+                     three wrapping to 1; a run ended beginning again.
       ui-field-caret-x at every index of a line with kerning pairs, the caret is
                      where the glyph there is drawn, to the pixel snap.
       ui-field-scroll-x a line longer than its field keeps the caret inside it at
@@ -2242,6 +2245,18 @@ def run_ui_gate(workdir):
             detail = ("'abc def' undoes to 'abc' then nothing, and redoes back a word at a time"
                       if ok else f"the text was not the one wanted after {list(wrong)} (want "
                       f"'abc', '', 'abc', 'abc def'; the probe's stderr names each)")
+        return ok, detail
+
+    @arm("ui-presses")
+    def _():
+        p = _ui_probe("presses")
+        if not p:
+            ok, detail = False, "the probe produced nothing"
+        else:
+            got = {k: p[(k, "count")] for k in ("run", "apart", "cycle", "ended")}
+            ok = (got["run"] == [1, 2, 3] and got["apart"] == [1, 1]
+                  and got["cycle"] == [1, 2, 3, 1] and got["ended"] == [1])
+            detail = f"counts {got} (want run 1 2 3, apart 1 1, cycle 1 2 3 1, ended 1)"
         return ok, detail
 
     @arm("ui-field-caret-x")
