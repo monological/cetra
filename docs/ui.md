@@ -245,7 +245,8 @@ keys, repeats and characters; `docs/architecture.md`, Input). It leaves `nav_*`,
 `back` to the app's own bindings. No app gathers pointer state of its own.
 
 **A run of presses** is counted by `ui_presses_add`, on a `UIPresses` its caller holds: a press
-within 0.4 seconds and 4 points of the last joins the run, so 2 is a double click and 3 a triple,
+close enough to the last in time and place (`UI_PRESS_SECONDS` and `UI_PRESS_POINTS`, in `ui.c`)
+joins the run, so 2 is a double click and 3 a triple,
 and `cycle` wraps it back to 1, as the code editor's caret, word and line do. It counts on
 `UIInput.time`, so a scripted double click is the same on every headless run. `ui_presses_end` ends
 the run when a press is not part of one, so a quick press after it is not a second. The text field,

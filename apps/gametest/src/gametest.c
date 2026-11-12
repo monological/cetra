@@ -9651,12 +9651,16 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    // The settings case runs before the engine exists, because nothing it
-    // measures needs one. Every other case needs a font -- FIT sizing is made
-    // of measurement -- so it takes a headless game, the shape the audio and
-    // anim probes already established, and still never draws a frame.
+    // The settings and presses cases run before the engine exists, because
+    // nothing they measure needs one. Every other case needs a font -- FIT
+    // sizing is made of measurement -- so it takes a headless game, the shape
+    // the audio and anim probes already established, and still never draws a
+    // frame.
     if (ui_probe && !strcmp(ui_probe, "settings")) {
         return run_ui_probe(ui_probe);
+    }
+    if (ui_probe && !strcmp(ui_probe, "presses")) {
+        return run_ui_presses_probe();
     }
     // Most cases are pure arithmetic over camera_rig.c and need no engine at all,
     // which is the rig's design asserted rather than described. `seam` and

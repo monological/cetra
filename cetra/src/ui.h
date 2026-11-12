@@ -804,7 +804,8 @@ typedef struct UIInput {
 // the app's, from its own bindings, before or after this.
 void ui_input_read(UIInput* in, const struct Engine* engine);
 
-// A run of presses: the last one's time, on UIInput.time, and place, and how many so far.
+// A run of presses: the last one's time, on UIInput.time, and place, and how many so far. Zeroed,
+// an empty run; ui_presses_add and ui_presses_end write it, and its holder reads `count` alone.
 typedef struct UIPresses {
     double time;
     float x, y;

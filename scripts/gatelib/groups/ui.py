@@ -2253,7 +2253,7 @@ def run_ui_gate(workdir):
         if not p:
             ok, detail = False, "the probe produced nothing"
         else:
-            got = {k: p[(k, "count")] for k in ("run", "apart", "cycle", "ended")}
+            got = {k: p.get((k, "count")) for k in ("run", "apart", "cycle", "ended")}
             ok = (got["run"] == [1, 2, 3] and got["apart"] == [1, 1]
                   and got["cycle"] == [1, 2, 3, 1] and got["ended"] == [1])
             detail = f"counts {got} (want run 1 2 3, apart 1 1, cycle 1 2 3 1, ended 1)"

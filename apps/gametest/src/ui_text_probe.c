@@ -736,10 +736,9 @@ static int probe_field_undo(UISystem* ui) {
     return 0;
 }
 
-// A run of presses as an app counts one (spec 14.34): three close together in time and place, then
-// one late and one far, each beginning again; a cycle of three wrapping on the fourth; a run ended
-// beginning again.
-static int probe_presses(void) {
+// Three presses close together in time and place, then one late and one far, each beginning again;
+// a cycle of three wrapping on the fourth; a run ended beginning again.
+int run_ui_presses_probe(void) {
     UIPresses run = {0};
     const int first = ui_presses_add(&run, 1.0, 10.0f, 10.0f, 0);
     const int second = ui_presses_add(&run, 1.2, 12.0f, 11.0f, 0);
@@ -2455,8 +2454,6 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_field_clipboard(game, ui);
     if (!strcmp(which, "field-undo"))
         return probe_field_undo(ui);
-    if (!strcmp(which, "presses"))
-        return probe_presses();
     if (!strcmp(which, "field-caret-x"))
         return probe_field_caret_x(ui, font);
     if (!strcmp(which, "field-scroll-x"))
