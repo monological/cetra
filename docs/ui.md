@@ -244,6 +244,13 @@ modifiers, the wheel, the clock, and the keys (`UIInput.key_events`, the engine'
 keys, repeats and characters; `docs/architecture.md`, Input). It leaves `nav_*`, `accept` and
 `back` to the app's own bindings. No app gathers pointer state of its own.
 
+**A run of presses** is counted by `ui_presses_add`, on a `UIPresses` its caller holds: a press
+within 0.4 seconds and 4 points of the last joins the run, so 2 is a double click and 3 a triple,
+and `cycle` wraps it back to 1, as the code editor's caret, word and line do. It counts on
+`UIInput.time`, so a scripted double click is the same on every headless run. `ui_presses_end` ends
+the run when a press is not part of one, so a quick press after it is not a second. The text field,
+the code editor and an app all count theirs this way, so a double click is one thing everywhere.
+
 **Focus**: a press takes a text field's focus and the pointer passing over does not; a press on
 nothing in a screen that is not modal lets go. `ui_wants_keyboard` is what an app asks before
 taking a key itself. `ui_set_focus` refuses an element hidden or under a hidden one, so no key
@@ -458,8 +465,8 @@ element's. The placeholder is drawn dim while the field is empty, and never size
 **`ui_typing.c`** (private) holds the platform's editing conventions, which the text field and the
 code editor both edit by, so the two cannot drift: word classes and word moves (to a word's end on
 macOS, the next word's start elsewhere), the word round a point, a character stepped without reading
-past its run, the paste cleaner, and the state of a run of presses (the double press) and of a
-caret's blink.
+past its run, the paste cleaner, and the state of a caret's blink. A run of presses is the UI's
+(Focus, input and key routing).
 
 ## The code editor and its text
 

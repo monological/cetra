@@ -17,7 +17,7 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-11: 14.33, a panel measured by its app._
+_Last updated: 2026-11-12: 14.34, a double click for the app._
 
 ---
 
@@ -66,7 +66,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 | 9 | What the panes and the fonts need of the UI | **Built** | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
 
-Specs 14.7, 14.9 to 14.21, 14.23 to 14.28 and 14.30 to 14.33 are the smaller changes pcb's window
+Specs 14.7, 14.9 to 14.21, 14.23 to 14.28 and 14.30 to 14.34 are the smaller changes pcb's window
 asked for, listed under "Not among the nine". Spec 14.8 was not asked for by pcb: a headless run
 waits for the textures its start-up asked for before frame 1 (`docs/architecture.md`, Render
 Pipeline), which `pcb render` gets for free. Nor was 14.29, which splits the gate suite into files (`docs/verification.md`,
@@ -536,6 +536,11 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
   width, as Yoga's measure function does a leaf's. The values were not made labels spread by a new
   alignment, which would put each tick's place in two hands (`docs/ui.md`, Layout, one axis at a
   time).
+- **A double click for the app** -- spec 14.34, built, from pcb 7.5, whose layout picks a trace's
+  segment by a click and the trace whole by a double click. `UIPresses`, `ui_presses_add` and
+  `ui_presses_end` in `ui.h` count a run of presses, as the text field and the code editor did
+  privately, so pcb keeps no copy of what a double click is (`docs/ui.md`, Focus, input and key
+  routing).
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the

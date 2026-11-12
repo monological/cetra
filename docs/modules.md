@@ -165,7 +165,7 @@ linked doc explains the subsystem. `cetra/src/ext/` is vendored and not listed.
 | `text.c/h` | Fonts: the SDF atlas, kerning, the pen, and UTF-8. See `docs/ui.md`. |
 | `glyph_cache.c/h` | Coverage bitmaps at the exact pixel size, for the code editor. See `docs/ui.md`. |
 | `embedded_file.h` | A file built into the program by `cetra_embed_files`. See `docs/shader-subsystems.md`. |
-| `ui.c/h` | The retained UI: elements, layout, focus, input routing, theme. See `docs/ui.md`. |
+| `ui.c/h` | The retained UI: elements, layout, focus, input routing and a run of presses, theme. See `docs/ui.md`. |
 | `ui_draw.c` | The UI's draw list, drawn as an engine overlay after tone mapping. See `docs/ui.md`. |
 | `ui_text.h` | Private: the UI's one text walk for measuring, breaking, drawing and caret placement. See `docs/ui.md`. |
 | `ui_internal.h`, `ui_hooks.h` | Private: what the UI's files share, and what a test reads of the system. See `docs/ui.md`. |
