@@ -438,6 +438,46 @@ static int probe_doc_undo(void) {
     printf("ui doc-undo inside refused %d\n", g_inside_refused && doc_is_str(doc, ""));
     printf("ui doc-undo inside redo %d\n", text_doc_redo(doc) && doc_is_str(doc, "ab"));
     free_text_doc(doc);
+
+    // A host's edit joined to the step before it: one undo takes back both, the caret where the
+    // step began, and a redo makes both, the caret moved through the host's change.
+    doc = create_text_doc("", 0);
+    FakeView joined = {.sel = {{0, 0}}, .count = 1};
+    fake_attach(doc, &joined);
+    fake_type(doc, &joined, "ab");
+    text_doc_set_text_joined(doc, "<ab", 3);
+    printf("ui doc-undo joined one %d\n", doc->undo_count == 1 && joined.sel[0].head == 3);
+    text_doc_undo(doc);
+    printf("ui doc-undo joined undone %d\n", doc_is_str(doc, "") && joined.sel[0].head == 0);
+    text_doc_redo(doc);
+    printf("ui doc-undo joined redone %d\n", doc_is_str(doc, "<ab") && joined.sel[0].head == 3);
+    free_text_doc(doc);
+
+    // After an undo the last step is not the text's latest: the host's edit is a step of its own,
+    // the redo dropped, and an undo takes it back alone.
+    doc = create_text_doc("", 0);
+    FakeView late = {.sel = {{0, 0}}, .count = 1};
+    fake_attach(doc, &late);
+    fake_type(doc, &late, "ab");
+    fake_type(doc, &late, " c");
+    text_doc_undo(doc);
+    text_doc_set_text_joined(doc, "ab!", 3);
+    printf("ui doc-undo late own %d\n", doc->undo_count == 2 && doc->redo_count == 0);
+    text_doc_undo(doc);
+    printf("ui doc-undo late alone %d\n", doc_is_str(doc, "ab"));
+    free_text_doc(doc);
+
+    // Typing after a joined edit is a step of its own, never merged into the host's bytes.
+    doc = create_text_doc("", 0);
+    FakeView after = {.sel = {{0, 0}}, .count = 1};
+    fake_attach(doc, &after);
+    fake_type(doc, &after, "ab");
+    text_doc_set_text_joined(doc, "ab!", 3);
+    fake_type(doc, &after, "c");
+    printf("ui doc-undo typing own %d\n", doc_is_str(doc, "abc!") && doc->undo_count == 2);
+    text_doc_undo(doc);
+    printf("ui doc-undo typing undone %d\n", doc_is_str(doc, "ab!"));
+    free_text_doc(doc);
     return 0;
 }
 

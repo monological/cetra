@@ -499,7 +499,8 @@ spans -- is the private `text_doc_edit.h`.
   one's replacement begins would be pushed past that one's new text. The text is not changed from
   inside `on_action`; that is refused by name.
 - **The host's edits** (`text_doc_replace`, and `text_doc_set_text`, which trims the unchanged ends
-  to one replacement) are not reported back to it.
+  to one replacement) are not reported back to it. Each is a step of undo of its own, but
+  `text_doc_set_text_joined`'s, which joins the step before it (see Undo).
 - **A text freed while an editor shows it** leaves the editor showing nothing.
 
 **Undo.** The text keeps an undo of its own (`keep_undo`, on by default) for an app with no
@@ -515,6 +516,12 @@ it off and binds the keys to its own.
 - **A step is joined only by the action straight after its last**: each keeps the text's version
   after its last action, so typing after `keep_undo` was off, or after another editor's edit, starts
   a step of its own rather than adding bytes to one that no longer ends where they begin.
+- **A host's edit joins the step before it** with `text_doc_set_text_joined` (spec 14.35), as vim's
+  `:undojoin` does, for a host that puts what was typed in order as it saves: the edit and what
+  caused it are one undo, so undo never lands on text the host would put in order again. It joins
+  only the latest step, by the same version, and is a step of its own after an undo; the step's
+  selections after are moved through it, as the editors' carets were, and the typing it may have
+  moved is sealed.
 - **A view leaving a text** (`text_doc_remove_view`: an editor freed, or shown another text) closes a
   group held to it, keeping the step as far as it got, and seals the typing it was joining, since a
   view made later at its address must add to neither.

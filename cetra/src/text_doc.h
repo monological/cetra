@@ -188,6 +188,10 @@ bool text_doc_replace(TextDoc* doc, size_t start, size_t end, const char* text, 
 // The host's whole new text, landing as one replacement of what changed between the two: a file
 // reloaded after an undo of one word moves the carets as that word's change.
 bool text_doc_set_text(TextDoc* doc, const char* text, size_t len);
+// The same, joined to the last step of undo where that step is the text's latest -- nothing has
+// changed the text since its last action -- so one undo takes back both, as vim's :undojoin; a step
+// of its own otherwise.
+bool text_doc_set_text_joined(TextDoc* doc, const char* text, size_t len);
 // `offset` held at `version` brought to the text as it is now: an offset before a change stays,
 // one after moves by its length, and one inside the bytes it replaced goes to the end of the new
 // ones. Refused by name, *offset untouched, for a version older than TEXT_DOC_HISTORY changes or

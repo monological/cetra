@@ -780,7 +780,11 @@ def run_ui_gate(workdir):
       ui-doc-undo    typing joins into words, a space starting the next; a sealed
                      caret splits typing; two carets' typing is one step and joins
                      as one caret's does; undo and redo restore the text and the
-                     carets as they were; with keep_undo off nothing is kept.
+                     carets as they were; with keep_undo off nothing is kept. A
+                     host's edit joined to the latest step (spec 14.35) is undone
+                     with it, the caret back where the step began, and redone with
+                     the caret moved through it; after an undo it is a step of its
+                     own, and typing after it is never merged into its bytes.
       ui-doc-read-only a read-only text (spec 14.7): typing at two carets refused as
                      one action, the version unchanged and nothing told to
                      on_action; an editor's undo and redo refused; the host's edit
@@ -2474,10 +2478,12 @@ def run_ui_gate(workdir):
 
     @arm("ui-doc-undo")
     def _():
-        ok, detail = doc_flags("doc-undo", 19, "typing joins into words, a sealed caret splits it, "
+        ok, detail = doc_flags("doc-undo", 26, "typing joins into words, a sealed caret splits it, "
                                "two carets are one step, undo and redo restore the text and the "
-                               "carets, with keep_undo off nothing is kept, and a change asked for "
-                               "inside on_action is refused")
+                               "carets, with keep_undo off nothing is kept, a change asked for "
+                               "inside on_action is refused, and a host's edit joined to the latest "
+                               "step is undone and redone with it, a step of its own after an undo, "
+                               "typing after it a step of its own")
         return ok, detail
 
     @arm("ui-doc-read-only")

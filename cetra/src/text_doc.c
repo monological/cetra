@@ -936,16 +936,17 @@ static bool _splits_char(TextDoc* doc, size_t offset) {
     return text_utf8_is_continuation(text_doc_byte(doc, offset));
 }
 
-bool text_doc_replace(TextDoc* doc, size_t start, size_t end, const char* text, size_t len) {
-    if (!doc || (!text && len) || !_may_change(doc, "text_doc_replace"))
-        return false;
+// The host's edit, named `who` where it is refused: a step of its own, or with `join` the last
+// step's last part where that step is the text's latest.
+static bool _host_replace(TextDoc* doc, size_t start, size_t end, const char* text, size_t len,
+                          bool join, const char* who) {
     if (start > end || end > doc->length) {
-        log_error("text_doc_replace: bytes %zu to %zu are not inside the text's %zu", start, end,
+        log_error("%s: bytes %zu to %zu are not inside the text's %zu", who, start, end,
                   doc->length);
         return false;
     }
     if (_splits_char(doc, start) || _splits_char(doc, end)) {
-        log_error("text_doc_replace: bytes %zu to %zu start or end inside a character", start, end);
+        log_error("%s: bytes %zu to %zu start or end inside a character", who, start, end);
         return false;
     }
     if (start == end && !len)
@@ -954,23 +955,50 @@ bool text_doc_replace(TextDoc* doc, size_t start, size_t end, const char* text, 
     char* removed = NULL;
     TextDocChange* change = _changes_of(doc, &edit, 1, &removed);
     if (!change) {
-        log_error("text_doc_replace: out of memory");
+        log_error("%s: out of memory", who);
         return false;
     }
+    const uint64_t from = doc->version;
+    const TextUndoStep* last = doc->undo_count ? &doc->undo[doc->undo_count - 1] : NULL;
+    const bool joins = join && doc->keep_undo && last && last->version == from;
     const bool ok = _run(doc, change, 1, NULL, NULL) == 1;
-    // A step of its own, the typing before it sealed and a group's next action a new step.
-    _new_step(doc);
-    doc->group_fresh = doc->grouping;
-    _drop_group_before(doc);
-    if (ok)
-        _keep(doc, KEEP_STEP, 0, change, 1, NULL, 0, NULL, 0, NULL);
+    if (joins) {
+        // The typing before it sealed, since the change may have moved where it ends; a group
+        // held open stays so.
+        doc->typing.count = 0;
+        if (ok) {
+            // The step's selections after moved through the change, as the editors' carets were.
+            size_t n = 0;
+            TextSelection* after = _copy_selections(last->after, last->after_count, &n);
+            const TextViewChange moved = {.start = start, .removed = end - start, .inserted = len};
+            for (size_t i = 0; after && i < n; i++)
+                text_doc_map_selection(&after[i], &moved);
+            _keep(doc, KEEP_PART, from, change, 1, NULL, 0, after, after ? n : 0, NULL);
+            free(after);
+        }
+    } else {
+        // A step of its own, the typing before it sealed and a group's next action a new step.
+        _new_step(doc);
+        doc->group_fresh = doc->grouping;
+        _drop_group_before(doc);
+        if (ok)
+            _keep(doc, KEEP_STEP, 0, change, 1, NULL, 0, NULL, 0, NULL);
+    }
     free(change);
     free(removed);
     return ok;
 }
 
-bool text_doc_set_text(TextDoc* doc, const char* text, size_t len) {
-    if (!doc || (!text && len) || !_may_change(doc, "text_doc_set_text"))
+bool text_doc_replace(TextDoc* doc, size_t start, size_t end, const char* text, size_t len) {
+    if (!doc || (!text && len) || !_may_change(doc, "text_doc_replace"))
+        return false;
+    return _host_replace(doc, start, end, text, len, false, "text_doc_replace");
+}
+
+// The host's whole new text as the one replacement of what changed, joined or not as _host_replace
+// takes it.
+static bool _host_set_text(TextDoc* doc, const char* text, size_t len, bool join, const char* who) {
+    if (!doc || (!text && len) || !_may_change(doc, who))
         return false;
     size_t old_len = 0;
     char* old = text_doc_text(doc, &old_len);
@@ -993,7 +1021,15 @@ bool text_doc_set_text(TextDoc* doc, const char* text, size_t len) {
     free(old);
     if (head == old_len && head == len)
         return true;
-    return text_doc_replace(doc, head, old_len - tail, text + head, len - tail - head);
+    return _host_replace(doc, head, old_len - tail, text + head, len - tail - head, join, who);
+}
+
+bool text_doc_set_text(TextDoc* doc, const char* text, size_t len) {
+    return _host_set_text(doc, text, len, false, "text_doc_set_text");
+}
+
+bool text_doc_set_text_joined(TextDoc* doc, const char* text, size_t len) {
+    return _host_set_text(doc, text, len, true, "text_doc_set_text_joined");
 }
 
 // Whether every change since `version` is still in the history, saying by name when not.
