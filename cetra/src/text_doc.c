@@ -568,19 +568,24 @@ static bool _part(TextUndoPart* part, const TextDocChange* changes, size_t count
     return true;
 }
 
-// Keeps an action, made from the text's version `from`, for undo as `how` says; with no last step
-// to join, a step of its own. The last step is joined only when its last action is the one before
-// this -- nothing made since went unkept with keep_undo off -- and a step kept empty, a group's
-// first when it changed nothing, takes the group's next action as its first part.
+// The last step, which an action made from the text's version `from` may join: its last action the
+// one before -- nothing made since went unkept with keep_undo off; NULL otherwise.
+static TextUndoStep* _latest_step(TextDoc* doc, uint64_t from) {
+    TextUndoStep* s = doc->keep_undo && doc->undo_count ? &doc->undo[doc->undo_count - 1] : NULL;
+    return s && s->version == from ? s : NULL;
+}
+
+// Keeps an action, made from the text's version `from`, for undo as `how` says; with no latest step
+// to join, a step of its own. A step kept empty, a group's first when it changed nothing, takes the
+// group's next action as its first part.
 static void _keep(TextDoc* doc, Keep how, uint64_t from, const TextDocChange* changes, size_t count,
                   const TextSelection* before, size_t before_count, const TextSelection* after,
                   size_t after_count, void* view) {
     if (!doc->keep_undo)
         return;
     _drop_redo(doc);
-    TextUndoStep* s = doc->undo_count ? &doc->undo[doc->undo_count - 1] : NULL;
-    if (how != KEEP_STEP && s && s->version == from) {
-        s->version = doc->version;
+    TextUndoStep* s = how != KEEP_STEP ? _latest_step(doc, from) : NULL;
+    if (s) {
         // Typing joins the last action's text caret by caret, which kept it with as many changes.
         if (how == KEEP_MERGE && s->part_count &&
             s->parts[s->part_count - 1].change_count == count) {
@@ -602,6 +607,9 @@ static void _keep(TextDoc* doc, Keep how, uint64_t from, const TextDocChange* ch
                 return;
             s->part_count++;
         }
+        // The step's version moves only once it holds the action, so a step that could not take
+        // it is joined by nothing after.
+        s->version = doc->version;
         free(s->after);
         s->after = _copy_selections(after, after_count, &s->after_count);
         return;
@@ -959,31 +967,28 @@ static bool _host_replace(TextDoc* doc, size_t start, size_t end, const char* te
         return false;
     }
     const uint64_t from = doc->version;
-    const TextUndoStep* last = doc->undo_count ? &doc->undo[doc->undo_count - 1] : NULL;
-    const bool joins = join && doc->keep_undo && last && last->version == from;
+    const TextUndoStep* last = join ? _latest_step(doc, from) : NULL;
+    // Joined, the step's selections after moved through the change, as the editors' carets are.
+    size_t n = 0;
+    TextSelection* after = last ? _copy_selections(last->after, last->after_count, &n) : NULL;
+    const TextViewChange moved = {.start = start, .removed = end - start, .inserted = len};
+    for (size_t i = 0; i < n; i++)
+        text_doc_map_selection(&after[i], &moved);
+    const bool joins = last != NULL;
     const bool ok = _run(doc, change, 1, NULL, NULL) == 1;
+    // The typing before it sealed, since the change may have moved where it ends. Of its own, it
+    // is a new step and a group's next action another; joined, a group held open goes on joining.
+    // Either way a group's selections as it opened are let go, held where the change has moved.
     if (joins) {
-        // The typing before it sealed, since the change may have moved where it ends; a group
-        // held open stays so.
-        doc->typing.count = 0;
-        if (ok) {
-            // The step's selections after moved through the change, as the editors' carets were.
-            size_t n = 0;
-            TextSelection* after = _copy_selections(last->after, last->after_count, &n);
-            const TextViewChange moved = {.start = start, .removed = end - start, .inserted = len};
-            for (size_t i = 0; after && i < n; i++)
-                text_doc_map_selection(&after[i], &moved);
-            _keep(doc, KEEP_PART, from, change, 1, NULL, 0, after, after ? n : 0, NULL);
-            free(after);
-        }
+        text_doc_seal_undo(doc);
     } else {
-        // A step of its own, the typing before it sealed and a group's next action a new step.
         _new_step(doc);
         doc->group_fresh = doc->grouping;
-        _drop_group_before(doc);
-        if (ok)
-            _keep(doc, KEEP_STEP, 0, change, 1, NULL, 0, NULL, 0, NULL);
     }
+    _drop_group_before(doc);
+    if (ok)
+        _keep(doc, joins ? KEEP_PART : KEEP_STEP, from, change, 1, NULL, 0, after, n, NULL);
+    free(after);
     free(change);
     free(removed);
     return ok;
@@ -995,8 +1000,7 @@ bool text_doc_replace(TextDoc* doc, size_t start, size_t end, const char* text, 
     return _host_replace(doc, start, end, text, len, false, "text_doc_replace");
 }
 
-// The host's whole new text as the one replacement of what changed, joined or not as _host_replace
-// takes it.
+// The host's whole new text as the one replacement of what changed.
 static bool _host_set_text(TextDoc* doc, const char* text, size_t len, bool join, const char* who) {
     if (!doc || (!text && len) || !_may_change(doc, who))
         return false;

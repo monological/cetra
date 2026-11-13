@@ -478,6 +478,20 @@ static int probe_doc_undo(void) {
     text_doc_undo(doc);
     printf("ui doc-undo typing undone %d\n", doc_is_str(doc, "ab!"));
     free_text_doc(doc);
+
+    // A group opened before a joined edit starts its step where its first action finds the caret,
+    // not where the group found it before the host's change moved it.
+    doc = create_text_doc("", 0);
+    FakeView group = {.sel = {{0, 0}}, .count = 1};
+    fake_attach(doc, &group);
+    fake_type(doc, &group, "ab");
+    text_doc_group(doc, true, &group);
+    text_doc_set_text_joined(doc, "<ab", 3);
+    fake_type(doc, &group, "c");
+    text_doc_group(doc, false, NULL);
+    text_doc_undo(doc);
+    printf("ui doc-undo group before %d\n", doc_is_str(doc, "<ab") && group.sel[0].head == 3);
+    free_text_doc(doc);
     return 0;
 }
 
