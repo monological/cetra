@@ -146,5 +146,11 @@ net and its parts and fades the rest.
 `triangulate.c/h` turns an outline with holes into triangles. It is a port of Mapbox's earcut v2.2,
 with its ISC notice. Holes may wind either way and are bridged at their leftmost points. Every
 triangle's corners are points given, and there are n - 2 + 2h triangles for n points and h holes.
+
+From 32 holes, each hole's bridge to the ring is found through a grid over the ring's edges (spec
+14.37), where earcut walks the whole ring for each hole. A ground plane holds a hole for every via
+and pad of another net, so the walk cost its holes times its points. Where two bridges tie, the
+grid takes its own choice, not earcut's, so the triangles can differ from earcut's there; what they
+cover cannot.
 It is pure CPU and safe on any thread, so the canvas's edits call it off the main thread, and it is
 public, for an app with polygons of its own.

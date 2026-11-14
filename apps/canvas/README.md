@@ -30,9 +30,11 @@ Every flag, and what each probe prints, is in `docs/cli-reference.md`, "The othe
 units: `shapes` (the default), `areas`, `polygons`, `ramp`, `thin`, `long`, `long-short`,
 `glyphs`, `tags`, `overlap`, a `symbol` of an integrated circuit with turned pin names, a
 two-layer `board` with a ground plane, a highlighted net, a picked pad and a removed trace, and
-`strokes` and `dashes`, a cell a cap, join or dash pattern, each with its area in closed form, and
+`strokes` and `dashes`, a cell a cap, join or dash pattern, each with its area in closed form,
 `fade`, four boxes on white paper, one lit, and over them an untagged box on a faded one and a
-faded box on a lit one, for a view that fades.
+faded box on a lit one, for a view that fades, and `plane`, the ground pour of pcb's speed gate
+board, a 100 mm plate with a hole for each of 2,008 vias and balls of another net, whose edit
+`--canvas-probe` times.
 
 - `--fade STRENGTH,ROOM` makes the view fade (`docs/canvas.md`, Dimming by light): its tagged
   shapes not lit fade toward its sheet's paper by STRENGTH, less within ROOM points of a lit one; a

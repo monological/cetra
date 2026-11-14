@@ -17,7 +17,7 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-14: 14.37, a polygon of thousands of holes, started._
+_Last updated: 2026-11-14: 14.37, a polygon of thousands of holes, built._
 
 ---
 
@@ -55,7 +55,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 
 | # | Item | Status | First needed by pcb's step | Spec |
 |---|------|--------|----------------------------|------|
-| 1 | The 2D canvas | **Built**, with caps, joins and dashes; images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0, 14.22, 14.36 |
+| 1 | The 2D canvas | **Built**, with caps, joins and dashes; images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0, 14.22, 14.36, 14.37 |
 | 2 | Idle mode: drawing only when something changed | **Built**, for frames that draw no 3D scene | 6 | 14.1 |
 | 3 | Skipping the 3D scene pass when no 3D view is shown | Not started; includes a still 3D view drawn on demand | 8, the 3D view | |
 | 4 | Drawing the 3D scene into part of the window | Not started | 8 | |
@@ -66,7 +66,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 | 9 | What the panes and the fonts need of the UI | **Built** | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
 
-Specs 14.7, 14.9 to 14.21, 14.23 to 14.28 and 14.30 to 14.36 are the smaller changes pcb's window
+Specs 14.7, 14.9 to 14.21, 14.23 to 14.28 and 14.30 to 14.37 are the smaller changes pcb's window
 asked for, listed under "Not among the nine". Spec 14.8 was not asked for by pcb: a headless run
 waits for the textures its start-up asked for before frame 1 (`docs/architecture.md`, Render
 Pipeline), which `pcb render` gets for free. Nor was 14.29, which splits the gate suite into files (`docs/verification.md`,
@@ -121,6 +121,10 @@ shape's record and pixels are as they were.
 - **A stroke's cap, join and dash are the paint's**, baked into the records when the shape is added:
   a ghost is dashed by its paint, a dashed rectangle is one `canvas_edit_box` whose pattern runs
   round it, and changing a stroke is an edit.
+- **A fill can leave a pixel uncovered inside a sliver**, found by spec 14.37: a few in a plane of
+  thousands of holes, each drawn as the view's background. The triangulation covers the pixel's
+  centre, inside a triangle under a pixel thick, but nothing is drawn there. Where they fall moves
+  with the tile size. Not yet diagnosed, and not yet a spec.
 
 **Left for later**, each with a need named:
 - **Images and datasheet pages**, with the texture residency they need, for pcb's step 10. A record
@@ -551,11 +555,13 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
   tags without taking its colour. With them, at the user's word, a ring by its nearest shape: one
   pass more while a ring shows takes the least inner ramp by min, so a picked trace's ring is one
   round a joint, where 14.0 left a tick in the inner corner, seen at 2x (`docs/canvas.md`).
-- **A polygon of thousands of holes** -- spec 14.37, started, from pcb 7.6, whose ground planes
-  hold a hole for every via and pad of another net: a fill of 2,234 holes took 2.3 s to triangulate,
-  each hole's bridge to the outline found by walking the whole ring. The bridge is found through a
-  grid over the ring's edges instead, inside `triangulate.c`, with no change to its API. Triangles
-  supplied by the caller (item 1, Left for later) stay the fallback.
+- **A polygon of thousands of holes** -- spec 14.37, built, from pcb 7.6, whose ground planes hold
+  a hole for every via and pad of another net. Earcut bridges each hole to the outline by walking
+  the whole ring, which grows by every hole joined, so such a plane cost its holes times its points.
+  From 32 holes each bridge is found through a grid over the ring's edges instead, inside
+  `triangulate.c`, with no change to its API (`docs/canvas.md`, Triangulation). What is left of a
+  fill's time is the ear clipping. Triangles supplied by the caller (item 1, Left for later) stay
+  the fallback.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the
