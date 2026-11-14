@@ -993,7 +993,8 @@ static float g_fade, g_fade_room;
  * toward white by the strength, or gone at 1. The near one is so with no room, and nearer red with
  * it. Over them a layer of two: an untagged blue box on a red one left out, which stays blue; and
  * a red box left out on a lit green one, faded over it, or at 1 gone so the green shows, room or
- * none. And a lit red H, whose ink a fading view with room must still draw.
+ * none. A red box whose tag lies past the table, never set, faded as the far one is (spec 14.36).
+ * And a lit red H, whose ink a fading view with room must still draw.
  */
 static void sheet_fade(SheetContext* ctx) {
     Canvas* canvas = ctx->canvas;
@@ -1008,11 +1009,11 @@ static void sheet_fade(SheetContext* ctx) {
     canvas_tags_set(tags, 2, (CanvasTagState){.colour = 0xff0000ffu});
     // The lit box's right edge at -2.5 mm, the near one's left 0.1 mm past it.
     const CanvasPoint lit = {MM(-3.0) + o, o}, near = {MM(-1.9) + o, o}, far = {MM(3.0) + o, o},
-                      untagged = {o, MM(-2.0) + o};
+                      untagged = {o, MM(-2.0) + o}, past = {MM(3.0) + o, MM(2.0) + o};
     const struct {
         CanvasPoint at;
         uint32_t object;
-    } boxes[] = {{lit, 1}, {near, 2}, {far, 2}, {untagged, 0}};
+    } boxes[] = {{lit, 1}, {near, 2}, {far, 2}, {untagged, 0}, {past, 1000}};
     for (size_t k = 0; k < sizeof boxes / sizeof boxes[0]; k++)
         canvas_edit_box(ctx->edit, &(CanvasBox){.paint = paint_of(layer, red, 0, boxes[k].object),
                                                 .centre = boxes[k].at,
@@ -1050,6 +1051,7 @@ static void sheet_fade(SheetContext* ctx) {
         const uint32_t pale = 0xff0000u | faded << 8 | faded;
         probe_pixel(ctx, "fade", "lit", lit, 0xff0000);
         probe_pixel(ctx, "fade", "far", far, pale);
+        probe_pixel(ctx, "fade", "past", past, pale);
         probe_pixel(ctx, "fade", "untagged", untagged, 0xff0000);
         // 0.15 mm from the lit box's edge.
         probe_pixel(ctx, "fade", "near", (CanvasPoint){near.x - MM(0.45), near.y}, pale);

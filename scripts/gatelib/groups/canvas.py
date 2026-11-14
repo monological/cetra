@@ -695,10 +695,10 @@ def run_canvas_gate(workdir):
         cells = _canvas_sheet(probe, "fade")
         mask_cells = _canvas_sheet(mask_probe, "fade")
         label = probe.get(("fade-text", "label"))
-        if (not hard or not roomy or not masked or not mask_roomy or len(cells) != 6
-                or len(mask_cells) != 6 or not label):
+        if (not hard or not roomy or not masked or not mask_roomy or len(cells) != 7
+                or len(mask_cells) != 7 or not label):
             ok, detail = False, (f"the app failed or printed {len(cells)} and {len(mask_cells)} "
-                                 f"points (want 6 each, and the label)")
+                                 f"points (want 7 each, and the label)")
         else:
             # With room, the overlap is as without it, the light under a faded box sparing nothing;
             # under the mask with room, the near box comes back within the room.
@@ -726,7 +726,8 @@ def run_canvas_gate(workdir):
             inks = [ink(hard), ink(roomy), ink(mask_roomy)]
             ok = (not wrong and roomy_near < pale - 64 and mask_near < 255 - 64
                   and min(inks) > 20)
-            detail = (f"lit and untagged red, far and near faded to {pale} green with no room, "
+            detail = (f"lit and untagged red, far, near and a box tagged past the table faded to "
+                      f"{pale} green with no room, "
                       f"blue over a faded box, a faded box over a lit one, with room too; masked, "
                       f"the faded gone and the lit showing, with room too; near {roomy_near} with "
                       f"20 pt (want under {pale - 64}), {mask_near} masked (want under "

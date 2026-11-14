@@ -45,7 +45,9 @@ bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised, 
     bool hidden = false;
     raised = 0.0;
     float lit = 0.0;
-    bool tagged = false;
+    // Any tag but 0 is a tag; one past the table was never set, its state all zero, and the table
+    // is read within its length alone.
+    bool tagged = u.y != 0u || u.z != 0u;
     vec4 netColour = vec4(0.0), objectColour = vec4(0.0), objectOutline = vec4(0.0);
     if (u.y != 0u && u.y < uint(uTagCount)) {
         netColour = canvasTagTexel(u.y, 0);
@@ -55,7 +57,6 @@ bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised, 
         hidden = m.g > 0.5;
         raised = max(raised, m.b);
         lit = max(lit, m.a);
-        tagged = true;
     }
     if (u.z != 0u && u.z < uint(uTagCount)) {
         objectColour = canvasTagTexel(u.z, 0);
@@ -65,7 +66,6 @@ bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised, 
         hidden = hidden || m.g > 0.5;
         raised = max(raised, m.b);
         lit = max(lit, m.a);
-        tagged = true;
     }
     fade = tagged && lit == 0.0 ? uFade : 0.0;
     if (uPass == CANVAS_PASS_LIT) {
