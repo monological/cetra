@@ -394,20 +394,24 @@ static void poly_hole(Poly* p) {
     p->holes[p->hole_count++] = p->n;
 }
 
-static void probe_polygon(const SheetContext* ctx, const char* name, CanvasPoint centre,
-                          const Poly* p) {
+// Prints a polygon's cell, `half` units each way of its centre: its area by the shoelace formula,
+// its outline's length, its triangulation's area and count, its points and holes; and returns the
+// seconds the triangulation took.
+static double probe_polygon(const SheetContext* ctx, const char* sheet, const char* name,
+                            CanvasPoint centre, int64_t half, const CanvasPoint* pts, size_t n,
+                            const size_t* holes, size_t hole_count) {
     const double s = ppu_px(ctx);
-    double* xy = malloc(p->n * 2 * sizeof(double));
+    double* xy = malloc(n * 2 * sizeof(double));
     if (!xy)
-        return;
-    for (size_t i = 0; i < p->n; i++) {
-        xy[2 * i] = (double)(p->pts[i].x - p->pts[0].x);
-        xy[2 * i + 1] = (double)(p->pts[i].y - p->pts[0].y);
+        return 0.0;
+    for (size_t i = 0; i < n; i++) {
+        xy[2 * i] = (double)(pts[i].x - pts[0].x);
+        xy[2 * i + 1] = (double)(pts[i].y - pts[0].y);
     }
     double area = 0.0, perimeter = 0.0;
-    for (size_t r = 0; r <= p->hole_count; r++) {
-        const size_t start = r ? p->holes[r - 1] : 0;
-        const size_t end = r < p->hole_count ? p->holes[r] : p->n;
+    for (size_t r = 0; r <= hole_count; r++) {
+        const size_t start = r ? holes[r - 1] : 0;
+        const size_t end = r < hole_count ? holes[r] : n;
         double ring = 0.0;
         for (size_t i = start, j = end - 1; i < end; j = i++) {
             const double* a = xy + 2 * j;
@@ -419,7 +423,10 @@ static void probe_polygon(const SheetContext* ctx, const char* name, CanvasPoint
     }
     Triangulation t;
     double tri_area = 0.0;
-    if (triangulate_polygon(xy, p->n, p->holes, p->hole_count, &t)) {
+    const double start = glfwGetTime();
+    const bool made = triangulate_polygon(xy, n, holes, hole_count, &t);
+    const double took = glfwGetTime() - start;
+    if (made) {
         for (size_t k = 0; k < t.count; k++) {
             const double* a = xy + 2 * t.indices[3 * k];
             const double* b = xy + 2 * t.indices[3 * k + 1];
@@ -427,11 +434,12 @@ static void probe_polygon(const SheetContext* ctx, const char* name, CanvasPoint
             tri_area += fabs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) / 2.0;
         }
     }
-    probe_cell(ctx, "polygons", name, centre, MM(1.2));
+    probe_cell(ctx, sheet, name, centre, half);
     printf(" area %.6f perimeter %.6f triangulated %.6f triangles %zu points %zu holes %zu\n",
-           area * s * s, perimeter * s, tri_area * s * s, t.count, p->n, p->hole_count);
+           area * s * s, perimeter * s, tri_area * s * s, t.count, n, hole_count);
     free_triangulation(&t);
     free(xy);
+    return took;
 }
 
 static void sheet_polygons(SheetContext* ctx) {
@@ -501,9 +509,93 @@ static void sheet_polygons(SheetContext* ctx) {
                                                         .holes = p.holes,
                                                         .hole_count = p.hole_count});
         if (ctx->probe)
-            probe_polygon(ctx, cells[k].name, c, &p);
+            probe_polygon(ctx, "polygons", cells[k].name, c, MM(1.2), p.pts, p.n, p.holes,
+                          p.hole_count);
     }
 #undef CELL
+}
+
+/*
+ * The plane sheet (spec 14.37): the ground pour on the top of pcb's speed gate board, a plate
+ * 100 mm square with a hole for every via and ball of another net -- two in three of 2,000 vias on
+ * a 1.9 mm grid round a BGA, three in four of its 900 balls at 1 mm. Each hole is the polygon pcb
+ * draws round a circle: the least multiple of eight sides whose corners stray no more than 5 um
+ * outside it, its edges facing the eight directions, so every hole of a row has its leftmost point
+ * level with a corner of the hole before it.
+ *
+ * Under --canvas-probe it prints the plate as the polygons sheet prints a polygon, and the
+ * milliseconds its edit and its triangulation took.
+ */
+typedef struct Plane {
+    CanvasPoint* pts;
+    size_t* holes;
+    size_t n, hole_count, cap;
+} Plane;
+
+// A hole of radius r millimetres about (x, y) from the centre, as pcb's polygon_around makes it:
+// its corners r / cos(pi / sides) out, half a side off the eight directions.
+static void plane_hole(Plane* p, CanvasPoint centre, double x, double y, double r) {
+    int sides = 8;
+    while (r / cos(3.141592653589793 / sides) - r > 0.005)
+        sides += 8;
+    if (p->n + (size_t)sides > p->cap)
+        return;
+    p->holes[p->hole_count++] = p->n;
+    const double corner = r / cos(3.141592653589793 / sides);
+    for (int k = 0; k < sides; k++) {
+        const double a = 6.283185307179586 * (k + 0.5) / sides;
+        p->pts[p->n++] = (CanvasPoint){centre.x + MM(x) + MM(corner * cos(a)),
+                                       centre.y + MM(y) + MM(corner * sin(a))};
+    }
+}
+
+static void sheet_plane(SheetContext* ctx) {
+    const CanvasPoint c = {ctx->offset, ctx->offset};
+    Plane p = {.cap = 4 + 3000 * 24};
+    p.pts = malloc(p.cap * sizeof(CanvasPoint));
+    p.holes = malloc(3000 * sizeof(size_t));
+    if (!p.pts || !p.holes) {
+        free(p.pts);
+        free(p.holes);
+        return;
+    }
+    p.pts[p.n++] = (CanvasPoint){c.x - MM(50.0), c.y - MM(50.0)};
+    p.pts[p.n++] = (CanvasPoint){c.x + MM(50.0), c.y - MM(50.0)};
+    p.pts[p.n++] = (CanvasPoint){c.x + MM(50.0), c.y + MM(50.0)};
+    p.pts[p.n++] = (CanvasPoint){c.x - MM(50.0), c.y + MM(50.0)};
+    // The vias, by rows from the board's corner, the BGA's square left clear; a via 0.6 mm across
+    // kept 0.15 mm from the pour. Every third is the pour's own net and is no hole.
+    int vias = 0;
+    for (int row = 0; row < 50 && vias < 2000; row++) {
+        for (int col = 0; col < 50 && vias < 2000; col++) {
+            const double x = 2.5 + 1.9 * col, y = 2.5 + 1.9 * row;
+            if (x > 32 && x < 68 && y > 32 && y < 68)
+                continue;
+            if (vias++ % 3 != 0)
+                plane_hole(&p, c, x - 50.0, y - 50.0, 0.45);
+        }
+    }
+    // The balls, round lands 0.45 mm across kept 0.15 mm from the pour; every fourth the pour's.
+    for (int k = 1; k <= 900; k++) {
+        if (k % 4 != 0) {
+            const int row = (k - 1) / 30, col = (k - 1) % 30;
+            plane_hole(&p, c, -14.5 + col, -14.5 + row, 0.375);
+        }
+    }
+    const double start = glfwGetTime();
+    canvas_edit_polygon(ctx->edit, &(CanvasPolygon){.paint = white_paint(ctx->canvas),
+                                                    .points = p.pts,
+                                                    .count = p.n,
+                                                    .holes = p.holes,
+                                                    .hole_count = p.hole_count});
+    const double edit = glfwGetTime() - start;
+    if (ctx->probe) {
+        const double tri =
+            probe_polygon(ctx, "plane", "plate", c, MM(51.0), p.pts, p.n, p.holes, p.hole_count);
+        printf("canvas plane-time plate edit-ms %.3f triangulate-ms %.3f\n", edit * 1e3, tri * 1e3);
+    }
+    free(p.pts);
+    free(p.holes);
 }
 
 /*
@@ -1922,6 +2014,7 @@ static const Sheet SHEETS[] = {
     {"shapes", sheet_shapes, {-2.0, 0.5}, 24.0, 0x14181effu},
     {"areas", sheet_areas, {0.0, 0.0}, 8.0, 0x000000ffu},
     {"polygons", sheet_polygons, {0.0, 0.0}, 8.0, 0x000000ffu},
+    {"plane", sheet_plane, {0.0, 0.0}, 136.0, 0x000000ffu},
     {"ramp", sheet_ramp, {0.0, 0.0}, 8.0, 0x000000ffu},
     {"thin", sheet_thin, {0.0, 0.0}, 8.0, 0x000000ffu},
     // A view 10 micrometres across, centred on the line half a piece from a cut.
