@@ -73,6 +73,19 @@ def _canvas_area_rows(path, cells, area_of):
     return worst, rows
 
 
+def _canvas_unfilled(cov, box):
+    """Pixels of a coverage array inside a cell's box under half covered while all eight round
+    them are over 0.8: a pixel a fill left out between two of its triangles."""
+    x0, y0, x1, y1 = box
+    c = cov[y0:y1, x0:x1]
+    low = c[1:-1, 1:-1] < 0.5
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dx or dy:
+                low &= c[1 + dy:c.shape[0] - 1 + dy, 1 + dx:c.shape[1] - 1 + dx] > 0.8
+    return int(low.sum())
+
+
 def _canvas_area(name, m):
     """A shape of the areas sheet as (area, perimeter) in framebuffer pixels, from its measures."""
     if name == "circle":
@@ -167,8 +180,14 @@ def run_canvas_gate(workdir):
                      the 64-gon is under half a pixel thick, and asking only it left most of the
                      inner ramp to the triangle beside it, at 0.047 px of outline over.
       canvas-plane-edit the plane sheet's plate edited, the least of three: under 400 ms. A
-                     timing arm: the bound is this machine's (184 ms measured on an M1 Max, the
+                     timing arm: the bound is this machine's (194 ms measured on an M1 Max, the
                      Debug build) and does not travel. The walk alone, with no grid, takes 570.
+      canvas-fill-whole the plane sheet's plate at 4 mm tiles, at 16.8 mm ones and moved 1.2 mm
+                     off the grid: no pixel of it under half covered while all eight round it are
+                     over 0.8. A triangle crossing the grid is cut at every tile it crosses, so
+                     two sharing an edge split it alike. Drawn whole where it fitted in two tiles,
+                     beside a neighbour cut, a sliver left a pixel whose centre lay between the two
+                     unfilled: 2 at 4 mm tiles and 10 at 16.8 mm (spec 14.37).
       canvas-refused-whole the polygons sheet with tiles of 4096 units, where some polygons'
                      triangles cross more tiles than an edit splits a shape into and are refused:
                      every polygon is drawn whole or not at all. A refused polygon used to keep
@@ -593,6 +612,27 @@ def run_canvas_gate(workdir):
             ok = ms <= 400.0
             detail = (f"the plane sheet's plate of 2,008 holes edited in {ms:.0f} ms, the least of "
                       f"three (want <= 400; a timing arm, this machine's)")
+        return ok, detail
+
+    @arm("canvas-fill-whole")
+    def _():
+        runs = [("4 mm tiles", sheet_run("plane")),
+                ("16.8 mm", _canvas_run(workdir, "plane_t24", "--sheet", "plane", "--tile-shift",
+                                        "24")),
+                ("moved", _canvas_run(workdir, "plane_moved", "--sheet", "plane", "--offset",
+                                      "1234567"))]
+        rows, ok = [], True
+        for label, (path, probe) in runs:
+            plate = _canvas_sheet(probe, "plane").get("plate")
+            if not path or not plate:
+                rows.append(f"{label}: the app failed")
+                ok = False
+                continue
+            box, _ = _canvas_cell(plate)
+            left = _canvas_unfilled(_canvas_coverage(path), box)
+            ok = ok and left == 0
+            rows.append(f"{label} {left}")
+        detail = "pixels of the plate left out among full ones: " + ", ".join(rows) + " (want 0)"
         return ok, detail
 
     @arm("canvas-refused-whole")

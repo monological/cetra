@@ -747,9 +747,12 @@ static bool _fill(CanvasEdit* edit, const CanvasPaint* paint, int64_t tx, int64_
     return _add_fill(edit, &piece);
 }
 
-// One triangle of a polygon: whole when it fits in two tiles each way of its
-// lowest, else cut into each tile it crosses, each cut piece a fan. Every
-// piece carries the whole triangle's nine outline points.
+// One triangle of a polygon: whole when it lies in one tile, else cut into
+// each tile it crosses, each cut piece a fan. Every piece carries the whole
+// triangle's nine outline points. Any triangle crossing the grid is cut, so
+// two sharing an edge split it at the same rounded points (`_crossing` orders
+// the edge's ends): drawn whole beside a neighbour cut, a triangle 0.06 px
+// thick left a pixel whose centre fell between the two unfilled (spec 14.37).
 static bool _polygon_triangle(CanvasEdit* edit, const CanvasPaint* paint, const CanvasPoint tri[3],
                               const CanvasPoint near[9]) {
     const int shift = edit->tile_shift;
@@ -761,7 +764,7 @@ static bool _polygon_triangle(CanvasEdit* edit, const CanvasPaint* paint, const 
     }
     const int64_t tx0 = _tile_of(x0, shift), tx1 = _tile_of(x1, shift);
     const int64_t ty0 = _tile_of(y0, shift), ty1 = _tile_of(y1, shift);
-    if (tx1 - tx0 <= 1 && ty1 - ty0 <= 1)
+    if (tx1 == tx0 && ty1 == ty0)
         return _fill(edit, paint, tx0, ty0, tri, near);
     if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) > CANVAS_SPLIT_MAX) {
         log_error("canvas: a polygon triangle across more than %d tiles is refused",
