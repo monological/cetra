@@ -253,13 +253,15 @@ chain's defaults (what is on, what is lazily allocated) are in
     `canvas-ui-borders` holds it.
 - **2D canvas:** `canvas_vert/frag` (one instance of a unit quad per record: segments, arcs,
   circles, boxes, a fill's outer edge ramp, glyphs, outline rings; a dashed record is 64 bytes, its
-  pattern in attribute 3 on the dashed store's own vertex array, and the vertex stage resolves each
+  pattern in attribute 3 on the dashed store's own vertex array, as is a glyph in a band of zoom,
+  its band there instead, and the vertex stage resolves each
   end of a segment or arc to a cap, a cut, an open corner or a join, `CANVAS_END_*`, which one
   fragment function draws), `canvas_fill_vert/frag` (a
   polygon's triangles and their inner ramp), `canvas_composite_frag` (a view's rectangle into the
   frame, opaque), over `include/canvas_constants.glsl`, `include/canvas_paint.glsl` (the view, the
   tables, a shape's colour through its tags) and `include/canvas_pass.glsl` (the layer resolve's
-  passes, and a fading view's fade of each shape). See [canvas.md](canvas.md)
+  passes, the nearest ring's among them, and a fading view's fade of each shape). See
+  [canvas.md](canvas.md)
 - **App shaders †:** `late_surface_vert` with `include/late_surface.glsl`,
   `include/surface_hook.glsl`, `present_frag`. The splice markers are `// CETRA_SURFACE_HOOK_CHUNK`
   (`pbr_frag`, `shadow_depth_frag`) and `// CETRA_OFFSET_HOOK_CHUNK`

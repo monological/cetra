@@ -17,7 +17,7 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-14: 14.36, labels on copper, started._
+_Last updated: 2026-11-14: 14.36, labels on copper, built._
 
 ---
 
@@ -55,7 +55,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 
 | # | Item | Status | First needed by pcb's step | Spec |
 |---|------|--------|----------------------------|------|
-| 1 | The 2D canvas | **Built**, with caps, joins and dashes; images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0, 14.22 |
+| 1 | The 2D canvas | **Built**, with caps, joins and dashes; images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0, 14.22, 14.36 |
 | 2 | Idle mode: drawing only when something changed | **Built**, for frames that draw no 3D scene | 6 | 14.1 |
 | 3 | Skipping the 3D scene pass when no 3D view is shown | Not started; includes a still 3D view drawn on demand | 8, the 3D view | |
 | 4 | Drawing the 3D scene into part of the window | Not started | 8 | |
@@ -66,7 +66,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 | 9 | What the panes and the fonts need of the UI | **Built** | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
 
-Specs 14.7, 14.9 to 14.21, 14.23 to 14.28 and 14.30 to 14.35 are the smaller changes pcb's window
+Specs 14.7, 14.9 to 14.21, 14.23 to 14.28 and 14.30 to 14.36 are the smaller changes pcb's window
 asked for, listed under "Not among the nine". Spec 14.8 was not asked for by pcb: a headless run
 waits for the textures its start-up asked for before frame 1 (`docs/architecture.md`, Render
 Pipeline), which `pcb render` gets for free. Nor was 14.29, which splits the gate suite into files (`docs/verification.md`,
@@ -116,9 +116,6 @@ shape's record and pixels are as they were.
 - **The active layer is drawn after the others, except layers kept above it**
   (`CanvasLayer.above_active`): holes, a ratsnest and a selection overlay stay over whichever copper
   is active.
-- **A picked shape's ring has a pixel or two of error at a joint's inner corners.** The ring wants
-  the least distance over all of an object's shapes, which max blending cannot give; three more
-  passes a layer would. Invisible at 1x.
 - **Buffer textures are not yet checked on Linux and Windows.** They are core in GL 3.1, below the
   4.1 the engine requires, so the risk is a driver's bug.
 - **A stroke's cap, join and dash are the paint's**, baked into the records when the shape is added:
@@ -546,12 +543,14 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
   its own, `u` took back the ordering alone and the next save made it again, so the edit before it
   could never be undone. `text_doc_set_text_joined` joins the latest step, as vim's `:undojoin`
   (`docs/ui.md`, The text, Undo).
-- **Labels on copper** -- spec 14.36, started, from pcb 7.5.4, which writes a pad's number and net
-  on it, a trace's net along it and a via's in it, once each reads: `CanvasText.shown_from` and
+- **Labels on copper** -- spec 14.36, built, from pcb 7.5.4, which writes a pad's number and net on
+  it, a trace's net along it and a via's in it, once each reads: `CanvasText.shown_from` and
   `shown_until`, a text drawn only within a band of zoom judged by another em, so a pad's number is
   centred until its net reads; a non-zero tag past the table counted as a tag, so a shape tagged
   there fades as `canvas.h` says; and `CanvasLayer.keeps_colour`, so a label carries its copper's
-  tags without taking its colour.
+  tags without taking its colour. With them, at the user's word, a ring by its nearest shape: one
+  pass more while a ring shows takes the least inner ramp by min, so a picked trace's ring is one
+  round a joint, where 14.0 left a tick in the inner corner, seen at 2x (`docs/canvas.md`).
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the

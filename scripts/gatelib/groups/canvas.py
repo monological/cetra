@@ -202,7 +202,13 @@ def run_canvas_gate(workdir):
                      of two segments at its joint, where one segment's ring runs inside the
                      other's body: the trace's colour shows there, not the ring's. Rings are
                      painted last, after every shape of the layer has spent its pixels. Each
-                     within 2 codes.
+                     within 2 codes. On a layer keeping its colour (spec 14.36), a white box and
+                     a white H under a tag coloured red and dimmed half: the box 808080, the H's
+                     ink grey with none red. And the trace's ring held to the nearer of its two
+                     segments, every pixel round it measured against both: none lit in the gap
+                     between the trace and its ring, all yellow well inside the ring's band. Each
+                     segment ringing by its own distance left a tick of one ring in the other's
+                     gap at the inner corner, 15 pixels at 2x.
       canvas-fade    the fade sheet under a view fading by half toward its white paper (specs
                      14.24, 14.25): the lit box and the untagged one red, a tagged one far from the
                      light and one a hair beside it faded to half white with no room, an untagged
@@ -214,7 +220,15 @@ def run_canvas_gate(workdir):
                      coming back under 191 green. A lit H's red ink drawn in each run with room. A
                      shape fades as it is drawn, so what is drawn over it is never faded with it, a
                      light under it never spares it, and the mask hides what it leaves out rather
-                     than painting the paper over what lies beneath.
+                     than painting the paper over what lies beneath. A box whose only tag lies
+                     past the table, never set, fades with the far one (spec 14.36): read as no
+                     tag, it stayed red.
+      canvas-text-band the band sheet (spec 14.36): a plain H, one shown from an em of 0.05 mm and
+                     one shown until it, seen 20 mm across, where 0.05 mm is under the text floor,
+                     and 5 mm across, where it reads. Each H's ink in its colour: zoomed out the
+                     plain and the until H drawn and the from H not, zoomed in the plain and the
+                     from H and not the until. A band is judged by the floor as a string's own em
+                     is.
       canvas-uploads the board sheet over eight frames, what each uploaded: a tag written and a
                      style written upload nothing, a segment added one range and removed the same
                      range, and a transient layer of fifty lines, cleared and filled again, one

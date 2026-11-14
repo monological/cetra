@@ -69,7 +69,9 @@ net and its parts and fades the rest.
 - **A view fades by `fade`** toward `fade_to`, the paper it is drawn on: white under a schematic,
   the background under a board. A tagged shape not lit fades by `fade`; within `fade_room` points
   of a lit one it fades less, down to nothing at the light's edge, though over a lit shape it fades
-  wholly. An untagged shape never fades.
+  wholly. An untagged shape, both its tags 0, never fades. Any other tag is a tag wherever it lies:
+  one past the table was never set, its state all zero, so a shape tagged there fades as one not
+  lit (spec 14.36).
 - **A shape fades as it is drawn** (spec 14.25), in the layers' order, so what is drawn over it is
   never faded with it: a selection box over a faded part keeps its colour. Below a fade of 1 the
   shape's colour goes toward `fade_to` and it still covers what lies under it; at 1, the mask, it
@@ -104,7 +106,11 @@ net and its parts and fades the rest.
      moves as it grows), so overlapping shapes want one colour.
 4. **Rings are drawn last.** A ring is not a distance that falls away, so where it crosses another
    shape of its layer -- the next segment of a picked trace at its joint -- that shape must win.
-   Drawn raised, the rings crossed every joint.
+   Drawn raised, the rings crossed every joint. And **a ring is its nearest shape's** (spec 14.36):
+   a pass just before the rings takes every ringed shape's inner ramp into alpha by min, so a
+   segment's ring in the gap just outside the next one goes, and the ring round a joint is one.
+   The inner ramp rising with distance and the outer falling, what is left is exactly the ring of
+   the nearest ringed shape; it costs a pass a layer while a tag draws a ring.
 5. **A fill is triangulated on the CPU** (`triangulate.h`), and each triangle measures its inner ramp
    against the six outline edges at its corners, not its own edges: an earcut ear thinner than half a
    pixel otherwise leaves its band to the triangle beside it. EDGE records draw the outer half. A
@@ -116,13 +122,20 @@ net and its parts and fades the rest.
 7. **Every shape carries two tags, a net and an object**: indices into a `CanvasTags` table a canvas
    may share with another, so one write highlights a net in the schematic and the layout. A tag
    carries colour, a pick outline, dim, hidden, raised and lit. A tag or style write uploads no
-   geometry.
+   geometry. A layer keeping its colour (`CanvasLayer.keeps_colour`, spec 14.36) takes all of
+   that but the colour, so a label carrying its copper's tags stays its own colour on copper
+   drawn in a chosen net's.
 8. **Edits are built on any thread.** A `CanvasEdit` holds no GL; layout, splitting and triangulating
    happen there, and `canvas_apply` merges one on the main thread.
 9. **Text is a glyph record each, placed by its pen in ems** from the string's anchor
    (`font_pen_step`, `docs/ui.md`), so its size and turn ride the record. A canvas draws with at most
    four fonts (`CANVAS_FONT_MAX`), a texture unit each, and cuts at the font's true edge
    (`Font.sdf_edge`), half a code under stb's stated value because stb truncates each field texel.
+   A string under `text_min_px` is dropped in the vertex stage, and **a string in a band of zoom**
+   (`CanvasText.shown_from`, `shown_until`, spec 14.36) is drawn only once a string of the first
+   em would read and until one of the second would, each judged by the same floor: a pad's number
+   centred gives way to its number over its net in the frame the net comes to read. A banded
+   glyph carries its band after its record, in the 64-byte store dashed shapes use.
 10. **A stroke is baked into its records.** The edit lays the paint's cap, join and dash along the
     shape in double, so changing one is an edit of the shape, not a write to a table as a tag's
     colour is.
