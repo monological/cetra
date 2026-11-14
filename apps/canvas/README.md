@@ -34,7 +34,7 @@ two-layer `board` with a ground plane, a highlighted net, a picked pad and a rem
 `fade`, four boxes on white paper, one lit, and over them an untagged box on a faded one and a
 faded box on a lit one, for a view that fades, and `plane`, the ground pour of pcb's speed gate
 board, a 100 mm plate with a hole for each of 2,008 vias and balls of another net, whose edit
-`--canvas-probe` times.
+`--canvas-probe` times; the probe also triangulates eight seeded plates it does not draw.
 
 - `--fade STRENGTH,ROOM` makes the view fade (`docs/canvas.md`, Dimming by light): its tagged
   shapes not lit fade toward its sheet's paper by STRENGTH, less within ROOM points of a lit one; a
