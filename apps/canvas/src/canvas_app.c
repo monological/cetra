@@ -524,7 +524,7 @@ static void sheet_polygons(SheetContext* ctx) {
  * level with a corner of the hole before it.
  *
  * Under --canvas-probe it prints the plate as the polygons sheet prints a polygon, and the
- * milliseconds its edit and its triangulation took.
+ * milliseconds its edit took, the least of three, and its triangulation.
  */
 typedef struct Plane {
     CanvasPoint* pts;
@@ -582,14 +582,23 @@ static void sheet_plane(SheetContext* ctx) {
             plane_hole(&p, c, -14.5 + col, -14.5 + row, 0.375);
         }
     }
-    const double start = glfwGetTime();
-    canvas_edit_polygon(ctx->edit, &(CanvasPolygon){.paint = white_paint(ctx->canvas),
-                                                    .points = p.pts,
-                                                    .count = p.n,
-                                                    .holes = p.holes,
-                                                    .hole_count = p.hole_count});
-    const double edit = glfwGetTime() - start;
+    const CanvasPolygon plate = {.paint = white_paint(ctx->canvas),
+                                 .points = p.pts,
+                                 .count = p.n,
+                                 .holes = p.holes,
+                                 .hole_count = p.hole_count};
+    double start = glfwGetTime();
+    canvas_edit_polygon(ctx->edit, &plate);
+    double edit = glfwGetTime() - start;
     if (ctx->probe) {
+        // The least of three edits, the two more thrown away: one run can land on a slower core.
+        for (int k = 0; k < 2; k++) {
+            CanvasEdit* again = create_canvas_edit(ctx->canvas);
+            start = glfwGetTime();
+            canvas_edit_polygon(again, &plate);
+            edit = fmin(edit, glfwGetTime() - start);
+            free_canvas_edit(again);
+        }
         const double tri =
             probe_polygon(ctx, "plane", "plate", c, MM(51.0), p.pts, p.n, p.holes, p.hole_count);
         printf("canvas plane-time plate edit-ms %.3f triangulate-ms %.3f\n", edit * 1e3, tri * 1e3);

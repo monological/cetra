@@ -148,15 +148,22 @@ def run_canvas_gate(workdir):
                      pixel, which is idempotent there: before that resolve it was 2,482 px apart,
                      by up to 20%.
       canvas-triangulation each polygon of the polygons sheet -- holed, a star, an L, a plate
-                     with three holes wound either way, a 64-gon, a comb -- triangulates to its
-                     own area by the shoelace formula, to a part in a billion, in n - 2 + 2h
-                     triangles for n points and h holes: every point a corner and no more.
+                     with three holes wound either way, a 64-gon, a comb -- and the plane sheet's
+                     plate of 2,008 holes (spec 14.37), its bridges found through the grid,
+                     triangulates to its own area by the shoelace formula, to a part in a
+                     billion, in n - 2 + 2h triangles for n points and h holes: every point a
+                     corner and no more. A bridge that crosses the ring covers some of it twice.
       canvas-polygon-areas each polygon's coverage against that area, within 0.01 px per pixel
                      of outline, with the default tiles and with 65 um ones, which cut every
-                     triangle at the grid. A pixel's inner ramp is measured against the outline
-                     edges at its triangle's corners, not its triangle's own: an ear of the 64-gon
-                     is under half a pixel thick, and asking only it left most of the inner ramp
-                     to the triangle beside it, at 0.047 px of outline over.
+                     triangle at the grid; and the plate's with the default tiles, where its
+                     triangles are not refused. A pixel's inner ramp is measured against the
+                     outline edges at its triangle's corners, not its triangle's own: an ear of
+                     the 64-gon is under half a pixel thick, and asking only it left most of the
+                     inner ramp to the triangle beside it, at 0.047 px of outline over.
+      canvas-plane-edit the plane sheet's plate edited, the least of three: under 400 ms. A
+                     timing arm: the bound is this machine's (184 ms measured on an M1 Max, the
+                     Debug build, where walking the ring for each hole took 570) and does not
+                     travel.
       canvas-refused-whole the polygons sheet with tiles of 4096 units, where some polygons'
                      triangles cross more tiles than an edit splits a shape into and are refused:
                      every polygon is drawn whole or not at all. A refused polygon used to keep
@@ -527,9 +534,10 @@ def run_canvas_gate(workdir):
     @arm("canvas-triangulation")
     def _():
         polygons, probe = sheet_run("polygons")
-        cells = _canvas_sheet(probe, "polygons")
-        if not polygons or len(cells) != 6:
-            ok, detail = False, f"the app failed or printed {len(cells)} polygons (want 6)"
+        plane, plane_probe = sheet_run("plane")
+        cells = {**_canvas_sheet(probe, "polygons"), **_canvas_sheet(plane_probe, "plane")}
+        if not polygons or not plane or len(cells) != 7:
+            ok, detail = False, f"a run failed or printed {len(cells)} polygons (want 7)"
         else:
             rows, ok = [], True
             for name, tokens in sorted(cells.items()):
@@ -546,23 +554,42 @@ def run_canvas_gate(workdir):
     def _():
         polygons, probe = sheet_run("polygons")
         cells = _canvas_sheet(probe, "polygons")
+        plane, plane_probe = sheet_run("plane")
+        plate = _canvas_sheet(plane_probe, "plane").get("plate")
         tiny, _ = _canvas_run(workdir, "polygons_tiny", "--sheet", "polygons", "--tile-shift",
                               "16")
-        if not polygons or not tiny or len(cells) != 6:
+        if not polygons or not tiny or not plane or len(cells) != 6 or not plate:
             ok, detail = False, "a run failed"
         else:
+            def per_edge(cov, tokens):
+                (x0, y0, x1, y1), m = _canvas_cell(tokens)
+                return (float(cov[y0:y1, x0:x1].sum()) - m["area"]) / m["perimeter"]
             worst, rows = 0.0, []
             for label, path in (("4 mm", polygons), ("65 um", tiny)):
                 cov = _canvas_coverage(path)
                 for name, tokens in sorted(cells.items()):
-                    (x0, y0, x1, y1), m = _canvas_cell(tokens)
-                    per_edge = (float(cov[y0:y1, x0:x1].sum()) - m["area"]) / m["perimeter"]
-                    worst = max(worst, abs(per_edge))
+                    off = per_edge(cov, tokens)
+                    worst = max(worst, abs(off))
                     if label == "65 um":
-                        rows.append(f"{name} {per_edge:+.4f}")
+                        rows.append(f"{name} {off:+.4f}")
+            off = per_edge(_canvas_coverage(plane), plate)
+            worst = max(worst, abs(off))
             ok = worst <= 0.01
-            detail = (f"worst {worst:.4f} px of outline (want <= 0.01) over both tile sizes; "
-                      f"with 65 um tiles: " + ", ".join(rows))
+            detail = (f"worst {worst:.4f} px of outline (want <= 0.01) over both tile sizes and "
+                      f"the plane's plate ({off:+.4f}); with 65 um tiles: " + ", ".join(rows))
+        return ok, detail
+
+    @arm("canvas-plane-edit")
+    def _():
+        _, probe = sheet_run("plane")
+        timed = _canvas_sheet(probe, "plane-time").get("plate")
+        if not timed or "edit-ms" not in timed:
+            ok, detail = False, "the app failed or printed no time"
+        else:
+            ms = float(timed[timed.index("edit-ms") + 1])
+            ok = ms <= 400.0
+            detail = (f"the plane sheet's plate of 2,008 holes edited in {ms:.0f} ms, the least of "
+                      f"three (want <= 400; a timing arm, this machine's)")
         return ok, detail
 
     @arm("canvas-refused-whole")

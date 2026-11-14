@@ -24,8 +24,10 @@
  * against are found through a z-order curve rather than the whole ring.
  *
  * What is cetra's: nodes come from one pool sized to the worst case, so a
- * triangulation allocates twice; and holes sort by x then y, so the result
- * does not depend on the order equal points arrive in.
+ * triangulation allocates twice; holes sort by x then y, so the result does
+ * not depend on the order equal points arrive in; and from 32 holes each
+ * hole's bridge is found through a grid over the ring rather than by walking
+ * it (spec 14.37), the grid allocated beside the pool.
  */
 
 #include <math.h>
@@ -37,12 +39,14 @@
 #include "triangulate.h"
 
 typedef struct EarNode {
-    uint32_t i; // the point's index in the input
+    uint32_t i;    // the point's index in the input
+    uint32_t seen; // the latest grid query that tested it
     double x, y;
     struct EarNode *prev, *next;
-    int32_t z; // its place along the z-order curve
-    struct EarNode *prev_z, *next_z;
+    int32_t z;    // its place along the z-order curve
     bool steiner; // a hole of one point
+    bool removed; // taken out of its ring
+    struct EarNode *prev_z, *next_z;
 } EarNode;
 
 typedef struct EarState {
@@ -141,6 +145,7 @@ static EarNode* _insert(EarState* s, uint32_t i, double x, double y, EarNode* la
 }
 
 static void _remove(EarNode* p) {
+    p->removed = true;
     p->next->prev = p->prev;
     p->prev->next = p->next;
     if (p->prev_z)
@@ -505,6 +510,209 @@ static EarNode* _find_hole_bridge(const EarNode* hole, EarNode* outer) {
     return m;
 }
 
+/*
+ * The grid (spec 14.37). The walk above tests every edge of the ring for a hole's ray and every
+ * point for its angle, and the ring grows by each hole it joins, so a plane of thousands of holes
+ * costs their product. The grid lies over the polygon's box. Each edge of the ring is filed, by the
+ * node it starts from, in every cell its box meets, so each node is in its own cell too. A hole
+ * then tests the edges of the cells of its own row, leftward from it, for the ray, and the points
+ * of the cells its triangle's box meets for the angle. A node the filter takes out stays filed. As
+ * a point it is passed over. As an edge it stands for its nearest predecessor still in the ring,
+ * whose edge now runs along the line its own did.
+ *
+ * The walk keeps the first of two equal candidates it meets going round the ring from `outer`, an
+ * order the grid does not have. Of two edges the ray meets at the same x, the grid takes the one
+ * whose node was made first. Of two points at the same place and angle, it takes the one whose
+ * sector lies inside the other's, as the walk does, and the one made first where that does not
+ * decide. Either gives a bridge locally inside the ring there, so the triangles may differ from the
+ * walk's where such ties fall, and what they cover does not.
+ */
+
+// Holes from which a polygon's bridges are found through the grid; fewer walk the ring. A plate
+// of vias costs the same either way at 32 holes unoptimised, and the grid is ahead from 16 to 24
+// at -O2; below, making the grid costs a tenth more than it saves.
+#define EAR_GRID_HOLES 32
+
+// The ring's points the grid gives a cell, about. From 1 to 64 the plane sheet's 2,008 holes
+// triangulate within a fifth of each other; 16 was the quickest, unoptimised and at -O2.
+#define EAR_GRID_POINTS_PER_CELL 16.0
+
+typedef struct EarEntry {
+    EarNode* node;
+    uint32_t next; // the cell's entry filed before it, + 1; 0 = none
+} EarEntry;
+
+typedef struct EarGrid {
+    double x0, y0;       // the box's corner
+    double per_x, per_y; // cells per unit along each axis
+    int cols, rows;
+    uint32_t* head; // each cell's latest entry, + 1; 0 = none
+    EarEntry* entries;
+    size_t used, cap;
+    uint32_t stamp; // the latest query
+    bool failed;    // out of memory: the walk takes the holes left
+} EarGrid;
+
+// The cell along one axis at t cells from the box's corner, those outside it at its edges.
+static int _grid_cell(double t, int n) {
+    return t >= 1.0 ? (t < (double)n ? (int)t : n - 1) : 0;
+}
+
+static int _grid_col(const EarGrid* g, double x) {
+    return _grid_cell((x - g->x0) * g->per_x, g->cols);
+}
+
+static int _grid_row(const EarGrid* g, double y) {
+    return _grid_cell((y - g->y0) * g->per_y, g->rows);
+}
+
+// Files the edge from p in every cell its box meets.
+static void _grid_file(EarGrid* g, EarNode* p) {
+    if (g->failed)
+        return;
+    const int c0 = _grid_col(g, fmin(p->x, p->next->x)), c1 = _grid_col(g, fmax(p->x, p->next->x));
+    const int r0 = _grid_row(g, fmin(p->y, p->next->y)), r1 = _grid_row(g, fmax(p->y, p->next->y));
+    for (int r = r0; r <= r1; r++) {
+        for (int c = c0; c <= c1; c++) {
+            if (g->used == g->cap) {
+                const size_t cap = g->cap * 2;
+                EarEntry* grown =
+                    cap < UINT32_MAX ? realloc(g->entries, cap * sizeof(EarEntry)) : NULL;
+                if (!grown) {
+                    g->failed = true;
+                    return;
+                }
+                g->entries = grown;
+                g->cap = cap;
+            }
+            uint32_t* head = &g->head[(size_t)r * (size_t)g->cols + (size_t)c];
+            g->entries[g->used] = (EarEntry){p, *head};
+            *head = (uint32_t)++g->used;
+        }
+    }
+}
+
+// A grid over the box of all count points, the outer ring's edges filed; false when the box has
+// no area or memory runs out, and the walk finds every bridge.
+static bool _grid_make(EarGrid* g, const double* xy, size_t count, EarNode* outer) {
+    double x0 = xy[0], y0 = xy[1], x1 = xy[0], y1 = xy[1];
+    for (size_t i = 1; i < count; i++) {
+        x0 = fmin(x0, xy[2 * i]), x1 = fmax(x1, xy[2 * i]);
+        y0 = fmin(y0, xy[2 * i + 1]), y1 = fmax(y1, xy[2 * i + 1]);
+    }
+    const double w = x1 - x0, h = y1 - y0;
+    if (!(w > 0.0 && h > 0.0))
+        return false;
+    // Square cells, no more than 4096 along an axis.
+    const double side = sqrt(w * h * EAR_GRID_POINTS_PER_CELL / (double)count);
+    *g = (EarGrid){.x0 = x0, .y0 = y0};
+    g->cols = (int)fmax(1.0, fmin(4096.0, ceil(w / side)));
+    g->rows = (int)fmax(1.0, fmin(4096.0, ceil(h / side)));
+    g->per_x = g->cols / w;
+    g->per_y = g->rows / h;
+    g->cap = 2 * count + 64;
+    g->head = calloc((size_t)g->cols * (size_t)g->rows, sizeof(uint32_t));
+    g->entries = malloc(g->cap * sizeof(EarEntry));
+    if (!g->head || !g->entries) {
+        g->failed = true;
+        return false;
+    }
+    EarNode* p = outer;
+    do {
+        _grid_file(g, p);
+        p = p->next;
+    } while (p != outer);
+    return !g->failed;
+}
+
+static void _grid_free(EarGrid* g) {
+    free(g->head);
+    free(g->entries);
+}
+
+// Of two points at one place, whether p's sector decides over m's (the grid's ties, above).
+static bool _beats(const EarNode* p, const EarNode* m) {
+    const bool inside_m = _sector_contains_sector(m, p);
+    return inside_m != _sector_contains_sector(p, m) ? inside_m : p < m;
+}
+
+// _find_hole_bridge through the grid. The ray's walk ends past the column whose edges put the
+// nearest x right of that column: an edge filed only further left meets the ray further left, an
+// x rounded past its edge's box by a column at most. It starts a column right of the hole's for
+// the same rounding.
+static EarNode* _grid_bridge(EarGrid* g, const EarNode* hole) {
+    const double hx = hole->x, hy = hole->y;
+    uint32_t stamp = ++g->stamp;
+    const int row = _grid_row(g, hy);
+    double qx = -INFINITY;
+    const EarNode* edge = NULL;
+    EarNode* m = NULL;
+    const int first = _grid_col(g, hx) + 1;
+    for (int c = first < g->cols ? first : g->cols - 1; c >= 0; c--) {
+        for (uint32_t e = g->head[(size_t)row * (size_t)g->cols + (size_t)c]; e;
+             e = g->entries[e - 1].next) {
+            EarNode* p = g->entries[e - 1].node;
+            while (p->removed)
+                p = p->prev;
+            if (p->seen == stamp)
+                continue;
+            p->seen = stamp;
+            if (hy <= p->y && hy >= p->next->y && p->next->y != p->y) {
+                const double x = p->x + (hy - p->y) * (p->next->x - p->x) / (p->next->y - p->y);
+                if (x <= hx && (x > qx || (x == qx && p < edge))) {
+                    qx = x;
+                    edge = p;
+                    m = p->x < p->next->x ? p : p->next;
+                }
+            }
+        }
+        if (m && _grid_col(g, qx) > c)
+            break;
+    }
+    if (!m || qx == hx)
+        return m; // none, or the hole touches the ring here
+
+    stamp = ++g->stamp;
+    const double mx = m->x, my = m->y;
+    const int c0 = _grid_col(g, mx), c1 = _grid_col(g, hx);
+    const int r0 = _grid_row(g, fmin(my, hy)), r1 = _grid_row(g, fmax(my, hy));
+    double tan_min = INFINITY;
+    for (int r = r0; r <= r1; r++) {
+        for (int c = c0; c <= c1; c++) {
+            for (uint32_t e = g->head[(size_t)r * (size_t)g->cols + (size_t)c]; e;
+                 e = g->entries[e - 1].next) {
+                EarNode* p = g->entries[e - 1].node;
+                if (p->removed || p->seen == stamp)
+                    continue;
+                p->seen = stamp;
+                if (hx >= p->x && p->x >= mx && hx != p->x &&
+                    _point_in_triangle(hy < my ? hx : qx, hy, mx, my, hy < my ? qx : hx, hy, p->x,
+                                       p->y)) {
+                    const double tan_ = fabs(hy - p->y) / (hx - p->x);
+                    if (_locally_inside(p, hole) &&
+                        (tan_ < tan_min ||
+                         (tan_ == tan_min && (p->x > m->x || (p->x == m->x && _beats(p, m)))))) {
+                        m = p;
+                        tan_min = tan_;
+                    }
+                }
+            }
+        }
+    }
+    return m;
+}
+
+// Files what joining a hole at its bridge made: the bridge's edge from its ring point, then the
+// hole's edges round to the bridge's way back and the edge after it, from the bridge's copy.
+static void _grid_join(EarGrid* g, EarNode* bridge, EarNode* hole, const EarNode* reverse) {
+    _grid_file(g, bridge);
+    for (EarNode* p = hole;; p = p->next) {
+        _grid_file(g, p);
+        if (p == reverse->next)
+            break;
+    }
+}
+
 static int _compare_leftmost(const void* a, const void* b) {
     const EarNode* p = *(EarNode* const*)a;
     const EarNode* q = *(EarNode* const*)b;
@@ -534,16 +742,22 @@ static EarNode* _eliminate_holes(EarState* s, const double* xy, size_t count, co
         queue[n++] = _leftmost(list);
     }
     qsort(queue, n, sizeof(EarNode*), _compare_leftmost);
+    EarGrid grid = {0};
+    const bool gridded = n >= EAR_GRID_HOLES && _grid_make(&grid, xy, count, outer);
     for (size_t h = 0; h < n && !s->failed; h++) {
-        EarNode* bridge = _find_hole_bridge(queue[h], outer);
+        EarNode* bridge = gridded && !grid.failed ? _grid_bridge(&grid, queue[h])
+                                                  : _find_hole_bridge(queue[h], outer);
         if (!bridge)
             continue;
         EarNode* reverse = _split_polygon(s, bridge, queue[h]);
         if (!reverse)
             break;
+        if (gridded)
+            _grid_join(&grid, bridge, queue[h], reverse);
         _filter_points(reverse, reverse->next);
         outer = _filter_points(bridge, bridge->next);
     }
+    _grid_free(&grid);
     free(queue);
     return outer;
 }
