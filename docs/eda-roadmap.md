@@ -17,7 +17,7 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-14: 14.36, labels on copper, built._
+_Last updated: 2026-11-14: 14.37, a polygon of thousands of holes, started._
 
 ---
 
@@ -551,6 +551,11 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
   tags without taking its colour. With them, at the user's word, a ring by its nearest shape: one
   pass more while a ring shows takes the least inner ramp by min, so a picked trace's ring is one
   round a joint, where 14.0 left a tick in the inner corner, seen at 2x (`docs/canvas.md`).
+- **A polygon of thousands of holes** -- spec 14.37, started, from pcb 7.6, whose ground planes
+  hold a hole for every via and pad of another net: a fill of 2,234 holes took 2.3 s to triangulate,
+  each hole's bridge to the outline found by walking the whole ring. The bridge is found through a
+  grid over the ring's edges instead, inside `triangulate.c`, with no change to its API. Triangles
+  supplied by the caller (item 1, Left for later) stay the fallback.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the
