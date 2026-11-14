@@ -77,13 +77,8 @@ def _canvas_unfilled(cov, box):
     """Pixels of a coverage array inside a cell's box under half covered while all eight round
     them are over 0.8: a pixel a fill left out between two of its triangles."""
     x0, y0, x1, y1 = box
-    c = cov[y0:y1, x0:x1]
-    low = c[1:-1, 1:-1] < 0.5
-    for dy in (-1, 0, 1):
-        for dx in (-1, 0, 1):
-            if dx or dy:
-                low &= c[1 + dy:c.shape[0] - 1 + dy, 1 + dx:c.shape[1] - 1 + dx] > 0.8
-    return int(low.sum())
+    w = np.lib.stride_tricks.sliding_window_view(cov[y0:y1, x0:x1], (3, 3)).reshape(-1, 9)
+    return int(((w[:, 4] < 0.5) & (np.delete(w, 4, axis=1).min(axis=1) > 0.8)).sum())
 
 
 def _canvas_area(name, m):
@@ -182,12 +177,11 @@ def run_canvas_gate(workdir):
       canvas-plane-edit the plane sheet's plate edited, the least of three: under 400 ms. A
                      timing arm: the bound is this machine's (194 ms measured on an M1 Max, the
                      Debug build) and does not travel. The walk alone, with no grid, takes 570.
-      canvas-fill-whole the plane sheet's plate at 4 mm tiles, at 16.8 mm ones and moved 1.2 mm
-                     off the grid: no pixel of it under half covered while all eight round it are
-                     over 0.8. A triangle crossing the grid is cut at every tile it crosses, so
-                     two sharing an edge split it alike. Drawn whole where it fitted in two tiles,
-                     beside a neighbour cut, a sliver left a pixel whose centre lay between the two
-                     unfilled: 2 at 4 mm tiles and 10 at 16.8 mm (spec 14.37).
+      canvas-fill-whole the plane sheet's plate at 4 mm tiles, at 16.8 mm ones and moved 2 mm
+                     on the grid: no pixel of it under half covered while all eight round it are
+                     over 0.8. A triangle drawn whole where it fitted in two tiles, beside a
+                     neighbour cut at the grid, left a pixel whose centre lay between the two
+                     unfilled: 2 at 4 mm tiles, 10 at 16.8 mm and 2 moved (spec 14.37).
       canvas-refused-whole the polygons sheet with tiles of 4096 units, where some polygons'
                      triangles cross more tiles than an edit splits a shape into and are refused:
                      every polygon is drawn whole or not at all. A refused polygon used to keep
@@ -616,23 +610,21 @@ def run_canvas_gate(workdir):
 
     @arm("canvas-fill-whole")
     def _():
-        runs = [("4 mm tiles", sheet_run("plane")),
-                ("16.8 mm", _canvas_run(workdir, "plane_t24", "--sheet", "plane", "--tile-shift",
-                                        "24")),
-                ("moved", _canvas_run(workdir, "plane_moved", "--sheet", "plane", "--offset",
-                                      "1234567"))]
-        rows, ok = [], True
-        for label, (path, probe) in runs:
-            plate = _canvas_sheet(probe, "plane").get("plate")
-            if not path or not plate:
-                rows.append(f"{label}: the app failed")
-                ok = False
-                continue
-            box, _ = _canvas_cell(plate)
-            left = _canvas_unfilled(_canvas_coverage(path), box)
-            ok = ok and left == 0
-            rows.append(f"{label} {left}")
-        detail = "pixels of the plate left out among full ones: " + ", ".join(rows) + " (want 0)"
+        # The plate's box is the probe's, the same in every run: an offset moves the view with it.
+        plane, probe = sheet_run("plane")
+        plate = _canvas_sheet(probe, "plane").get("plate")
+        def shot(tag, *args):
+            path = os.path.join(workdir, f"canvas_{tag}.ppm")
+            return path if _canvas_shot(path, 2, "--sheet", "plane", *args) is not None else None
+        runs = [("4 mm tiles", plane), ("16.8 mm", shot("plane_t24", "--tile-shift", "24")),
+                ("moved 2 mm", shot("plane_moved", "--offset", "2000000"))]
+        if not plate or not all(path for _, path in runs):
+            return False, "a run failed or printed no plate"
+        box, _ = _canvas_cell(plate)
+        left = [(label, _canvas_unfilled(_canvas_coverage(path), box)) for label, path in runs]
+        ok = all(n == 0 for _, n in left)
+        detail = ("pixels of the plate left out among full ones: "
+                  + ", ".join(f"{label} {n}" for label, n in left) + " (want 0)")
         return ok, detail
 
     @arm("canvas-refused-whole")

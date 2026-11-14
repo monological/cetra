@@ -623,7 +623,10 @@ void canvas_edit_box(CanvasEdit* edit, const CanvasBox* box) {
  * tile grid, and every point where an edge crosses a grid line is found from
  * the edge's two ends taken in one order: the triangles either side of a grid
  * line, and the edge records along it, then share their corners to the unit,
- * so the pieces meet with no crack.
+ * so the pieces meet with no crack. An edge is split where it crosses the
+ * grid, so both triangles beside it must be cut there: one left whole beside a
+ * neighbour cut meets it along two different lines, and a pixel whose centre
+ * falls between them is filled by neither.
  */
 
 // Where the line through a and b crosses x = at (axis 0) or y = at (axis 1),
@@ -680,8 +683,14 @@ static CanvasPoint _clip_cross(const CanvasPoint tri[3], int line, int side, con
     return (CanvasPoint){x, y};
 }
 
-// Sutherland-Hodgman against the tile's four sides in turn.
-static int _clip_triangle(const CanvasPoint tri[3], const ClipBox* box, ClipCorner out[CLIP_MAX]) {
+// Sutherland-Hodgman against the tile's four sides in turn, a side the
+// triangle's box, `span`, lies inside passed over: every corner, clipped ones
+// too, lies in that box, and a side holding them all would copy them as they
+// are.
+static int _clip_triangle(const CanvasPoint tri[3], const ClipBox* span, const ClipBox* box,
+                          ClipCorner out[CLIP_MAX]) {
+    const bool crosses[4] = {span->x0<box->x0, span->x1> box->x1,
+                             span->y0<box->y0, span->y1> box->y1};
     ClipCorner a[CLIP_MAX], b[CLIP_MAX];
     a[0] = (ClipCorner){tri[0], 2};
     a[1] = (ClipCorner){tri[1], 0};
@@ -690,6 +699,8 @@ static int _clip_triangle(const CanvasPoint tri[3], const ClipBox* box, ClipCorn
     ClipCorner* in = a;
     ClipCorner* next = b;
     for (int side = 3; side <= 6 && n > 0; side++) {
+        if (!crosses[side - 3])
+            continue;
         int m = 0;
         for (int j = 0; j < n && m + 2 <= CLIP_MAX; j++) {
             const ClipCorner* p = &in[(j + n - 1) % n];
@@ -747,12 +758,8 @@ static bool _fill(CanvasEdit* edit, const CanvasPaint* paint, int64_t tx, int64_
     return _add_fill(edit, &piece);
 }
 
-// One triangle of a polygon: whole when it lies in one tile, else cut into
-// each tile it crosses, each cut piece a fan. Every piece carries the whole
-// triangle's nine outline points. Any triangle crossing the grid is cut, so
-// two sharing an edge split it at the same rounded points (`_crossing` orders
-// the edge's ends): drawn whole beside a neighbour cut, a triangle 0.06 px
-// thick left a pixel whose centre fell between the two unfilled (spec 14.37).
+// One triangle of a polygon, cut into each tile it crosses, each piece a fan
+// carrying the whole triangle's nine outline points.
 static bool _polygon_triangle(CanvasEdit* edit, const CanvasPaint* paint, const CanvasPoint tri[3],
                               const CanvasPoint near[9]) {
     const int shift = edit->tile_shift;
@@ -764,8 +771,7 @@ static bool _polygon_triangle(CanvasEdit* edit, const CanvasPaint* paint, const 
     }
     const int64_t tx0 = _tile_of(x0, shift), tx1 = _tile_of(x1, shift);
     const int64_t ty0 = _tile_of(y0, shift), ty1 = _tile_of(y1, shift);
-    if (tx1 == tx0 && ty1 == ty0)
-        return _fill(edit, paint, tx0, ty0, tri, near);
+    const ClipBox span = {x0, x1, y0, y1};
     if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) > CANVAS_SPLIT_MAX) {
         log_error("canvas: a polygon triangle across more than %d tiles is refused",
                   CANVAS_SPLIT_MAX);
@@ -776,7 +782,7 @@ static bool _polygon_triangle(CanvasEdit* edit, const CanvasPaint* paint, const 
             const ClipBox box = {_tile_origin(tx, shift), _tile_origin(tx + 1, shift),
                                  _tile_origin(ty, shift), _tile_origin(ty + 1, shift)};
             ClipCorner c[CLIP_MAX];
-            const int n = _clip_triangle(tri, &box, c);
+            const int n = _clip_triangle(tri, &span, &box, c);
             for (int k = 1; k + 1 < n; k++) {
                 const CanvasPoint fan[3] = {c[0].p, c[k].p, c[k + 1].p};
                 if (!_fill(edit, paint, tx, ty, fan, near))
