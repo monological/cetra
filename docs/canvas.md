@@ -56,8 +56,8 @@ its join and its dash. A paint of zeros is round, round and solid.
   by default -- is drawn solid at its pattern's average, the dash's share of the period, as an
   opacity: its pixels keep the rank their coverage gives, so a raised ghost still shows over what
   it crosses.
-- **A dashed shape costs a 64-byte record** in a store of its own, its pattern after the shape's
-  record; a solid one stays 48 bytes, and a solid round line writes no joins.
+- **A dashed shape costs a 64-byte record** in the long store, its pattern in the vec4 after the
+  shape's record; a solid one stays 48 bytes, and a solid round line writes no joins.
 
 ## Dimming by light
 
@@ -106,11 +106,11 @@ net and its parts and fades the rest.
      moves as it grows), so overlapping shapes want one colour.
 4. **Rings are drawn last.** A ring is not a distance that falls away, so where it crosses another
    shape of its layer -- the next segment of a picked trace at its joint -- that shape must win.
-   Drawn raised, the rings crossed every joint. And **a ring is its nearest shape's** (spec 14.36):
-   a pass just before the rings takes every ringed shape's inner ramp into alpha by min, so a
-   segment's ring in the gap just outside the next one goes, and the ring round a joint is one.
-   The inner ramp rising with distance and the outer falling, what is left is exactly the ring of
-   the nearest ringed shape; it costs a pass a layer while a tag draws a ring.
+   Drawn raised, the rings crossed every joint. And **a ring's coverage is its nearest ringed
+   shape's** (spec 14.36), `canvas_pass.glsl`'s NEAREST pass: the ring round a joint is one, and
+   two ringed shapes nearer than twice the ring's gap share one outline. Where two colours of ring
+   meet, which shows is the first drawn's, not the nearer's. It costs a pass a layer while a tag
+   draws a ring.
 5. **A fill is triangulated on the CPU** (`triangulate.h`), and each triangle measures its inner ramp
    against the six outline edges at its corners, not its own edges: an earcut ear thinner than half a
    pixel otherwise leaves its band to the triangle beside it. EDGE records draw the outer half. A
@@ -131,11 +131,12 @@ net and its parts and fades the rest.
    (`font_pen_step`, `docs/ui.md`), so its size and turn ride the record. A canvas draws with at most
    four fonts (`CANVAS_FONT_MAX`), a texture unit each, and cuts at the font's true edge
    (`Font.sdf_edge`), half a code under stb's stated value because stb truncates each field texel.
-   A string under `text_min_px` is dropped in the vertex stage, and **a string in a band of zoom**
-   (`CanvasText.shown_from`, `shown_until`, spec 14.36) is drawn only once a string of the first
-   em would read and until one of the second would, each judged by the same floor: a pad's number
-   centred gives way to its number over its net in the frame the net comes to read. A banded
-   glyph carries its band after its record, in the 64-byte store dashed shapes use.
+   A string is dropped in the vertex stage under its floor: `text_min_px`, or where higher the em
+   at which its font's field holds no more than half a pixel of ramp. **A string in a band of
+   zoom** (`CanvasText.shown_from`, `shown_until`, spec 14.36) is drawn only once a string of the
+   first em in its font would be and until one of the second would, each judged by that floor: a
+   pad's number centred gives way to its number over its net in the frame the net comes to be
+   drawn. A banded glyph carries its band in the vec4 after its record, in the long store.
 10. **A stroke is baked into its records.** The edit lays the paint's cap, join and dash along the
     shape in double, so changing one is an edit of the shape, not a write to a table as a tag's
     colour is.
