@@ -999,6 +999,15 @@ static void sheet_tags(SheetContext* ctx) {
                     0xff0000);
         probe_pixel(ctx, "tags", "kept", CELL(9), 0x808080);
         probe_pixel(ctx, "tags-text", "kept", label, 0x808080);
+        // The ringed trace in framebuffer pixels, its ends and its joint, its half width, and the
+        // ring's inner and outer distance as canvas.c's CANVAS_RING_GAP_PT and _WIDTH_PT make
+        // them, so the ring can be held to the nearest of its two segments (spec 14.36).
+        double ex[3], ey[3];
+        for (int k = 0; k < 3; k++)
+            fb_of(ctx, trace[k], &ex[k], &ey[k]);
+        const double inner = fmax(1.0, 1.0 * ctx->fb_scale), outer = inner + 1.5 * ctx->fb_scale;
+        printf("canvas tags-joint trace %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f\n", ex[0],
+               ey[0], ex[1], ey[1], ex[2], ey[2], MM(0.15) * ppu_px(ctx), inner, outer);
     }
 #undef CELL
 }

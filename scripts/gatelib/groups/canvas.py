@@ -678,8 +678,10 @@ def run_canvas_gate(workdir):
         path, probe = _canvas_run(workdir, "tags", "--sheet", "tags")
         cells = _canvas_sheet(probe, "tags")
         label = probe.get(("tags-text", "kept"))
-        if not path or len(cells) != 12 or not label:
-            ok, detail = False, f"the app failed or printed {len(cells)} points (want 12, and the H)"
+        joint = probe.get(("tags-joint", "trace"))
+        if not path or len(cells) != 12 or not label or not joint:
+            ok, detail = False, (f"the app failed or printed {len(cells)} points (want 12, the H "
+                                 f"and the trace)")
         else:
             wrong = _canvas_wrong_pixels(path, cells)
             # The H on the layer keeping its colour: its ink grey, the tag's dim, and none of it red.
@@ -688,9 +690,31 @@ def run_canvas_gate(workdir):
             r, g, b = img[..., 0], img[..., 1], img[..., 2]
             grey = int(((r > 60) & (np.abs(r - g) < 16) & (np.abs(g - b) < 16)).sum())
             red = int(((r - g) > 40).sum())
-            ok = not wrong and grey > 200 and red == 0
+            # The ringed trace's ring by the nearer of its two segments: a pixel whose centre is in
+            # the gap between the trace and its ring dark, one well inside the ring's band yellow,
+            # the inner corner and the outer bend among them.
+            ax, ay, cx, cy, bx, by, hw, inner, outer = (float(v) for v in joint)
+            reach = hw + outer + 4.0
+            x0, y0 = int(min(ax, bx, cx) - reach), int(min(ay, by, cy) - reach)
+            x1, y1 = int(max(ax, bx, cx) + reach), int(max(ay, by, cy) + reach)
+            ys, xs = np.mgrid[y0:y1, x0:x1] + 0.5
+
+            def apart(sx, sy, ex, ey):
+                dx, dy = ex - sx, ey - sy
+                t = np.clip(((xs - sx) * dx + (ys - sy) * dy) / (dx * dx + dy * dy), 0.0, 1.0)
+                return np.hypot(xs - sx - t * dx, ys - sy - t * dy)
+            d = np.minimum(apart(cx, cy, ax, ay), apart(cx, cy, bx, by)) - hw
+            trace = _ppm_array(path)[y0:y1, x0:x1].astype(int)
+            yellow = (trace[..., 0] > 200) & (trace[..., 1] > 200) & (trace[..., 2] < 80)
+            dark = trace.max(axis=-1) < 40
+            gap = (d >= 0.8) & (d <= inner - 0.6)
+            band = (d >= inner + 0.8) & (d <= outer - 0.8)
+            stray, missing = int((gap & ~dark).sum()), int((band & ~yellow).sum())
+            ok = not wrong and grey > 200 and red == 0 and stray == 0 and missing == 0
             detail = (f"12 points each its state's colour within 2 codes; the kept H's ink {grey} px "
-                      f"grey (want over 200), {red} red (want 0)"
+                      f"grey (want over 200), {red} red (want 0); the trace's ring by its nearer "
+                      f"segment: {stray} of {int(gap.sum())} px in its gap lit (want 0), {missing} "
+                      f"of {int(band.sum())} in its band not yellow (want 0)"
                       + ("" if not wrong else "; wrong: " + ", ".join(wrong)))
         return ok, detail
 

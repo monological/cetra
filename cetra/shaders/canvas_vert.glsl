@@ -98,7 +98,7 @@ void main() {
     // The quad's corners as a strip: (0, 0), (1, 0), (0, 1), (1, 1). A shape with an outline
     // reaches out to its ring in the passes that draw it.
     vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
-    bool ringed = vOutline.a > 0.0 && (uPass == 0 || uPass == 4);
+    bool ringed = vOutline.a > 0.0 && (uPass == 0 || uPass == 4 || uPass == CANVAS_PASS_NEAREST);
     float pad = PAD + (ringed ? uRing.y : 0.0);
     vec2 pos;
     float span;

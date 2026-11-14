@@ -1067,7 +1067,7 @@ static void _draw_stores(const CanvasData* d, const CanvasLayer* layer, int pass
     const CanvasStore* fills = &layer->data->stores[CANVAS_FILLS];
     const CanvasStore* quads[2] = {&layer->data->stores[CANVAS_SHAPES],
                                    &layer->data->stores[CANVAS_DASHES]};
-    if (fills->live && pass != 4) {
+    if (fills->live && pass != 4 && pass != CANVAS_PASS_NEAREST) {
         glUseProgram(d->fill_program->id);
         uniform_set_int(d->fill_program->uniforms, "uPass", pass);
         uniform_set_float(d->fill_program->uniforms, "uOpacity", opacity);
@@ -1107,16 +1107,23 @@ static void _draw_layer(const CanvasData* d, const CanvasLayer* layer) {
     if (!fills->live && !shapes->live && !dashes->live)
         return;
     const float opacity = glm_clamp(layer->opacity, 0.0f, 1.0f);
-    for (int pass = 0; pass < 5; pass++) {
-        // The raised pass only while some tag raises, and the ring pass only
+    static const int passes[] = {0, 1, 2, 3, CANVAS_PASS_NEAREST, 4};
+    for (size_t k = 0; k < sizeof passes / sizeof passes[0]; k++) {
+        const int pass = passes[k];
+        // The raised pass only while some tag raises, and the rings' two only
         // while one draws a ring.
-        if ((pass == 1 && !d->tags->raised) || (pass == 4 && !d->tags->outlined))
+        const bool ringed = pass == 4 || pass == CANVAS_PASS_NEAREST;
+        if ((pass == 1 && !d->tags->raised) || (ringed && !d->tags->outlined))
             continue;
         if (pass == 0) {
             glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
             glBlendEquationSeparate(GL_FUNC_ADD, GL_MAX);
             glBlendFuncSeparate(GL_ONE, GL_ZERO, GL_ONE, GL_ONE);
-        } else if (pass == 1 || (pass == 2 && !d->tags->raised)) {
+        } else if (pass == CANVAS_PASS_NEAREST) {
+            // The least of every ringed shape's inner ramp, so a ring is its nearest shape's.
+            glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
+            glBlendEquationSeparate(GL_FUNC_ADD, GL_MIN);
+        } else if (pass == 1 || (pass == 2 && !d->tags->raised) || pass == 4) {
             glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
             glBlendEquation(GL_FUNC_ADD);
             glBlendFuncSeparate(GL_DST_ALPHA, GL_ONE_MINUS_DST_ALPHA, GL_ZERO, GL_ZERO);

@@ -49,6 +49,9 @@
 // The pass that draws every lit shape's coverage into the lit target while a view fades with room
 // (canvas_pass.glsl). A pass number, so a plain int in both languages.
 #define CANVAS_PASS_LIT 5
+// The pass, between the shapes' and the rings', that leaves a ring only where its nearest ringed
+// shape is far enough for it (canvas_pass.glsl). A pass number likewise.
+#define CANVAS_PASS_NEAREST 6
 // The taps round a fragment of a shape a view fades (canvas_pass.glsl): rings out to the room,
 // spokes a ring. The lit target's levels are made down to the widest ring's spacing. Counts, plain
 // ints.

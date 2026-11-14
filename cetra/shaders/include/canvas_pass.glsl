@@ -8,9 +8,14 @@
 //   1  the colour of shapes a tag raises, where they cover half a pixel or more,
 //   2  then of the rest where they cover half a pixel or more,
 //   3  then of every shape where less,
+//   6  then CANVAS_PASS_NEAREST, the least of every ringed shape's inner ramp into alpha by min:
+//      pass 0 left there the largest ring any shape gives the pixel, the most of every outer ramp,
+//      and the ramps being one rising and one falling with distance, the least inner one and the
+//      most outer one are the nearest shape's, so what is left is the ring of the nearest ringed
+//      shape. A segment's ring in the gap just outside the next one at a joint goes.
 //   4  then outline rings: each paints by the pixel's alpha and zeroes it, so the first shape to
 //      reach a pixel spends the whole coverage and overlaps add nothing.
-// Pass 1 is drawn only while a tag raises and pass 4 only while one draws a ring.
+// Pass 1 is drawn only while a tag raises and passes 6 and 4 only while one draws a ring.
 //
 // A view that fades (spec 14.25) fades each shape it leaves out as the shape is drawn, so what lies
 // over it is never faded with it. Below a fade of 1 its colour goes toward the view's colour, and

@@ -86,9 +86,9 @@ bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised, 
 
 // Whether an instance can paint anything in this pass (canvas_pass.glsl), so one that cannot is
 // dropped before it is rasterised: the raised pass draws raised shapes alone, the solid pass none
-// of them (a raised shape's solid pixels went in the raised pass), and the ring pass only shapes
-// with a ring.
+// of them (a raised shape's solid pixels went in the raised pass), and the rings' two passes only
+// shapes with a ring.
 bool canvasInPass(float raised, float outline) {
     return !(uPass == 1 && raised < 0.5) && !(uPass == 2 && raised > 0.5) &&
-           !(uPass == 4 && outline == 0.0);
+           !((uPass == 4 || uPass == CANVAS_PASS_NEAREST) && outline == 0.0);
 }

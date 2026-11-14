@@ -371,6 +371,12 @@ void main() {
         d = boxDistance();
     if (vDash.y > 0.0)
         d = max(d, dashDistance());
+    // A ringed shape's inner ramp, everywhere its quad reaches, the shape's own pixels 0: the least
+    // of them is the ramp of the nearest ringed shape, as the ramp rises with distance (canvas_pass).
+    if (uPass == CANVAS_PASS_NEAREST) {
+        FragColor = vec4(0.0, 0.0, 0.0, clamp(d - uRing.x + 0.5, 0.0, 1.0));
+        return;
+    }
     // An outline is a ring uRing.x to uRing.y pixels outside the shape. Its inner ramp starts at
     // least half a pixel out, where the shape's own ends, so a pixel is the shape's or the ring's
     // and never both.
