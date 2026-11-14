@@ -395,15 +395,16 @@ static void poly_hole(Poly* p) {
 }
 
 // Prints a polygon's cell, `half` units each way of its centre: its area by the shoelace formula,
-// its outline's length, its triangulation's area and count, its points and holes; and returns the
-// seconds the triangulation took.
-static double probe_polygon(const SheetContext* ctx, const char* sheet, const char* name,
-                            CanvasPoint centre, int64_t half, const CanvasPoint* pts, size_t n,
-                            const size_t* holes, size_t hole_count) {
+// its outline's length, its triangulation's area and count, its points and holes.
+static void probe_polygon(const SheetContext* ctx, const char* sheet, const char* name,
+                          CanvasPoint centre, int64_t half, const CanvasPolygon* polygon) {
+    const CanvasPoint* pts = polygon->points;
+    const size_t* holes = polygon->holes;
+    const size_t n = polygon->count, hole_count = polygon->hole_count;
     const double s = ppu_px(ctx);
     double* xy = malloc(n * 2 * sizeof(double));
     if (!xy)
-        return 0.0;
+        return;
     for (size_t i = 0; i < n; i++) {
         xy[2 * i] = (double)(pts[i].x - pts[0].x);
         xy[2 * i + 1] = (double)(pts[i].y - pts[0].y);
@@ -423,10 +424,7 @@ static double probe_polygon(const SheetContext* ctx, const char* sheet, const ch
     }
     Triangulation t;
     double tri_area = 0.0;
-    const double start = glfwGetTime();
-    const bool made = triangulate_polygon(xy, n, holes, hole_count, &t);
-    const double took = glfwGetTime() - start;
-    if (made) {
+    if (triangulate_polygon(xy, n, holes, hole_count, &t)) {
         for (size_t k = 0; k < t.count; k++) {
             const double* a = xy + 2 * t.indices[3 * k];
             const double* b = xy + 2 * t.indices[3 * k + 1];
@@ -439,7 +437,6 @@ static double probe_polygon(const SheetContext* ctx, const char* sheet, const ch
            area * s * s, perimeter * s, tri_area * s * s, t.count, n, hole_count);
     free_triangulation(&t);
     free(xy);
-    return took;
 }
 
 static void sheet_polygons(SheetContext* ctx) {
@@ -503,14 +500,14 @@ static void sheet_polygons(SheetContext* ctx) {
                 }
                 break;
         }
-        canvas_edit_polygon(ctx->edit, &(CanvasPolygon){.paint = paint,
-                                                        .points = p.pts,
-                                                        .count = p.n,
-                                                        .holes = p.holes,
-                                                        .hole_count = p.hole_count});
+        const CanvasPolygon polygon = {.paint = paint,
+                                       .points = p.pts,
+                                       .count = p.n,
+                                       .holes = p.holes,
+                                       .hole_count = p.hole_count};
+        canvas_edit_polygon(ctx->edit, &polygon);
         if (ctx->probe)
-            probe_polygon(ctx, "polygons", cells[k].name, c, MM(1.2), p.pts, p.n, p.holes,
-                          p.hole_count);
+            probe_polygon(ctx, "polygons", cells[k].name, c, MM(1.2), &polygon);
     }
 #undef CELL
 }
@@ -524,24 +521,47 @@ static void sheet_polygons(SheetContext* ctx) {
  * level with a corner of the hole before it.
  *
  * Under --canvas-probe it prints the plate as the polygons sheet prints a polygon, and the
- * milliseconds its edit took, the least of three, and its triangulation.
+ * milliseconds its edit took, the least of three. It also triangulates eight seeded plates it does
+ * not draw (plane_seeded).
  */
+enum { PLANE_HOLES = 2000 + 900, PLANE_SIDES = 24 }; // every via and ball; the sides at 5 um
+
 typedef struct Plane {
-    CanvasPoint* pts;
-    size_t* holes;
-    size_t n, hole_count, cap;
+    CanvasPoint pts[4 + PLANE_HOLES * PLANE_SIDES];
+    size_t holes[PLANE_HOLES];
+    size_t n, hole_count;
 } Plane;
 
+static Plane g_plane;
+
+// A plate's corner, x and y millimetres from the centre.
+static void plane_point(Plane* p, CanvasPoint centre, double x, double y) {
+    p->pts[p->n++] = (CanvasPoint){centre.x + MM(x), centre.y + MM(y)};
+}
+
+static void plane_plate(Plane* p, CanvasPoint centre, double half_w, double half_h) {
+    p->n = p->hole_count = 0;
+    plane_point(p, centre, -half_w, -half_h), plane_point(p, centre, half_w, -half_h);
+    plane_point(p, centre, half_w, half_h), plane_point(p, centre, -half_w, half_h);
+}
+
 // A hole of radius r millimetres about (x, y) from the centre, as pcb's polygon_around makes it:
-// its corners r / cos(pi / sides) out, half a side off the eight directions.
+// its corners r / cos(pi / sides) out, half a side off the eight directions, each rounded apart
+// from the hole's centre as pcb rounds about its whole nanometres, so every hole of a size has the
+// same corners about its centre.
 static void plane_hole(Plane* p, CanvasPoint centre, double x, double y, double r) {
     int sides = 8;
-    while (r / cos(3.141592653589793 / sides) - r > 0.005)
+    double corner = r / cos(3.141592653589793 / sides);
+    while (corner - r > 0.005) {
         sides += 8;
-    if (p->n + (size_t)sides > p->cap)
+        corner = r / cos(3.141592653589793 / sides);
+    }
+    if (sides > PLANE_SIDES || p->hole_count == PLANE_HOLES) {
+        fprintf(stderr, "canvas: the plane sheet holds no hole of %d sides past %d holes\n", sides,
+                (int)p->hole_count);
         return;
+    }
     p->holes[p->hole_count++] = p->n;
-    const double corner = r / cos(3.141592653589793 / sides);
     for (int k = 0; k < sides; k++) {
         const double a = 6.283185307179586 * (k + 0.5) / sides;
         p->pts[p->n++] = (CanvasPoint){centre.x + MM(x) + MM(corner * cos(a)),
@@ -549,20 +569,45 @@ static void plane_hole(Plane* p, CanvasPoint centre, double x, double y, double 
     }
 }
 
+static double plane_rnd(uint32_t* rng) {
+    *rng = *rng * 1664525u + 1013904223u;
+    return (double)(*rng >> 8) / 16777216.0;
+}
+
+// A plate the grid's rule for a point the filter takes out is held by: squares with a point mid
+// each upright side, in level rows thinned at random by the seed, each with a small square right
+// of it level with its upper half. A row's bridges run along two bottoms and set the filter round
+// the ring, which takes the middles out, and a small square's ray then meets a side whose middle
+// is gone. Passed over as an edge, the middle let the ray through: 3 of seeds 1 to 8 bridged across
+// the ring. At most 23 by 23 cells of 10 points.
+static void plane_seeded(Plane* p, CanvasPoint centre, uint32_t seed) {
+    uint32_t rng = seed;
+    const int cols = 8 + (int)(plane_rnd(&rng) * 16), rows = 8 + (int)(plane_rnd(&rng) * 16);
+    const double pitch = 1.0 + plane_rnd(&rng) * 2.0, keep = 0.3 + plane_rnd(&rng) * 0.6;
+    const double r = pitch * (0.15 + plane_rnd(&rng) * 0.15), s = 0.08 * pitch;
+    const double w = cols * pitch, h = rows * pitch;
+    plane_plate(p, centre, 0.5 * w + pitch, 0.5 * h + pitch);
+    for (int j = 0; j < rows; j++) {
+        for (int i = 0; i < cols; i++) {
+            if (plane_rnd(&rng) > keep)
+                continue;
+            const double x = -0.5 * w + (i + 0.5) * pitch, y = -0.5 * h + (j + 0.5) * pitch;
+            p->holes[p->hole_count++] = p->n;
+            plane_point(p, centre, x - r, y - r), plane_point(p, centre, x + r, y - r);
+            plane_point(p, centre, x + r, y), plane_point(p, centre, x + r, y + r);
+            plane_point(p, centre, x - r, y + r), plane_point(p, centre, x - r, y);
+            const double px = x + r + 0.15 * pitch, py = y + r * (0.2 + 0.6 * plane_rnd(&rng));
+            p->holes[p->hole_count++] = p->n;
+            plane_point(p, centre, px - s, py - s), plane_point(p, centre, px + s, py - s);
+            plane_point(p, centre, px + s, py + s), plane_point(p, centre, px - s, py + s);
+        }
+    }
+}
+
 static void sheet_plane(SheetContext* ctx) {
     const CanvasPoint c = {ctx->offset, ctx->offset};
-    Plane p = {.cap = 4 + 3000 * 24};
-    p.pts = malloc(p.cap * sizeof(CanvasPoint));
-    p.holes = malloc(3000 * sizeof(size_t));
-    if (!p.pts || !p.holes) {
-        free(p.pts);
-        free(p.holes);
-        return;
-    }
-    p.pts[p.n++] = (CanvasPoint){c.x - MM(50.0), c.y - MM(50.0)};
-    p.pts[p.n++] = (CanvasPoint){c.x + MM(50.0), c.y - MM(50.0)};
-    p.pts[p.n++] = (CanvasPoint){c.x + MM(50.0), c.y + MM(50.0)};
-    p.pts[p.n++] = (CanvasPoint){c.x - MM(50.0), c.y + MM(50.0)};
+    Plane* p = &g_plane;
+    plane_plate(p, c, 50.0, 50.0);
     // The vias, by rows from the board's corner, the BGA's square left clear; a via 0.6 mm across
     // kept 0.15 mm from the pour. Every third is the pour's own net and is no hole.
     int vias = 0;
@@ -572,39 +617,43 @@ static void sheet_plane(SheetContext* ctx) {
             if (x > 32 && x < 68 && y > 32 && y < 68)
                 continue;
             if (vias++ % 3 != 0)
-                plane_hole(&p, c, x - 50.0, y - 50.0, 0.45);
+                plane_hole(p, c, x - 50.0, y - 50.0, 0.45);
         }
     }
     // The balls, round lands 0.45 mm across kept 0.15 mm from the pour; every fourth the pour's.
     for (int k = 1; k <= 900; k++) {
         if (k % 4 != 0) {
             const int row = (k - 1) / 30, col = (k - 1) % 30;
-            plane_hole(&p, c, -14.5 + col, -14.5 + row, 0.375);
+            plane_hole(p, c, -14.5 + col, -14.5 + row, 0.375);
         }
     }
-    const CanvasPolygon plate = {.paint = white_paint(ctx->canvas),
-                                 .points = p.pts,
-                                 .count = p.n,
-                                 .holes = p.holes,
-                                 .hole_count = p.hole_count};
+    CanvasPolygon plate = {.paint = white_paint(ctx->canvas),
+                           .points = p->pts,
+                           .count = p->n,
+                           .holes = p->holes,
+                           .hole_count = p->hole_count};
     double start = glfwGetTime();
     canvas_edit_polygon(ctx->edit, &plate);
     double edit = glfwGetTime() - start;
-    if (ctx->probe) {
-        // The least of three edits, the two more thrown away: one run can land on a slower core.
-        for (int k = 0; k < 2; k++) {
-            CanvasEdit* again = create_canvas_edit(ctx->canvas);
-            start = glfwGetTime();
-            canvas_edit_polygon(again, &plate);
-            edit = fmin(edit, glfwGetTime() - start);
-            free_canvas_edit(again);
-        }
-        const double tri =
-            probe_polygon(ctx, "plane", "plate", c, MM(51.0), p.pts, p.n, p.holes, p.hole_count);
-        printf("canvas plane-time plate edit-ms %.3f triangulate-ms %.3f\n", edit * 1e3, tri * 1e3);
+    if (!ctx->probe)
+        return;
+    // The least of three edits, the two more thrown away: one run can land on a slower core.
+    for (int k = 0; k < 2; k++) {
+        CanvasEdit* again = create_canvas_edit(ctx->canvas);
+        start = glfwGetTime();
+        canvas_edit_polygon(again, &plate);
+        edit = fmin(edit, glfwGetTime() - start);
+        free_canvas_edit(again);
     }
-    free(p.pts);
-    free(p.holes);
+    probe_polygon(ctx, "plane", "plate", c, MM(51.0), &plate);
+    printf("canvas plane-time plate edit-ms %.3f\n", edit * 1e3);
+    for (uint32_t seed = 1; seed <= 8; seed++) {
+        char name[16];
+        snprintf(name, sizeof(name), "seed-%u", seed);
+        plane_seeded(p, c, seed);
+        plate.count = p->n, plate.hole_count = p->hole_count;
+        probe_polygon(ctx, "plane-seeded", name, c, 0, &plate);
+    }
 }
 
 /*

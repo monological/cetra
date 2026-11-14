@@ -153,7 +153,12 @@ def run_canvas_gate(workdir):
                      triangulates to its own area by the shoelace formula, to a part in a
                      billion, in n - 2 + 2h triangles for n points and h holes: every point a
                      corner and no more. A hole the grid left unbridged, its ray stopped at the
-                     first cell holding any edge, cost the plate 21,892 of its triangles.
+                     first cell holding any edge, cost the plate 21,892 of its triangles. And the
+                     plane sheet's eight seeded plates, which it triangulates and does not draw,
+                     each to its area alone: squares with a point mid each upright side, which
+                     the filter takes out as their rows' bridges run along their bottoms. A point
+                     taken out passed over as an edge, not standing for its predecessor's, let a
+                     ray through a square's side and bridged 3 of the 8 across the ring.
       canvas-polygon-areas each polygon's coverage against that area, within 0.01 px per pixel
                      of outline, with the default tiles and with 65 um ones, which cut every
                      triangle at the grid; and the plate's with the default tiles, where its
@@ -163,8 +168,7 @@ def run_canvas_gate(workdir):
                      inner ramp to the triangle beside it, at 0.047 px of outline over.
       canvas-plane-edit the plane sheet's plate edited, the least of three: under 400 ms. A
                      timing arm: the bound is this machine's (184 ms measured on an M1 Max, the
-                     Debug build, where walking the ring for each hole took 570) and does not
-                     travel.
+                     Debug build) and does not travel. The walk alone, with no grid, takes 570.
       canvas-refused-whole the polygons sheet with tiles of 4096 units, where some polygons'
                      triangles cross more tiles than an edit splits a shape into and are refused:
                      every polygon is drawn whole or not at all. A refused polygon used to keep
@@ -537,21 +541,23 @@ def run_canvas_gate(workdir):
         polygons, probe = sheet_run("polygons")
         plane, plane_probe = sheet_run("plane")
         cells = {**_canvas_sheet(probe, "polygons"), **_canvas_sheet(plane_probe, "plane")}
-        if not polygons or not plane or len(cells) != 7:
-            ok, detail = False, f"a run failed or printed {len(cells)} polygons (want 7)"
+        seeded = _canvas_sheet(plane_probe, "plane-seeded")
+        if not polygons or not plane or len(cells) != 7 or len(seeded) != 8:
+            ok, detail = False, (f"a run failed or printed {len(cells)} polygons and "
+                                 f"{len(seeded)} seeded plates (want 7 and 8)")
         else:
-            rows, off, miscounted = [], [], []
-            for name, tokens in sorted(cells.items()):
+            rows, off = [], []
+            for name, tokens in sorted({**cells, **seeded}.items()):
                 _, m = _canvas_cell(tokens)
-                want_count = m["points"] - 2 + 2 * m["holes"]
                 if abs(m["triangulated"] - m["area"]) > 1e-9 * m["area"]:
                     off.append(f"{name} {m['triangulated']:.1f}/{m['area']:.1f} px^2")
-                if m["triangles"] != want_count:
-                    miscounted.append(name)
-                rows.append(f"{name} {m['triangles']:.0f}/{want_count:.0f}")
-            ok = not off and not miscounted
-            detail = ((f"areas off: {', '.join(off)}" if off else "areas agree")
-                      + ", triangles (want n - 2 + 2h): " + ", ".join(rows))
+                if name in cells:
+                    want_count = m["points"] - 2 + 2 * m["holes"]
+                    rows.append((name, m["triangles"], want_count))
+            ok = not off and all(got == want for _, got, want in rows)
+            detail = ((f"areas off: {', '.join(off)}" if off else "areas agree, the seeded plates'"
+                       " too") + ", triangles (want n - 2 + 2h): "
+                      + ", ".join(f"{name} {got:.0f}/{want:.0f}" for name, got, want in rows))
         return ok, detail
 
     @arm("canvas-polygon-areas")
@@ -565,22 +571,15 @@ def run_canvas_gate(workdir):
         if not polygons or not tiny or not plane or len(cells) != 6 or not plate:
             ok, detail = False, "a run failed"
         else:
-            def per_edge(cov, tokens):
-                (x0, y0, x1, y1), m = _canvas_cell(tokens)
-                return (float(cov[y0:y1, x0:x1].sum()) - m["area"]) / m["perimeter"]
-            worst, rows = 0.0, []
-            for label, path in (("4 mm", polygons), ("65 um", tiny)):
-                cov = _canvas_coverage(path)
-                for name, tokens in sorted(cells.items()):
-                    off = per_edge(cov, tokens)
-                    worst = max(worst, abs(off))
-                    if label == "65 um":
-                        rows.append(f"{name} {off:+.4f}")
-            off = per_edge(_canvas_coverage(plane), plate)
-            worst = max(worst, abs(off))
+            def of(_, m):
+                return m["area"], m["perimeter"]
+            worst, _ = _canvas_area_rows(polygons, cells, of)
+            tiny_worst, rows = _canvas_area_rows(tiny, cells, of)
+            plate_worst, plate_rows = _canvas_area_rows(plane, {"plate": plate}, of)
+            worst = max(worst, tiny_worst, plate_worst)
             ok = worst <= 0.01
             detail = (f"worst {worst:.4f} px of outline (want <= 0.01) over both tile sizes and "
-                      f"the plane's plate ({off:+.4f}); with 65 um tiles: " + ", ".join(rows))
+                      f"the plane's {plate_rows[0]}; with 65 um tiles: " + ", ".join(rows))
         return ok, detail
 
     @arm("canvas-plane-edit")
