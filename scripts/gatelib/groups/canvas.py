@@ -152,7 +152,8 @@ def run_canvas_gate(workdir):
                      plate of 2,008 holes (spec 14.37), its bridges found through the grid,
                      triangulates to its own area by the shoelace formula, to a part in a
                      billion, in n - 2 + 2h triangles for n points and h holes: every point a
-                     corner and no more. A bridge that crosses the ring covers some of it twice.
+                     corner and no more. A hole the grid left unbridged, its ray stopped at the
+                     first cell holding any edge, cost the plate 21,892 of its triangles.
       canvas-polygon-areas each polygon's coverage against that area, within 0.01 px per pixel
                      of outline, with the default tiles and with 65 um ones, which cut every
                      triangle at the grid; and the plate's with the default tiles, where its
@@ -539,15 +540,18 @@ def run_canvas_gate(workdir):
         if not polygons or not plane or len(cells) != 7:
             ok, detail = False, f"a run failed or printed {len(cells)} polygons (want 7)"
         else:
-            rows, ok = [], True
+            rows, off, miscounted = [], [], []
             for name, tokens in sorted(cells.items()):
                 _, m = _canvas_cell(tokens)
                 want_count = m["points"] - 2 + 2 * m["holes"]
-                good = (abs(m["triangulated"] - m["area"]) <= 1e-9 * m["area"]
-                        and m["triangles"] == want_count)
-                ok = ok and good
+                if abs(m["triangulated"] - m["area"]) > 1e-9 * m["area"]:
+                    off.append(f"{name} {m['triangulated']:.1f}/{m['area']:.1f} px^2")
+                if m["triangles"] != want_count:
+                    miscounted.append(name)
                 rows.append(f"{name} {m['triangles']:.0f}/{want_count:.0f}")
-            detail = "areas agree, triangles (want n - 2 + 2h): " + ", ".join(rows)
+            ok = not off and not miscounted
+            detail = ((f"areas off: {', '.join(off)}" if off else "areas agree")
+                      + ", triangles (want n - 2 + 2h): " + ", ".join(rows))
         return ok, detail
 
     @arm("canvas-polygon-areas")
