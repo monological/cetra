@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "canvas_edit_hooks.h"
 #include "canvas_record.h"
 #include "ext/log.h"
 #include "text.h"
@@ -112,6 +113,21 @@ static int64_t _tile_origin(int64_t tile, int shift) {
 
 static int32_t _rel(int64_t v, int64_t tile, int shift) {
     return (int32_t)(v - _tile_origin(tile, shift));
+}
+
+size_t canvas_edit_fill_count(const CanvasEdit* edit) {
+    return edit ? edit->fill_count : 0;
+}
+
+void canvas_edit_fill_corners(const CanvasEdit* edit, size_t i, CanvasPoint corners[3]) {
+    if (!edit || i >= edit->fill_count) {
+        log_error("canvas: an edit has no fill piece %zu", i);
+        return;
+    }
+    const CanvasFillPiece* f = &edit->fills[i];
+    for (int k = 0; k < 3; k++)
+        corners[k] = (CanvasPoint){_tile_origin(f->tx, edit->tile_shift) + f->fill.p[2 * k],
+                                   _tile_origin(f->ty, edit->tile_shift) + f->fill.p[2 * k + 1]};
 }
 
 // Starts a piece anchored in the tile of `anchor`, with its paint, its first

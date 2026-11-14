@@ -37,6 +37,7 @@
 
 #include "ext/log.h"
 #include "triangulate.h"
+#include "triangulate_hooks.h"
 
 typedef struct EarNode {
     uint32_t i;    // the point's index in the input
@@ -57,6 +58,7 @@ typedef struct EarState {
     bool failed;
     double min_x, min_y, max_x, max_y; // the outer ring's box
     double inv_size;                   // 0 = no z-order
+    size_t grid_holes;                 // holes from which bridges are found through the grid
 } EarState;
 
 static EarNode* _node(EarState* s, uint32_t i, double x, double y) {
@@ -744,7 +746,7 @@ static EarNode* _eliminate_holes(EarState* s, const double* xy, size_t count, co
     }
     qsort(queue, n, sizeof(EarNode*), _compare_leftmost);
     EarGrid grid = {.failed = true};
-    if (n >= EAR_GRID_HOLES)
+    if (n >= s->grid_holes)
         _grid_make(&grid, s, count, outer);
     for (size_t h = 0; h < n && !s->failed; h++) {
         EarNode* bridge =
@@ -763,8 +765,8 @@ static EarNode* _eliminate_holes(EarState* s, const double* xy, size_t count, co
     return outer;
 }
 
-bool triangulate_polygon(const double* xy, size_t count, const size_t* holes, size_t hole_count,
-                         Triangulation* out) {
+static bool _triangulate(const double* xy, size_t count, const size_t* holes, size_t hole_count,
+                         Triangulation* out, size_t grid_holes) {
     if (!out)
         return false;
     memset(out, 0, sizeof(*out));
@@ -781,7 +783,7 @@ bool triangulate_polygon(const double* xy, size_t count, const size_t* holes, si
     // Every point once, two more for each hole's bridge, and two for each
     // diagonal split, of which the bridged ring of count + 2 * hole_count
     // points takes at most as many.
-    EarState s = {.cap = 3 * (count + 2 * hole_count) + 16};
+    EarState s = {.cap = 3 * (count + 2 * hole_count) + 16, .grid_holes = grid_holes};
     s.pool = malloc(s.cap * sizeof(EarNode));
     if (!s.pool)
         return false;
@@ -811,6 +813,16 @@ bool triangulate_polygon(const double* xy, size_t count, const size_t* holes, si
     out->indices = s.tri;
     out->count = s.tri_count;
     return true;
+}
+
+bool triangulate_polygon(const double* xy, size_t count, const size_t* holes, size_t hole_count,
+                         Triangulation* out) {
+    return _triangulate(xy, count, holes, hole_count, out, EAR_GRID_HOLES);
+}
+
+bool triangulate_polygon_walked(const double* xy, size_t count, const size_t* holes,
+                                size_t hole_count, Triangulation* out) {
+    return _triangulate(xy, count, holes, hole_count, out, SIZE_MAX);
 }
 
 void free_triangulation(Triangulation* triangulation) {
