@@ -57,6 +57,8 @@ typedef struct CanvasLayer {
     float opacity;     // the layer as a whole; 1 when added
     int order;         // drawn lowest first, ties in the order added; its index when added
     bool above_active; // drawn after a view's active layer, as holes or a ratsnest are
+    bool keeps_colour; // a tag's colour never replaces its shapes' style colours; the rest of
+                       // a tag's state still applies
 } CanvasLayer;
 
 // A set of layers, by their index. Empty means every layer.

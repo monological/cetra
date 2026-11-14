@@ -896,7 +896,9 @@ static void sheet_overlap(SheetContext* ctx) {
 /*
  * The tags sheet: a box a cell, each drawn through a different tag state, and
  * where each should land on screen. The colour a pixel takes where shapes of a
- * layer overlap is a raised one's, then the first added's.
+ * layer overlap is a raised one's, then the first added's. On a layer keeping
+ * its colour (spec 14.36), a box and a line of text dimmed by their tag but
+ * never coloured by it.
  */
 static void sheet_tags(SheetContext* ctx) {
     Canvas* canvas = ctx->canvas;
@@ -954,6 +956,23 @@ static void sheet_tags(SheetContext* ctx) {
                                                  .points = trace,
                                                  .count = 3,
                                                  .width = MM(0.3)});
+    // On a layer keeping its colour, a white box and a white H under a tag coloured red and
+    // dimmed: the dim taken, the red never.
+    CanvasLayer* kept = canvas_add_layer(canvas, "tags kept");
+    kept->keeps_colour = true;
+    canvas_tags_set(tags, 9, (CanvasTagState){.colour = 0xff0000ffu, .dim = 0.5f});
+    canvas_edit_box(edit, &(CanvasBox){.paint = paint_of(kept, white, 0, 9),
+                                       .centre = CELL(9),
+                                       .size_x = MM(1.0),
+                                       .size_y = MM(1.0)});
+    const CanvasPoint label = {o, MM(2.1) + o};
+    canvas_edit_text(edit, &(CanvasText){.paint = paint_of(kept, white, 0, 9),
+                                         .font = ctx->font,
+                                         .string = "H",
+                                         .anchor = label,
+                                         .size = MM(0.8),
+                                         .align_x = CANVAS_ALIGN_CENTRE,
+                                         .align_y = CANVAS_ALIGN_MIDDLE});
 #undef BOX
     if (ctx->probe) {
         // A point well inside each box, and the outline's ring: a box's edge is
@@ -978,6 +997,8 @@ static void sheet_tags(SheetContext* ctx) {
         probe_pixel(ctx, "tags", "outline-joint",
                     (CanvasPoint){c8.x + MM(along * 0.6 / unit), c8.y - MM(along * 0.4 / unit)},
                     0xff0000);
+        probe_pixel(ctx, "tags", "kept", CELL(9), 0x808080);
+        probe_pixel(ctx, "tags-text", "kept", label, 0x808080);
     }
 #undef CELL
 }

@@ -677,13 +677,21 @@ def run_canvas_gate(workdir):
     def _():
         path, probe = _canvas_run(workdir, "tags", "--sheet", "tags")
         cells = _canvas_sheet(probe, "tags")
-        if not path or len(cells) != 11:
-            ok, detail = False, f"the app failed or printed {len(cells)} points (want 11)"
+        label = probe.get(("tags-text", "kept"))
+        if not path or len(cells) != 12 or not label:
+            ok, detail = False, f"the app failed or printed {len(cells)} points (want 12, and the H)"
         else:
             wrong = _canvas_wrong_pixels(path, cells)
-            ok = not wrong
-            detail = ("11 points each its state's colour within 2 codes" if ok
-                      else "wrong: " + ", ".join(wrong))
+            # The H on the layer keeping its colour: its ink grey, the tag's dim, and none of it red.
+            x, y = int(label[1]), int(label[2])
+            img = _ppm_array(path)[max(y - 120, 0):y + 120, max(x - 120, 0):x + 120].astype(int)
+            r, g, b = img[..., 0], img[..., 1], img[..., 2]
+            grey = int(((r > 60) & (np.abs(r - g) < 16) & (np.abs(g - b) < 16)).sum())
+            red = int(((r - g) > 40).sum())
+            ok = not wrong and grey > 200 and red == 0
+            detail = (f"12 points each its state's colour within 2 codes; the kept H's ink {grey} px "
+                      f"grey (want over 200), {red} red (want 0)"
+                      + ("" if not wrong else "; wrong: " + ", ".join(wrong)))
         return ok, detail
 
     @arm("canvas-fade")

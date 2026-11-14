@@ -1070,6 +1070,7 @@ static void _draw_stores(const CanvasData* d, const CanvasLayer* layer, int pass
         glUseProgram(d->fill_program->id);
         uniform_set_int(d->fill_program->uniforms, "uPass", pass);
         uniform_set_float(d->fill_program->uniforms, "uOpacity", opacity);
+        uniform_set_int(d->fill_program->uniforms, "uKeepsColour", layer->keeps_colour);
         glBindVertexArray(fills->vao);
         glDrawArraysInstanced(GL_TRIANGLES, 0, 3, (GLsizei)fills->end);
     }
@@ -1078,6 +1079,7 @@ static void _draw_stores(const CanvasData* d, const CanvasLayer* layer, int pass
     glUseProgram(d->program->id);
     uniform_set_int(d->program->uniforms, "uPass", pass);
     uniform_set_float(d->program->uniforms, "uOpacity", opacity);
+    uniform_set_int(d->program->uniforms, "uKeepsColour", layer->keeps_colour);
     for (int k = 0; k < 2; k++) {
         if (!quads[k]->live)
             continue;
