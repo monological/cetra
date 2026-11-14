@@ -40,18 +40,16 @@
  * A cut end (FLAG_CUT_*) is where an edit split a shape reaching too far from
  * its tile: it has no cap and no edge ramp, so the pieces meet with no seam.
  *
- * A dashed segment, arc, stroked circle or stroked box (FLAG_DASHED) is a
- * CanvasDashRecord in a store of its own, its pattern after the record:
- *   dash  vec4  the dash and the gap, stretched on a closed shape; the place in
- *               the pattern at the record's a, under one period, growing toward
- *               b; 0
+ * A record carrying a vec4 after it is a CanvasLongRecord in a store of its
+ * own, the long store, so only such a record pays for the vec4:
+ *   dash  a dashed segment, arc, stroked circle or stroked box (FLAG_DASHED):
+ *         the dash and the gap, stretched on a closed shape; the place in the
+ *         pattern at the record's a, under one period, growing toward b; 0
+ *   band  a glyph of a text in a band of zoom (FLAG_BANDED): the em it is
+ *         shown from and the em it is shown until, in units, 0 for no bound;
+ *         0; 0
  * A circle's a is its rightmost point and a box's the middle of its bottom
  * side, each going round counter-clockwise.
- *
- * A glyph of a text in a band of zoom (FLAG_BANDED) is a CanvasDashRecord in
- * the same store, its band where a pattern would be:
- *   dash  vec4  the em it is shown from and the em it is shown until, in units,
- *               0 for no bound; 0; 0
  */
 
 #include <stdint.h>
@@ -72,14 +70,17 @@ typedef struct CanvasRecord {
 
 _Static_assert(sizeof(CanvasRecord) == 48, "canvas_vert.glsl reads a 48-byte record");
 
-// A dashed shape's record and its pattern, in units: the solid shapes' record
-// stays 48 bytes, and only a dashed one pays for its place along.
-typedef struct CanvasDashRecord {
+// A record and the vec4 after it, in units, by its flag a dash pattern or a
+// glyph's band.
+typedef struct CanvasLongRecord {
     CanvasRecord record;
-    float dash[4];
-} CanvasDashRecord;
+    union {
+        float dash[4];
+        float band[4];
+    };
+} CanvasLongRecord;
 
-_Static_assert(sizeof(CanvasDashRecord) == 64, "canvas_vert.glsl reads a 64-byte dashed record");
+_Static_assert(sizeof(CanvasLongRecord) == 64, "canvas_vert.glsl reads a 64-byte long record");
 _Static_assert(CANVAS_CAP_ROUND == CANVAS_STROKE_ROUND && CANVAS_CAP_BUTT == CANVAS_STROKE_BUTT &&
                    CANVAS_CAP_SQUARE == CANVAS_STROKE_SQUARE &&
                    CANVAS_JOIN_ROUND == CANVAS_STROKE_ROUND &&
@@ -93,6 +94,11 @@ static inline uint32_t canvas_record_head(uint32_t kind, uint32_t flags, uint16_
 
 static inline uint32_t canvas_record_flags(uint32_t head) {
     return head >> 6 & 0x3ffu;
+}
+
+// Whether a record carries a vec4 after it, and so is kept in the long store.
+static inline bool canvas_record_long(uint32_t head) {
+    return (canvas_record_flags(head) & (CANVAS_FLAG_DASHED | CANVAS_FLAG_BANDED)) != 0u;
 }
 
 /*
@@ -126,7 +132,7 @@ typedef struct CanvasPiece {
     const struct Font* font; // a glyph's; NULL for every other kind
     int64_t tx, ty;          // its tile
     int64_t min[2], max[2];  // its bound in units
-    CanvasDashRecord item;
+    CanvasLongRecord item;
 } CanvasPiece;
 
 // A fill triangle as an edit holds it, likewise.

@@ -35,11 +35,11 @@ vec4 canvasTagTexel(uint tag, int i) {
 
 // A shape's colour, from u = (head, net, object, tile): the object's colour if it states one,
 // else the net's, else the style's -- the style's alone on a layer keeping its colour -- dimmed by
-// the larger of the two dims; its outline the
-// object's if it states one, else the net's, alpha 0 for none; raised when either tag raises
-// it; and how far a fading view fades it, uFade when it is tagged and neither tag lights it. False
-// when either tag hides it, or the mask with no room does. In the lit pass it has no outline, and
-// a shape no tag lights is false: the pass draws lit shapes alone.
+// the larger of the two dims; its outline the object's if it states one, else the net's, alpha 0
+// for none; raised when either tag raises it; and how far a fading view fades it, uFade when it is
+// tagged and neither tag lights it. False when either tag hides it, or the mask with no room does.
+// In the lit pass it has no outline, and a shape no tag lights is false: the pass draws lit shapes
+// alone.
 bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised, out float fade) {
     colour = texelFetch(uStyles, int(u.x >> 16));
     outline = vec4(0.0);
@@ -89,6 +89,7 @@ bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised, 
 // of them (a raised shape's solid pixels went in the raised pass), and the rings' two passes only
 // shapes with a ring.
 bool canvasInPass(float raised, float outline) {
-    return !(uPass == 1 && raised < 0.5) && !(uPass == 2 && raised > 0.5) &&
-           !((uPass == 4 || uPass == CANVAS_PASS_NEAREST) && outline == 0.0);
+    return !(uPass == CANVAS_PASS_RAISED && raised < 0.5) &&
+           !(uPass == CANVAS_PASS_SHAPE && raised > 0.5) &&
+           !(CANVAS_PASS_RINGS(uPass) && outline == 0.0);
 }

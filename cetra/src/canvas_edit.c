@@ -1106,8 +1106,8 @@ void canvas_edit_text(CanvasEdit* edit, const CanvasText* text) {
         piece->item.record.f[1] = (float)-ay;
         piece->item.record.f[2] = (float)text->size;
         piece->item.record.f[3] = (float)text->angle;
-        piece->item.dash[0] = (float)text->shown_from;
-        piece->item.dash[1] = (float)text->shown_until;
+        piece->item.band[0] = (float)text->shown_from;
+        piece->item.band[1] = (float)text->shown_until;
         const double x = glyphs[i].pen - ax;
         lo[0] = fmin(lo[0], x + g->x0 * em), hi[0] = fmax(hi[0], x + g->x1 * em);
         lo[1] = fmin(lo[1], -ay - g->y1 * em), hi[1] = fmax(hi[1], -ay - g->y0 * em);

@@ -371,21 +371,20 @@ void main() {
         d = boxDistance();
     if (vDash.y > 0.0)
         d = max(d, dashDistance());
-    // A ringed shape's inner ramp, everywhere its quad reaches, the shape's own pixels 0: the least
-    // of them is the ramp of the nearest ringed shape, as the ramp rises with distance (canvas_pass).
+    // An outline is a ring uRing.x to uRing.y pixels outside the shape, the least of its inner and
+    // outer ramps. The inner starts at least half a pixel out, where the shape's own ends, so a
+    // pixel is the shape's or the ring's and never both. In NEAREST every pixel the quad reaches
+    // gives the inner ramp, the shape's own 0.
+    float inner = clamp(d - uRing.x + 0.5, 0.0, 1.0);
     if (uPass == CANVAS_PASS_NEAREST) {
-        FragColor = vec4(0.0, 0.0, 0.0, clamp(d - uRing.x + 0.5, 0.0, 1.0));
+        FragColor = canvasNearest(inner, vOutline.a, vFade);
         return;
     }
-    // An outline is a ring uRing.x to uRing.y pixels outside the shape. Its inner ramp starts at
-    // least half a pixel out, where the shape's own ends, so a pixel is the shape's or the ring's
-    // and never both.
     if (vOutline.a > 0.0 && d > 0.5) {
-        float ring = max(uRing.x - d, d - uRing.y);
-        FragColor =
-            canvasOutput(vOutline, CANVAS_RANK_RING, clamp(0.5 - ring, 0.0, 1.0), vFade);
+        float ring = min(inner, clamp(uRing.y - d + 0.5, 0.0, 1.0));
+        FragColor = canvasOutput(vOutline, CANVAS_PASS_RING, ring, vFade);
         return;
     }
-    FragColor = canvasOutput(vColor, vRaised > 0.5 ? CANVAS_RANK_RAISED : CANVAS_RANK_SHAPE,
+    FragColor = canvasOutput(vColor, vRaised > 0.5 ? CANVAS_PASS_RAISED : CANVAS_PASS_SHAPE,
                              clamp(0.5 - d, 0.0, 1.0), vFade);
 }

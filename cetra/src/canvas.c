@@ -185,14 +185,14 @@ typedef struct CanvasCoord {
 } CanvasCoord;
 
 // The kinds of thing a layer keeps, each an instance in a buffer of its own:
-// shape records, a quad each; fill triangles; and dashed shapes' records,
-// which only they pay the pattern's bytes for. Each carries its head, net,
-// object and tile as `u`, where the second column says.
-enum { CANVAS_SHAPES = 0, CANVAS_FILLS = 1, CANVAS_DASHES = 2, CANVAS_STORES = 3 };
+// shape records, a quad each; fill triangles; and long records, a shape's with
+// a vec4 after it (canvas_record.h), which only they pay for. Each carries its
+// head, net, object and tile as `u`, where the second column says.
+enum { CANVAS_SHAPES = 0, CANVAS_FILLS = 1, CANVAS_LONGS = 2, CANVAS_STORES = 3 };
 static const size_t CANVAS_ITEM_SIZE[CANVAS_STORES] = {sizeof(CanvasRecord), sizeof(CanvasFill),
-                                                       sizeof(CanvasDashRecord)};
+                                                       sizeof(CanvasLongRecord)};
 static const size_t CANVAS_ITEM_U[CANVAS_STORES] = {
-    offsetof(CanvasRecord, u), offsetof(CanvasFill, u), offsetof(CanvasDashRecord, record.u)};
+    offsetof(CanvasRecord, u), offsetof(CanvasFill, u), offsetof(CanvasLongRecord, record.u)};
 
 // A tile's items of one kind, and the range of its layer's buffer they upload
 // into.
@@ -276,7 +276,7 @@ typedef struct CanvasData {
     int32_t* tile_table;
     size_t tile_table_cap;
     GLuint target_fbo, target_texture;
-    GLuint lit_fbo, lit_texture; // pass 5's, mipmapped: a lit shape's coverage
+    GLuint lit_fbo, lit_texture; // CANVAS_PASS_LIT's, mipmapped: a lit shape's coverage
     int target_w, target_h;
     void* scratch; // a tile's range, its items then dead slots
     size_t scratch_bytes;
@@ -656,12 +656,9 @@ void canvas_apply(Canvas* canvas, CanvasEdit* edit) {
                             }
                             p->item.record.p[3] = slot;
                         }
-                        // A store's items are its kind's first bytes of the piece's: a record
-                        // carrying a vec4 after it, a pattern or a band, the dashed store's 64.
-                        const uint32_t after = CANVAS_FLAG_DASHED | CANVAS_FLAG_BANDED;
-                        const int store = (canvas_record_flags(p->item.record.u[0]) & after) != 0u
-                                              ? CANVAS_DASHES
-                                              : CANVAS_SHAPES;
+                        // A store's items are its kind's first bytes of the piece's.
+                        const int store =
+                            canvas_record_long(p->item.record.u[0]) ? CANVAS_LONGS : CANVAS_SHAPES;
                         refused +=
                             !_add(d, store, p->layer, p->tx, p->ty, p->min, p->max, &p->item);
                     }
@@ -773,8 +770,8 @@ static void _instance_floats(GLuint index, GLsizei stride, size_t offset) {
 }
 
 // A store's vertex array. Each item is an instance: a shape record of a unit
-// quad, a fill of a triangle. A dashed record is a shape record and its
-// pattern, attribute 3, which the shape store leaves off and nothing reads.
+// quad, a fill of a triangle. A long record is a shape record and its vec4,
+// attribute 3, which the shape store leaves off and the flags keep unread.
 static void _store_gl(CanvasStore* store, int kind) {
     if (store->vao)
         return;
@@ -787,8 +784,8 @@ static void _store_gl(CanvasStore* store, int kind) {
         _instance_attrib(0, 4, GL_INT, stride, offsetof(CanvasRecord, p));
         _instance_floats(1, stride, offsetof(CanvasRecord, f));
         _instance_attrib(2, 4, GL_UNSIGNED_INT, stride, offsetof(CanvasRecord, u));
-        if (kind == CANVAS_DASHES)
-            _instance_floats(3, stride, offsetof(CanvasDashRecord, dash));
+        if (kind == CANVAS_LONGS)
+            _instance_floats(3, stride, offsetof(CanvasLongRecord, dash));
     } else {
         // The corners as an ivec4 and an ivec2, the nine outline points as four
         // ivec4 and an ivec2, then u.
@@ -1060,14 +1057,15 @@ static uint32_t _draw_order(const CanvasData* d, const CanvasView* view, const C
     return n;
 }
 
-// A layer's stores drawn in one pass at an opacity: fills first, but in the ring pass, then shapes,
-// among them the outer half of each fill's edge ramp and every ring, a polygon's included, then
-// dashed shapes, which no order within a layer is promised against.
+// A layer's stores drawn in one pass at an opacity: fills first, but in the rings' passes, then
+// shapes, among them the outer half of each fill's edge ramp and every ring, a polygon's included,
+// then long records, dashed shapes and banded glyphs, which no order within a layer is promised
+// against.
 static void _draw_stores(const CanvasData* d, const CanvasLayer* layer, int pass, float opacity) {
     const CanvasStore* fills = &layer->data->stores[CANVAS_FILLS];
     const CanvasStore* quads[2] = {&layer->data->stores[CANVAS_SHAPES],
-                                   &layer->data->stores[CANVAS_DASHES]};
-    if (fills->live && pass != 4 && pass != CANVAS_PASS_NEAREST) {
+                                   &layer->data->stores[CANVAS_LONGS]};
+    if (fills->live && !CANVAS_PASS_RINGS(pass)) {
         glUseProgram(d->fill_program->id);
         uniform_set_int(d->fill_program->uniforms, "uPass", pass);
         uniform_set_float(d->fill_program->uniforms, "uOpacity", opacity);
@@ -1103,31 +1101,27 @@ static void _draw_stores(const CanvasData* d, const CanvasLayer* layer, int pass
 static void _draw_layer(const CanvasData* d, const CanvasLayer* layer) {
     const CanvasStore* fills = &layer->data->stores[CANVAS_FILLS];
     const CanvasStore* shapes = &layer->data->stores[CANVAS_SHAPES];
-    const CanvasStore* dashes = &layer->data->stores[CANVAS_DASHES];
-    if (!fills->live && !shapes->live && !dashes->live)
+    const CanvasStore* longs = &layer->data->stores[CANVAS_LONGS];
+    if (!fills->live && !shapes->live && !longs->live)
         return;
     const float opacity = glm_clamp(layer->opacity, 0.0f, 1.0f);
-    static const int passes[] = {0, 1, 2, 3, CANVAS_PASS_NEAREST, 4};
-    for (size_t k = 0; k < sizeof passes / sizeof passes[0]; k++) {
-        const int pass = passes[k];
+    for (int pass = CANVAS_PASS_COVERAGE; pass <= CANVAS_PASS_RING; pass++) {
         // The raised pass only while some tag raises, and the rings' two only
         // while one draws a ring.
-        const bool ringed = pass == 4 || pass == CANVAS_PASS_NEAREST;
-        if ((pass == 1 && !d->tags->raised) || (ringed && !d->tags->outlined))
+        if ((pass == CANVAS_PASS_RAISED && !d->tags->raised) ||
+            (CANVAS_PASS_RINGS(pass) && !d->tags->outlined))
             continue;
-        if (pass == 0) {
-            glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
-            glBlendEquationSeparate(GL_FUNC_ADD, GL_MAX);
-            glBlendFuncSeparate(GL_ONE, GL_ZERO, GL_ONE, GL_ONE);
-        } else if (pass == CANVAS_PASS_NEAREST) {
-            // The least of every ringed shape's inner ramp, so a ring is its nearest shape's.
-            glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
-            glBlendEquationSeparate(GL_FUNC_ADD, GL_MIN);
-        } else if (pass == 1 || (pass == 2 && !d->tags->raised) || pass == 4) {
-            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-            glBlendEquation(GL_FUNC_ADD);
+        // Alpha alone in the coverage pass, by max, and the nearest ring's, by min; the
+        // colour passes paint by alpha and zero it.
+        const bool paints = pass != CANVAS_PASS_COVERAGE && pass != CANVAS_PASS_NEAREST;
+        glColorMask(paints, paints, paints, GL_TRUE);
+        glBlendEquationSeparate(GL_FUNC_ADD, pass == CANVAS_PASS_COVERAGE  ? GL_MAX
+                                             : pass == CANVAS_PASS_NEAREST ? GL_MIN
+                                                                           : GL_FUNC_ADD);
+        if (paints)
             glBlendFuncSeparate(GL_DST_ALPHA, GL_ONE_MINUS_DST_ALPHA, GL_ZERO, GL_ZERO);
-        }
+        else
+            glBlendFuncSeparate(GL_ONE, GL_ZERO, GL_ONE, GL_ONE);
         _draw_stores(d, layer, pass, opacity);
     }
 }

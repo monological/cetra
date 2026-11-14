@@ -12,8 +12,8 @@
 layout(location = 0) in ivec4 aP;
 layout(location = 1) in vec4 aF;
 layout(location = 2) in uvec4 aU;
-layout(location = 3) in vec4 aD; // a dashed record's pattern, read only under FLAG_DASHED, or a
-                                 // glyph's band, only under FLAG_BANDED
+layout(location = 3) in vec4 aAfter; // a long record's vec4: a pattern, read only under
+                                     // FLAG_DASHED, or a glyph's band, only under FLAG_BANDED
 
 uniform float uShapeMinPx;
 uniform float uTextMinPx;
@@ -81,11 +81,28 @@ void main() {
     vLocal = vec2(0.0);
     // Outside every clip plane: a quad of four such corners draws nothing.
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-
-    ivec4 tile = texelFetch(uTiles, int(aU.w));
     vRaised = 0.0;
     vFade = 0.0;
     vOutline = vec4(0.0);
+
+    // A glyph is decided before anything else is fetched for it: none in the rings' passes, and
+    // none too small to draw or outside its band of zoom, each judged by the floor its font is
+    // drawn by -- the canvas's, or where higher the em at which the font's field no longer holds
+    // half a pixel of ramp -- so a band gives way in the frame the em it names comes to be drawn.
+    vec4 font = vec4(0.0); // em, edge, falloff, spread
+    if (kind == CANVAS_KIND_GLYPH) {
+        if (CANVAS_PASS_RINGS(uPass))
+            return;
+        font = texelFetch(uGlyphs, aP.w * CANVAS_GLYPH_CODEPOINTS * 2);
+        float floorPx = max(uTextMinPx, 0.5 * font.x / font.w);
+        bool banded = (flags & CANVAS_FLAG_BANDED) != 0u;
+        if (aF.z * uPixelsPerUnit < floorPx ||
+            (banded && aAfter.x > 0.0 && aAfter.x * uPixelsPerUnit < floorPx) ||
+            (banded && aAfter.y > 0.0 && aAfter.y * uPixelsPerUnit >= floorPx))
+            return;
+    }
+
+    ivec4 tile = texelFetch(uTiles, int(aU.w));
     if (kind == CANVAS_KIND_NONE || tile.z == 0 ||
         !canvasColour(aU, vColor, vOutline, vRaised, vFade))
         return;
@@ -98,14 +115,15 @@ void main() {
     // The quad's corners as a strip: (0, 0), (1, 0), (0, 1), (1, 1). A shape with an outline
     // reaches out to its ring in the passes that draw it.
     vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
-    bool ringed = vOutline.a > 0.0 && (uPass == 0 || uPass == 4 || uPass == CANVAS_PASS_NEAREST);
+    bool ringed =
+        vOutline.a > 0.0 && (uPass == CANVAS_PASS_COVERAGE || CANVAS_PASS_RINGS(uPass));
     float pad = PAD + (ringed ? uRing.y : 0.0);
     vec2 pos;
     float span;
     // The pattern in pixels, as every length is. Where a dash or a gap would span fewer than
     // uDashMinPx, pixel centres land inside a dash or not at random: the line is drawn solid at
     // the dash's share of the period, the pattern's average, so it keeps the weight its dashes had.
-    vec3 dash = aD.xyz * uPixelsPerUnit;
+    vec3 dash = aAfter.xyz * uPixelsPerUnit;
     bool dashed = (flags & CANVAS_FLAG_DASHED) != 0u && min(dash.x, dash.y) >= uDashMinPx;
 
     if (kind == CANVAS_KIND_SEGMENT) {
@@ -216,21 +234,10 @@ void main() {
     } else if (kind == CANVAS_KIND_GLYPH) {
         // The glyph's box about its pen, in ems, mirrored and turned about the string's anchor.
         // The box is the atlas's whole cell, so it already holds the outer half of the ramp
-        // wherever the field reaches half a pixel; past that the string is too small to draw.
+        // wherever the field reaches half a pixel, which the floor above made sure of.
         float emPx = aF.z * uPixelsPerUnit;
-        if (emPx < uTextMinPx)
-            return;
-        // In a band of zoom, judged by the floor as the glyph's own em is: before its first em
-        // reads, or once its second does, not drawn.
-        if ((flags & CANVAS_FLAG_BANDED) != 0u &&
-            ((aD.x > 0.0 && aD.x * uPixelsPerUnit < uTextMinPx) ||
-             (aD.y > 0.0 && aD.y * uPixelsPerUnit >= uTextMinPx)))
-            return;
         int base = aP.w * CANVAS_GLYPH_CODEPOINTS * 2;
-        vec4 font = texelFetch(uGlyphs, base); // em, edge, falloff, spread
-        float atlasPx = emPx / font.x;         // framebuffer pixels an atlas pixel spans
-        if (font.w * atlasPx < 0.5)
-            return;
+        float atlasPx = emPx / font.x;                   // framebuffer pixels an atlas pixel spans
         vec4 box = texelFetch(uGlyphs, base + aP.z * 2); // x0, y0, x1, y1
         vec4 cell = texelFetch(uGlyphs, base + aP.z * 2 + 1);
         vec2 local = (aF.xy + mix(box.xy, box.zw, c)) * emPx;
@@ -253,6 +260,6 @@ void main() {
     if (dashed)
         vDash = vec4(dash.x, dash.x + dash.y, dash.z, 0.0);
     else if ((flags & CANVAS_FLAG_DASHED) != 0u)
-        vColor.a *= aD.x / (aD.x + aD.y);
+        vColor.a *= aAfter.x / (aAfter.x + aAfter.y);
     gl_Position = canvasClip(pos);
 }
