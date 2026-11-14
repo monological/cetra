@@ -155,8 +155,8 @@ linked doc explains the subsystem. `cetra/src/ext/` is vendored and not listed.
 
 | Module | Purpose |
 |--------|---------|
-| `canvas.c/h`, `canvas_edit.c`, `canvas_record.h` | Exact 2D shapes and text drawn after tone mapping, kept on the GPU and edited in place. See `docs/canvas.md`. |
-| `triangulate.c/h` | Polygons with holes into triangles (earcut), each hole's bridge found through a grid over the ring from 32 holes. See `docs/canvas.md`. |
+| `canvas.c/h`, `canvas_edit.c`, `canvas_record.h`, `canvas_edit_hooks.h` | Exact 2D shapes and text drawn after tone mapping, kept on the GPU and edited in place; what a test reads of an edit's fill pieces. See `docs/canvas.md`. |
+| `triangulate.c/h`, `triangulate_hooks.h` | Polygons with holes into triangles (earcut), each hole's bridge found through a grid over the ring from 32 holes; the walk's triangulation, for a test to hold the grid's to. See `docs/canvas.md`. |
 
 ## Text and UI
 
