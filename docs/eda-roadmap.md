@@ -121,10 +121,6 @@ shape's record and pixels are as they were.
 - **A stroke's cap, join and dash are the paint's**, baked into the records when the shape is added:
   a ghost is dashed by its paint, a dashed rectangle is one `canvas_edit_box` whose pattern runs
   round it, and changing a stroke is an edit.
-- **A fill can leave a pixel uncovered inside a sliver**, found by spec 14.37: a few in a plane of
-  thousands of holes, each drawn as the view's background. The triangulation covers the pixel's
-  centre, inside a triangle under a pixel thick, but nothing is drawn there. Where they fall moves
-  with the tile size. Not yet diagnosed, and not yet a spec.
 
 **Left for later**, each with a need named:
 - **Images and datasheet pages**, with the texture residency they need, for pcb's step 10. A record
@@ -561,7 +557,10 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
   From 32 holes each bridge is found through a grid over the ring's edges instead, inside
   `triangulate.c`, with no change to its API (`docs/canvas.md`, Triangulation). What is left of a
   fill's time is the ear clipping. Triangles supplied by the caller (item 1, Left for later) stay
-  the fallback.
+  the fallback. With it, at the user's word, a fill triangle crossing the tile grid is cut at
+  every tile it crosses. Before, a triangle that fitted in two tiles was drawn whole beside a
+  neighbour that was cut, and a pixel whose centre fell on their shared edge was left unfilled: a
+  few in a plane of thousands of holes (`docs/canvas.md`).
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the
