@@ -17,7 +17,7 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-13: 14.35, a host's edit joined to the last step._
+_Last updated: 2026-11-14: 14.36, labels on copper, started._
 
 ---
 
@@ -546,6 +546,12 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
   its own, `u` took back the ordering alone and the next save made it again, so the edit before it
   could never be undone. `text_doc_set_text_joined` joins the latest step, as vim's `:undojoin`
   (`docs/ui.md`, The text, Undo).
+- **Labels on copper** -- spec 14.36, started, from pcb 7.5.4, which writes a pad's number and net
+  on it, a trace's net along it and a via's in it, once each reads: `CanvasText.shown_from` and
+  `shown_until`, a text drawn only within a band of zoom judged by another em, so a pad's number is
+  centred until its net reads; a non-zero tag past the table counted as a tag, so a shape tagged
+  there fades as `canvas.h` says; and `CanvasLayer.keeps_colour`, so a label carries its copper's
+  tags without taking its colour.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the
