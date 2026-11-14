@@ -743,6 +743,36 @@ def run_canvas_gate(workdir):
                       + ("" if not wrong else "; wrong: " + ", ".join(wrong)))
         return ok, detail
 
+    @arm("canvas-text-band")
+    def _():
+        far, far_probe = _canvas_run(workdir, "band_far", "--sheet", "band", "--view", "0,0,20")
+        near, near_probe = _canvas_run(workdir, "band_near", "--sheet", "band", "--view", "0,0,5")
+        far_cells, near_cells = _canvas_sheet(far_probe, "band"), _canvas_sheet(near_probe, "band")
+        if not far or not near or len(far_cells) != 3 or len(near_cells) != 3:
+            return False, (f"the app failed or printed {len(far_cells)} and {len(near_cells)} "
+                           f"points (want 3 each)")
+
+        # Each H's ink in its own colour, within 0.7 of its em of its anchor.
+        def inks(path, cells, width_mm):
+            img = _ppm_array(path).astype(int)
+            half = int(0.7 * img.shape[1] / width_mm)
+            got = {}
+            for name, tokens in cells.items():
+                x, y, want = int(tokens[1]), int(tokens[2]), int(tokens[4], 16)
+                patch = img[max(y - half, 0):y + half, max(x - half, 0):x + half]
+                on = np.ones(patch.shape[:2], bool)
+                for c, sh in enumerate((16, 8, 0)):
+                    on &= patch[..., c] > 128 if (want >> sh) & 255 else patch[..., c] < 64
+                got[name] = int(on.sum())
+            return got
+        f, n = inks(far, far_cells, 20.0), inks(near, near_cells, 5.0)
+        ok = (f["plain"] > 20 and f["until"] > 20 and f["from"] == 0
+              and n["plain"] > 20 and n["from"] > 20 and n["until"] == 0)
+        detail = (f"20 mm across, the band's 0.05 mm under the floor: plain {f['plain']}, "
+                  f"from {f['from']} (want 0), until {f['until']} px of ink; 5 mm across, read: "
+                  f"plain {n['plain']}, from {n['from']}, until {n['until']} (want 0)")
+        return ok, detail
+
     @arm("canvas-uploads")
     def _():
         board, probe = _canvas_run(workdir, "board", "--sheet", "board", "-f", "8")

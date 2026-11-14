@@ -1082,6 +1082,36 @@ static void sheet_fade(SheetContext* ctx) {
 }
 
 /*
+ * The band sheet (spec 14.36): three H's a millimetre tall under the canvas's own floor -- a red
+ * one plain, a green one shown from an em of 0.05 mm, a blue one shown until it -- and where each
+ * stands. In the gate's 800 pixels, seen 20 mm across 0.05 mm is under the floor: the red and the
+ * blue draw. Seen 5 mm across it reads: the red and the green.
+ */
+static void sheet_band(SheetContext* ctx) {
+    Canvas* canvas = ctx->canvas;
+    CanvasLayer* layer = canvas_add_layer(canvas, "band");
+    const uint16_t styles[3] = {canvas_add_style(canvas, 0xff0000ffu),
+                                canvas_add_style(canvas, 0x00ff00ffu),
+                                canvas_add_style(canvas, 0x0000ffffu)};
+    const char* names[3] = {"plain", "from", "until"};
+    const int64_t o = ctx->offset;
+    for (int k = 0; k < 3; k++) {
+        const CanvasPoint at = {MM(-1.5 + 1.5 * k) + o, o};
+        canvas_edit_text(ctx->edit, &(CanvasText){.paint = paint_of(layer, styles[k], 0, 0),
+                                                  .font = ctx->font,
+                                                  .string = "H",
+                                                  .anchor = at,
+                                                  .size = MM(1.0),
+                                                  .align_x = CANVAS_ALIGN_CENTRE,
+                                                  .align_y = CANVAS_ALIGN_MIDDLE,
+                                                  .shown_from = k == 1 ? MM(0.05) : 0,
+                                                  .shown_until = k == 2 ? MM(0.05) : 0});
+        if (ctx->probe)
+            probe_pixel(ctx, "band", names[k], at, 0xff0000u >> (8 * k));
+    }
+}
+
+/*
  * The board sheet: a dense two-layer board, made the way pcb would make one.
  * Its layers, styles and tags are set on the main thread, and its shapes are
  * filled into the edit by board_fill, which touches nothing else and so runs
@@ -1886,6 +1916,7 @@ static const Sheet SHEETS[] = {
     {"overlap", sheet_overlap, {0.0, 0.0}, 8.0, 0x000000ffu},
     {"tags", sheet_tags, {0.0, 0.0}, 9.0, 0x000000ffu},
     {"fade", sheet_fade, {0.0, 0.0}, 9.0, 0xffffffffu},
+    {"band", sheet_band, {0.0, 0.0}, 20.0, 0x000000ffu},
     {"board", sheet_board, {0.0, 0.0}, 66.0, 0x001023ffu},
     {"strokes", sheet_strokes, {0.0, 0.0}, 8.0, 0x000000ffu},
     {"dashes", sheet_dashes, {0.0, 0.0}, 8.0, 0x000000ffu},

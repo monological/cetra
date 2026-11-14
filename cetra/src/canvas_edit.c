@@ -1052,7 +1052,9 @@ void canvas_edit_text(CanvasEdit* edit, const CanvasText* text) {
                   font ? "a font that is not SDF" : "no font");
         return;
     }
-    if (!_length_ok(text->size, "string", "size"))
+    if (!_length_ok(text->size, "string", "size") ||
+        !_length_ok(text->shown_from, "string", "shown_from") ||
+        !_length_ok(text->shown_until, "string", "shown_until"))
         return;
     if (text->size == 0) {
         log_error("canvas: a string with no size is refused");
@@ -1089,7 +1091,9 @@ void canvas_edit_text(CanvasEdit* edit, const CanvasText* text) {
                       : text->align_y == CANVAS_ALIGN_TOP ? font->ascent * em
                                                           : 0.0;
     const int shift = edit->tile_shift;
-    const uint32_t flags = text->mirrored ? CANVAS_FLAG_MIRROR : 0u;
+    const bool banded = text->shown_from || text->shown_until;
+    const uint32_t flags =
+        (text->mirrored ? CANVAS_FLAG_MIRROR : 0u) | (banded ? CANVAS_FLAG_BANDED : 0u);
     // The ink of the whole string in its own frame, in ems from the anchor.
     double lo[2] = {INFINITY, INFINITY}, hi[2] = {-INFINITY, -INFINITY};
     for (size_t i = 0; i < n; i++) {
@@ -1102,6 +1106,8 @@ void canvas_edit_text(CanvasEdit* edit, const CanvasText* text) {
         piece->item.record.f[1] = (float)-ay;
         piece->item.record.f[2] = (float)text->size;
         piece->item.record.f[3] = (float)text->angle;
+        piece->item.dash[0] = (float)text->shown_from;
+        piece->item.dash[1] = (float)text->shown_until;
         const double x = glyphs[i].pen - ax;
         lo[0] = fmin(lo[0], x + g->x0 * em), hi[0] = fmax(hi[0], x + g->x1 * em);
         lo[1] = fmin(lo[1], -ay - g->y1 * em), hi[1] = fmax(hi[1], -ay - g->y0 * em);

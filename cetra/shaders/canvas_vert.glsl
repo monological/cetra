@@ -12,7 +12,8 @@
 layout(location = 0) in ivec4 aP;
 layout(location = 1) in vec4 aF;
 layout(location = 2) in uvec4 aU;
-layout(location = 3) in vec4 aD; // a dashed record's pattern, read only under FLAG_DASHED
+layout(location = 3) in vec4 aD; // a dashed record's pattern, read only under FLAG_DASHED, or a
+                                 // glyph's band, only under FLAG_BANDED
 
 uniform float uShapeMinPx;
 uniform float uTextMinPx;
@@ -218,6 +219,12 @@ void main() {
         // wherever the field reaches half a pixel; past that the string is too small to draw.
         float emPx = aF.z * uPixelsPerUnit;
         if (emPx < uTextMinPx)
+            return;
+        // In a band of zoom, judged by the floor as the glyph's own em is: before its first em
+        // reads, or once its second does, not drawn.
+        if ((flags & CANVAS_FLAG_BANDED) != 0u &&
+            ((aD.x > 0.0 && aD.x * uPixelsPerUnit < uTextMinPx) ||
+             (aD.y > 0.0 && aD.y * uPixelsPerUnit >= uTextMinPx)))
             return;
         int base = aP.w * CANVAS_GLYPH_CODEPOINTS * 2;
         vec4 font = texelFetch(uGlyphs, base); // em, edge, falloff, spread

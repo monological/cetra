@@ -47,6 +47,11 @@
  *               b; 0
  * A circle's a is its rightmost point and a box's the middle of its bottom
  * side, each going round counter-clockwise.
+ *
+ * A glyph of a text in a band of zoom (FLAG_BANDED) is a CanvasDashRecord in
+ * the same store, its band where a pattern would be:
+ *   dash  vec4  the em it is shown from and the em it is shown until, in units,
+ *               0 for no bound; 0; 0
  */
 
 #include <stdint.h>

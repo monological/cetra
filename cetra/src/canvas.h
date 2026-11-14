@@ -303,6 +303,9 @@ typedef enum CanvasAlignY {
 // line through the anchor along it, as bottom-side silkscreen is. The font must
 // be an SDF font, and outlive the canvas; the string is UTF-8, and a character
 // the font's atlas does not hold draws nothing and advances by its own width.
+// A band of zoom draws it only while a string of em shown_from would read and
+// one of em shown_until would not, each judged as text_min_px judges a string's
+// own em: so one text gives way to another as a smaller one comes to read.
 typedef struct CanvasText {
     CanvasPaint paint;
     const struct Font* font;
@@ -313,6 +316,8 @@ typedef struct CanvasText {
     CanvasAlignX align_x;
     CanvasAlignY align_y;
     bool mirrored;
+    int64_t shown_from;  // drawn only once a string of this em reads; 0 = its own size
+    int64_t shown_until; // drawn only until a string of this em reads; 0 = always
 } CanvasText;
 
 // The string's advance from its first character's pen to past its last, in

@@ -656,11 +656,12 @@ void canvas_apply(Canvas* canvas, CanvasEdit* edit) {
                             }
                             p->item.record.p[3] = slot;
                         }
-                        // A store's items are its kind's first bytes of the piece's.
-                        const int store =
-                            (canvas_record_flags(p->item.record.u[0]) & CANVAS_FLAG_DASHED) != 0u
-                                ? CANVAS_DASHES
-                                : CANVAS_SHAPES;
+                        // A store's items are its kind's first bytes of the piece's: a record
+                        // carrying a vec4 after it, a pattern or a band, the dashed store's 64.
+                        const uint32_t after = CANVAS_FLAG_DASHED | CANVAS_FLAG_BANDED;
+                        const int store = (canvas_record_flags(p->item.record.u[0]) & after) != 0u
+                                              ? CANVAS_DASHES
+                                              : CANVAS_SHAPES;
                         refused +=
                             !_add(d, store, p->layer, p->tx, p->ty, p->min, p->max, &p->item);
                     }
