@@ -204,11 +204,12 @@ def run_canvas_gate(workdir):
                      painted last, after every shape of the layer has spent its pixels. Each
                      within 2 codes. On a layer keeping its colour (spec 14.36), a white box and
                      a white H under a tag coloured red and dimmed half: the box 808080, the H's
-                     ink grey with none red. And the trace's ring held to the nearer of its two
-                     segments, every pixel round it measured against both: none lit in the gap
-                     between the trace and its ring, all yellow well inside the ring's band. Each
-                     segment ringing by its own distance left a tick of one ring in the other's
-                     gap at the inner corner, 15 pixels at 2x.
+                     ink within its box grey with none red.
+      canvas-ring-nearest the tags sheet's outlined trace, its ring held to the nearer of its two
+                     segments (spec 14.36), every pixel of the trace's box measured against both:
+                     none lit in the gap between the trace and its ring, all yellow well inside the
+                     ring's band. Each segment ringing by its own distance left a tick of one
+                     ring in the other's gap at the inner corner, 15 pixels at 2x.
       canvas-fade    the fade sheet under a view fading by half toward its white paper (specs
                      14.24, 14.25): the lit box and the untagged one red, a tagged one far from the
                      light and one a hair beside it faded to half white with no room, an untagged
@@ -692,45 +693,49 @@ def run_canvas_gate(workdir):
         path, probe = _canvas_run(workdir, "tags", "--sheet", "tags")
         cells = _canvas_sheet(probe, "tags")
         label = probe.get(("tags-text", "kept"))
-        joint = probe.get(("tags-joint", "trace"))
-        if not path or len(cells) != 12 or not label or not joint:
-            ok, detail = False, (f"the app failed or printed {len(cells)} points (want 12, the H "
-                                 f"and the trace)")
+        if not path or len(cells) != 12 or not label:
+            ok, detail = False, f"the app failed or printed {len(cells)} points (want 12, and the H)"
         else:
             wrong = _canvas_wrong_pixels(path, cells)
-            # The H on the layer keeping its colour: its ink grey, the tag's dim, and none of it red.
-            x, y = int(label[1]), int(label[2])
-            img = _ppm_array(path)[max(y - 120, 0):y + 120, max(x - 120, 0):x + 120].astype(int)
-            r, g, b = img[..., 0], img[..., 1], img[..., 2]
+            # The H on the layer keeping its colour, within its box: its ink grey, the tag's dim,
+            # and none of it red.
+            (x0, y0, x1, y1), _ = _canvas_cell(label)
+            h = _ppm_array(path)[y0:y1, x0:x1].astype(int)
+            r, g, b = h[..., 0], h[..., 1], h[..., 2]
             grey = int(((r > 60) & (np.abs(r - g) < 16) & (np.abs(g - b) < 16)).sum())
             red = int(((r - g) > 40).sum())
-            # The ringed trace's ring by the nearer of its two segments: a pixel whose centre is in
-            # the gap between the trace and its ring dark, one well inside the ring's band yellow,
-            # the inner corner and the outer bend among them.
-            ax, ay, cx, cy, bx, by, hw, inner, outer = (float(v) for v in joint)
-            reach = hw + outer + 4.0
-            x0, y0 = int(min(ax, bx, cx) - reach), int(min(ay, by, cy) - reach)
-            x1, y1 = int(max(ax, bx, cx) + reach), int(max(ay, by, cy) + reach)
-            ys, xs = np.mgrid[y0:y1, x0:x1] + 0.5
-
-            def apart(sx, sy, ex, ey):
-                dx, dy = ex - sx, ey - sy
-                t = np.clip(((xs - sx) * dx + (ys - sy) * dy) / (dx * dx + dy * dy), 0.0, 1.0)
-                return np.hypot(xs - sx - t * dx, ys - sy - t * dy)
-            d = np.minimum(apart(cx, cy, ax, ay), apart(cx, cy, bx, by)) - hw
-            trace = _ppm_array(path)[y0:y1, x0:x1].astype(int)
-            yellow = (trace[..., 0] > 200) & (trace[..., 1] > 200) & (trace[..., 2] < 80)
-            dark = trace.max(axis=-1) < 40
-            gap = (d >= 0.8) & (d <= inner - 0.6)
-            band = (d >= inner + 0.8) & (d <= outer - 0.8)
-            stray, missing = int((gap & ~dark).sum()), int((band & ~yellow).sum())
-            ok = not wrong and grey > 200 and red == 0 and stray == 0 and missing == 0
+            ok = not wrong and grey > 200 and red == 0
             detail = (f"12 points each its state's colour within 2 codes; the kept H's ink {grey} px "
-                      f"grey (want over 200), {red} red (want 0); the trace's ring by its nearer "
-                      f"segment: {stray} of {int(gap.sum())} px in its gap lit (want 0), {missing} "
-                      f"of {int(band.sum())} in its band not yellow (want 0)"
+                      f"grey (want over 200), {red} red (want 0)"
                       + ("" if not wrong else "; wrong: " + ", ".join(wrong)))
         return ok, detail
+
+    @arm("canvas-ring-nearest")
+    def _():
+        path, probe = _canvas_run(workdir, "tags_ring", "--sheet", "tags")
+        joint = probe.get(("tags-joint", "trace"))
+        if not path or not joint:
+            return False, "the app failed or printed no trace"
+        # The ringed trace's ring by the nearer of its two segments, every pixel of its box measured
+        # against both: one whose centre is in the gap between the trace and its ring dark, one
+        # well inside the ring's band yellow, the inner corner and the outer bend among them.
+        (x0, y0, x1, y1), m = _canvas_cell(joint)
+        ys, xs = np.mgrid[y0:y1, x0:x1] + 0.5
+
+        def apart(ex, ey):
+            dx, dy = ex - m["cx"], ey - m["cy"]
+            t = np.clip(((xs - m["cx"]) * dx + (ys - m["cy"]) * dy) / (dx * dx + dy * dy), 0.0, 1.0)
+            return np.hypot(xs - m["cx"] - t * dx, ys - m["cy"] - t * dy)
+        d = np.minimum(apart(m["ax"], m["ay"]), apart(m["bx"], m["by"])) - m["hw"]
+        trace = _ppm_array(path)[y0:y1, x0:x1].astype(int)
+        yellow = (trace[..., 0] > 200) & (trace[..., 1] > 200) & (trace[..., 2] < 80)
+        dark = trace.max(axis=-1) < 40
+        gap = (d >= 0.8) & (d <= m["inner"] - 0.6)
+        band = (d >= m["inner"] + 0.8) & (d <= m["outer"] - 0.8)
+        stray, missing = int((gap & ~dark).sum()), int((band & ~yellow).sum())
+        return (stray == 0 and missing == 0 and gap.sum() > 0 and band.sum() > 0,
+                f"{stray} of {int(gap.sum())} px in the trace's gap lit (want 0), {missing} of "
+                f"{int(band.sum())} in its ring's band not yellow (want 0)")
 
     @arm("canvas-fade")
     def _():
@@ -790,20 +795,17 @@ def run_canvas_gate(workdir):
             return False, (f"the app failed or printed {len(far_cells)} and {len(near_cells)} "
                            f"points (want 3 each)")
 
-        # Each H's ink in its own colour, within 0.7 of its em of its anchor.
-        def inks(path, cells, width_mm):
-            img = _ppm_array(path).astype(int)
-            half = int(0.7 * img.shape[1] / width_mm)
+        # Each H's ink within its box: pixels within half the range of its colour on every channel.
+        def inks(path, cells):
+            img = _ppm_array(path).astype(float)
             got = {}
             for name, tokens in cells.items():
-                x, y, want = int(tokens[1]), int(tokens[2]), int(tokens[4], 16)
-                patch = img[max(y - half, 0):y + half, max(x - half, 0):x + half]
-                on = np.ones(patch.shape[:2], bool)
-                for c, sh in enumerate((16, 8, 0)):
-                    on &= patch[..., c] > 128 if (want >> sh) & 255 else patch[..., c] < 64
-                got[name] = int(on.sum())
+                (x0, y0, x1, y1), m = _canvas_cell(tokens)
+                patch = img[y0:y1, x0:x1]
+                rgb = _hex_rgb(f"{int(m['rgb']):06x}")
+                got[name] = patch.shape[0] * patch.shape[1] - _off_rgb(patch, rgb, 127)
             return got
-        f, n = inks(far, far_cells, 20.0), inks(near, near_cells, 5.0)
+        f, n = inks(far, far_cells), inks(near, near_cells)
         ok = (f["plain"] > 20 and f["until"] > 20 and f["from"] == 0
               and n["plain"] > 20 and n["from"] > 20 and n["until"] == 0)
         detail = (f"20 mm across, the band's 0.05 mm under the floor: plain {f['plain']}, "

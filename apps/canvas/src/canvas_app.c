@@ -975,9 +975,12 @@ static void sheet_tags(SheetContext* ctx) {
                                          .align_y = CANVAS_ALIGN_MIDDLE});
 #undef BOX
     if (ctx->probe) {
+        // The ring's inner and outer distance in framebuffer pixels, as canvas.c's
+        // CANVAS_RING_GAP_PT and _WIDTH_PT make them, and its middle in mm.
+        const double inner = fmax(1.0, 1.0 * ctx->fb_scale), outer = inner + 1.5 * ctx->fb_scale;
+        const double ring_mm = 0.5 * (inner + outer) / ppu_px(ctx) / 1e6;
         // A point well inside each box, and the outline's ring: a box's edge is
-        // 0.5 mm from its centre, and its ring 1.75 points past that.
-        const double ring_mm = 1.75 / (ctx->view->points_per_unit * 1e6);
+        // 0.5 mm from its centre, and its ring's middle ring_mm past that.
         probe_pixel(ctx, "tags", "style", CELL(0), 0xff0000);
         probe_pixel(ctx, "tags", "net-colour", CELL(1), 0x00ff00);
         probe_pixel(ctx, "tags", "object-over-net", CELL(2), 0x0000ff);
@@ -998,16 +1001,17 @@ static void sheet_tags(SheetContext* ctx) {
                     (CanvasPoint){c8.x + MM(along * 0.6 / unit), c8.y - MM(along * 0.4 / unit)},
                     0xff0000);
         probe_pixel(ctx, "tags", "kept", CELL(9), 0x808080);
-        probe_pixel(ctx, "tags-text", "kept", label, 0x808080);
-        // The ringed trace in framebuffer pixels, its ends and its joint, its half width, and the
-        // ring's inner and outer distance as canvas.c's CANVAS_RING_GAP_PT and _WIDTH_PT make
-        // them, so the ring can be held to the nearest of its two segments (spec 14.36).
+        // The kept H's box, and the ringed trace's with its ends and joint, its half width and
+        // the ring's distances, in framebuffer pixels, so the ring can be held to the nearer of
+        // its two segments (spec 14.36).
+        probe_cell(ctx, "tags-text", "kept", label, MM(0.45));
+        printf("\n");
         double ex[3], ey[3];
         for (int k = 0; k < 3; k++)
             fb_of(ctx, trace[k], &ex[k], &ey[k]);
-        const double inner = fmax(1.0, 1.0 * ctx->fb_scale), outer = inner + 1.5 * ctx->fb_scale;
-        printf("canvas tags-joint trace %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f\n", ex[0],
-               ey[0], ex[1], ey[1], ex[2], ey[2], MM(0.15) * ppu_px(ctx), inner, outer);
+        probe_cell(ctx, "tags-joint", "trace", c8, MM(0.85));
+        printf(" ax %.3f ay %.3f cx %.3f cy %.3f bx %.3f by %.3f hw %.3f inner %.3f outer %.3f\n",
+               ex[0], ey[0], ex[1], ey[1], ex[2], ey[2], MM(0.15) * ppu_px(ctx), inner, outer);
     }
 #undef CELL
 }
@@ -1115,8 +1119,11 @@ static void sheet_band(SheetContext* ctx) {
                                                   .align_y = CANVAS_ALIGN_MIDDLE,
                                                   .shown_from = k == 1 ? MM(0.05) : 0,
                                                   .shown_until = k == 2 ? MM(0.05) : 0});
-        if (ctx->probe)
-            probe_pixel(ctx, "band", names[k], at, 0xff0000u >> (8 * k));
+        // Its box, 0.7 mm each way, and its colour as RRGGBB in decimal.
+        if (ctx->probe) {
+            probe_cell(ctx, "band", names[k], at, MM(0.7));
+            printf(" rgb %u\n", 0xff0000u >> (8 * k));
+        }
     }
 }
 
