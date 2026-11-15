@@ -679,10 +679,10 @@ def run_canvas_gate(workdir):
             if "open" not in mesh:
                 return False, f"the {label} run failed or printed no mesh"
             ok = ok and mesh["open"] == 0 and mesh["pieces"] > 0
-            rows.append(f"{label} {mesh['open']:.0f} of {mesh['pieces']:.0f} pieces' edges "
+            rows.append(f"{label} {mesh['open']:.0f} among {mesh['pieces']:.0f} pieces "
                         f"({mesh['flat']:.0f} dropped as flat)")
-        detail = "the plate's mesh, edges not met once by their reverse: " + ", ".join(rows) + \
-            " (want 0)"
+        detail = "the plate's mesh, directed edges not met once by their reverse: " + \
+            ", ".join(rows) + " (want 0)"
         return ok, detail
 
     @arm("canvas-refused-whole")
