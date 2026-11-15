@@ -163,6 +163,7 @@ struct CanvasEdit {
     size_t piece_count, piece_cap;
     CanvasFillPiece* fills;
     size_t fill_count, fill_cap;
+    size_t flat_fills; // fill pieces dropped as their corners rounded onto one line
     CanvasStep* steps;
     size_t step_count, step_cap;
 };

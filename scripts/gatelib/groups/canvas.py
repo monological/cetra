@@ -16,10 +16,15 @@ def _canvas_sheet(probe, sheet):
     return {name: tokens for (word, name), tokens in probe.items() if word == sheet}
 
 
+def _canvas_measures(tokens):
+    """A probe line's names, each with the value after it."""
+    return {tokens[k]: float(tokens[k + 1]) for k in range(0, len(tokens) - 1, 2)}
+
+
 def _canvas_cell(tokens):
     """A probe line's cell: its box in framebuffer pixels and its named measures."""
     box = tuple(int(v) for v in tokens[1:5])
-    return box, {tokens[k]: float(tokens[k + 1]) for k in range(5, len(tokens) - 1, 2)}
+    return box, _canvas_measures(tokens[5:])
 
 
 def _rgb_near(pixel, want, codes):
@@ -162,16 +167,21 @@ def run_canvas_gate(workdir):
                      billion, in n - 2 + 2h triangles for n points and h holes: every point a
                      corner and no more. A hole the grid left unbridged, its ray stopped at the
                      first cell holding any edge, cost the plate 21,892 of its triangles. And the
-                     plane sheet's nine seeded plates, which it triangulates and does not draw,
-                     each to its area alone. Eight are squares with a point mid each upright side,
+                     plane sheet's nine plates it triangulates and does not draw, each to its
+                     area alone. Eight are seeded squares with a point mid each upright side,
                      which the filter takes out as their rows' bridges run along their bottoms. A
                      point taken out passed over as an edge, not standing for its predecessor's,
                      let a ray through a square's side and bridged 3 of the 8 across the ring.
-      canvas-grid-walk the plane sheet's plate and its nine seeded plates, each triangulated as
-                     the canvas does it and with every bridge found by walking the ring, as earcut
-                     does (triangulate_hooks.h): the same triangles, every index. The ninth plate,
-                     turned polygons of 3 to 12 sides, is one in 600 whose triangles change when
-                     the grid files no bridge's two edges, which no area shows.
+      canvas-grid-walk all sixteen polygons above, each triangulated with every bridge found
+                     through the grid and with every bridge found by walking the ring, as earcut
+                     does (triangulate_hooks.h): the same triangles, every index. Where bridges
+                     tie the grid breaks the tie its own way, so on another polygon the triangles
+                     may differ and cover the same (docs/canvas.md); on these they are known to
+                     be the walk's, and one that differs is read by hand. The ninth plate is built
+                     for it: a triangle whose bridge is the leftmost point of the one before, on
+                     the side the first's bridge's way back holds, which the grid sees only
+                     through that edge. Filed without the bridge's two edges, the grid bridges it
+                     elsewhere, its area still the shoelace formula's.
       canvas-polygon-areas each polygon's coverage against that area, within 0.01 px per pixel
                      of outline, with the default tiles and with 65 um ones, which cut every
                      triangle at the grid; and the plate's with the default tiles, where its
@@ -187,10 +197,12 @@ def run_canvas_gate(workdir):
                      over 0.8. A triangle drawn whole where it fitted in two tiles, beside a
                      neighbour cut at the grid, left a pixel whose centre lay between the two
                      unfilled: 2 at 4 mm tiles, 10 at 16.8 mm and 2 moved (spec 14.37).
-      canvas-fill-closed the plane sheet's plate at 4 mm and 16.8 mm tiles, its fill pieces read
-                     from the edit (canvas_edit_hooks.h): every piece's edge met by another's,
-                     but those along the outline, within a unit of an outline edge. The pixels
-                     above can miss a crack no pixel's centre falls in; this cannot.
+      canvas-fill-closed the plane sheet's plate at 4 mm and 16.8 mm tiles, read from the edit
+                     (canvas_edit_hooks.h): its fill pieces turned counter-clockwise and its
+                     outline's edge records turned to face out, every directed edge met by its
+                     reverse once and only once. The pixels above can miss a crack no pixel's
+                     centre falls in, and a seam between the fill and its outer ramp; this
+                     cannot. The pieces the edit drops as flat are counted beside it.
       canvas-refused-whole the polygons sheet with tiles of 4096 units, where some polygons'
                      triangles cross more tiles than an edit splits a shape into and are refused:
                      every polygon is drawn whole or not at all. A refused polygon used to keep
@@ -417,6 +429,18 @@ def run_canvas_gate(workdir):
         return _canvas_run(workdir, "board_plain", "--sheet", "board")
 
     @functools.cache
+    def polygon_cells():
+        # The polygons drawn, the polygons sheet's six and the plane's plate, and the plane's nine
+        # triangulated and not drawn; None when a run failed or printed others.
+        polygons, probe = sheet_run("polygons")
+        plane, plane_probe = sheet_run("plane")
+        drawn = {**_canvas_sheet(probe, "polygons"), **_canvas_sheet(plane_probe, "plane")}
+        seeded = _canvas_sheet(plane_probe, "plane-seeded")
+        if not polygons or not plane or len(drawn) != 7 or len(seeded) != 9:
+            return None
+        return drawn, seeded
+
+    @functools.cache
     def plane_t24_run():
         # The plane at tiles of 16.8 mm, where the most pieces met unfilled.
         return _canvas_run(workdir, "plane_t24", "--sheet", "plane", "--tile-shift", "24")
@@ -565,40 +589,32 @@ def run_canvas_gate(workdir):
     # ---- polygons
     @arm("canvas-triangulation")
     def _():
-        polygons, probe = sheet_run("polygons")
-        plane, plane_probe = sheet_run("plane")
-        cells = {**_canvas_sheet(probe, "polygons"), **_canvas_sheet(plane_probe, "plane")}
-        seeded = _canvas_sheet(plane_probe, "plane-seeded")
-        if not polygons or not plane or len(cells) != 7 or len(seeded) != 9:
-            ok, detail = False, (f"a run failed or printed {len(cells)} polygons and "
-                                 f"{len(seeded)} seeded plates (want 7 and 9)")
-        else:
-            rows, off = [], []
-            for name, tokens in sorted({**cells, **seeded}.items()):
-                _, m = _canvas_cell(tokens)
-                if abs(m["triangulated"] - m["area"]) > 1e-9 * m["area"]:
-                    off.append(f"{name} {m['triangulated']:.1f}/{m['area']:.1f} px^2")
-                if name in cells:
-                    want_count = m["points"] - 2 + 2 * m["holes"]
-                    rows.append((name, m["triangles"], want_count))
-            ok = not off and all(got == want for _, got, want in rows)
-            detail = ((f"areas off: {', '.join(off)}" if off else "areas agree, the seeded plates'"
-                       " too") + ", triangles (want n - 2 + 2h): "
-                      + ", ".join(f"{name} {got:.0f}/{want:.0f}" for name, got, want in rows))
+        if not polygon_cells():
+            return False, "a run failed or printed other than 7 polygons and 9 plates"
+        cells, seeded = polygon_cells()
+        rows, off = [], []
+        for name, tokens in sorted({**cells, **seeded}.items()):
+            _, m = _canvas_cell(tokens)
+            if abs(m["triangulated"] - m["area"]) > 1e-9 * m["area"]:
+                off.append(f"{name} {m['triangulated']:.1f}/{m['area']:.1f} px^2")
+            if name in cells:
+                rows.append((name, m["triangles"], m["points"] - 2 + 2 * m["holes"]))
+        ok = not off and all(got == want for _, got, want in rows)
+        detail = ((f"areas off: {', '.join(off)}" if off else "areas agree, the seeded plates' too")
+                  + ", triangles (want n - 2 + 2h): "
+                  + ", ".join(f"{name} {got:.0f}/{want:.0f}" for name, got, want in rows))
         return ok, detail
 
     @arm("canvas-grid-walk")
     def _():
-        _, probe = sheet_run("plane")
-        plates = {**_canvas_sheet(probe, "plane"), **_canvas_sheet(probe, "plane-seeded")}
-        if len(plates) != 10:
-            ok, detail = False, f"the app failed or printed {len(plates)} plates (want 10)"
-        else:
-            differ = [name for name, tokens in sorted(plates.items())
-                      if _canvas_cell(tokens)[1]["walked"] != 1]
-            ok = not differ
-            detail = (f"{len(plates)} plates, the grid's triangles the walk's on each" if ok
-                      else "the grid's triangles not the walk's: " + ", ".join(differ))
+        if not polygon_cells():
+            return False, "a run failed or printed other than 7 polygons and 9 plates"
+        cells = {**polygon_cells()[0], **polygon_cells()[1]}
+        differ = [name for name, tokens in sorted(cells.items())
+                  if _canvas_cell(tokens)[1]["walked"] != 1]
+        ok = not differ
+        detail = (f"{len(cells)} polygons, the grid's triangles the walk's on each" if ok
+                  else "the grid's triangles not the walk's: " + ", ".join(differ))
         return ok, detail
 
     @arm("canvas-polygon-areas")
@@ -626,11 +642,11 @@ def run_canvas_gate(workdir):
     @arm("canvas-plane-edit")
     def _():
         _, probe = sheet_run("plane")
-        timed = _canvas_sheet(probe, "plane-time").get("plate")
-        if not timed or "edit-ms" not in timed:
+        timed = _canvas_measures(_canvas_sheet(probe, "plane-time").get("plate", []))
+        if "edit-ms" not in timed:
             ok, detail = False, "the app failed or printed no time"
         else:
-            ms = float(timed[timed.index("edit-ms") + 1])
+            ms = timed["edit-ms"]
             ok = ms <= 400.0
             detail = (f"the plane sheet's plate of 2,008 holes edited in {ms:.0f} ms, the least of "
                       f"three (want <= 400; a timing arm, this machine's)")
@@ -659,14 +675,14 @@ def run_canvas_gate(workdir):
         rows, ok = [], True
         for label, (_, probe) in (("4 mm tiles", sheet_run("plane")),
                                   ("16.8 mm", plane_t24_run())):
-            mesh = _canvas_sheet(probe, "plane-mesh").get("plate")
-            if not mesh:
+            mesh = _canvas_measures(_canvas_sheet(probe, "plane-mesh").get("plate", []))
+            if "open" not in mesh:
                 return False, f"the {label} run failed or printed no mesh"
-            pieces, open_ = int(mesh[mesh.index("pieces") + 1]), int(mesh[mesh.index("open") + 1])
-            ok = ok and open_ == 0 and pieces > 0
-            rows.append(f"{label} {open_} of {pieces} pieces' edges")
-        detail = "the plate's fill pieces, edges met by no other but along the outline: " + \
-            ", ".join(rows) + " (want 0)"
+            ok = ok and mesh["open"] == 0 and mesh["pieces"] > 0
+            rows.append(f"{label} {mesh['open']:.0f} of {mesh['pieces']:.0f} pieces' edges "
+                        f"({mesh['flat']:.0f} dropped as flat)")
+        detail = "the plate's mesh, edges not met once by their reverse: " + ", ".join(rows) + \
+            " (want 0)"
         return ok, detail
 
     @arm("canvas-refused-whole")

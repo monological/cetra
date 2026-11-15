@@ -115,19 +115,41 @@ static int32_t _rel(int64_t v, int64_t tile, int shift) {
     return (int32_t)(v - _tile_origin(tile, shift));
 }
 
-size_t canvas_edit_fill_count(const CanvasEdit* edit) {
-    return edit ? edit->fill_count : 0;
+size_t canvas_edit_fill_corners(const CanvasEdit* edit, CanvasPoint* corners, size_t cap) {
+    if (!edit)
+        return 0;
+    for (size_t i = 0; i < edit->fill_count && i < cap; i++) {
+        const CanvasFillPiece* f = &edit->fills[i];
+        for (int k = 0; k < 3; k++)
+            corners[3 * i + k] =
+                (CanvasPoint){_tile_origin(f->tx, edit->tile_shift) + f->fill.p[2 * k],
+                              _tile_origin(f->ty, edit->tile_shift) + f->fill.p[2 * k + 1]};
+    }
+    return edit->fill_count;
 }
 
-void canvas_edit_fill_corners(const CanvasEdit* edit, size_t i, CanvasPoint corners[3]) {
-    if (!edit || i >= edit->fill_count) {
-        log_error("canvas: an edit has no fill piece %zu", i);
-        return;
+size_t canvas_edit_edge_ends(const CanvasEdit* edit, CanvasPoint* ends, size_t cap) {
+    if (!edit)
+        return 0;
+    size_t n = 0;
+    for (size_t i = 0; i < edit->piece_count; i++) {
+        const CanvasPiece* piece = &edit->pieces[i];
+        const CanvasRecord* r = &piece->item.record;
+        if ((r->u[0] & 0x3fu) != CANVAS_KIND_EDGE)
+            continue;
+        if (n < cap) {
+            const int64_t ox = _tile_origin(piece->tx, edit->tile_shift);
+            const int64_t oy = _tile_origin(piece->ty, edit->tile_shift);
+            ends[2 * n] = (CanvasPoint){ox + r->p[0], oy + r->p[1]};
+            ends[2 * n + 1] = (CanvasPoint){ox + r->p[2], oy + r->p[3]};
+        }
+        n++;
     }
-    const CanvasFillPiece* f = &edit->fills[i];
-    for (int k = 0; k < 3; k++)
-        corners[k] = (CanvasPoint){_tile_origin(f->tx, edit->tile_shift) + f->fill.p[2 * k],
-                                   _tile_origin(f->ty, edit->tile_shift) + f->fill.p[2 * k + 1]};
+    return n;
+}
+
+size_t canvas_edit_flat_fills(const CanvasEdit* edit) {
+    return edit ? edit->flat_fills : 0;
 }
 
 // Starts a piece anchored in the tile of `anchor`, with its paint, its first
@@ -749,8 +771,10 @@ static int64_t _cross3(CanvasPoint a, CanvasPoint b, CanvasPoint c) {
 // Corners that rounded onto a line add nothing.
 static bool _fill(CanvasEdit* edit, const CanvasPaint* paint, int64_t tx, int64_t ty,
                   const CanvasPoint c[3], const CanvasPoint near[9]) {
-    if (_cross3(c[0], c[1], c[2]) == 0)
+    if (_cross3(c[0], c[1], c[2]) == 0) {
+        edit->flat_fills++;
         return true;
+    }
     const int shift = edit->tile_shift;
     CanvasFillPiece piece = {.layer = paint->layer, .tx = tx, .ty = ty};
     CanvasFill* fill = &piece.fill;

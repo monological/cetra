@@ -36,10 +36,10 @@
 #include "cetra/fuzzy.h"
 #include "cetra/glyph_cache.h"
 #include "cetra/internal/ext/stb_truetype.h"
-#include "cetra/internal/canvas_edit_hooks.h" // an edit's fill pieces, for a mesh closed
+#include "cetra/internal/canvas_edit_hooks.h" // an edit's pieces, for the probe's mesh check
 #include "cetra/internal/text_doc_edit.h"     // text_doc_ranges, the parse's errors as they stand
 #include "cetra/internal/thread.h"
-#include "cetra/internal/triangulate_hooks.h" // the triangulation by the walk, for the grid's
+#include "cetra/internal/triangulate_hooks.h" // bridges by grid or walk, for the probe's check
 #include "cetra/internal/ui_editor_hooks.h"   // where the editor drew a range, for the probe
 #include "cetra/postfx.h"
 #include "cetra/program.h"
@@ -398,7 +398,7 @@ static void poly_hole(Poly* p) {
 
 // Prints a polygon's cell, `half` units each way of its centre: its area by the shoelace formula,
 // its outline's length, its triangulation's area and count, its points and holes, and whether
-// walking the ring for every hole's bridge makes the same triangles.
+// every bridge found through the grid gives the triangles every bridge found by the walk gives.
 static void probe_polygon(const SheetContext* ctx, const char* sheet, const char* name,
                           CanvasPoint centre, int64_t half, const CanvasPolygon* polygon) {
     const CanvasPoint* pts = polygon->points;
@@ -425,26 +425,26 @@ static void probe_polygon(const SheetContext* ctx, const char* sheet, const char
         }
         area += r == 0 ? fabs(ring) / 2.0 : -fabs(ring) / 2.0;
     }
-    Triangulation t = {0}, walked = {0};
+    Triangulation t = {0}, grid = {0}, walk = {0};
     double tri_area = 0.0;
-    const bool made = triangulate_polygon(xy, n, holes, hole_count, &t);
-    const bool same = made && triangulate_polygon_walked(xy, n, holes, hole_count, &walked) &&
-                      walked.count == t.count &&
-                      memcmp(walked.indices, t.indices, t.count * 3 * sizeof(uint32_t)) == 0;
-    if (made) {
-        for (size_t k = 0; k < t.count; k++) {
-            const double* a = xy + 2 * t.indices[3 * k];
-            const double* b = xy + 2 * t.indices[3 * k + 1];
-            const double* c = xy + 2 * t.indices[3 * k + 2];
-            tri_area += fabs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) / 2.0;
-        }
+    triangulate_polygon(xy, n, holes, hole_count, &t);
+    for (size_t k = 0; k < t.count; k++) {
+        const double* a = xy + 2 * t.indices[3 * k];
+        const double* b = xy + 2 * t.indices[3 * k + 1];
+        const double* c = xy + 2 * t.indices[3 * k + 2];
+        tri_area += fabs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) / 2.0;
     }
+    const bool same = triangulate_polygon_bridged(xy, n, holes, hole_count, 0, &grid) &&
+                      triangulate_polygon_bridged(xy, n, holes, hole_count, SIZE_MAX, &walk) &&
+                      grid.count == walk.count &&
+                      memcmp(grid.indices, walk.indices, grid.count * 3 * sizeof(uint32_t)) == 0;
     probe_cell(ctx, sheet, name, centre, half);
     printf(" area %.6f perimeter %.6f triangulated %.6f triangles %zu points %zu holes %zu walked "
            "%d\n",
            area * s * s, perimeter * s, tri_area * s * s, t.count, n, hole_count, same);
     free_triangulation(&t);
-    free_triangulation(&walked);
+    free_triangulation(&grid);
+    free_triangulation(&walk);
     free(xy);
 }
 
@@ -530,8 +530,8 @@ static void sheet_polygons(SheetContext* ctx) {
  * level with a corner of the hole before it.
  *
  * Under --canvas-probe it prints the plate as the polygons sheet prints a polygon, and the
- * milliseconds its edit took, the least of three. It also triangulates nine seeded plates it does
- * not draw (plane_seeded, plane_turned).
+ * milliseconds its edit took, the least of three, and the mesh its edit cut it into. It also
+ * triangulates nine plates it does not draw (plane_seeded, plane_bridges).
  */
 enum { PLANE_HOLES = 2000 + 900, PLANE_SIDES = 24 }; // every via and ball; the sides at 5 um
 
@@ -613,43 +613,30 @@ static void plane_seeded(Plane* p, CanvasPoint centre, uint32_t seed) {
     }
 }
 
-// A plate the grid's bridges are held to the walk's on: turned regular polygons of 3 to 12 sides,
-// one a cell, thinned and wound either way at random by the seed. Seed 137 has 573 holes, and
-// is the one in 600 whose triangles change when the grid files no bridge's edges.
-static void plane_turned(Plane* p, CanvasPoint centre, uint32_t seed) {
-    uint32_t rng = seed;
-    const int cols = 8 + (int)(plane_rnd(&rng) * 40), rows = 8 + (int)(plane_rnd(&rng) * 40);
-    const double pitch = 1.0 + plane_rnd(&rng) * 2.0, keep = 0.3 + plane_rnd(&rng) * 0.7;
-    const double r = pitch * (0.15 + plane_rnd(&rng) * 0.25);
-    const double w = cols * pitch, h = rows * pitch;
-    plane_plate(p, centre, 0.5 * w + pitch, 0.5 * h + pitch);
-    for (int j = 0; j < rows; j++) {
-        for (int i = 0; i < cols; i++) {
-            if (plane_rnd(&rng) > keep)
-                continue;
-            const int sides = 3 + (int)(plane_rnd(&rng) * 10);
-            const double turn = plane_rnd(&rng) * 6.283185307179586;
-            const bool clockwise = plane_rnd(&rng) < 0.5;
-            const double x = -0.5 * w + (i + 0.5) * pitch, y = -0.5 * h + (j + 0.5) * pitch;
-            p->holes[p->hole_count++] = p->n;
-            for (int v = 0; v < sides; v++) {
-                const double a = turn + 6.283185307179586 * (clockwise ? sides - 1 - v : v) / sides;
-                plane_point(p, centre, x + r * cos(a), y + r * sin(a));
-            }
-        }
+// A plate built to hold the grid's bridges to the walk's: three triangles in a row. The first is
+// bridged left to the plate. The second, X, is bridged up and left to the first, its leftmost
+// point copied for the bridge's way back. The third lies right of X's leftmost point and just
+// below it, its ray passing under X, so X's leftmost point is its bridge, on the side of X's
+// bridge its way back holds: through the copy that starts it, which the grid files as that edge.
+// Filed without the bridge's two edges, the grid cannot see the copy and bridges elsewhere.
+static void plane_bridges(Plane* p, CanvasPoint centre) {
+    static const double corners[9][2] = {{2.531, 0.803},  {2.687, -0.443}, {1.529, 0.044},
+                                         {5.136, -0.210}, {4.478, 0.860},  {3.881, -0.245},
+                                         {7.463, 0.016},  {6.492, 0.814},  {6.287, -0.425}};
+    p->n = p->hole_count = 0;
+    plane_point(p, centre, 0.0, -2.0), plane_point(p, centre, 10.0, -2.0);
+    plane_point(p, centre, 10.0, 3.0), plane_point(p, centre, 0.0, 3.0);
+    for (int h = 0; h < 3; h++) {
+        p->holes[p->hole_count++] = p->n;
+        for (int v = 0; v < 3; v++)
+            plane_point(p, centre, corners[3 * h + v][0], corners[3 * h + v][1]);
     }
 }
 
-// An edge of the mesh a fill was cut into, its ends in order by x, then y.
+// A directed edge of the mesh a fill was cut into.
 typedef struct MeshEdge {
     CanvasPoint a, b;
 } MeshEdge;
-
-// An outline edge, its two ends, filed in a cell of 2^20 units, about a millimetre.
-typedef struct MeshCell {
-    int64_t key;
-    CanvasPoint a, b;
-} MeshCell;
 
 static int point_order(CanvasPoint p, CanvasPoint q) {
     return p.x != q.x ? (p.x < q.x ? -1 : 1) : p.y != q.y ? (p.y < q.y ? -1 : 1) : 0;
@@ -661,98 +648,59 @@ static int compare_mesh_edges(const void* l, const void* r) {
     return a ? a : point_order(e->b, f->b);
 }
 
-static int compare_mesh_cells(const void* l, const void* r) {
-    const int64_t a = ((const MeshCell*)l)->key, b = ((const MeshCell*)r)->key;
-    return (a > b) - (a < b);
+// How many of the sorted mesh's edges equal e.
+static size_t mesh_count(const MeshEdge* mesh, size_t n, MeshEdge e) {
+    const MeshEdge* hit = bsearch(&e, mesh, n, sizeof(MeshEdge), compare_mesh_edges);
+    if (!hit)
+        return 0;
+    const MeshEdge *lo = hit, *hi = hit + 1;
+    while (lo > mesh && compare_mesh_edges(lo - 1, &e) == 0)
+        lo--;
+    while (hi < mesh + n && compare_mesh_edges(hi, &e) == 0)
+        hi++;
+    return (size_t)(hi - lo);
 }
 
-static int64_t mesh_key(int64_t x, int64_t y) {
-    return (((x >> 20) + ((int64_t)1 << 30)) << 32) | ((y >> 20) + ((int64_t)1 << 30));
-}
-
-static double mesh_distance(CanvasPoint p, CanvasPoint a, CanvasPoint b) {
-    const double dx = (double)(b.x - a.x), dy = (double)(b.y - a.y);
-    const double px = (double)(p.x - a.x), py = (double)(p.y - a.y);
-    const double len = dx * dx + dy * dy;
-    const double t = len > 0.0 ? fmin(fmax((px * dx + py * dy) / len, 0.0), 1.0) : 0.0;
-    return hypot(px - t * dx, py - t * dy);
-}
-
-// The edges of the pieces a polygon's fill was cut into that no other piece meets, other than
-// those along its outline: within a unit of an outline edge, as one cut at the tile grid is, its
-// crossings rounded to the unit. An edge met by more than one other counts too. A closed mesh
-// gives 0; one drawn whole beside one cut gives the whole one's edge and the cut one's halves.
-static size_t mesh_open_edges(const CanvasEdit* edit, const CanvasPolygon* polygon) {
-    const size_t pieces = canvas_edit_fill_count(edit);
-    MeshEdge* edges = malloc(pieces * 3 * sizeof(MeshEdge));
-    size_t cells_cap = polygon->count * 4, cells_n = 0;
-    MeshCell* cells = malloc(cells_cap * sizeof(MeshCell));
-    if (!edges || !cells) {
-        free(edges);
-        free(cells);
-        return SIZE_MAX;
+// The edit's fill pieces as a mesh, each turned counter-clockwise, with its outline's edge
+// records turned to face out, standing for the outside: every directed edge of a closed mesh is
+// met by its reverse once and only once. Into *open the edges that are not; into *pieces and
+// *flat the fill pieces and those the edit dropped as flat. False when memory runs out.
+static bool mesh_open_edges(const CanvasEdit* edit, size_t* pieces, size_t* flat, size_t* open) {
+    const size_t fills = canvas_edit_fill_corners(edit, NULL, 0);
+    const size_t outline = canvas_edit_edge_ends(edit, NULL, 0);
+    CanvasPoint* corners = malloc((fills * 3 + outline * 2) * sizeof(CanvasPoint));
+    MeshEdge* mesh = malloc((fills * 3 + outline) * sizeof(MeshEdge));
+    if (!corners || !mesh) {
+        free(corners);
+        free(mesh);
+        return false;
     }
-    for (size_t i = 0; i < pieces; i++) {
-        CanvasPoint c[3];
-        canvas_edit_fill_corners(edit, i, c);
-        for (int k = 0; k < 3; k++) {
-            const CanvasPoint p = c[k], q = c[(k + 1) % 3];
-            edges[3 * i + k] = point_order(p, q) < 0 ? (MeshEdge){p, q} : (MeshEdge){q, p};
-        }
+    const CanvasPoint* ends = corners + fills * 3;
+    canvas_edit_fill_corners(edit, corners, fills);
+    canvas_edit_edge_ends(edit, corners + fills * 3, outline);
+    size_t n = 0;
+    for (size_t i = 0; i < fills; i++) {
+        const CanvasPoint* c = corners + 3 * i;
+        const bool ccw =
+            (c[1].x - c[0].x) * (c[2].y - c[0].y) > (c[1].y - c[0].y) * (c[2].x - c[0].x);
+        for (int k = 0; k < 3; k++)
+            mesh[n++] = ccw ? (MeshEdge){c[k], c[(k + 1) % 3]} : (MeshEdge){c[(k + 1) % 3], c[k]};
     }
-    qsort(edges, pieces * 3, sizeof(MeshEdge), compare_mesh_edges);
-    // Each outline edge filed in every cell its box, a unit wider, meets.
-    const CanvasPoint* pts = polygon->points;
-    for (size_t r = 0; r <= polygon->hole_count; r++) {
-        const size_t start = r ? polygon->holes[r - 1] : 0;
-        const size_t end = r < polygon->hole_count ? polygon->holes[r] : polygon->count;
-        for (size_t i = start; i < end; i++) {
-            const CanvasPoint a = pts[i], b = pts[i + 1 < end ? i + 1 : start];
-            const int64_t x0 = (a.x < b.x ? a.x : b.x) - 1, x1 = (a.x < b.x ? b.x : a.x) + 1;
-            const int64_t y0 = (a.y < b.y ? a.y : b.y) - 1, y1 = (a.y < b.y ? b.y : a.y) + 1;
-            for (int64_t cx = x0 >> 20; cx <= x1 >> 20; cx++) {
-                for (int64_t cy = y0 >> 20; cy <= y1 >> 20; cy++) {
-                    if (cells_n == cells_cap) {
-                        cells_cap *= 2;
-                        MeshCell* grown = realloc(cells, cells_cap * sizeof(MeshCell));
-                        if (!grown) {
-                            free(edges);
-                            free(cells);
-                            return SIZE_MAX;
-                        }
-                        cells = grown;
-                    }
-                    cells[cells_n++] = (MeshCell){mesh_key(cx << 20, cy << 20), a, b};
-                }
-            }
-        }
-    }
-    qsort(cells, cells_n, sizeof(MeshCell), compare_mesh_cells);
-    size_t open = 0;
-    for (size_t i = 0; i < pieces * 3;) {
-        size_t run = 1;
-        while (i + run < pieces * 3 && compare_mesh_edges(&edges[i], &edges[i + run]) == 0)
-            run++;
-        const MeshEdge e = edges[i];
-        bool along = false;
-        if (run == 1) {
-            const MeshCell probe = {
-                .key = mesh_key(e.a.x + (e.b.x - e.a.x) / 2, e.a.y + (e.b.y - e.a.y) / 2)};
-            const MeshCell* hit =
-                bsearch(&probe, cells, cells_n, sizeof(MeshCell), compare_mesh_cells);
-            while (hit && hit > cells && hit[-1].key == probe.key)
-                hit--;
-            for (; hit && hit < cells + cells_n && hit->key == probe.key && !along; hit++)
-                along = mesh_distance(e.a, hit->a, hit->b) <= 1.0 &&
-                        mesh_distance(e.b, hit->a, hit->b) <= 1.0;
-        }
-        if (run > 2 || (run == 1 && !along))
-            open += run == 1 ? 1 : run;
+    for (size_t i = 0; i < outline; i++)
+        mesh[n++] = (MeshEdge){ends[2 * i + 1], ends[2 * i]};
+    qsort(mesh, n, sizeof(MeshEdge), compare_mesh_edges);
+    *open = 0;
+    for (size_t i = 0; i < n;) {
+        const size_t run = mesh_count(mesh + i, n - i, mesh[i]);
+        if (run != 1 || mesh_count(mesh, n, (MeshEdge){mesh[i].b, mesh[i].a}) != 1)
+            *open += run;
         i += run;
     }
-    free(edges);
-    free(cells);
-    return open;
+    *pieces = fills;
+    *flat = canvas_edit_flat_fills(edit);
+    free(corners);
+    free(mesh);
+    return true;
 }
 
 static void sheet_plane(SheetContext* ctx) {
@@ -788,23 +736,20 @@ static void sheet_plane(SheetContext* ctx) {
     double edit = glfwGetTime() - start;
     if (!ctx->probe)
         return;
-    // The least of three edits, the two more thrown away: one run can land on a slower core. The
-    // last is the mesh checked, the plate alone.
-    size_t open = 0, pieces = 0;
+    // The sheet's edit holds the plate alone.
+    size_t pieces, flat, open;
+    if (mesh_open_edges(ctx->edit, &pieces, &flat, &open))
+        printf("canvas plane-mesh plate pieces %zu flat %zu open %zu\n", pieces, flat, open);
+    // The least of three edits, the two more thrown away: one run can land on a slower core.
     for (int k = 0; k < 2; k++) {
         CanvasEdit* again = create_canvas_edit(ctx->canvas);
         start = glfwGetTime();
         canvas_edit_polygon(again, &plate);
         edit = fmin(edit, glfwGetTime() - start);
-        if (k == 1) {
-            open = mesh_open_edges(again, &plate);
-            pieces = canvas_edit_fill_count(again);
-        }
         free_canvas_edit(again);
     }
     probe_polygon(ctx, "plane", "plate", c, MM(51.0), &plate);
     printf("canvas plane-time plate edit-ms %.3f\n", edit * 1e3);
-    printf("canvas plane-mesh plate pieces %zu open %zu\n", pieces, open);
     for (uint32_t seed = 1; seed <= 8; seed++) {
         char name[16];
         snprintf(name, sizeof(name), "seed-%u", seed);
@@ -812,9 +757,9 @@ static void sheet_plane(SheetContext* ctx) {
         plate.count = p->n, plate.hole_count = p->hole_count;
         probe_polygon(ctx, "plane-seeded", name, c, 0, &plate);
     }
-    plane_turned(p, c, 137);
+    plane_bridges(p, c);
     plate.count = p->n, plate.hole_count = p->hole_count;
-    probe_polygon(ctx, "plane-seeded", "turned-137", c, 0, &plate);
+    probe_polygon(ctx, "plane-seeded", "bridges", c, 0, &plate);
 }
 
 /*
