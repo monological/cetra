@@ -239,8 +239,8 @@ from a scene that renders identically across two runs of the same build. Measure
 first:
 
 ```bash
-# same build, twice -- must print "0 (0)" before the comparison means anything
-magick compare -metric AE run_a.ppm run_b.ppm null:
+# same build, twice -- must print "0 px" before the comparison means anything
+python3 scripts/gatelib/images.py run_a.ppm run_b.ppm
 ```
 
 **Measure the floor even when this file says the asset is safe.** Every verdict in the table below
@@ -249,12 +249,20 @@ was taken at one resolution, frame count and flag set, and all three move it: `a
 
 ### Reading a diff
 
-`-metric AE` counts differing pixels (the useful bar). `-metric RMSE` gives magnitude, `-metric PAE`
-the worst single-channel delta. A `PAE` of `1/255` (0.00392) is last-bit rounding: the compiler
-scheduled the same math differently, not a behaviour change. To see where two renders differ:
+`scripts/gatelib/images.py A B` prints what the gates read: the pixels that differ on any channel
+(the useful bar) and the peak, the worst single-channel delta. A peak of `1/255` (0.00392) is
+last-bit rounding: the compiler scheduled the same math differently, not a behaviour change.
+`magick compare -metric RMSE` gives magnitude.
+
+**`magick compare -metric AE` is not a pixel count.** ImageMagick 7.1.2-35 prints the summed
+absolute error in units of full scale: a glare pair differing in 243,109 pixels reads 2,997. It
+also compares frames of different sizes over their overlap rather than refusing them. It still
+reads 0 for identical frames, which is why a suite reading it as a count failed every arm that
+wants an effect to move pixels and passed every arm that wants none moved. The `instruments`
+group holds `compare()` to a pair whose answer is known. To see where two renders differ:
 
 ```bash
-magick compare -metric AE -compose src before.ppm after.ppm diff.png
+magick compare -compose src before.ppm after.ppm diff.png
 # sparse specks are usually LSB noise; dilate to make them visible:
 magick diff.png -negate -morphology Dilate disk:4 -negate -resize 1000x big.png
 ```

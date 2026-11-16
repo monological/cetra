@@ -48,6 +48,7 @@ from gatelib.groups.idle import run_idle_gate
 from gatelib.groups.ies import run_ies_gate
 from gatelib.groups.ik import run_ik_gate
 from gatelib.groups.imports import _run_import_gates
+from gatelib.groups.instruments import run_instruments_gate
 from gatelib.groups.island import run_island_gate
 from gatelib.groups.ladder import run_ladder_gate
 from gatelib.groups.layers import run_layers_gate
@@ -100,6 +101,8 @@ from gatelib.groups.wind_uv import run_wind_uv_gate
 
 
 GATE_GROUPS = [
+    ("instruments", "the suite's instruments (compare() against a pair whose answer is known):",
+     run_instruments_gate),
     ("scale", "scale invariance (lights x1000, exposure /1000):", run_scale_gates),
     ("scale-twin", "the same scene shrunk 1024 times, to the pixel (spec 13.57):",
      run_scale_twin_gate),

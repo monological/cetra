@@ -21,28 +21,52 @@ import numpy as np
 LSB = 1.0 / 255.0 + 1e-6
 
 
+def _pixels(path):
+    """A picture as an (h, w, 4) array of 16-bit codes, or None when it cannot be read.
+
+    A capture is an 8-bit P6 PPM and is read here. Anything else is decoded by magick, as RGBA
+    so a PNG's alpha is compared too; a picture with no alpha reads opaque, as a PPM does.
+    """
+    if path.endswith(".ppm"):
+        try:
+            w, h, data = _read_ppm(path)
+        except (OSError, IndexError, ValueError):
+            return None
+        if len(data) < w * h * 3:
+            return None
+        rgb = np.frombuffer(data[:w * h * 3], dtype=np.uint8).reshape(h, w, 3)
+        rgba = np.full((h, w, 4), 255, dtype=np.uint16)
+        rgba[:, :, :3] = rgb
+        return rgba * 257
+    size = subprocess.run(["magick", "identify", "-format", "%w %h", path + "[0]"],
+                          capture_output=True, text=True)
+    raw = subprocess.run(["magick", path + "[0]", "-depth", "16", "rgba:-"], capture_output=True)
+    try:
+        w, h = (int(v) for v in size.stdout.split())
+    except ValueError:
+        return None
+    if raw.returncode != 0 or len(raw.stdout) != w * h * 8:
+        return None
+    return np.frombuffer(raw.stdout, dtype=">u2").reshape(h, w, 4).astype(np.uint16)
+
+
 def compare(a, b):
     """Return (differing pixels, peak absolute error as a 0..1 fraction).
 
-    A magick that could not read one of the two answers with a message rather
-    than a number ("compare: unable to open image ..."), which used to raise out
-    of here and take the whole run down over one missing frame. Reported as a
-    full-frame difference instead: the caller is asking whether two images agree,
-    and one that does not exist does not agree.
-    """
-    def metric(name):
-        r = subprocess.run(["magick", "compare", "-metric", name, a, b, "null:"],
-                           capture_output=True, text=True)
-        return (r.stderr or r.stdout).strip()
+    A pixel differs when any channel does, by any amount. Counted here rather than read from
+    `magick compare -metric AE`, which stopped being a pixel count: ImageMagick 7.1.2-35 prints
+    the summed absolute error in units of full scale, and compares frames of different sizes
+    over their overlap instead of refusing them. magick only decodes a picture that is not a
+    PPM.
 
-    try:
-        ae = int(float(metric("AE").split()[0]))
-    except (ValueError, IndexError):
+    A frame that cannot be read, or two of different sizes, is reported as a full-frame
+    difference: the caller is asking whether two images agree, and they do not.
+    """
+    pa, pb = _pixels(a), _pixels(b)
+    if pa is None or pb is None or pa.shape != pb.shape:
         return sys.maxsize, 1.0
-    # PAE prints "257 (0.00392157)"; the parenthesised value is the normalised one.
-    pae_raw = metric("PAE")
-    pae = float(pae_raw.split("(")[1].rstrip(")")) if "(" in pae_raw else 0.0
-    return ae, pae
+    diff = np.abs(pa.astype(np.int32) - pb.astype(np.int32)).max(axis=2)
+    return int(np.count_nonzero(diff)), float(diff.max()) / 65535.0
 
 
 def _read_ppm(path):
@@ -247,3 +271,8 @@ def _pixels_past(pix_a, pix_b, w, h, box, codes):
                    abs(pix_a[o + 2] - pix_b[o + 2])) > codes:
                 n += 1
     return n
+
+
+# `python3 scripts/gatelib/images.py A B`: the pixel count and peak the gates read, for a hand A/B.
+if __name__ == "__main__":
+    print("%d px, peak %.6f" % compare(sys.argv[1], sys.argv[2]))
