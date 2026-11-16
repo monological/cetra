@@ -17,7 +17,7 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-14: 14.37, a polygon of thousands of holes, built._
+_Last updated: 2026-11-16: 14.38, scene views, started for items 3 and 4._
 
 ---
 
@@ -57,8 +57,8 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 |---|------|--------|----------------------------|------|
 | 1 | The 2D canvas | **Built**, with caps, joins and dashes; images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0, 14.22, 14.36, 14.37 |
 | 2 | Idle mode: drawing only when something changed | **Built**, for frames that draw no 3D scene | 6 | 14.1 |
-| 3 | Skipping the 3D scene pass when no 3D view is shown | Not started; includes a still 3D view drawn on demand | 8, the 3D view | |
-| 4 | Drawing the 3D scene into part of the window | Not started | 8 | |
+| 3 | Skipping the 3D scene pass when no 3D view is shown | Started on `14.38-scene-views`; includes a still 3D view drawn on demand | 8, the 3D view | 14.38 |
+| 4 | Drawing the 3D scene into part of the window | Started on `14.38-scene-views`, with item 3: any number of views, each a camera, a rectangle, its own settings and its own buffers | 8 | 14.38 |
 | 5 | Text input and scrolling panes in the UI | **Built**; composing text in an input method, glyphs past the atlas and the rest below are left for later | 6 (the command palette and the `/` jump); 9 (the chat) | 14.2, 14.3 |
 | 6 | The text editor widget | **Built**; sideways scrolling, a regular-expression find and the rest below are left for later | 6 (the code view) | 14.4 |
 | 6a | The editor's vim mode | **Built**, held to vim 9.2 itself; named registers, macros, marks and the rest below are left for later | 6 (the code view, which is vim only) | 14.5, 14.9 |
@@ -74,7 +74,8 @@ Running the gates).
 
 **Order**: 1, 2, 5, 6, 6a and 9 are built, in that order; the canvas went first because the
 schematic and the layout both stand on it, and the editor stands on 5's UTF-8, typed input,
-clipboard and input script. Next are 3 and 4 together, once pcb starts its 3D view. Item 8's bugs
+clipboard and input script. 3 and 4 are being built together in 14.38, for pcb's 3D view (its spec
+8.1); 14.39, tags in 3D, follows on 14.38's views. Item 8's bugs
 and the physical depth of field can be taken whenever they fit.
 
 pcb's build steps, for reference: 6 is the window (code editor, schematic, keys, palette, help,
