@@ -75,6 +75,7 @@ linked doc explains the subsystem. `cetra/src/ext/` is vendored and not listed.
 | Module | Purpose |
 |--------|---------|
 | `postfx.c/h` | The HDR post chain: bloom, tonemap, exposure, TAA, GTAO, SSGI, SSR, SSS, fog, motion blur, DoF, OIT composite, app passes. See `docs/architecture.md`. |
+| `postfx_programs.c/h` | The post chain's programs, noise tile, white stand-in and fullscreen quad, made once per engine and borrowed by every chain. |
 | `exposure.c/h` | The camera's exposure, the one place that decides it, and the metering modes. See `docs/shader-subsystems.md`. |
 | `glare.c/h` | Diffraction glare by FFT. See `docs/shader-subsystems.md`. |
 | `local_exposure.c/h` | Local exposure's bilateral grid and blurred luminance, in one atlas the tonemap slices. See `docs/shader-subsystems.md`. |

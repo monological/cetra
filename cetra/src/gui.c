@@ -1176,12 +1176,12 @@ static void _engine_gui_panel(Engine* engine) {
         _end_effect_group();
 
         // After everything above, the game's overlay included; this panel is drawn over it.
-        _begin_effect_group("CRT", &fx->crt_enabled);
-        igSliderFloat("CRT Lines", &fx->crt_lines, 240.0f, 1080.0f, "%.0f", 0);
-        igSliderFloat("CRT Scanlines", &fx->crt_scanlines, 0.0f, 1.0f, "%.2f", 0);
-        igSliderFloat("CRT Slot Mask", &fx->crt_mask, 0.0f, 1.0f, "%.2f", 0);
-        igSliderFloat("CRT Curvature", &fx->crt_curvature, 0.0f, 1.0f, "%.2f", 0);
-        igSliderFloat("CRT Colour Bleed", &fx->crt_bleed, 0.0f, 1.0f, "%.2f", 0);
+        _begin_effect_group("CRT", &engine->crt_enabled);
+        igSliderFloat("CRT Lines", &engine->crt_lines, 240.0f, 1080.0f, "%.0f", 0);
+        igSliderFloat("CRT Scanlines", &engine->crt_scanlines, 0.0f, 1.0f, "%.2f", 0);
+        igSliderFloat("CRT Slot Mask", &engine->crt_mask, 0.0f, 1.0f, "%.2f", 0);
+        igSliderFloat("CRT Curvature", &engine->crt_curvature, 0.0f, 1.0f, "%.2f", 0);
+        igSliderFloat("CRT Colour Bleed", &engine->crt_bleed, 0.0f, 1.0f, "%.2f", 0);
         _end_effect_group();
 
         _begin_effect_group("Color Grade", &fx->grade_enabled);

@@ -810,7 +810,8 @@ filter averages away, and wrong for noise that is seen.
 
 `crt.c` with `crt_resample_frag` and `crt_frag` (spec 13.28), after Lottes' CRTS (2018) and the
 slot mask of his earlier crt-lottes (2014), both public domain; `docs/papers/README.md` has both.
-**Off by default**; an app turns it on with `postfx->crt_enabled`, the render app with `--crt`.
+**Off by default**; an app turns it on with `engine->crt_enabled`, the render app with `--crt`.
+The CRT and its look are the engine's, since it shows the whole window.
 
 **Where it runs.** With it on, the post chain writes the finished picture into PostFX's picture
 (`PostFX.picture`, window-sized RGBA16F, shared with an app's after-tonemap passes) instead of the

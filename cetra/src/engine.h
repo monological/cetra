@@ -133,7 +133,8 @@ typedef struct Engine {
     // the frame clock and counters, idle mode's `time_waited` and `wake`, the
     // program cache, the async loader, the
     // input state, the capture state (`capturing`, `capture_kind`), and the
-    // owned subsystems (postfx, the text renderer, the profiler). What an app
+    // owned subsystems (postfx and its programs, the CRT, the text renderer, the
+    // profiler). What an app
     // may change among them has a function: engine_set_camera,
     // engine_add_scene and the scene selectors, engine_add_program.
     //
@@ -467,6 +468,17 @@ typedef struct Engine {
     // it any time.
     vec3 clear_color;
 
+    // The CRT (spec 13.28): the finished window, the app's overlays on it, shown as a
+    // living-room television shows a console's. Off by default.
+    bool crt_enabled;
+    float crt_lines;     // the signal's lines, top to bottom
+    float crt_scanlines; // 0 = lines fused, 1 = thin beams with dark gaps between
+    float crt_mask;      // the slot mask's depth, 0..1
+    float crt_curvature; // the tube's bow, 0 = flat
+    float crt_bleed;     // composite colour bleed, 0..1
+    struct Crt* crt;     // engine-owned; made on first use
+    bool crt_failed;     // engine-owned: could not be made; never retried
+
     // The overlays, plain writes: the engine re-applies each from its field at
     // the frame top, so nothing has to run when one changes.
     bool show_gui;
@@ -570,6 +582,8 @@ typedef struct Engine {
 
     // HDR post-processing (bloom + tone mapping)
     PostFX* postfx;
+    // The post chain's programs, made once and shared by every chain
+    struct PostFXPrograms* postfx_programs;
 
     // Per-pass GPU time, CPU time and submission counts (specs 11.27, 11.28).
     // NULL unless the config asked for it, and every entry point no-ops on

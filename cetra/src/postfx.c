@@ -4,8 +4,8 @@
 #include <string.h>
 
 #include "postfx.h"
+#include "postfx_programs.h"
 #include "compat.h" // strcasecmp
-#include "crt.h"
 #include "glare.h"
 #include "local_exposure.h"
 #include "lut.h"
@@ -66,10 +66,6 @@
 // per MOTION_BLUR_TILE^2 tile, which also bounds the max blur radius. Must match
 // TILE_SIZE reasoning in motion_blur_frag.glsl (MAX_PIXELS clamp).
 #define MOTION_BLUR_TILE 20
-// DoF tile size (half-res texels per tile texel): the tile pass reduces the
-// signed CoC to per-tile far/near maxima that set the gather's kernel radius.
-// Uploaded as the tileSize uniform to dof_tile and dof_gather.
-#define DOF_TILE 4
 // Aperture kernel taps; mirror of dof_gather_frag's TAPS.
 #define DOF_TAPS 64
 
@@ -86,7 +82,7 @@
 static void draw_volume_slices(PostFX* fx, GLuint volume, UniformManager* um) {
     glBindFramebuffer(GL_FRAMEBUFFER, fx->froxel_fbo);
     glViewport(0, 0, fx->froxel_built_x, fx->froxel_built_y);
-    glBindVertexArray(fx->quad_vao);
+    glBindVertexArray(fx->programs->quad_vao);
     for (int slice = 0; slice < fx->froxel_built_z; slice++) {
         glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, volume, 0, slice);
         if (slice == 0 && glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
@@ -101,15 +97,6 @@ static void draw_volume_slices(PostFX* fx, GLuint volume, UniformManager* um) {
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
     glBindVertexArray(0);
-}
-
-// The units froxel_inject_frag's samplers read, for either of its two programs.
-static void set_inject_samplers(ShaderProgram* program) {
-    glUseProgram(program->id);
-    uniform_set_int(program->uniforms, "shadowMaps", 1);
-    uniform_set_int(program->uniforms, "punctualShadowMaps", 2);
-    uniform_set_int(program->uniforms, "historyVolume", 3);
-    uniform_set_int(program->uniforms, "cloudShadowTex", 4);
 }
 
 // A ping-pong pair: two color FBOs of the same size/format (see PingPong)
@@ -238,36 +225,6 @@ static bool create_depth_fbo(int width, int height, GLuint* out_fbo, GLuint* out
     return true;
 }
 
-// Deterministic PRNG (xorshift32): the AO rotation noise must be
-// bit-identical across runs so headless screenshots stay comparable
-static float prng_float(unsigned int* state) {
-    unsigned int x = *state;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    *state = x;
-    return (float)(x & 0xFFFFFF) / (float)0x1000000; // [0, 1)
-}
-
-static GLuint create_ssao_noise_texture(unsigned int* rng) {
-    // 4x4 random rotation vectors in the XY plane, tiled across the screen
-    float noise[16 * 2];
-    for (int i = 0; i < 16; i++) {
-        noise[i * 2] = prng_float(rng) * 2.0f - 1.0f;
-        noise[i * 2 + 1] = prng_float(rng) * 2.0f - 1.0f;
-    }
-
-    GLuint texture = 0;
-    glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG16F, 4, 4, 0, GL_RG, GL_FLOAT, noise);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    return texture;
-}
-
 float postfx_clamp_render_scale(float render_scale) {
     if (render_scale < 0.5f)
         return 0.5f;
@@ -344,36 +301,11 @@ static bool create_bloom_pyramid(PostFX* fx) {
     return true;
 }
 
-// Compile the TAAU resolve and seed its sampler units, once. Absent by
-// default: it exists only for a reduced render scale, which create_postfx may
-// never see and a later resize may introduce. Kept if the scale returns to 1
-// -- the seam dispatches on the canvas, not on the program. Mirrors the
-// postfx_ensure_* family; true when the program is present or not wanted.
+// The TAAU resolve, which exists only for a reduced render scale: create_postfx may never see one
+// and a later resize may introduce it. Kept if the scale returns to 1 -- the seam dispatches on the
+// canvas, not on the program. True when the program is present or not wanted.
 static bool postfx_ensure_taau_program(PostFX* fx) {
-    if (fx->render_scale >= 1.0f || fx->taau_resolve_program)
-        return true;
-    fx->taau_resolve_program = create_taau_resolve_program();
-    if (!fx->taau_resolve_program) {
-        log_error("Failed to compile the TAAU resolve");
-        return false;
-    }
-    glUseProgram(fx->taau_resolve_program->id);
-    uniform_set_int(fx->taau_resolve_program->uniforms, "currentTex", 0);
-    uniform_set_int(fx->taau_resolve_program->uniforms, "velocityTex", 1);
-    uniform_set_int(fx->taau_resolve_program->uniforms, "historyTex", 2);
-    return true;
-}
-
-// The uniforms that depend on a size and are NOT uploaded per draw. Exactly
-// one qualifies -- GTAO's noiseScale, which maps the 4x4 rotation tile onto
-// the AO buffer -- and it is the single reason a resize needs a fixup step at
-// all, so it lives in one place both create and resize call.
-static void postfx_seed_size_uniforms(PostFX* fx) {
-    if (!fx->gtao_program)
-        return;
-    glUseProgram(fx->gtao_program->id);
-    const float noise_scale[2] = {(float)fx->half_width / 4.0f, (float)fx->half_height / 4.0f};
-    uniform_set_vec2(fx->gtao_program->uniforms, "noiseScale", noise_scale);
+    return fx->render_scale >= 1.0f || postfx_programs_ensure_taau(fx->programs);
 }
 
 // Every resolution-dependent target, allocated from the sizes already on fx.
@@ -591,7 +523,12 @@ static void postfx_invalidate_targets(PostFX* fx) {
     fx->spec_ready = false;
 }
 
-PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
+PostFX* create_postfx(PostFXPrograms* programs, int width, int height, int ss_scale,
+                      float render_scale) {
+    if (!programs) {
+        log_error("create_postfx: no programs");
+        return NULL;
+    }
     if (width <= 0 || height <= 0) {
         log_error("create_postfx: invalid size %dx%d", width, height);
         return NULL;
@@ -611,6 +548,7 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
         log_error("Failed to allocate memory for PostFX");
         return NULL;
     }
+    fx->programs = programs;
 
     // The scene and the pre-TAA chain render at the render resolution (post
     // size x render_scale); the TAA seam brings the frame to post size, and
@@ -711,14 +649,6 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     // On by default: banding is a defect of the 8-bit write, not a look.
     fx->dither_enabled = true;
     fx->dither_strength = 1.0f;
-    // A look, so off. Its settings are a console's 480 lines on a living-room set, there to be
-    // seen and not to fight the picture.
-    fx->crt_enabled = false;
-    fx->crt_lines = 480.0f;
-    fx->crt_scanlines = 0.4f;
-    fx->crt_mask = 0.3f;
-    fx->crt_curvature = 0.35f;
-    fx->crt_bleed = 0.5f;
     // No LUT until an app loads one. `lut_texture` 0 is what gates the branch,
     // so there is no separate enable to keep in step with it.
     fx->lut_texture = 0;
@@ -845,262 +775,14 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
-    unsigned int rng = 0x9E3779B9u;
-    fx->noise_texture = create_ssao_noise_texture(&rng);
-
-    fx->bloom_bright_program = create_bloom_bright_program();
-    fx->bloom_down_program = create_bloom_down_program();
-    fx->bloom_up_program = create_bloom_up_program();
-    fx->flare_program = create_lens_flare_program();
-    fx->tonemap_program = create_tonemap_program();
-    fx->spec_occ_composite_program = create_spec_occ_composite_program();
-    fx->gtao_program = create_gtao_program();
-    fx->ssao_blur_program = create_ssao_blur_program();
-    fx->temporal_accum_program = create_temporal_accum_program();
-    fx->ssgi_composite_program = create_ssgi_composite_program();
-    fx->ssgi_accum_program = create_ssgi_accum_program();
-    fx->ssgi_atrous_program = create_ssgi_atrous_program();
-    fx->ssr_atrous_program = create_ssr_atrous_program();
-    fx->ssr_accum_program = create_ssr_accum_program();
-    fx->lum_measure_program = create_lum_measure_program();
-    fx->lum_histogram_program = create_lum_histogram_program();
-    fx->lum_reduce_program = create_lum_reduce_program();
-    fx->ssr_program = create_ssr_program();
-    fx->ssr_hiz_program = create_ssr_hiz_program();
-    fx->upsample_tent_program = create_upsample_tent_program();
-    // Optional: without it wet ground folds by the plain tent's lerp, as the catcher does.
-    fx->ssr_fold_wet_program = create_ssr_fold_wet_program();
-    fx->froxel_inject_program = create_froxel_inject_program();
-    fx->froxel_integrate_program = create_froxel_integrate_program();
-    fx->froxel_composite_program = create_froxel_composite_program();
-    fx->fog_esm_program = create_fog_esm_program();
-    fx->taa_resolve_program = create_taa_resolve_program();
     // The TAAU resolve is compiled on demand -- here when the launch scale is
     // already reduced, otherwise at the resize that first reduces it.
     if (!postfx_ensure_taau_program(fx)) {
         free_postfx(fx);
         return NULL;
     }
-    fx->dof_coc_program = create_dof_coc_program();
-    fx->dof_tile_program = create_dof_tile_program();
-    fx->dof_dilate_program = create_dof_dilate_program();
-    fx->dof_gather_program = create_dof_gather_program();
-    fx->dof_composite_program = create_dof_composite_program();
-    fx->motion_blur_program = create_motion_blur_program();
-    fx->motion_blur_tilemax_program = create_motion_blur_tilemax_program();
-    fx->motion_blur_neighbormax_program = create_motion_blur_neighbormax_program();
-    fx->sss_gather_program = create_sss_gather_program();
-    fx->sss_pyr_seed_program = create_sss_pyr_seed_program();
-    fx->sss_pyr_down_program = create_sss_pyr_down_program();
-    fx->contact_shadow_program = create_contact_shadow_program();
-    fx->oit_resolve_program = create_oit_resolve_program();
-    fx->present_program = create_present_program();
-    if (!fx->sss_pyr_seed_program || !fx->sss_pyr_down_program || !fx->contact_shadow_program ||
-        !fx->oit_resolve_program || !fx->present_program || !fx->sss_gather_program ||
-        !fx->motion_blur_program || !fx->motion_blur_tilemax_program ||
-        !fx->motion_blur_neighbormax_program || !fx->bloom_bright_program ||
-        !fx->bloom_down_program || !fx->bloom_up_program || !fx->tonemap_program ||
-        !fx->gtao_program || !fx->ssao_blur_program || !fx->temporal_accum_program ||
-        !fx->ssgi_composite_program || !fx->ssgi_accum_program || !fx->ssgi_atrous_program ||
-        !fx->ssr_atrous_program || !fx->ssr_accum_program || !fx->lum_measure_program ||
-        !fx->lum_histogram_program || !fx->lum_reduce_program || !fx->ssr_program ||
-        !fx->upsample_tent_program || !fx->taa_resolve_program || !fx->dof_coc_program ||
-        !fx->froxel_inject_program || !fx->froxel_integrate_program ||
-        !fx->froxel_composite_program || !fx->dof_tile_program || !fx->dof_dilate_program ||
-        !fx->dof_gather_program || !fx->dof_composite_program) {
-        free_postfx(fx);
-        return NULL;
-    }
-
-    // Sampler bindings never change; set them once on the program objects
-    glUseProgram(fx->bloom_bright_program->id);
-    uniform_set_int(fx->bloom_bright_program->uniforms, "hdrTex", 0);
-    glUseProgram(fx->bloom_down_program->id);
-    uniform_set_int(fx->bloom_down_program->uniforms, "srcTex", 0);
-    glUseProgram(fx->bloom_up_program->id);
-    uniform_set_int(fx->bloom_up_program->uniforms, "srcTex", 0);
-    glUseProgram(fx->tonemap_program->id);
-    uniform_set_int(fx->tonemap_program->uniforms, "hdrTex", 0);
-    uniform_set_int(fx->tonemap_program->uniforms, "bloomTex", 1);
-    uniform_set_int(fx->tonemap_program->uniforms, "aoTex", 2);
-    uniform_set_int(fx->tonemap_program->uniforms, "normalsTex", 3);
-    uniform_set_int(fx->tonemap_program->uniforms, "ssrTex", 4);
-    uniform_set_int(fx->tonemap_program->uniforms, "albedoTex", 5);
-    uniform_set_int(fx->tonemap_program->uniforms, "giTex", 6);
-    // Unit 7 held the adapted-luminance texture the tonemap divided by. Exposure
-    // is applied whole at the scene passes now -- but the Purkinje shift wants a
-    // frame luminance again, so the metering 1x1 goes back on that same unit
-    // (spec 11.83). A sampler2D, which is what the note below was insuring
-    // against; the LUT staying on 11 is what makes that harmless.
-    uniform_set_int(fx->tonemap_program->uniforms, "purkinjeAdaptTex", 7);
-    uniform_set_int(fx->tonemap_program->uniforms, "auxTex", 9); // linZ + roughness for spec-occ
-    uniform_set_int(fx->tonemap_program->uniforms, "csTex", 10); // contact-shadow visibility
-    // 11, not the free 7, and the reason is NOT that 7 would be an error today:
-    // no sampler in this program names it, so a sampler3D there would link and
-    // draw perfectly well. Unit 7 carries a BINDING (the retired adapted-
-    // luminance slot, bound to 2D 0 each frame) and the INVALID_OPERATION rule
-    // is about two sampler DECLARATIONS of different types sharing a unit.
-    // Appending is what keeps that unrepresentable if a 2D sampler is ever
-    // restored to 7 -- it is insurance, not a fix.
-    uniform_set_int(fx->tonemap_program->uniforms, "lutTex", 11);
-    // Debug view 7 only: the split term is applied in the composite pass, so
-    // this exists so that view can show what was applied rather than recompute
-    // a second opinion about it.
-    uniform_set_int(fx->tonemap_program->uniforms, "specOccTex", 12);
-
-    glUseProgram(fx->lum_measure_program->id);
-    uniform_set_int(fx->lum_measure_program->uniforms, "hdrTex", 0);
-    glUseProgram(fx->lum_histogram_program->id);
-    uniform_set_int(fx->lum_histogram_program->uniforms, "lumTex", 0);
-    glUseProgram(fx->lum_reduce_program->id);
-    uniform_set_int(fx->lum_reduce_program->uniforms, "histTex", 0);
-
-    glUseProgram(fx->ssr_program->id);
-    uniform_set_int(fx->ssr_program->uniforms, "depthTex", 0);
-    uniform_set_int(fx->ssr_program->uniforms, "normalsTex", 1);
-    uniform_set_int(fx->ssr_program->uniforms, "hdrTex", 2);
-    uniform_set_int(fx->ssr_program->uniforms, "probeTex", 3);
-    uniform_set_int(fx->ssr_program->uniforms, "hizTex", 4);
-    // The probe atlas (spec 11.70), on its own unit rather than aliasing
-    // probeTex: those are two sampler TYPES, and pointing both at one image unit
-    // is an INVALID_OPERATION at draw. This pass has the units to spare -- it is
-    // pbr_frag that does not.
-    uniform_set_int(fx->ssr_program->uniforms, "probeAtlasTex", 5);
-    // Wet ground's per-pixel roughness (spec 13.9).
-    uniform_set_int(fx->ssr_program->uniforms, "auxTex", 6);
-    glUseProgram(fx->ssr_hiz_program->id);
-    uniform_set_int(fx->ssr_hiz_program->uniforms, "srcTex", 0);
-    set_inject_samplers(fx->froxel_inject_program);
-
-    // The stand-in for an absent optional sampler; see white_tex in postfx.h for why an
-    // incomplete texture is worse than a real one.
-    const float white_texel = 1.0f;
-    glGenTextures(1, &fx->white_tex);
-    glBindTexture(GL_TEXTURE_2D, fx->white_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, 1, 1, 0, GL_RED, GL_FLOAT, &white_texel);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glBindTexture(GL_TEXTURE_2D, 0);
-    glUseProgram(fx->froxel_integrate_program->id);
-    uniform_set_int(fx->froxel_integrate_program->uniforms, "scatterVolume", 0);
-    glUseProgram(fx->froxel_composite_program->id);
-    uniform_set_int(fx->froxel_composite_program->uniforms, "linDepthTex", 0);
-    uniform_set_int(fx->froxel_composite_program->uniforms, "integratedVolume", 1);
-    uniform_set_int(fx->froxel_composite_program->uniforms, "layerTex", 2);
-    uniform_set_int(fx->froxel_composite_program->uniforms, "aerialVolume", 3);
-    uniform_set_int(fx->froxel_composite_program->uniforms, "momentTex", 4);
-
-    glUseProgram(fx->dof_coc_program->id);
-    uniform_set_int(fx->dof_coc_program->uniforms, "sceneTex", 0);
-    uniform_set_int(fx->dof_coc_program->uniforms, "depthTex", 1);
-    glUseProgram(fx->dof_tile_program->id);
-    uniform_set_int(fx->dof_tile_program->uniforms, "cocColorTex", 0);
-    uniform_set_int(fx->dof_tile_program->uniforms, "tileSize", DOF_TILE);
-    glUseProgram(fx->dof_dilate_program->id);
-    uniform_set_int(fx->dof_dilate_program->uniforms, "tileTex", 0);
-    glUseProgram(fx->dof_gather_program->id);
-    uniform_set_int(fx->dof_gather_program->uniforms, "cocColorTex", 0);
-    uniform_set_int(fx->dof_gather_program->uniforms, "tileTex", 1);
-    uniform_set_int(fx->dof_gather_program->uniforms, "tileSize", DOF_TILE);
-    glUseProgram(fx->dof_composite_program->id);
-    uniform_set_int(fx->dof_composite_program->uniforms, "sceneTex", 0);
-    uniform_set_int(fx->dof_composite_program->uniforms, "nearTex", 1);
-    uniform_set_int(fx->dof_composite_program->uniforms, "farTex", 2);
-    uniform_set_int(fx->dof_composite_program->uniforms, "depthTex", 3);
-
-    glUseProgram(fx->motion_blur_tilemax_program->id);
-    uniform_set_int(fx->motion_blur_tilemax_program->uniforms, "auxTex", 0);
-    glUseProgram(fx->motion_blur_neighbormax_program->id);
-    uniform_set_int(fx->motion_blur_neighbormax_program->uniforms, "tileTex", 0);
-    glUseProgram(fx->motion_blur_program->id);
-    uniform_set_int(fx->motion_blur_program->uniforms, "sceneTex", 0);
-    uniform_set_int(fx->motion_blur_program->uniforms, "neighborMaxTex", 1);
-    uniform_set_int(fx->motion_blur_program->uniforms, "velocityTex", 2);
-
-    glUseProgram(fx->sss_gather_program->id);
-    uniform_set_int(fx->sss_gather_program->uniforms, "pyrColor", 0);
-    uniform_set_int(fx->sss_gather_program->uniforms, "origTex", 1);
-    uniform_set_int(fx->sss_gather_program->uniforms, "auxTex", 2);
-    uniform_set_int(fx->sss_gather_program->uniforms, "depthTex", 3);
-    glUseProgram(fx->sss_pyr_seed_program->id);
-    uniform_set_int(fx->sss_pyr_seed_program->uniforms, "srcTex", 0);
-    uniform_set_int(fx->sss_pyr_seed_program->uniforms, "auxTex", 1);
-    uniform_set_int(fx->sss_pyr_seed_program->uniforms, "depthTex", 2);
-    glUseProgram(fx->sss_pyr_down_program->id);
-    uniform_set_int(fx->sss_pyr_down_program->uniforms, "srcColor", 0);
-    uniform_set_int(fx->sss_pyr_down_program->uniforms, "srcDepth", 1);
-    glUseProgram(fx->oit_resolve_program->id);
-    uniform_set_int(fx->oit_resolve_program->uniforms, "accumTex", 0);
-    uniform_set_int(fx->oit_resolve_program->uniforms, "revealageTex", 1);
-
-    glUseProgram(fx->gtao_program->id);
-    uniform_set_int(fx->gtao_program->uniforms, "linDepthTex", 0);
-    uniform_set_int(fx->gtao_program->uniforms, "noiseTex", 1);
-    uniform_set_int(fx->gtao_program->uniforms, "normalsTex", 2);
-    uniform_set_int(fx->gtao_program->uniforms, "hdrTex", 3);  // SSGI radiance source
-    uniform_set_int(fx->gtao_program->uniforms, "specTex", 4); // split spec share of that radiance
-    // noiseScale is size-dependent and seeded by postfx_seed_size_uniforms
-    // below, which the resize path calls too.
-
-    // No texelSize for either of the next two: every consumer of ssao_blur and
-    // of the shared tent uploads it per draw from its own resolution, so a
-    // seed here would be dead, and a dead seed reads as a sanctioned fallback
-    // that a future third consumer could rely on by forgetting to upload.
-    glUseProgram(fx->ssao_blur_program->id);
-    uniform_set_int(fx->ssao_blur_program->uniforms, "aoTex", 0);
-    uniform_set_int(fx->ssao_blur_program->uniforms, "auxTex", 1); // linZ for the bilateral weight
-
-    glUseProgram(fx->contact_shadow_program->id);
-    uniform_set_int(fx->contact_shadow_program->uniforms, "linDepthTex", 0);
-    uniform_set_int(fx->contact_shadow_program->uniforms, "normalsTex", 1);
-
-    glUseProgram(fx->upsample_tent_program->id);
-    uniform_set_int(fx->upsample_tent_program->uniforms, "srcTex", 0);
-
-    glUseProgram(fx->present_program->id);
-    uniform_set_int(fx->present_program->uniforms, "pictureTex", 0);
-
-    if (fx->spec_occ_composite_program) {
-        glUseProgram(fx->spec_occ_composite_program->id);
-        uniform_set_int(fx->spec_occ_composite_program->uniforms, "specTex", 0);
-        uniform_set_int(fx->spec_occ_composite_program->uniforms, "aoTex", 1);
-        uniform_set_int(fx->spec_occ_composite_program->uniforms, "normalsTex", 2);
-        uniform_set_int(fx->spec_occ_composite_program->uniforms, "auxTex", 3);
-        uniform_set_int(fx->spec_occ_composite_program->uniforms, "specOccTex", 4);
-        uniform_set_int(fx->spec_occ_composite_program->uniforms, "ssrPrevTex", 5);
-    }
-    if (fx->ssr_fold_wet_program) {
-        glUseProgram(fx->ssr_fold_wet_program->id);
-        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "srcTex", 0);
-        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "normalsTex", 1);
-    }
-
-    // temporal_accum, ssr_accum, and ssgi_accum are seeded entirely by
-    // run_temporal_accum, which owns their unit layout and texelSize together.
-
-    glUseProgram(fx->ssgi_composite_program->id);
-    uniform_set_int(fx->ssgi_composite_program->uniforms, "giTex", 0);
-    uniform_set_int(fx->ssgi_composite_program->uniforms, "albedoTex", 1);
-
-    // Both a-trous programs get texelSize per call from run_atrous (the SSR one
-    // tracks the full-res toggle; the SSGI one always resolves to the AO texel).
-    glUseProgram(fx->ssgi_atrous_program->id);
-    uniform_set_int(fx->ssgi_atrous_program->uniforms, "giTex", 0);
-    uniform_set_int(fx->ssgi_atrous_program->uniforms, "linDepthTex", 1);
-    uniform_set_int(fx->ssgi_atrous_program->uniforms, "normalsTex", 2);
-
-    glUseProgram(fx->ssr_atrous_program->id);
-    uniform_set_int(fx->ssr_atrous_program->uniforms, "reflTex", 0);
-    uniform_set_int(fx->ssr_atrous_program->uniforms, "linDepthTex", 1);
-    uniform_set_int(fx->ssr_atrous_program->uniforms, "normalsTex", 2);
-
-    // The TAAU resolve's own units are seeded by postfx_ensure_taau_program,
-    // wherever it first compiles; run_taau_resolve uploads the sizes and the
-    // jitter, which are the only things that vary.
-    postfx_seed_size_uniforms(fx);
     glUseProgram(0);
-
-    create_fullscreen_quad_vao(&fx->quad_vao, &fx->quad_vbo);
 
     check_gl_error("create_postfx");
     return fx;
@@ -1373,37 +1055,37 @@ static void postfx_run_motion_blur(PostFX* fx, GLuint canvas_fbo, GLuint canvas_
     const float aux_texel[2] = {1.0f / (float)fx->post_width, 1.0f / (float)fx->post_height};
     glBindFramebuffer(GL_FRAMEBUFFER, fx->motion_blur_tile_fbo);
     glViewport(0, 0, fx->motion_blur_tile_w, fx->motion_blur_tile_h);
-    glUseProgram(fx->motion_blur_tilemax_program->id);
+    glUseProgram(fx->programs->motion_blur_tilemax->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
-    uniform_set_vec2(fx->motion_blur_tilemax_program->uniforms, "auxTexel", aux_texel);
-    uniform_set_int(fx->motion_blur_tilemax_program->uniforms, "tileSize", MOTION_BLUR_TILE);
-    draw_fullscreen_quad(fx->quad_vao);
+    uniform_set_vec2(fx->programs->motion_blur_tilemax->uniforms, "auxTexel", aux_texel);
+    uniform_set_int(fx->programs->motion_blur_tilemax->uniforms, "tileSize", MOTION_BLUR_TILE);
+    draw_fullscreen_quad(fx->programs->quad_vao);
 
     // Pass 2: neighbor-max -- max over each tile's 3x3 neighborhood.
     const float tile_texel[2] = {1.0f / (float)fx->motion_blur_tile_w,
                                  1.0f / (float)fx->motion_blur_tile_h};
     glBindFramebuffer(GL_FRAMEBUFFER, fx->motion_blur_neighbor_fbo);
-    glUseProgram(fx->motion_blur_neighbormax_program->id);
+    glUseProgram(fx->programs->motion_blur_neighbormax->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->motion_blur_tile_texture);
-    uniform_set_vec2(fx->motion_blur_neighbormax_program->uniforms, "tileTexel", tile_texel);
-    draw_fullscreen_quad(fx->quad_vao);
+    uniform_set_vec2(fx->programs->motion_blur_neighbormax->uniforms, "tileTexel", tile_texel);
+    draw_fullscreen_quad(fx->programs->quad_vao);
 
     // Pass 3: reconstruction -- gather the scene along the dominant velocity.
     glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_scratch.fbo);
     glViewport(0, 0, fx->post_width, fx->post_height);
-    glUseProgram(fx->motion_blur_program->id);
+    glUseProgram(fx->programs->motion_blur->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, canvas_tex);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, fx->motion_blur_neighbor_texture);
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
-    uniform_set_vec2(fx->motion_blur_program->uniforms, "texelSize", aux_texel);
-    uniform_set_float(fx->motion_blur_program->uniforms, "scale", fx->motion_blur_scale);
-    uniform_set_float(fx->motion_blur_program->uniforms, "maxBlurPx", (float)MOTION_BLUR_TILE);
-    draw_fullscreen_quad(fx->quad_vao);
+    uniform_set_vec2(fx->programs->motion_blur->uniforms, "texelSize", aux_texel);
+    uniform_set_float(fx->programs->motion_blur->uniforms, "scale", fx->motion_blur_scale);
+    uniform_set_float(fx->programs->motion_blur->uniforms, "maxBlurPx", (float)MOTION_BLUR_TILE);
+    draw_fullscreen_quad(fx->programs->quad_vao);
 
     // So the rest of the chain reads the blurred result.
     _postfx_copy_back(&fx->hdr_scratch, canvas_fbo);
@@ -1447,7 +1129,7 @@ static void postfx_run_spec_occ_composite(PostFX* fx, const SplitOcclusion* spli
             : 0;
     glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
     glViewport(0, 0, fx->width, fx->height);
-    ShaderProgram* prog = fx->spec_occ_composite_program;
+    ShaderProgram* prog = fx->programs->spec_occ_composite;
     glUseProgram(prog->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->spec_texture);
@@ -1474,7 +1156,7 @@ static void postfx_run_spec_occ_composite(PostFX* fx, const SplitOcclusion* spli
                       _history_scale(fx, fx->ssr_prev.pre_exposure));
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_SRC_ALPHA);
-    draw_fullscreen_quad(fx->quad_vao);
+    draw_fullscreen_quad(fx->programs->quad_vao);
     glDisable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     check_gl_error("postfx spec-occ composite");
@@ -1606,7 +1288,7 @@ static void postfx_build_sss_pyramid(PostFX* fx, int profile_tag, float proj_sca
                            fx->sss_pyr_depth_texture, 0);
     glDrawBuffers(2, bufs);
     glViewport(0, 0, fx->width, fx->height);
-    glUseProgram(fx->sss_pyr_seed_program->id);
+    glUseProgram(fx->programs->sss_pyr_seed->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->sss_diffuse_texture);
     glActiveTexture(GL_TEXTURE1);
@@ -1617,12 +1299,12 @@ static void postfx_build_sss_pyramid(PostFX* fx, int profile_tag, float proj_sca
     // from a surface partway to the sky.
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
-    uniform_set_int(fx->sss_pyr_seed_program->uniforms, "profileTag", profile_tag);
-    uniform_set_mat4(fx->sss_pyr_seed_program->uniforms, "projection", (const float*)projection);
-    draw_fullscreen_quad(fx->quad_vao);
+    uniform_set_int(fx->programs->sss_pyr_seed->uniforms, "profileTag", profile_tag);
+    uniform_set_mat4(fx->programs->sss_pyr_seed->uniforms, "projection", (const float*)projection);
+    draw_fullscreen_quad(fx->programs->quad_vao);
 
-    glUseProgram(fx->sss_pyr_down_program->id);
-    uniform_set_mat4(fx->sss_pyr_down_program->uniforms, "projection", (const float*)projection);
+    glUseProgram(fx->programs->sss_pyr_down->id);
+    uniform_set_mat4(fx->programs->sss_pyr_down->uniforms, "projection", (const float*)projection);
     float sigma_z = fx->sss_profiles[profile_tag - 1][3];
     for (int mip = 1; mip < fx->sss_pyr_mips; mip++) {
         int lw, lh, sw, sh;
@@ -1647,15 +1329,15 @@ static void postfx_build_sss_pyramid(PostFX* fx, int profile_tag, float proj_sca
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, mip - 1);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mip - 1);
 
-        uniform_set_vec2(fx->sss_pyr_down_program->uniforms, "texelSize",
+        uniform_set_vec2(fx->programs->sss_pyr_down->uniforms, "texelSize",
                          (const float[]){1.0f / (float)sw, 1.0f / (float)sh});
         // World units one SOURCE texel spans per unit of clip w. A source texel
         // is 2^(mip-1) render texels, and a render texel subtends 1/proj_scale
         // at clip w = 1.
-        uniform_set_float(fx->sss_pyr_down_program->uniforms, "srcFootprint",
+        uniform_set_float(fx->programs->sss_pyr_down->uniforms, "srcFootprint",
                           proj_scale > 0.0f ? (float)(1 << (mip - 1)) / proj_scale : 0.0f);
-        uniform_set_float(fx->sss_pyr_down_program->uniforms, "sigmaZFloor", sigma_z);
-        draw_fullscreen_quad(fx->quad_vao);
+        uniform_set_float(fx->programs->sss_pyr_down->uniforms, "sigmaZFloor", sigma_z);
+        draw_fullscreen_quad(fx->programs->quad_vao);
     }
 
     glActiveTexture(GL_TEXTURE0);
@@ -1727,7 +1409,6 @@ bool postfx_resize(PostFX* fx, int width, int height, int ss_scale, float render
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         return false;
     }
-    postfx_seed_size_uniforms(fx);
     glUseProgram(0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     check_gl_error("postfx_resize");
@@ -1790,7 +1471,7 @@ static void _sss_fold_into_canvas(PostFX* fx, GLuint canvas_fbo) {
     glViewport(0, 0, fx->post_width, fx->post_height);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE);
-    draw_fullscreen_quad(fx->quad_vao);
+    draw_fullscreen_quad(fx->programs->quad_vao);
     glDisable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     check_gl_error("postfx sss");
@@ -1826,7 +1507,7 @@ static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool 
             glEnable(GL_BLEND);
             glBlendFunc(GL_ONE, GL_ONE);
         }
-        glUseProgram(fx->sss_gather_program->id);
+        glUseProgram(fx->programs->sss_gather->id);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, fx->sss_pyr_color_texture);
         glActiveTexture(GL_TEXTURE1);
@@ -1835,14 +1516,15 @@ static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool 
         glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
-        uniform_set_vec4(fx->sss_gather_program->uniforms, "sssProfile", fx->sss_profiles[p]);
-        uniform_set_int(fx->sss_gather_program->uniforms, "profileTag", p + 1);
-        uniform_set_mat4(fx->sss_gather_program->uniforms, "projection", (const float*)projection);
-        uniform_set_float(fx->sss_gather_program->uniforms, "projScale", proj_scale);
-        uniform_set_float(fx->sss_gather_program->uniforms, "maxLod", sss_lod_cap(fx));
-        uniform_set_vec2(fx->sss_gather_program->uniforms, "renderTexel",
+        uniform_set_vec4(fx->programs->sss_gather->uniforms, "sssProfile", fx->sss_profiles[p]);
+        uniform_set_int(fx->programs->sss_gather->uniforms, "profileTag", p + 1);
+        uniform_set_mat4(fx->programs->sss_gather->uniforms, "projection",
+                         (const float*)projection);
+        uniform_set_float(fx->programs->sss_gather->uniforms, "projScale", proj_scale);
+        uniform_set_float(fx->programs->sss_gather->uniforms, "maxLod", sss_lod_cap(fx));
+        uniform_set_vec2(fx->programs->sss_gather->uniforms, "renderTexel",
                          (const float[]){1.0f / (float)fx->width, 1.0f / (float)fx->height});
-        draw_fullscreen_quad(fx->quad_vao);
+        draw_fullscreen_quad(fx->programs->quad_vao);
         if (p > 0) {
             glDisable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1854,16 +1536,17 @@ static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool 
     GLuint delta = fx->sss_delta_texture;
     if (taa_resolving) {
         delta =
-            run_temporal_accum(fx, fx->temporal_accum_program, &fx->sss_history, fx->width,
+            run_temporal_accum(fx, fx->programs->temporal_accum, &fx->sss_history, fx->width,
                                fx->height, fx->sss_delta_texture, TEMPORAL_FEEDBACK_DEFAULT, true);
     } else {
         fx->sss_history.valid = false;
     }
 
-    glUseProgram(fx->upsample_tent_program->id);
+    glUseProgram(fx->programs->upsample_tent->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, delta);
-    uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize", (const float[]){0.0f, 0.0f});
+    uniform_set_vec2(fx->programs->upsample_tent->uniforms, "texelSize",
+                     (const float[]){0.0f, 0.0f});
     _sss_fold_into_canvas(fx, canvas_fbo);
 }
 
@@ -1910,10 +1593,10 @@ static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool 
 static void postfx_measure_luminance(PostFX* fx, GLuint scene_tex) {
     glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_fbo);
     glViewport(0, 0, LUM_MEASURE_SIZE, LUM_MEASURE_SIZE);
-    glUseProgram(fx->lum_measure_program->id);
+    glUseProgram(fx->programs->lum_measure->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, scene_tex);
-    draw_fullscreen_quad(fx->quad_vao);
+    draw_fullscreen_quad(fx->programs->quad_vao);
 
     // Bin, then collapse.
     //
@@ -1928,28 +1611,28 @@ static void postfx_measure_luminance(PostFX* fx, GLuint scene_tex) {
     // statistic.
     glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_hist_fbo);
     glViewport(0, 0, LUM_HISTOGRAM_BINS, LUM_HISTOGRAM_ROWS);
-    glUseProgram(fx->lum_histogram_program->id);
+    glUseProgram(fx->programs->lum_histogram->id);
     glBindTexture(GL_TEXTURE_2D, fx->lum_texture);
-    uniform_set_int(fx->lum_histogram_program->uniforms, "srcSize", LUM_MEASURE_SIZE);
-    uniform_set_int(fx->lum_histogram_program->uniforms, "binCount", LUM_HISTOGRAM_BINS);
-    uniform_set_int(fx->lum_histogram_program->uniforms, "rowCount", LUM_HISTOGRAM_ROWS);
-    uniform_set_vec2(fx->lum_histogram_program->uniforms, "binRange",
+    uniform_set_int(fx->programs->lum_histogram->uniforms, "srcSize", LUM_MEASURE_SIZE);
+    uniform_set_int(fx->programs->lum_histogram->uniforms, "binCount", LUM_HISTOGRAM_BINS);
+    uniform_set_int(fx->programs->lum_histogram->uniforms, "rowCount", LUM_HISTOGRAM_ROWS);
+    uniform_set_vec2(fx->programs->lum_histogram->uniforms, "binRange",
                      (vec2){LUM_HISTOGRAM_MIN_LOG2, LUM_HISTOGRAM_MAX_LOG2});
-    uniform_set_int(fx->lum_histogram_program->uniforms, "meterMode",
+    uniform_set_int(fx->programs->lum_histogram->uniforms, "meterMode",
                     (int)fx->exposure->meter_mode);
-    uniform_set_float(fx->lum_histogram_program->uniforms, "meterRadius",
+    uniform_set_float(fx->programs->lum_histogram->uniforms, "meterRadius",
                       fx->exposure->meter_radius);
-    draw_fullscreen_quad(fx->quad_vao);
+    draw_fullscreen_quad(fx->programs->quad_vao);
 
     glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_reduce_fbo);
     glViewport(0, 0, 1, 1);
-    glUseProgram(fx->lum_reduce_program->id);
+    glUseProgram(fx->programs->lum_reduce->id);
     glBindTexture(GL_TEXTURE_2D, fx->lum_hist_texture);
-    uniform_set_int(fx->lum_reduce_program->uniforms, "binCount", LUM_HISTOGRAM_BINS);
-    uniform_set_int(fx->lum_reduce_program->uniforms, "rowCount", LUM_HISTOGRAM_ROWS);
-    uniform_set_vec2(fx->lum_reduce_program->uniforms, "percentiles",
+    uniform_set_int(fx->programs->lum_reduce->uniforms, "binCount", LUM_HISTOGRAM_BINS);
+    uniform_set_int(fx->programs->lum_reduce->uniforms, "rowCount", LUM_HISTOGRAM_ROWS);
+    uniform_set_vec2(fx->programs->lum_reduce->uniforms, "percentiles",
                      (vec2){fx->exposure->meter_low, fx->exposure->meter_high});
-    draw_fullscreen_quad(fx->quad_vao);
+    draw_fullscreen_quad(fx->programs->quad_vao);
     check_gl_error("postfx luminance measure");
 }
 
@@ -2002,18 +1685,18 @@ static void postfx_run_bloom(PostFX* fx, GLuint scene_tex) {
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fx->bloom_texture,
                            0);
     glViewport(0, 0, fx->bloom_width, fx->bloom_height);
-    glUseProgram(fx->bloom_bright_program->id);
+    glUseProgram(fx->programs->bloom_bright->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, scene_tex);
-    uniform_set_float(fx->bloom_bright_program->uniforms, "threshold", fx->bloom_threshold);
-    uniform_set_float(fx->bloom_bright_program->uniforms, "knee", fx->bloom_knee);
-    uniform_set_float(fx->bloom_bright_program->uniforms, "maxBrightness",
+    uniform_set_float(fx->programs->bloom_bright->uniforms, "threshold", fx->bloom_threshold);
+    uniform_set_float(fx->programs->bloom_bright->uniforms, "knee", fx->bloom_knee);
+    uniform_set_float(fx->programs->bloom_bright->uniforms, "maxBrightness",
                       fx->bloom_max_brightness);
-    draw_fullscreen_quad(fx->quad_vao);
+    draw_fullscreen_quad(fx->programs->quad_vao);
 
     // Downsample the chain: each level reads a 13-tap filter of the level
     // above it, with BASE/MAX_LEVEL pinning the sampled set to the source
-    glUseProgram(fx->bloom_down_program->id);
+    glUseProgram(fx->programs->bloom_down->id);
     glBindTexture(GL_TEXTURE_2D, fx->bloom_texture);
     for (int mip = 1; mip < fx->bloom_mips; mip++) {
         int sw = fx->bloom_width >> (mip - 1);
@@ -2023,15 +1706,15 @@ static void postfx_run_bloom(PostFX* fx, GLuint scene_tex) {
         glViewport(0, 0, fx->bloom_width >> mip, fx->bloom_height >> mip);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, mip - 1);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mip - 1);
-        uniform_set_vec2(fx->bloom_down_program->uniforms, "texelSize",
+        uniform_set_vec2(fx->programs->bloom_down->uniforms, "texelSize",
                          (vec2){1.0f / (float)sw, 1.0f / (float)sh});
-        draw_fullscreen_quad(fx->quad_vao);
+        draw_fullscreen_quad(fx->programs->quad_vao);
     }
 
     // Upsample back: tent-filter each coarser level additively onto the
     // finer one, so level 0 ends as the sum of progressively wider blurs
     // -- one smooth wide kernel instead of ringed bands.
-    glUseProgram(fx->bloom_up_program->id);
+    glUseProgram(fx->programs->bloom_up->id);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE);
     for (int mip = fx->bloom_mips - 2; mip >= 0; mip--) {
@@ -2042,9 +1725,9 @@ static void postfx_run_bloom(PostFX* fx, GLuint scene_tex) {
         glViewport(0, 0, fx->bloom_width >> mip, fx->bloom_height >> mip);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, mip + 1);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mip + 1);
-        uniform_set_vec2(fx->bloom_up_program->uniforms, "texelSize",
+        uniform_set_vec2(fx->programs->bloom_up->uniforms, "texelSize",
                          (vec2){1.0f / (float)sw, 1.0f / (float)sh});
-        draw_fullscreen_quad(fx->quad_vao);
+        draw_fullscreen_quad(fx->programs->quad_vao);
     }
     glDisable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -2092,10 +1775,10 @@ static bool postfx_run_flare(PostFX* fx) {
     profiler_scope_begin(fx->profiler, "lens flare");
     glBindFramebuffer(GL_FRAMEBUFFER, fx->flare_fbo);
     glViewport(0, 0, fx->flare_width, fx->flare_height);
-    glUseProgram(fx->flare_program->id);
+    glUseProgram(fx->programs->flare->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->bloom_texture);
-    UniformManager* u = fx->flare_program->uniforms;
+    UniformManager* u = fx->programs->flare->uniforms;
     uniform_set_int(u, "bloomTex", 0);
     uniform_set_int(u, "ghostCount", fx->flare_ghosts);
     uniform_set_float(u, "ghostSpacing", fx->flare_ghost_spacing);
@@ -2109,7 +1792,7 @@ static bool postfx_run_flare(PostFX* fx) {
     const int top_mip = fx->bloom_mips > 0 ? fx->bloom_mips - 1 : 0;
     uniform_set_float(u, "sourceLod",
                       (float)(fx->flare_source_lod < top_mip ? fx->flare_source_lod : top_mip));
-    draw_fullscreen_quad(fx->quad_vao);
+    draw_fullscreen_quad(fx->programs->quad_vao);
     check_gl_error("postfx lens flare");
     profiler_scope_end(fx->profiler);
     return true;
@@ -2151,25 +1834,25 @@ static void postfx_run_dof(PostFX* fx, GLuint canvas_tex, mat4 projection) {
     // Pass 1: signed CoC + half-res scene colour
     glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_coc_fbo);
     glViewport(0, 0, fx->half_width, fx->half_height);
-    glUseProgram(fx->dof_coc_program->id);
+    glUseProgram(fx->programs->dof_coc->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, canvas_tex);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
-    uniform_set_mat4(fx->dof_coc_program->uniforms, "projection", (float*)projection);
-    uniform_set_float(fx->dof_coc_program->uniforms, "focusDistance", fx->dof_focus_distance);
-    uniform_set_float(fx->dof_coc_program->uniforms, "focusRange", fx->dof_focus_range);
-    uniform_set_float(fx->dof_coc_program->uniforms, "maxCoC", fx->dof_max_coc);
-    draw_fullscreen_quad(fx->quad_vao);
+    uniform_set_mat4(fx->programs->dof_coc->uniforms, "projection", (float*)projection);
+    uniform_set_float(fx->programs->dof_coc->uniforms, "focusDistance", fx->dof_focus_distance);
+    uniform_set_float(fx->programs->dof_coc->uniforms, "focusRange", fx->dof_focus_range);
+    uniform_set_float(fx->programs->dof_coc->uniforms, "maxCoC", fx->dof_max_coc);
+    draw_fullscreen_quad(fx->programs->quad_vao);
 
     // Pass 2: per-tile CoC maxima (far in .r, near in .g).
     glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_tile_fbo);
     glViewport(0, 0, fx->dof_tile_w, fx->dof_tile_h);
-    glUseProgram(fx->dof_tile_program->id);
+    glUseProgram(fx->programs->dof_tile->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->dof_coc_texture);
-    uniform_set_vec2(fx->dof_tile_program->uniforms, "texelSize", dof_texel);
-    draw_fullscreen_quad(fx->quad_vao);
+    uniform_set_vec2(fx->programs->dof_tile->uniforms, "texelSize", dof_texel);
+    draw_fullscreen_quad(fx->programs->quad_vao);
 
     // Pass 3: dilate the maxima so a defocused tile's reach covers every tile
     // its blur can spill into. K from maxCoC: a blur of C half-res texels
@@ -2177,37 +1860,37 @@ static void postfx_run_dof(PostFX* fx, GLuint canvas_tex, mat4 projection) {
     int dilate = (int)ceilf(fx->dof_max_coc / (float)DOF_TILE);
     dilate = dilate < 1 ? 1 : (dilate > 8 ? 8 : dilate);
     glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_dilate_fbo);
-    glUseProgram(fx->dof_dilate_program->id);
+    glUseProgram(fx->programs->dof_dilate->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->dof_tile_texture);
     const float tile_texel[2] = {1.0f / (float)fx->dof_tile_w, 1.0f / (float)fx->dof_tile_h};
-    uniform_set_vec2(fx->dof_dilate_program->uniforms, "tileTexel", tile_texel);
-    uniform_set_int(fx->dof_dilate_program->uniforms, "dilateRadius", dilate);
-    draw_fullscreen_quad(fx->quad_vao);
+    uniform_set_vec2(fx->programs->dof_dilate->uniforms, "tileTexel", tile_texel);
+    uniform_set_int(fx->programs->dof_dilate->uniforms, "dilateRadius", dilate);
+    draw_fullscreen_quad(fx->programs->quad_vao);
 
     // Pass 4: aperture gather (half res), MRT to the near+far fields. The
     // kernel is rebuilt per frame -- 64 sincos is nothing, and it keeps the
     // GUI blade/rotation sliders live with no dirty tracking.
     glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_gather_fbo);
     glViewport(0, 0, fx->half_width, fx->half_height);
-    glUseProgram(fx->dof_gather_program->id);
+    glUseProgram(fx->programs->dof_gather->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->dof_coc_texture);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, fx->dof_dilate_texture);
-    uniform_set_vec2(fx->dof_gather_program->uniforms, "texelSize", dof_texel);
+    uniform_set_vec2(fx->programs->dof_gather->uniforms, "texelSize", dof_texel);
     float kernel[DOF_TAPS][2];
     dof_build_kernel(fx->dof_blades, fx->dof_rotation, kernel);
     // Ranged upload of the contiguous array (the SSS-profile idiom).
-    GLint kloc = uniform_location(fx->dof_gather_program->uniforms, "kernel[0]");
+    GLint kloc = uniform_location(fx->programs->dof_gather->uniforms, "kernel[0]");
     if (kloc >= 0)
         glUniform2fv(kloc, DOF_TAPS, (const GLfloat*)kernel);
-    draw_fullscreen_quad(fx->quad_vao);
+    draw_fullscreen_quad(fx->programs->quad_vao);
 
     // Pass 5: composite (post res) -- far under sharp, near alpha-over both
     glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_fbo);
     glViewport(0, 0, fx->post_width, fx->post_height);
-    glUseProgram(fx->dof_composite_program->id);
+    glUseProgram(fx->programs->dof_composite->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, canvas_tex);
     glActiveTexture(GL_TEXTURE1);
@@ -2216,11 +1899,12 @@ static void postfx_run_dof(PostFX* fx, GLuint canvas_tex, mat4 projection) {
     glBindTexture(GL_TEXTURE_2D, fx->dof_far_texture);
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
-    uniform_set_mat4(fx->dof_composite_program->uniforms, "projection", (float*)projection);
-    uniform_set_float(fx->dof_composite_program->uniforms, "focusDistance", fx->dof_focus_distance);
-    uniform_set_float(fx->dof_composite_program->uniforms, "focusRange", fx->dof_focus_range);
-    uniform_set_float(fx->dof_composite_program->uniforms, "maxCoC", fx->dof_max_coc);
-    draw_fullscreen_quad(fx->quad_vao);
+    uniform_set_mat4(fx->programs->dof_composite->uniforms, "projection", (float*)projection);
+    uniform_set_float(fx->programs->dof_composite->uniforms, "focusDistance",
+                      fx->dof_focus_distance);
+    uniform_set_float(fx->programs->dof_composite->uniforms, "focusRange", fx->dof_focus_range);
+    uniform_set_float(fx->programs->dof_composite->uniforms, "maxCoC", fx->dof_max_coc);
+    draw_fullscreen_quad(fx->programs->quad_vao);
 
     check_gl_error("postfx dof");
 }
@@ -2234,8 +1918,6 @@ void free_postfx(PostFX* fx) {
     // error-unwind over a half-built PostFX).
     postfx_free_targets(fx);
     // The ones the resize deliberately keeps, and so are only freed here.
-    gl_delete_texture(&fx->noise_texture);
-    gl_delete_texture(&fx->white_tex);
     gl_delete_texture(&fx->lut_texture);
     gl_delete_fbo(&fx->lum_fbo);
     gl_delete_texture(&fx->lum_texture);
@@ -2249,56 +1931,10 @@ void free_postfx(PostFX* fx) {
     fx->froxel_scatter[1] = 0;
     gl_delete_texture(&fx->froxel_integrated);
 
-    free_program(fx->bloom_bright_program);
-    free_program(fx->bloom_down_program);
-    free_program(fx->bloom_up_program);
-    free_program(fx->flare_program);
     free_glare(fx->glare);
     fx->glare = NULL;
     free_local_exposure(fx->local_exposure);
     fx->local_exposure = NULL;
-    free_crt(fx->crt);
-    fx->crt = NULL;
-    free_program(fx->present_program);
-    free_program(fx->tonemap_program);
-    free_program(fx->spec_occ_composite_program);
-    free_program(fx->gtao_program);
-    free_program(fx->ssao_blur_program);
-    free_program(fx->temporal_accum_program);
-    free_program(fx->ssgi_composite_program);
-    free_program(fx->ssgi_accum_program);
-    free_program(fx->ssr_accum_program);
-    free_program(fx->ssgi_atrous_program);
-    free_program(fx->ssr_atrous_program);
-    free_program(fx->lum_measure_program);
-    free_program(fx->lum_histogram_program);
-    free_program(fx->lum_reduce_program);
-    free_program(fx->ssr_program);
-    free_program(fx->ssr_hiz_program);
-    free_program(fx->upsample_tent_program);
-    free_program(fx->ssr_fold_wet_program);
-    free_program(fx->froxel_inject_program);
-    free_program(fx->froxel_miss_count_program);
-    free_program(fx->froxel_integrate_program);
-    free_program(fx->froxel_composite_program);
-    free_program(fx->taa_resolve_program);
-    free_program(fx->taau_resolve_program);
-    free_program(fx->dof_coc_program);
-    free_program(fx->dof_tile_program);
-    free_program(fx->dof_dilate_program);
-    free_program(fx->dof_gather_program);
-    free_program(fx->dof_composite_program);
-    free_program(fx->motion_blur_program);
-    free_program(fx->motion_blur_tilemax_program);
-    free_program(fx->motion_blur_neighbormax_program);
-    free_program(fx->sss_gather_program);
-    free_program(fx->sss_pyr_seed_program);
-    free_program(fx->sss_pyr_down_program);
-    free_program(fx->contact_shadow_program);
-    free_program(fx->oit_resolve_program);
-
-    glDeleteVertexArrays(1, &fx->quad_vao);
-    glDeleteBuffers(1, &fx->quad_vbo);
 
     free(fx);
 }
@@ -2387,17 +2023,6 @@ float postfx_sss_max_sigma_per_depth(const PostFX* fx, const mat4 projection) {
     return sss_level_sigma_px(sss_lod_cap(fx)) / proj_scale;
 }
 
-// Whether the CRT shows this frame, making it on first use.
-static bool _postfx_crt_on(PostFX* fx) {
-    if (!fx->crt_enabled || fx->crt_failed)
-        return false;
-    if (!fx->crt)
-        fx->crt = create_crt();
-    if (!fx->crt)
-        fx->crt_failed = true;
-    return fx->crt != NULL;
-}
-
 void postfx_late_draw_bind(const PostFXLateDraw* late, UniformManager* u, int depth_unit,
                            int fog_unit) {
     glActiveTexture(GL_TEXTURE0 + (GLenum)depth_unit);
@@ -2443,9 +2068,9 @@ static unsigned _postfx_live_locations(const PostFX* fx, bool depth) {
 static PostFXShow _postfx_show(PostFX* fx, bool tone_mapped) {
     const bool passes =
         tone_mapped && (_postfx_live_locations(fx, false) & (1u << POSTFX_AT_AFTER_TONEMAP));
-    const PostFXShow show = _postfx_crt_on(fx) ? POSTFX_SHOW_CRT
-                            : passes           ? POSTFX_SHOW_PRESENT
-                                               : POSTFX_SHOW_WINDOW;
+    const PostFXShow show = fx->crt_on ? POSTFX_SHOW_CRT
+                            : passes   ? POSTFX_SHOW_PRESENT
+                                       : POSTFX_SHOW_WINDOW;
     if (show == POSTFX_SHOW_WINDOW || fx->picture_failed)
         return POSTFX_SHOW_WINDOW;
     if (!gl_color_target_ensure(&fx->picture, fx->out_width, fx->out_height, "picture")) {
@@ -2457,49 +2082,6 @@ static PostFXShow _postfx_show(PostFX* fx, bool tone_mapped) {
 
 GLuint postfx_picture_fbo(const PostFX* fx) {
     return fx && fx->show != POSTFX_SHOW_WINDOW ? fx->picture.fbo : 0;
-}
-
-void postfx_present_picture(PostFX* fx) {
-    if (!fx)
-        return;
-    switch (fx->show) {
-        case POSTFX_SHOW_WINDOW:
-            return;
-        case POSTFX_SHOW_CRT: {
-            const CrtLook look = {.lines = fx->crt_lines,
-                                  .scanlines = fx->crt_scanlines,
-                                  .mask = fx->crt_mask,
-                                  .curvature = fx->crt_curvature,
-                                  .bleed = fx->crt_bleed,
-                                  .dither = fx->dither_enabled,
-                                  .dither_strength = fx->dither_strength};
-            profiler_scope_begin(fx->profiler, "crt");
-            crt_present(fx->crt, fx->picture.tex, fx->picture.w, fx->picture.h, fx->quad_vao,
-                        &look);
-            profiler_scope_end(fx->profiler);
-            return;
-        }
-        case POSTFX_SHOW_PRESENT: {
-            // The picture into the window as it is, with the dither the tone map left out, since
-            // it is the 8-bit write that dithers and this is now the one that makes it (spec
-            // 11.24).
-            profiler_scope_begin(fx->profiler, "present");
-            const GLPassState pass = gl_pass_begin();
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            glViewport(0, 0, fx->picture.w, fx->picture.h);
-            glUseProgram(fx->present_program->id);
-            UniformManager* u = fx->present_program->uniforms;
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, fx->picture.tex);
-            uniform_set_int(u, "ditherEnabled", fx->dither_enabled ? 1 : 0);
-            uniform_set_float(u, "ditherStrength", fx->dither_strength);
-            draw_fullscreen_quad(fx->quad_vao);
-            glUseProgram(0);
-            gl_pass_end(&pass);
-            profiler_scope_end(fx->profiler);
-            return;
-        }
-    }
 }
 
 PostFXPass* postfx_add_pass(PostFX* fx, PostFXLocation at, ShaderProgram* program) {
@@ -2560,7 +2142,7 @@ static void postfx_run_passes(PostFX* fx, PostFXLocation at, GLuint fbo, GLuint 
         uniform_set_mat4(u, "projection", (const float*)projection);
         uniform_set_mat4(u, "view", (const float*)view);
         shader_params_upload(&pass->params, u);
-        draw_fullscreen_quad(fx->quad_vao);
+        draw_fullscreen_quad(fx->programs->quad_vao);
         _postfx_copy_back(scratch, fbo);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
@@ -2709,7 +2291,7 @@ static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, 
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, pp->tex[read]);
     uniform_set_int(prog->uniforms, "reset", pp->valid ? 0 : 1);
-    draw_fullscreen_quad(fx->quad_vao);
+    draw_fullscreen_quad(fx->programs->quad_vao);
     pp->valid = true;
     pp->pre_exposure[write] = fx->pre_exposure;
     return pp->tex[write];
@@ -2734,8 +2316,8 @@ static void run_taau_resolve(PostFX* fx) {
     int read = write ^ 1;
     glBindFramebuffer(GL_FRAMEBUFFER, pp->fbo[write]);
     glViewport(0, 0, fx->post_width, fx->post_height);
-    glUseProgram(fx->taau_resolve_program->id);
-    UniformManager* u = fx->taau_resolve_program->uniforms;
+    glUseProgram(fx->programs->taau_resolve->id);
+    UniformManager* u = fx->programs->taau_resolve->uniforms;
     uniform_set_vec2(u, "renderSize", (vec2){(float)fx->width, (float)fx->height});
     uniform_set_vec2(u, "postSize", (vec2){(float)fx->post_width, (float)fx->post_height});
     uniform_set_vec2(u, "jitterPx", fx->taau_jitter_px);
@@ -2747,7 +2329,7 @@ static void run_taau_resolve(PostFX* fx) {
     glBindTexture(GL_TEXTURE_2D, pp->tex[read]);
     uniform_set_int(u, "reset", pp->valid ? 0 : 1);
     uniform_set_float(u, "historyScale", _history_scale(fx, pp->pre_exposure[read]));
-    draw_fullscreen_quad(fx->quad_vao);
+    draw_fullscreen_quad(fx->programs->quad_vao);
     pp->valid = true;
     pp->pre_exposure[write] = fx->pre_exposure;
 }
@@ -2776,7 +2358,7 @@ static GLuint run_atrous(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, i
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, input_tex);
         uniform_set_int(prog->uniforms, "stepSize", 1 << i);
-        draw_fullscreen_quad(fx->quad_vao);
+        draw_fullscreen_quad(fx->programs->quad_vao);
         input_tex = pp->tex[i & 1];
     }
     return input_tex;
@@ -2937,7 +2519,7 @@ static bool postfx_build_fog_esm(PostFX* fx) {
     int cascade_layers = fx->fog_shadow_map_array ? fx->fog_light_count * fx->fog_cascade_count : 0;
     bool spot = fx->fog_spot_enabled && fx->fog_spot_shadowed && fx->fog_punctual_shadow_maps;
     int layers = cascade_layers + (spot ? 1 : 0);
-    if (layers <= 0 || !fx->fog_esm_program || !fx->fog_esm_enabled)
+    if (layers <= 0 || !fx->programs->fog_esm || !fx->fog_esm_enabled)
         return false;
 
     if (fx->fog_esm_layers != layers) {
@@ -2961,12 +2543,12 @@ static bool postfx_build_fog_esm(PostFX* fx) {
 
     glBindFramebuffer(GL_FRAMEBUFFER, fx->fog_esm_fbo);
     glViewport(0, 0, POSTFX_FOG_ESM_SIZE, POSTFX_FOG_ESM_SIZE);
-    glUseProgram(fx->fog_esm_program->id);
-    UniformManager* eu = fx->fog_esm_program->uniforms;
+    glUseProgram(fx->programs->fog_esm->id);
+    UniformManager* eu = fx->programs->fog_esm->uniforms;
     uniform_set_int(eu, "srcDepth", 0);
     uniform_set_int(eu, "srcEsm", 1);
     uniform_set_float(eu, "esmK", fx->fog_esm_k);
-    glBindVertexArray(fx->quad_vao);
+    glBindVertexArray(fx->programs->quad_vao);
     // Completeness is only meaningful once a layer is attached, and a driver
     // that rejects a layered array attachment would otherwise fail silently.
     glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, fx->fog_esm_array, 0, 0);
@@ -3015,15 +2597,7 @@ static void upload_inject_uniforms(PostFX* fx, UniformManager* u, mat4 projectio
 // none missed is told from one where none could. Made on first use: nothing but the probe draws it.
 static void postfx_fog_miss_probe(PostFX* fx, GLuint volume, mat4 projection, mat4 inv_view,
                                   bool esm_on, int temporal) {
-    if (!fx->froxel_miss_count_program && !fx->froxel_miss_count_failed) {
-        fx->froxel_miss_count_program = create_froxel_miss_count_program();
-        fx->froxel_miss_count_failed = fx->froxel_miss_count_program == NULL;
-        if (fx->froxel_miss_count_failed)
-            log_error("Fog miss probe: its count could not be made, so it prints nothing");
-        else
-            set_inject_samplers(fx->froxel_miss_count_program);
-    }
-    ShaderProgram* count = fx->froxel_miss_count_program;
+    ShaderProgram* count = postfx_programs_ensure_miss_count(fx->programs);
     if (!count)
         return;
     GLuint query;
@@ -3076,8 +2650,8 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view, bool
     glm_mat4_inv(view, inv_view);
 
     // 1. Inject: scattering + extinction per cell, one draw per slice.
-    glUseProgram(fx->froxel_inject_program->id);
-    UniformManager* iu = fx->froxel_inject_program->uniforms;
+    glUseProgram(fx->programs->froxel_inject->id);
+    UniformManager* iu = fx->programs->froxel_inject->uniforms;
     // The medium reads the ESM cascades when they built this frame, the exact
     // depth array otherwise -- the shader branches on esmEnabled.
     glActiveTexture(GL_TEXTURE1);
@@ -3094,7 +2668,8 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view, bool
     // White is the transmittance identity, so the value is right even for a reader that
     // ignores cloudShadowTile -- the unit is never stale and never incomplete.
     glActiveTexture(GL_TEXTURE4);
-    glBindTexture(GL_TEXTURE_2D, fx->cloud_shadow_tex ? fx->cloud_shadow_tex : fx->white_tex);
+    glBindTexture(GL_TEXTURE_2D,
+                  fx->cloud_shadow_tex ? fx->cloud_shadow_tex : fx->programs->white_tex);
     glActiveTexture(GL_TEXTURE0);
     upload_inject_uniforms(fx, iu, projection, inv_view, esm_on, temporal);
     draw_volume_slices(fx, fx->froxel_scatter[write], iu);
@@ -3104,8 +2679,8 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view, bool
 
     // 2. Integrate: slice k gathers 0..k. Reads the scatter volume, writes the
     // integrated one -- different textures, so no read-write hazard.
-    glUseProgram(fx->froxel_integrate_program->id);
-    UniformManager* gu = fx->froxel_integrate_program->uniforms;
+    glUseProgram(fx->programs->froxel_integrate->id);
+    UniformManager* gu = fx->programs->froxel_integrate->uniforms;
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_3D, fx->froxel_scatter[write]);
     uniform_set_mat4(gu, "projection", (float*)projection);
@@ -3175,8 +2750,8 @@ static bool postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
     //
     // Gated on TAA, unlike the volume's accumulator above: with no jitter there
     // is no wobble to cancel and this would only add lag.
-    glUseProgram(fx->froxel_composite_program->id);
-    UniformManager* cu = fx->froxel_composite_program->uniforms;
+    glUseProgram(fx->programs->froxel_composite->id);
+    UniformManager* cu = fx->programs->froxel_composite->uniforms;
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
     glActiveTexture(GL_TEXTURE1);
@@ -3209,7 +2784,7 @@ static bool postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
         // fold that in place of the raw layer.
         glBindFramebuffer(GL_FRAMEBUFFER, fx->fog_layer_fbo);
         glViewport(0, 0, fx->width, fx->height);
-        draw_fullscreen_quad(fx->quad_vao);
+        draw_fullscreen_quad(fx->programs->quad_vao);
 
         // Same adjacency test the fog volume uses, and for the same reason: a
         // history is only reprojectable against the IMMEDIATELY preceding frame.
@@ -3219,11 +2794,11 @@ static bool postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
         // unrelated frame's velocity.
         fx->fog_layer_history.valid = (fx->fog_layer_frame == fx->frame_index - 1);
         GLuint stable =
-            run_temporal_accum(fx, fx->temporal_accum_program, &fx->fog_layer_history, fx->width,
+            run_temporal_accum(fx, fx->programs->temporal_accum, &fx->fog_layer_history, fx->width,
                                fx->height, fx->fog_layer_texture, TEMPORAL_FEEDBACK_DEFAULT, true);
         fx->fog_layer_frame = fx->frame_index;
 
-        glUseProgram(fx->froxel_composite_program->id);
+        glUseProgram(fx->programs->froxel_composite->id);
         uniform_set_int(cu, "mode", 1);
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, stable);
@@ -3234,7 +2809,7 @@ static bool postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
     glViewport(0, 0, fx->post_width, fx->post_height);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_SRC_ALPHA);
-    draw_fullscreen_quad(fx->quad_vao);
+    draw_fullscreen_quad(fx->programs->quad_vao);
     glDisable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -3264,7 +2839,7 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     // further level the min of the 2x2 below. The source level is
     // pinned via BASE/MAX_LEVEL so a level never reads itself.
     glBindFramebuffer(GL_FRAMEBUFFER, fx->hiz_fbo);
-    glUseProgram(fx->ssr_hiz_program->id);
+    glUseProgram(fx->programs->ssr_hiz->id);
     glActiveTexture(GL_TEXTURE0);
     {
         int mip_w = ssr_w;
@@ -3282,14 +2857,14 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, mip - 1);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mip - 1);
             }
-            uniform_set_int(fx->ssr_hiz_program->uniforms, "srcWidth", src_w);
-            uniform_set_int(fx->ssr_hiz_program->uniforms, "srcHeight", src_h);
+            uniform_set_int(fx->programs->ssr_hiz->uniforms, "srcWidth", src_w);
+            uniform_set_int(fx->programs->ssr_hiz->uniforms, "srcHeight", src_h);
             // Full-res level 0 is the same size as the depth buffer, so it
             // is a 1:1 copy, not a 2x2 reduction (which would sample depth
             // at twice the coordinate and corrupt the whole pyramid).
-            uniform_set_int(fx->ssr_hiz_program->uniforms, "copySrc",
+            uniform_set_int(fx->programs->ssr_hiz->uniforms, "copySrc",
                             (mip == 0 && fx->ssr_full_res) ? 1 : 0);
-            draw_fullscreen_quad(fx->quad_vao);
+            draw_fullscreen_quad(fx->programs->quad_vao);
             src_w = mip_w;
             src_h = mip_h;
             mip_w = mip_w > 1 ? mip_w / 2 : 1;
@@ -3306,7 +2881,7 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     // writes elsewhere: GL 4.1 has no texture barrier)
     glBindFramebuffer(GL_FRAMEBUFFER, fx->ssr_fbo);
     glViewport(0, 0, ssr_w, ssr_h);
-    glUseProgram(fx->ssr_program->id);
+    glUseProgram(fx->programs->ssr->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
     glActiveTexture(GL_TEXTURE1);
@@ -3318,15 +2893,15 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     glActiveTexture(GL_TEXTURE6);
     glBindTexture(GL_TEXTURE_2D, aux_written ? fx->aux_texture : 0);
     glActiveTexture(GL_TEXTURE0);
-    uniform_set_int(fx->ssr_program->uniforms, "auxAvailable", aux_written ? 1 : 0);
-    uniform_set_int(fx->ssr_program->uniforms, "wetReplace", wet_replace ? 1 : 0);
-    uniform_set_int(fx->ssr_program->uniforms, "hizWidth", ssr_w);
-    uniform_set_int(fx->ssr_program->uniforms, "hizHeight", ssr_h);
-    uniform_set_int(fx->ssr_program->uniforms, "hizMips", fx->hiz_mips);
-    uniform_set_mat4(fx->ssr_program->uniforms, "projection", (float*)projection);
-    uniform_set_mat4(fx->ssr_program->uniforms, "invProjection", (float*)inv_projection);
-    uniform_set_float(fx->ssr_program->uniforms, "maxDistance", fx->ssr_max_distance);
-    uniform_set_float(fx->ssr_program->uniforms, "thicknessMin", fx->ssr_thickness_min);
+    uniform_set_int(fx->programs->ssr->uniforms, "auxAvailable", aux_written ? 1 : 0);
+    uniform_set_int(fx->programs->ssr->uniforms, "wetReplace", wet_replace ? 1 : 0);
+    uniform_set_int(fx->programs->ssr->uniforms, "hizWidth", ssr_w);
+    uniform_set_int(fx->programs->ssr->uniforms, "hizHeight", ssr_h);
+    uniform_set_int(fx->programs->ssr->uniforms, "hizMips", fx->hiz_mips);
+    uniform_set_mat4(fx->programs->ssr->uniforms, "projection", (float*)projection);
+    uniform_set_mat4(fx->programs->ssr->uniforms, "invProjection", (float*)inv_projection);
+    uniform_set_float(fx->programs->ssr->uniforms, "maxDistance", fx->ssr_max_distance);
+    uniform_set_float(fx->programs->ssr->uniforms, "thicknessMin", fx->ssr_thickness_min);
     // The march budget is spent in screen columns, so it scales with the
     // trace width or the reach halves every time the resolution doubles
     // (a floor-hugging grazing ray crawls ~one column per iteration). The
@@ -3337,19 +2912,19 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
         march_budget = 256;
     if (march_budget > 1024)
         march_budget = 1024;
-    uniform_set_int(fx->ssr_program->uniforms, "marchBudget", march_budget);
-    uniform_set_float(fx->ssr_program->uniforms, "floorRoughness", fx->ssr_floor_roughness);
-    uniform_set_float(fx->ssr_program->uniforms, "maxRoughness", fx->ssr_max_roughness);
+    uniform_set_int(fx->programs->ssr->uniforms, "marchBudget", march_budget);
+    uniform_set_float(fx->programs->ssr->uniforms, "floorRoughness", fx->ssr_floor_roughness);
+    uniform_set_float(fx->programs->ssr->uniforms, "maxRoughness", fx->ssr_max_roughness);
     // Strength folds into the march's premultiplied weight (clamped
     // there) so the composite stays a straight premultiplied lerp
-    uniform_set_float(fx->ssr_program->uniforms, "strength", fx->ssr_strength);
+    uniform_set_float(fx->programs->ssr->uniforms, "strength", fx->ssr_strength);
     // Stochastic march: jitter the ray per pixel so the deterministic
     // Hi-Z grid stripes scatter into noise a resolver can clean. The
     // a-trous denoise (below) resolves it spatially every frame, so this
     // runs whenever the denoiser is on -- no TAA required. Off ->
     // deterministic march, bit-identical.
     int ssr_stochastic = fx->ssr_denoise ? 1 : 0;
-    uniform_set_int(fx->ssr_program->uniforms, "ssrStochastic", ssr_stochastic);
+    uniform_set_int(fx->programs->ssr->uniforms, "ssrStochastic", ssr_stochastic);
     // Temporal accumulation runs when enabled AND TAA is resolving (it
     // needs per-frame jitter + motion vectors). The seed and the
     // accumulator pass below share this one predicate so the seed only
@@ -3362,43 +2937,43 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     // Modulo keeps the shader's float hash well-conditioned over long
     // sessions (the PCSS seed's bound, render.c).
     int ssr_seed = ssr_temporal_on ? fx->frame_index % 4096 : 0;
-    uniform_set_int(fx->ssr_program->uniforms, "ssrFrameIndex", ssr_seed);
-    uniform_set_float(fx->ssr_program->uniforms, "ssrJitter", fx->ssr_jitter);
+    uniform_set_int(fx->programs->ssr->uniforms, "ssrFrameIndex", ssr_seed);
+    uniform_set_float(fx->programs->ssr->uniforms, "ssrJitter", fx->ssr_jitter);
     // The probes live in world space, and so does the height fog a replacing wet pair's hit
     // is seen through, while SSR marches in view space.
     mat4 inv_view;
     glm_mat4_inv(view, inv_view);
-    uniform_set_mat4(fx->ssr_program->uniforms, "invView", (float*)inv_view);
+    uniform_set_mat4(fx->programs->ssr->uniforms, "invView", (float*)inv_view);
     // That fog: the global height medium the environment's reflection is baked through.
-    uniform_set_float(fx->ssr_program->uniforms, "ssrFogDensity",
+    uniform_set_float(fx->programs->ssr->uniforms, "ssrFogDensity",
                       fx->fog_enabled ? fx->fog_density : 0.0f);
-    uniform_set_float(fx->ssr_program->uniforms, "ssrFogFalloff",
+    uniform_set_float(fx->programs->ssr->uniforms, "ssrFogFalloff",
                       fmaxf(fx->fog_height_falloff, 1e-3f));
-    uniform_set_float(fx->ssr_program->uniforms, "ssrFogFloorY", fx->fog_floor_y);
-    uniform_set_vec3(fx->ssr_program->uniforms, "ssrFogInscatter", fx->fog_ambient);
+    uniform_set_float(fx->programs->ssr->uniforms, "ssrFogFloorY", fx->fog_floor_y);
+    uniform_set_vec3(fx->programs->ssr->uniforms, "ssrFogInscatter", fx->fog_ambient);
     // Local-probe fallback for rays the march cannot answer.
-    uniform_set_int(fx->ssr_program->uniforms, "probeEnabled", fx->probe_enabled ? 1 : 0);
+    uniform_set_int(fx->programs->ssr->uniforms, "probeEnabled", fx->probe_enabled ? 1 : 0);
     if (fx->probe_enabled) {
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_CUBE_MAP, fx->probe_cubemap);
         glActiveTexture(GL_TEXTURE0);
-        uniform_set_vec3(fx->ssr_program->uniforms, "probePos", fx->probe_pos);
-        uniform_set_vec3(fx->ssr_program->uniforms, "probeBoxMin", fx->probe_box_min);
-        uniform_set_vec3(fx->ssr_program->uniforms, "probeBoxMax", fx->probe_box_max);
-        uniform_set_float(fx->ssr_program->uniforms, "probeMaxLOD", fx->probe_max_lod);
-        uniform_set_float(fx->ssr_program->uniforms, "probeIntensity", fx->probe_intensity);
+        uniform_set_vec3(fx->programs->ssr->uniforms, "probePos", fx->probe_pos);
+        uniform_set_vec3(fx->programs->ssr->uniforms, "probeBoxMin", fx->probe_box_min);
+        uniform_set_vec3(fx->programs->ssr->uniforms, "probeBoxMax", fx->probe_box_max);
+        uniform_set_float(fx->programs->ssr->uniforms, "probeMaxLOD", fx->probe_max_lod);
+        uniform_set_float(fx->programs->ssr->uniforms, "probeIntensity", fx->probe_intensity);
     }
     // A SET of probes (spec 11.70): the descriptors already reach this program
     // through ProbeBlock, which is bound for the context's lifetime, so all the
     // pass needs is the atlas and the flag that arms the branch.
-    uniform_set_int(fx->ssr_program->uniforms, "probeMulti", fx->probe_multi ? 1 : 0);
+    uniform_set_int(fx->programs->ssr->uniforms, "probeMulti", fx->probe_multi ? 1 : 0);
     if (fx->probe_multi) {
         glActiveTexture(GL_TEXTURE5);
         glBindTexture(GL_TEXTURE_2D, fx->probe_atlas);
         glActiveTexture(GL_TEXTURE0);
-        uniform_set_int(fx->ssr_program->uniforms, "probeAtlasTex", 5);
+        uniform_set_int(fx->programs->ssr->uniforms, "probeAtlasTex", 5);
     }
-    draw_fullscreen_quad(fx->quad_vao);
+    draw_fullscreen_quad(fx->programs->quad_vao);
 
     // Temporal accumulation: reproject the previous reflection by the
     // motion vectors and blend with SSR's OWN accumulator program --
@@ -3407,7 +2982,7 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     // jitter + motion); off/no-TAA leaves the raw march.
     GLuint ssr_result = fx->ssr_texture;
     if (ssr_temporal_on) {
-        ssr_result = run_temporal_accum(fx, fx->ssr_accum_program, &fx->ssr_history, ssr_w, ssr_h,
+        ssr_result = run_temporal_accum(fx, fx->programs->ssr_accum, &fx->ssr_history, ssr_w, ssr_h,
                                         fx->ssr_texture, TEMPORAL_FEEDBACK_SSR, true);
     } else {
         fx->ssr_history.valid = false;
@@ -3422,7 +2997,7 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     // SVGF order: denoise the accumulation. Skipped when the denoiser is
     // off -> bit-identical to the pre-denoise reflection.
     if (fx->ssr_denoise) {
-        ssr_result = run_atrous(fx, fx->ssr_atrous_program, &fx->ssr_atrous, ssr_w, ssr_h,
+        ssr_result = run_atrous(fx, fx->programs->ssr_atrous, &fx->ssr_atrous, ssr_w, ssr_h,
                                 ssr_result, have_normals);
         check_gl_error("postfx ssr denoise");
     }
@@ -3441,7 +3016,7 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     // and everything else assumes it.
     glBindFramebuffer(GL_FRAMEBUFFER, canvas_fbo);
     glViewport(0, 0, fx->post_width, fx->post_height);
-    ShaderProgram* fold = wet_replace ? fx->ssr_fold_wet_program : fx->upsample_tent_program;
+    ShaderProgram* fold = wet_replace ? fx->programs->ssr_fold_wet : fx->programs->upsample_tent;
     glUseProgram(fold->id);
     // Sample the tent at the reflection buffer's own texel: full-res is
     // a 1px tent (light AA on the sharp reflection); half-res is the
@@ -3456,7 +3031,7 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     glBindTexture(GL_TEXTURE_2D, ssr_result);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-    draw_fullscreen_quad(fx->quad_vao);
+    draw_fullscreen_quad(fx->programs->quad_vao);
     glDisable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     check_gl_error("postfx ssr");
@@ -3493,8 +3068,8 @@ static void postfx_run_oit(PostFX* fx, GLuint oit_fbo, bool moments) {
                              fx->height);
     glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
     glViewport(0, 0, fx->width, fx->height);
-    glUseProgram(fx->oit_resolve_program->id);
-    uniform_set_int(fx->oit_resolve_program->uniforms, "momentWeighted", moments ? 1 : 0);
+    glUseProgram(fx->programs->oit_resolve->id);
+    uniform_set_int(fx->programs->oit_resolve->uniforms, "momentWeighted", moments ? 1 : 0);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, fx->oit_accum_texture);
     glActiveTexture(GL_TEXTURE1);
@@ -3507,7 +3082,7 @@ static void postfx_run_oit(PostFX* fx, GLuint oit_fbo, bool moments) {
         glBlendFunc(GL_ONE, GL_SRC_ALPHA); // sum + scene*reveal
     else
         glBlendFunc(GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA); // avgColor*(1-reveal) + scene*reveal
-    draw_fullscreen_quad(fx->quad_vao);
+    draw_fullscreen_quad(fx->programs->quad_vao);
     glDisable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     check_gl_error("postfx oit");
@@ -3587,14 +3162,14 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
              * scaled blit would have box-filtered. Debug frames are data rather than graded
              * images; a nearest magnification of data is the honest one.
              */
-            glUseProgram(fx->upsample_tent_program->id);
+            glUseProgram(fx->programs->upsample_tent->id);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, fx->hdr_texture);
-            uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize",
+            uniform_set_vec2(fx->programs->upsample_tent->uniforms, "texelSize",
                              (const float[]){0.0f, 0.0f});
             glBindFramebuffer(GL_FRAMEBUFFER, target_fbo);
             glViewport(0, 0, fx->out_width, fx->out_height);
-            draw_fullscreen_quad(fx->quad_vao);
+            draw_fullscreen_quad(fx->programs->quad_vao);
         }
         profiler_scope_end(fx->profiler);
     } else {
@@ -3639,7 +3214,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         // routed away, and would lose AO too if the tonemap stood down.
         bool split_live = false;
         if (spec_written) {
-            split_live = postfx_ensure_spec_target(fx) && fx->spec_occ_composite_program != NULL;
+            split_live = postfx_ensure_spec_target(fx) && fx->programs->spec_occ_composite != NULL;
             if (split_live) {
                 resolve_color_attachment(msaa_fbo, GL_COLOR_ATTACHMENT7, fx->spec_fbo, fx->width,
                                          fx->height);
@@ -3653,7 +3228,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         // buffer -- and the program that folds the rest. Without either it lerps, as the catcher
         // does. One decision for the trace's encoding, the late fold and the composite, which
         // would otherwise fold a reflection twice or not at all.
-        const bool wet_replace = fx->rain_wet && split_live && fx->ssr_fold_wet_program != NULL;
+        const bool wet_replace = fx->rain_wet && split_live && fx->programs->ssr_fold_wet != NULL;
 
         // Resolve the scene pass's second attachment (normal .xyz + SSR marker .a)
         // ahead of its consumers (SSAO now, SSR later). The caller reports
@@ -3701,8 +3276,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
             glBindFramebuffer(GL_FRAMEBUFFER, fx->cs_fbo[0]);
             glViewport(0, 0, fx->width, fx->height);
             glDrawBuffer(GL_COLOR_ATTACHMENT0);
-            glUseProgram(fx->contact_shadow_program->id);
-            UniformManager* cu = fx->contact_shadow_program->uniforms;
+            glUseProgram(fx->programs->contact_shadow->id);
+            UniformManager* cu = fx->programs->contact_shadow->uniforms;
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
             glActiveTexture(GL_TEXTURE1);
@@ -3723,28 +3298,28 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
             // % 4096 keeps the shader's float hash well-conditioned over
             // long sessions (the PCSS/SSR seed bound)
             uniform_set_int(cu, "frameIndex", fx->frame_index % 4096);
-            draw_fullscreen_quad(fx->quad_vao);
+            draw_fullscreen_quad(fx->programs->quad_vao);
 
             // Reuse the AO bilateral blur. Its texelSize is per-draw now (the
             // GTAO consumer runs at AO res, this one at full res), so set the
             // full-res texel here. edgeAware is forced on: silhouette bleed drips
             // a directional shadow worse than it does ambient AO.
             glBindFramebuffer(GL_FRAMEBUFFER, fx->cs_fbo[1]);
-            glUseProgram(fx->ssao_blur_program->id);
+            glUseProgram(fx->programs->ssao_blur->id);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, fx->cs_texture[0]);
             glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
             const float cs_texel[2] = {1.0f / (float)fx->width, 1.0f / (float)fx->height};
-            uniform_set_vec2(fx->ssao_blur_program->uniforms, "texelSize", cs_texel);
-            uniform_set_int(fx->ssao_blur_program->uniforms, "edgeAware", 1);
-            draw_fullscreen_quad(fx->quad_vao);
+            uniform_set_vec2(fx->programs->ssao_blur->uniforms, "texelSize", cs_texel);
+            uniform_set_int(fx->programs->ssao_blur->uniforms, "edgeAware", 1);
+            draw_fullscreen_quad(fx->programs->quad_vao);
             cs_result_tex = fx->cs_texture[1];
 
             if (taa_resolving) {
-                cs_result_tex = run_temporal_accum(fx, fx->temporal_accum_program, &fx->cs_history,
-                                                   fx->width, fx->height, fx->cs_texture[1],
-                                                   TEMPORAL_FEEDBACK_DEFAULT, false);
+                cs_result_tex = run_temporal_accum(
+                    fx, fx->programs->temporal_accum, &fx->cs_history, fx->width, fx->height,
+                    fx->cs_texture[1], TEMPORAL_FEEDBACK_DEFAULT, false);
                 cs_accum_ran = true;
             }
             check_gl_error("postfx contact shadows");
@@ -3819,11 +3394,11 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
             } else {
                 glDrawBuffer(GL_COLOR_ATTACHMENT0);
             }
-            glUseProgram(fx->gtao_program->id);
+            glUseProgram(fx->programs->gtao->id);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
             glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, fx->noise_texture);
+            glBindTexture(GL_TEXTURE_2D, fx->programs->noise_texture);
             glActiveTexture(GL_TEXTURE2);
             glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
             glActiveTexture(GL_TEXTURE3);
@@ -3833,16 +3408,20 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
             const bool gather_spec = ssgi_active && split_live;
             glActiveTexture(GL_TEXTURE4);
             glBindTexture(GL_TEXTURE_2D, gather_spec ? fx->spec_texture : 0);
-            uniform_set_int(fx->gtao_program->uniforms, "useNormalsTex", have_normals ? 1 : 0);
-            uniform_set_mat4(fx->gtao_program->uniforms, "projection", (float*)projection);
-            uniform_set_float(fx->gtao_program->uniforms, "radius", fx->ssao_radius);
-            uniform_set_int(fx->gtao_program->uniforms, "temporal", taa_resolving ? 1 : 0);
+            uniform_set_int(fx->programs->gtao->uniforms, "useNormalsTex", have_normals ? 1 : 0);
+            // The 4x4 rotation tile across the AO buffer.
+            const float noise_scale[2] = {(float)fx->half_width / 4.0f,
+                                          (float)fx->half_height / 4.0f};
+            uniform_set_vec2(fx->programs->gtao->uniforms, "noiseScale", noise_scale);
+            uniform_set_mat4(fx->programs->gtao->uniforms, "projection", (float*)projection);
+            uniform_set_float(fx->programs->gtao->uniforms, "radius", fx->ssao_radius);
+            uniform_set_int(fx->programs->gtao->uniforms, "temporal", taa_resolving ? 1 : 0);
             // % 4096: same float-hash conditioning bound as PCSS/SSR
-            uniform_set_int(fx->gtao_program->uniforms, "frameIndex", fx->frame_index % 4096);
-            uniform_set_int(fx->gtao_program->uniforms, "gatherGI", ssgi_active ? 1 : 0);
-            uniform_set_int(fx->gtao_program->uniforms, "gatherSpec", gather_spec ? 1 : 0);
-            uniform_set_int(fx->gtao_program->uniforms, "specOcclusion", spec_occ_swept ? 1 : 0);
-            draw_fullscreen_quad(fx->quad_vao);
+            uniform_set_int(fx->programs->gtao->uniforms, "frameIndex", fx->frame_index % 4096);
+            uniform_set_int(fx->programs->gtao->uniforms, "gatherGI", ssgi_active ? 1 : 0);
+            uniform_set_int(fx->programs->gtao->uniforms, "gatherSpec", gather_spec ? 1 : 0);
+            uniform_set_int(fx->programs->gtao->uniforms, "specOcclusion", spec_occ_swept ? 1 : 0);
+            draw_fullscreen_quad(fx->programs->quad_vao);
             profiler_scope_end(fx->profiler);
 
             if (fx->ssao_enabled) {
@@ -3865,7 +3444,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
                 GLuint ao_denoise_src = fx->ssao_texture[0];
                 if (taa_resolving) {
                     ao_denoise_src = run_temporal_accum(
-                        fx, fx->temporal_accum_program, &fx->ao_history, fx->half_width,
+                        fx, fx->programs->temporal_accum, &fx->ao_history, fx->half_width,
                         fx->half_height, fx->ssao_texture[0], TEMPORAL_FEEDBACK_AO, false);
                     ao_accum_ran = true;
                 }
@@ -3874,7 +3453,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
                 // when the edge filter is on so it does not bleed across silhouettes.
                 glBindFramebuffer(GL_FRAMEBUFFER, fx->ssao_fbo[1]);
                 glViewport(0, 0, fx->half_width, fx->half_height);
-                glUseProgram(fx->ssao_blur_program->id);
+                glUseProgram(fx->programs->ssao_blur->id);
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, ao_denoise_src);
                 glActiveTexture(GL_TEXTURE1);
@@ -3883,10 +3462,10 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
                 // same program at full res); set the AO-res texel for this one.
                 const float ao_texel[2] = {1.0f / (float)fx->half_width,
                                            1.0f / (float)fx->half_height};
-                uniform_set_vec2(fx->ssao_blur_program->uniforms, "texelSize", ao_texel);
-                uniform_set_int(fx->ssao_blur_program->uniforms, "edgeAware",
+                uniform_set_vec2(fx->programs->ssao_blur->uniforms, "texelSize", ao_texel);
+                uniform_set_int(fx->programs->ssao_blur->uniforms, "edgeAware",
                                 fx->ao_edge_filter_enabled ? 1 : 0);
-                draw_fullscreen_quad(fx->quad_vao);
+                draw_fullscreen_quad(fx->programs->quad_vao);
                 ao_result_tex = fx->ssao_texture[1];
                 profiler_scope_end(fx->profiler);
 
@@ -3900,21 +3479,21 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
                     GLuint spec_src = fx->spec_occ_raw_texture;
                     if (taa_resolving) {
                         spec_src = run_temporal_accum(
-                            fx, fx->temporal_accum_program, &fx->spec_occ_history, fx->half_width,
+                            fx, fx->programs->temporal_accum, &fx->spec_occ_history, fx->half_width,
                             fx->half_height, fx->spec_occ_raw_texture, TEMPORAL_FEEDBACK_AO, false);
                         spec_occ_accum_ran = true;
                     }
                     glBindFramebuffer(GL_FRAMEBUFFER, fx->spec_occ_fbo);
                     glViewport(0, 0, fx->half_width, fx->half_height);
-                    glUseProgram(fx->ssao_blur_program->id);
+                    glUseProgram(fx->programs->ssao_blur->id);
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, spec_src);
                     glActiveTexture(GL_TEXTURE1);
                     glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
-                    uniform_set_vec2(fx->ssao_blur_program->uniforms, "texelSize", ao_texel);
-                    uniform_set_int(fx->ssao_blur_program->uniforms, "edgeAware",
+                    uniform_set_vec2(fx->programs->ssao_blur->uniforms, "texelSize", ao_texel);
+                    uniform_set_int(fx->programs->ssao_blur->uniforms, "edgeAware",
                                     fx->ao_edge_filter_enabled ? 1 : 0);
-                    draw_fullscreen_quad(fx->quad_vao);
+                    draw_fullscreen_quad(fx->programs->quad_vao);
                     profiler_scope_end(fx->profiler);
                 }
             }
@@ -3964,7 +3543,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
             if (post_canvas)
                 run_taau_resolve(fx);
             else
-                run_temporal_accum(fx, fx->taa_resolve_program, &fx->taa_history, fx->width,
+                run_temporal_accum(fx, fx->programs->taa_resolve, &fx->taa_history, fx->width,
                                    fx->height, fx->hdr_texture, TEMPORAL_FEEDBACK_DEFAULT, true);
 
             // Push the resolved frame onto the canvas (the history side is
@@ -4004,14 +3583,14 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
             profiler_scope_begin(fx->profiler, "ssgi denoise");
             if (taa_resolving) {
                 gi_result_tex = run_temporal_accum(
-                    fx, fx->ssgi_accum_program, &fx->ssgi_history, fx->half_width, fx->half_height,
-                    fx->ssgi_gi_texture, TEMPORAL_FEEDBACK_DEFAULT, true);
+                    fx, fx->programs->ssgi_accum, &fx->ssgi_history, fx->half_width,
+                    fx->half_height, fx->ssgi_gi_texture, TEMPORAL_FEEDBACK_DEFAULT, true);
                 gi_accum_ran = true;
             }
 
             // Three a-trous iterations with doubling tap spacing (1, 2, 4).
             gi_result_tex =
-                run_atrous(fx, fx->ssgi_atrous_program, &fx->ssgi_atrous, fx->half_width,
+                run_atrous(fx, fx->programs->ssgi_atrous, &fx->ssgi_atrous, fx->half_width,
                            fx->half_height, gi_result_tex, have_normals);
             check_gl_error("postfx ssgi denoise");
             profiler_scope_end(fx->profiler);
@@ -4033,16 +3612,16 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
             // light. Half-res GI is bilinear-upsampled; albedo is render-res.
             glBindFramebuffer(GL_FRAMEBUFFER, canvas_fbo);
             glViewport(0, 0, fx->post_width, fx->post_height);
-            glUseProgram(fx->ssgi_composite_program->id);
+            glUseProgram(fx->programs->ssgi_composite->id);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, gi_result_tex); // accumulated + denoised
             glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, fx->albedo_texture);
-            uniform_set_float(fx->ssgi_composite_program->uniforms, "intensity",
+            uniform_set_float(fx->programs->ssgi_composite->uniforms, "intensity",
                               fx->ssgi_intensity);
             glEnable(GL_BLEND);
             glBlendFunc(GL_ONE, GL_ONE);
-            draw_fullscreen_quad(fx->quad_vao);
+            draw_fullscreen_quad(fx->programs->quad_vao);
             glDisable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             check_gl_error("postfx ssgi composite");
@@ -4202,7 +3781,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
             if (fx->glare) {
                 profiler_scope_begin(fx->profiler, "glare");
                 glare_tex = glare_run(fx->glare, scene_tex, fx->out_width, fx->out_height,
-                                      fx->glare_threshold, fx->quad_vao, fx->glare_probe);
+                                      fx->glare_threshold, fx->programs->quad_vao, fx->glare_probe);
                 profiler_scope_end(fx->profiler);
             }
             if (!glare_tex)
@@ -4221,7 +3800,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
                 profiler_scope_begin(fx->profiler, "local exposure");
                 le_tex = local_exposure_run(fx->local_exposure, scene_tex, fx->post_width,
                                             fx->post_height, le_grey, fx->local_exposure_kernel,
-                                            fx->quad_vao);
+                                            fx->programs->quad_vao);
                 profiler_scope_end(fx->profiler);
                 if (le_tex && fx->local_exposure_probe)
                     local_exposure_probe(fx->local_exposure, le_grey);
@@ -4244,7 +3823,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         profiler_scope_begin(fx->profiler, "tonemap + finishing");
         glBindFramebuffer(GL_FRAMEBUFFER, target_fbo);
         glViewport(0, 0, fx->out_width, fx->out_height);
-        glUseProgram(fx->tonemap_program->id);
+        glUseProgram(fx->programs->tonemap->id);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, scene_tex);
         glActiveTexture(GL_TEXTURE1);
@@ -4284,7 +3863,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         glBindTexture(GL_TEXTURE_2D, glare_tex);
         glActiveTexture(GL_TEXTURE14);
         glBindTexture(GL_TEXTURE_2D, le_tex);
-        UniformManager* tm = fx->tonemap_program->uniforms;
+        UniformManager* tm = fx->programs->tonemap->uniforms;
         uniform_set_int(tm, "localExposureTex", 14);
         uniform_set_int(tm, "localExposureEnabled", le_tex ? 1 : 0);
         if (le_tex) {
@@ -4391,7 +3970,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         uniform_set_int(tm, "ditherEnabled",
                         fx->dither_enabled && fx->show == POSTFX_SHOW_WINDOW ? 1 : 0);
         uniform_set_float(tm, "ditherStrength", fx->dither_strength);
-        draw_fullscreen_quad(fx->quad_vao);
+        draw_fullscreen_quad(fx->programs->quad_vao);
         profiler_scope_end(fx->profiler);
 
         glUseProgram(0);

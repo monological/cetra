@@ -4153,17 +4153,17 @@ int main(int argc, char** argv) {
             fx->dither_strength = args.dither;
         }
         if (args.crt)
-            fx->crt_enabled = true;
+            engine->crt_enabled = true;
         if (args.crt_lines >= 0.0f)
-            fx->crt_lines = args.crt_lines;
+            engine->crt_lines = args.crt_lines;
         if (args.crt_scanlines >= 0.0f)
-            fx->crt_scanlines = args.crt_scanlines;
+            engine->crt_scanlines = args.crt_scanlines;
         if (args.crt_mask >= 0.0f)
-            fx->crt_mask = args.crt_mask;
+            engine->crt_mask = args.crt_mask;
         if (args.crt_curvature >= 0.0f)
-            fx->crt_curvature = args.crt_curvature;
+            engine->crt_curvature = args.crt_curvature;
         if (args.crt_bleed >= 0.0f)
-            fx->crt_bleed = args.crt_bleed;
+            engine->crt_bleed = args.crt_bleed;
         if (args.loading_screen) {
             engine->loading_palette = args.loading_palette;
             engine_show_loading_screen(engine);

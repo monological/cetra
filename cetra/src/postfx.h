@@ -280,7 +280,6 @@ typedef struct PostFX {
     GLuint spec_occ_texture;
     PingPong spec_occ_history; // Half-res temporal accumulation (RG16F)
     bool spec_occ_ready;       // Lazy-alloc guard: the three above
-    GLuint noise_texture;      // 4x4 random slice rotations, tiled
     GLuint ssr_fbo;            // Reflection buffer (march target); full-res by
     GLuint ssr_texture;        // default, half-res when ssr_full_res is off
     PingPong ssr_history;      // Temporal-SSR accumulation (RGBA16F): averages the jittered march
@@ -321,39 +320,8 @@ typedef struct PostFX {
     // live.
     float taau_jitter_px[2];
 
-    ShaderProgram* bloom_bright_program;
-    ShaderProgram* bloom_down_program; // Pyramid 13-tap downsample
-    ShaderProgram* bloom_up_program;   // Pyramid tent upsample (additive)
-    ShaderProgram* tonemap_program;
-    ShaderProgram* gtao_program;
-    ShaderProgram* ssao_blur_program;
-    ShaderProgram* contact_shadow_program; // AO-res depth march toward the key light (spec 9.3)
-    ShaderProgram* temporal_accum_program; // Shared plain-RGBA accumulator (AO .r, fog .rgba)
-    ShaderProgram* ssgi_composite_program;
-    ShaderProgram* ssgi_accum_program;
-    ShaderProgram* ssgi_atrous_program;
-    ShaderProgram* ssr_atrous_program; // Edge-aware a-trous denoise for the SSR reflection buffer
-    ShaderProgram* ssr_accum_program;  // SSR's own accumulator: inverse-luma blend (10.7.2)
-    ShaderProgram* lum_measure_program;
-    ShaderProgram* lum_histogram_program;
-    ShaderProgram* lum_reduce_program;
-    ShaderProgram* ssr_program;
-    ShaderProgram* ssr_hiz_program;
-    ShaderProgram* upsample_tent_program;     // Shared tent composite (bloom mips, SSR)
-    ShaderProgram* ssr_fold_wet_program;      // SSR's fold when ground is wet (spec 13.9)
-    ShaderProgram* froxel_inject_program;     // Per-cell scattering into the volume (spec 9.5)
-    ShaderProgram* froxel_miss_count_program; // fog_miss_probe's count; made on first use
-    bool froxel_miss_count_failed;            // that count could not be made; never retried
-    ShaderProgram* froxel_integrate_program;  // Front-to-back gather along each slice column
-    ShaderProgram* froxel_composite_program;
-    ShaderProgram* fog_esm_program; // Builds fog_esm_array from the depth cascades // One trilinear
-                                    // tap, folded into the HDR scene
-    ShaderProgram* taa_resolve_program;
-    ShaderProgram* taau_resolve_program; // Compiled the first time render_scale < 1 (at
-                                         // create or at a resize), and kept afterward
-
-    GLuint quad_vao;
-    GLuint quad_vbo;
+    // Borrowed, never owned: the engine's one set, shared by every chain it runs.
+    struct PostFXPrograms* programs;
 
     // Borrowed, never owned -- the Engine holds it and installs it before the
     // first run. The post chain runs the metering passes that FEED exposure but
@@ -381,7 +349,6 @@ typedef struct PostFX {
     bool flare_ready;                // Lazy-alloc guard for the target below
     GLuint flare_fbo, flare_texture; // Quarter post-res
     int flare_width, flare_height;
-    ShaderProgram* flare_program;
 
     // Diffraction glare (spec 13.4): the star an aperture draws round light brighter than
     // `glare_threshold`, composited in the tonemap beside bloom. Off by default.
@@ -590,12 +557,6 @@ typedef struct PostFX {
     // the app's and the GUI's, and two of the three arming sources republish every frame.
     bool froxel_failed;
 
-    // 1x1 white R16F, for a sampler whose real texture is absent this frame. Binding name 0
-    // instead leaves an INCOMPLETE texture on a live sampler, which this driver substitutes
-    // for per draw at a measurable cost -- so the stand-in is cheaper than the nothing it
-    // stands in for. White because every current consumer reads it as a transmittance.
-    GLuint white_tex;
-
     // Published per frame by water_publish_to_postfx (mirrors the sky and probe
     // blocks; postfx never learns about Water). water_medium 0 = one medium only.
     //
@@ -711,24 +672,16 @@ typedef struct PostFX {
     // to contour bands. Screen-space static: it carries no frame term.
     bool dither_enabled;
     float dither_strength; // Peak amplitude in 8-bit LSB (1 = textbook TPDF)
-    // A consumer television (spec 13.28): the finished picture shown as a living-room CRT would
-    // show a console's. Off by default.
-    bool crt_enabled;
-    float crt_lines;     // the signal's lines, top to bottom
-    float crt_scanlines; // 0 = lines fused, 1 = thin beams with dark gaps between
-    float crt_mask;      // the slot mask's depth, 0..1
-    float crt_curvature; // the tube's bow, 0 = flat
-    float crt_bleed;     // composite colour bleed, 0..1
-    struct Crt* crt;     // engine-owned; made on first use
-    bool crt_failed;     // could not be made; never retried
+    // Published per frame by the engine, whose the CRT is (spec 13.28): it shows this frame's
+    // picture, so the tone map draws into the picture rather than the window.
+    bool crt_on;
     // The finished picture, at output size and RGBA16F, when anything draws after the tone map
     // -- the CRT, an app's pass there -- rather than the tone map writing the window. Nothing is
     // quantized before the last pass, and an overlay's window-pixel scissor lands where it would
     // in the window. Engine-owned, made on first use.
     GLColorTarget picture;
-    bool picture_failed;            // could not be made at this size; retried at the next
-    PostFXShow show;                // engine-owned: what writes the window this frame
-    ShaderProgram* present_program; // the picture into the window, dithered, when no CRT is on
+    bool picture_failed; // could not be made at this size; retried at the next
+    PostFXShow show;     // engine-owned: what writes the window this frame
 
     // App passes at named points (spec 13.29). Each pass's `enabled` and params are settings.
     PostFXPass passes[POSTFX_PASS_MAX];
@@ -780,11 +733,6 @@ typedef struct PostFX {
     int dof_tile_w, dof_tile_h;                // Tile-pass resolution (half-res / DOF_TILE, ceil)
     GLuint dof_tile_fbo, dof_tile_texture;     // RG16F per-tile (maxFarCoC, maxNearCoC)
     GLuint dof_dilate_fbo, dof_dilate_texture; // RG16F neighborhood-dilated tile maxima
-    ShaderProgram* dof_coc_program;
-    ShaderProgram* dof_tile_program;
-    ShaderProgram* dof_dilate_program;
-    ShaderProgram* dof_gather_program;
-    ShaderProgram* dof_composite_program;
 
     // Motion blur (McGuire velocity reconstruction, 4.15). Reads the aux
     // velocity buffer (.xy) + resolved HDR, gathers along the velocity, and
@@ -797,9 +745,6 @@ typedef struct PostFX {
     int motion_blur_tile_w, motion_blur_tile_h; // Tile-max resolution (width/TILE, ceil)
     GLuint motion_blur_tile_fbo, motion_blur_tile_texture;         // RG16F per-tile max velocity
     GLuint motion_blur_neighbor_fbo, motion_blur_neighbor_texture; // RG16F 3x3-tile max velocity
-    ShaderProgram* motion_blur_program;
-    ShaderProgram* motion_blur_tilemax_program;
-    ShaderProgram* motion_blur_neighbormax_program;
 
     // Screen-space subsurface scattering. Resolves the scene pass's skin-diffuse
     // attachment (4), gathers it through a scale-space pyramid (depth-aware,
@@ -821,7 +766,6 @@ typedef struct PostFX {
     // fold.
     GLuint sss_delta_fbo, sss_delta_texture;
     PingPong sss_history;
-    ShaderProgram* sss_gather_program;
 
     // Scale-space pyramid for the scatter kernel (spec 11.14).
     //
@@ -843,8 +787,6 @@ typedef struct PostFX {
     GLuint sss_pyr_fbo; // one FBO, re-attached per level (the hiz idiom)
     GLuint sss_pyr_color_texture;
     GLuint sss_pyr_depth_texture;
-    ShaderProgram* sss_pyr_seed_program;
-    ShaderProgram* sss_pyr_down_program;
 
     // Weighted-blended OIT: single-sample resolves of the engine's OIT MSAA
     // accum/revealage attachments (a separate FBO sharing the scene depth), then a
@@ -853,14 +795,12 @@ typedef struct PostFX {
     GLuint oit_accum_fbo, oit_accum_texture;         // RGBA16F: sum(color*a*w) + sum(a*w)
     GLuint oit_revealage_fbo, oit_revealage_texture; // R16F: product(1 - a)
     bool oit_ready;
-    ShaderProgram* oit_resolve_program;
 
     // Split spec-occ: single-sample resolve of the scene pass's ambient-specular
     // attachment (7). Lazily allocated on the first split frame. Same packed
     // float as the MSAA source (multisample blits require identical formats).
     bool spec_ready;
     GLuint spec_fbo, spec_texture;
-    ShaderProgram* spec_occ_composite_program;
 
     // Borrowed, owned by the Engine. NULL means no pass here is timed.
     struct Profiler* profiler;
@@ -871,11 +811,13 @@ typedef struct PostFX {
     void* late_draw_user;
 } PostFX;
 
-// width/height are the display (downsample-target) size; ss_scale supersamples
-// the internal render + post chain by that integer factor (1 = off).
-// render_scale in [0.5, 1] shrinks only the render-res half of the chain (the
-// scene + every pass before the TAA seam); 1 leaves every size as it was.
-PostFX* create_postfx(int width, int height, int ss_scale, float render_scale);
+// `programs` is borrowed and outlives the chain. width/height are the display
+// (downsample-target) size; ss_scale supersamples the internal render + post
+// chain by that integer factor (1 = off). render_scale in [0.5, 1] shrinks only
+// the render-res half of the chain (the scene + every pass before the TAA
+// seam); 1 leaves every size as it was.
+PostFX* create_postfx(struct PostFXPrograms* programs, int width, int height, int ss_scale,
+                      float render_scale);
 
 // The one render-scale clamp. Three doors reach it -- the engine setter, the
 // create, and the resize -- and a scale that differed between them would size
@@ -981,9 +923,6 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
 // (spec 13.28) or a pass runs after the tone map (spec 13.29), else the window, 0. What draws
 // over the picture before it is shown -- debug tiles, the app's overlay -- draws into it.
 GLuint postfx_picture_fbo(const PostFX* fx);
-// Show this frame's picture in the window: through the CRT when it is on, through a dithered
-// copy when not, nothing to do when the window was drawn directly.
-void postfx_present_picture(PostFX* fx);
 
 // Run `program` at `at` from the next frame on, enabled, with no params (spec 13.29). The
 // program is borrowed, and its owner registers it with engine_add_program. NULL, logged, past

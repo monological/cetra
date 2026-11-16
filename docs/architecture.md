@@ -552,15 +552,20 @@ of the chain:
 
 The rest is `docs/shader-subsystems.md`, Local exposure.
 
-**The CRT** (`crt.c`, spec 13.28) is off unless asked for (`postfx->crt_enabled`, `--crt`). With
-it on, the post chain, the debug tiles and the app's overlay draw into a window-sized RGBA16F
-picture (`postfx_picture_fbo`, PostFX's own, which an after-tonemap pass also draws on), which
-`postfx_present_picture` shows through the CRT; the debug GUI draws after it. So the overlay is on
-the television and the GUI is not. The picture must be exactly window-sized, since the UI scissors
-in window pixels. **Dither stays on the last write**: the tonemap dithers only when it writes the
-window, and under the CRT the CRT's pass dithers. Which pass writes the window (the CRT, the
-present pass, or the tonemap) is decided once a frame by `postfx_run`. The rest is
-`docs/shader-subsystems.md`, The CRT.
+**The CRT** (`crt.c`, spec 13.28) is the window's, not the chain's: off unless asked for
+(`engine->crt_enabled`, `--crt`). With it on, the post chain, the debug tiles and the app's
+overlay draw into a window-sized RGBA16F picture (`postfx_picture_fbo`, PostFX's own, which an
+after-tonemap pass also draws on), which the engine shows through the CRT; the debug GUI draws
+after it. So the overlay is on the television and the GUI is not. The picture must be exactly
+window-sized, since the UI scissors in window pixels. **Dither stays on the last write**: the
+tonemap dithers only when it writes the window, and under the CRT the CRT's pass dithers. Which
+pass writes the window (the CRT, the present pass, or the tonemap) is decided once a frame by
+`postfx_run`, from whether the engine's CRT is on and whether the chain has passes after its tone
+map. The rest is `docs/shader-subsystems.md`, The CRT.
+
+**The chain's programs are the engine's** (`postfx_programs.c/h`): compiled once by
+`create_engine` and borrowed by the chain, so nothing a pass draws with is tied to one chain's
+size. What depends on a target's size is uploaded at the draw.
 
 **SSS is on but inert.** `engine->sss_enabled` is true, but attachment 4 goes unwritten unless a
 material carries `subsurface > 0`, and the pass is skipped when it is unwritten. So `--no-sss` on a

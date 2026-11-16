@@ -48,6 +48,9 @@
 #include "springbone.h"
 #include "wind.h"
 #include "profiler.h"
+#include "postfx_programs.h"
+#include "crt.h"
+#include "uniform.h"
 
 #include "ext/log.h"
 
@@ -334,6 +337,14 @@ static Engine* _engine_alloc(const EngineConfig* cfg) {
     glm_mat4_identity(engine->prev_view_proj);
 
     glm_vec3_copy((vec3){0.1f, 0.1f, 0.1f}, engine->clear_color);
+    // A look, so off. Its settings are a console's 480 lines on a living-room set, there to be
+    // seen and not to fight the picture.
+    engine->crt_enabled = false;
+    engine->crt_lines = 480.0f;
+    engine->crt_scanlines = 0.4f;
+    engine->crt_mask = 0.3f;
+    engine->crt_curvature = 0.35f;
+    engine->crt_bleed = 0.5f;
     engine->show_gui = false;
     engine->show_wireframe = false;
     engine->show_xyz = false;
@@ -462,6 +473,8 @@ void free_engine(Engine* engine) {
         if (engine->postfx) {
             free_postfx(engine->postfx);
         }
+        free_postfx_programs(engine->postfx_programs);
+        free_crt(engine->crt);
         free_loading_screen(engine->loading_screen);
 
         free_light_cluster_context(engine->light_cluster);
@@ -1557,8 +1570,13 @@ static int _engine_init(Engine* engine, const EngineConfig* cfg) {
     // resolution; the supersample factor enlarges the internal chain to match
     // the enlarged MSAA scene target. The render scale arrives already clamped
     // for headless by its setter.
-    engine->postfx =
-        create_postfx(engine->fb_width, engine->fb_height, engine->ss_scale, engine->render_scale);
+    engine->postfx_programs = create_postfx_programs();
+    if (!engine->postfx_programs) {
+        log_error("Failed to initialize engine post-processing");
+        return -1;
+    }
+    engine->postfx = create_postfx(engine->postfx_programs, engine->fb_width, engine->fb_height,
+                                   engine->ss_scale, engine->render_scale);
     if (!engine->postfx) {
         log_error("Failed to initialize engine post-processing");
         return -1;
@@ -3068,6 +3086,59 @@ void engine_set_render_time(Engine* engine, double time, double delta) {
     engine->render_delta = delta;
 }
 
+// Whether the CRT shows this frame, making it on first use.
+static bool _engine_crt_on(Engine* engine) {
+    if (!engine->crt_enabled || engine->crt_failed)
+        return false;
+    if (!engine->crt)
+        engine->crt = create_crt();
+    if (!engine->crt)
+        engine->crt_failed = true;
+    return engine->crt != NULL;
+}
+
+// The window's last write, when the chain drew this frame into its picture rather than the window:
+// the picture through the CRT, or as it is through the present pass. That write is the 8-bit one,
+// so it is the one that dithers (spec 11.24).
+static void _engine_present_window(Engine* engine) {
+    PostFX* fx = engine->postfx;
+    switch (fx->show) {
+        case POSTFX_SHOW_WINDOW:
+            return;
+        case POSTFX_SHOW_CRT: {
+            const CrtLook look = {.lines = engine->crt_lines,
+                                  .scanlines = engine->crt_scanlines,
+                                  .mask = engine->crt_mask,
+                                  .curvature = engine->crt_curvature,
+                                  .bleed = engine->crt_bleed,
+                                  .dither = fx->dither_enabled,
+                                  .dither_strength = fx->dither_strength};
+            profiler_scope_begin(engine->profiler, "crt");
+            crt_present(engine->crt, fx->picture.tex, fx->picture.w, fx->picture.h,
+                        engine->postfx_programs->quad_vao, &look);
+            profiler_scope_end(engine->profiler);
+            return;
+        }
+        case POSTFX_SHOW_PRESENT: {
+            profiler_scope_begin(engine->profiler, "present");
+            const GLPassState pass = gl_pass_begin();
+            ShaderProgram* present = engine->postfx_programs->present;
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, fx->picture.w, fx->picture.h);
+            glUseProgram(present->id);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, fx->picture.tex);
+            uniform_set_int(present->uniforms, "ditherEnabled", fx->dither_enabled ? 1 : 0);
+            uniform_set_float(present->uniforms, "ditherStrength", fx->dither_strength);
+            draw_fullscreen_quad(engine->postfx_programs->quad_vao);
+            glUseProgram(0);
+            gl_pass_end(&pass);
+            profiler_scope_end(engine->profiler);
+            return;
+        }
+    }
+}
+
 void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     if (!engine)
         return;
@@ -3089,6 +3160,7 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     // deterministic across equal --frames runs.
     engine->postfx->frame_index = (int)engine->total_frames;
     engine->postfx->time = (float)engine->render_time;
+    engine->postfx->crt_on = _engine_crt_on(engine);
     // Depth-of-field autofocus: keep the subject sharp as the camera orbits or
     // zooms by refocusing on the point the camera looks at (the orbit target),
     // unless a manual focus distance was pinned.
@@ -3178,7 +3250,7 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
 
     // The picture into the window, if it went into one; the GUI is the developer's and goes over
     // the television, sharp.
-    postfx_present_picture(engine->postfx);
+    _engine_present_window(engine);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     loading_screen_frame(engine);
 
