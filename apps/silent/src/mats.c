@@ -116,11 +116,8 @@ typedef struct MatSpec {
 #define CLEAR_GLASS(name, beads_)                                                        \
     {                                                                                    \
         name, "Smear008", {0.94f, 1.0f, 0.95f}, 0.12f, 0.0f, 0.3f, true, .grime = 0.35f, \
-            .glass = {0.97f, 0.004f, {0.90f, 0.97f, 0.90f}, 0.025f}, .rain = {           \
-                true,                                                                    \
-                -1.0f,                                                                   \
-                .beads = beads_                                                          \
-            }                                                                            \
+            .glass = {0.97f, 0.004f, {0.90f, 0.97f, 0.90f}, 0.025f},                     \
+            .rain = {true, -1.0f, .beads = beads_}                                       \
     }
 // A squirrel-cage filament, a few millimetres of wire seen through clear glass: bright enough
 // that the bloom shows the bulb lit from across a room.
@@ -728,11 +725,11 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene) {
                 load(engine, scene, m, material_set_height_tex, s->set, "disp",
                      texture_desc(false));
         }
-        if (s->scatter.strength > 0.0f && engine->postfx) {
+        if (s->scatter.strength > 0.0f) {
             m->subsurface = s->scatter.strength;
             glm_vec3_copy((float*)s->scatter.colour, m->subsurface_color);
             m->subsurface_profile =
-                postfx_add_sss_profile(engine->postfx, s->scatter.colour, s->scatter.radius);
+                scene_add_sss_profile(scene, s->scatter.colour, s->scatter.radius);
         }
         kit_material(kit, m, s->repeat_m, s->grime);
     }

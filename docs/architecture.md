@@ -534,14 +534,14 @@ normals G-buffer, OIT with moment weighting. Off (present, lazily allocated): SS
 motion blur, diffraction glare, local exposure, the CRT. SSS and TAA are the two exceptions below.
 
 **Diffraction glare** (`glare.c`, specs 13.4 and 13.5) is off unless asked for: `post.glare` in a
-`.cscn`, `postfx->glare_enabled` in an app, `--glare` on render, forest and gametest; `apps/tree`
+`.cscn`, `postfx->settings->glare_enabled` in an app, `--glare` on render, forest and gametest; `apps/tree`
 turns it on for its low sun. **It moves light rather than adding it**: the tonemap takes the moved
 light out of the pixel it came from, by `glare_threshold.glsl`, the rule the source pass shares.
 The rest is `docs/shader-subsystems.md`, Diffraction glare.
 
 **Local exposure** (`local_exposure.c`, spec 13.19) is an exposure per pixel on top of the
 camera's, which still sets the level; off by default (`post.local_exposure`,
-`postfx->local_exposure_enabled`), and the identity at its defaults. Two rules cross into the rest
+`postfx->settings->local_exposure_enabled`), and the identity at its defaults. Two rules cross into the rest
 of the chain:
 - **It is applied in the tonemap, to the composite with bloom, after the Purkinje shift reads the
   light as it is**, and once per pixel: the sharpen's taps reuse the centre's factor, as they reuse
@@ -591,7 +591,7 @@ so an artifact can be invisible in one and obvious in the other.
 **The same policy drops the sample count to 1, and both halves are `EngineConfig` fields**
 (`msaa_samples` and `taa`). `create_engine` reads them in the right order: the count before the
 scene target is built, the TAA switch after the post chain exists. After creation the switch is the
-plain field `postfx->taa_enabled`. Apps that keep four samples do so by decision (spec 11.103):
+plain field `postfx->settings->taa_enabled`. Apps that keep four samples do so by decision (spec 11.103):
 - `apps/forest`, `apps/tree` (always) and `apps/gametest` run one sample with TAA, like render.
 - `apps/spores` keeps four because its particles write no motion vector, and TAA turns 32,000 motes
   into dashes.
@@ -660,9 +660,9 @@ does to it:
   GTAO's radius, SSR's thickness and reach, the contact march's start, the depth tolerances of the
   AO blur and the a-trous filters, a soft particle's fade, the cascade and GI capture near planes,
   and the streaming margins. Each is its metre value times the size, read where it is used:
-  `engine->typical_size` in C, `ViewParams.typicalSize` in GLSL. PostFX's settable ones are written
-  by `postfx_reset_lengths` when the size is set, so an app sets the size first and its own values
-  after. The camera rig follows the size too.
+  `engine->typical_size` in C, `ViewParams.typicalSize` in GLSL. The post settings' settable ones
+  are written by `postfx_settings_reset_lengths` when the size is set, so an app sets the size first
+  and its own values after. The camera rig follows the size too.
 - **Fitted: worked out each frame**, which is a `fit_clip` camera's near and far.
 
 **A camera's planes are its owner's, or the fit's.** `Camera.fit_clip` fits them each frame,

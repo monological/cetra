@@ -206,7 +206,8 @@ static Engine* _engine_alloc(const EngineConfig* cfg) {
     }
 
     engine->window = NULL;
-    exposure_init(&engine->exposure);
+    exposure_settings_init(&engine->exposure_settings);
+    exposure_init(&engine->exposure, &engine->exposure_settings);
 
     engine->win_width = cfg->width > 0 ? cfg->width : 1280;
     engine->win_height = cfg->height > 0 ? cfg->height : 720;
@@ -1575,8 +1576,11 @@ static int _engine_init(Engine* engine, const EngineConfig* cfg) {
         log_error("Failed to initialize engine post-processing");
         return -1;
     }
-    engine->postfx = create_postfx(engine->postfx_programs, engine->fb_width, engine->fb_height,
-                                   engine->ss_scale, engine->render_scale);
+    postfx_settings_init(&engine->post_settings);
+    engine->post_settings.taa_enabled = cfg->taa;
+    engine->postfx =
+        create_postfx(engine->postfx_programs, &engine->post_settings, engine->fb_width,
+                      engine->fb_height, engine->ss_scale, engine->render_scale);
     if (!engine->postfx) {
         log_error("Failed to initialize engine post-processing");
         return -1;
@@ -1584,7 +1588,6 @@ static int _engine_init(Engine* engine, const EngineConfig* cfg) {
 
     engine->postfx->exposure = &engine->exposure;
     engine->postfx->profiler = engine->profiler;
-    engine->postfx->taa_enabled = cfg->taa;
 
     // Record what init just built at, or the first frame-top sync would see
     // zeroes, decide the sizes had changed, and rebuild everything once for
@@ -2870,7 +2873,7 @@ void engine_set_typical_size(Engine* engine, float metres) {
         return;
     }
     engine->typical_size = metres;
-    postfx_reset_lengths(engine->postfx, metres);
+    postfx_settings_reset_lengths(&engine->post_settings, metres);
     if (engine->camera_rig)
         engine->camera_rig->typical_size = metres;
 }
@@ -2879,18 +2882,18 @@ void engine_set_2d_preset(Engine* engine, Scene* scene) {
     if (!engine)
         return;
     PostFX* fx = engine->postfx;
-    fx->bloom_enabled = false;
-    fx->glare_enabled = false;
-    fx->local_exposure_enabled = false;
-    fx->ssao_enabled = false;
-    fx->ssr_enabled = false;
-    fx->vignette_enabled = false;
-    fx->dither_enabled = false;
-    fx->taa_enabled = false;
-    fx->tonemap_mode = POSTFX_TONEMAP_LINEAR;
-    engine->exposure.physical = false;
-    engine->exposure.automatic = false;
-    engine->exposure.multiplier = 1.0f;
+    fx->settings->bloom_enabled = false;
+    fx->settings->glare_enabled = false;
+    fx->settings->local_exposure_enabled = false;
+    fx->settings->ssao_enabled = false;
+    fx->settings->ssr_enabled = false;
+    fx->settings->vignette_enabled = false;
+    fx->settings->dither_enabled = false;
+    fx->settings->taa_enabled = false;
+    fx->settings->tonemap_mode = POSTFX_TONEMAP_LINEAR;
+    engine->exposure.settings->physical = false;
+    engine->exposure.settings->automatic = false;
+    engine->exposure.settings->multiplier = 1.0f;
     if (!scene)
         return;
     // White ambient radiance: the no-environment ambient is radiance times
@@ -3111,8 +3114,8 @@ static void _engine_present_window(Engine* engine) {
                                   .mask = engine->crt_mask,
                                   .curvature = engine->crt_curvature,
                                   .bleed = engine->crt_bleed,
-                                  .dither = fx->dither_enabled,
-                                  .dither_strength = fx->dither_strength};
+                                  .dither = fx->settings->dither_enabled,
+                                  .dither_strength = fx->settings->dither_strength};
             profiler_scope_begin(engine->profiler, "crt");
             crt_present(engine->crt, fx->picture.tex, fx->picture.w, fx->picture.h,
                         engine->postfx_programs->quad_vao, &look);
@@ -3128,8 +3131,9 @@ static void _engine_present_window(Engine* engine) {
             glUseProgram(present->id);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, fx->picture.tex);
-            uniform_set_int(present->uniforms, "ditherEnabled", fx->dither_enabled ? 1 : 0);
-            uniform_set_float(present->uniforms, "ditherStrength", fx->dither_strength);
+            uniform_set_int(present->uniforms, "ditherEnabled",
+                            fx->settings->dither_enabled ? 1 : 0);
+            uniform_set_float(present->uniforms, "ditherStrength", fx->settings->dither_strength);
             draw_fullscreen_quad(engine->postfx_programs->quad_vao);
             glUseProgram(0);
             gl_pass_end(&pass);
@@ -3163,14 +3167,15 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     engine->postfx->crt_on = _engine_crt_on(engine);
     // Depth-of-field autofocus: keep the subject sharp as the camera orbits or
     // zooms by refocusing on the point the camera looks at (the orbit target),
-    // unless a manual focus distance was pinned.
-    if (engine->postfx->dof_enabled && engine->postfx->dof_autofocus && engine->camera) {
-        engine->postfx->dof_focus_distance =
-            glm_vec3_distance(engine->camera->position, engine->camera->look_at);
-    }
+    // unless a manual focus distance was pinned. Negative with no camera to measure.
+    engine->postfx->dof_autofocus_distance =
+        engine->camera ? glm_vec3_distance(engine->camera->position, engine->camera->look_at)
+                       : -1.0f;
     // Hand the current scene's reflection probes and shadow casters to postfx
     // (SSR miss fallback / fog march) without postfx learning about Scene
     const Scene* fx_scene = engine_get_scene(engine);
+    engine->postfx->sss_profiles = fx_scene ? (const vec4*)fx_scene->sss_profiles : NULL;
+    engine->postfx->sss_profile_count = fx_scene ? fx_scene->sss_profile_count : 0;
     probe_set_publish_to_postfx(fx_scene ? fx_scene->probe_set : NULL,
                                 fx_scene ? fx_scene->lighting_atlas : NULL, engine->postfx);
     shadow_publish_to_postfx(fx_scene, engine->postfx);

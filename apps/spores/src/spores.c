@@ -139,21 +139,22 @@ static void on_init(Game* game) {
     // normalizes the metered mean toward middle gray, which for this lit room
     // is too bright for the intended dim interior -- the bias underexposes it
     // back down (photographic exposure compensation; auto-adaptation stays on).
-    engine->exposure.multiplier = 0.15f;
+    engine->exposure.settings->multiplier = 0.15f;
     if (engine->postfx) {
         // Thin volumetric haze so the flashlight throws a visible beam shaft.
         // Kept low-density with near-zero ambient so the room stays moody and
         // the beam dominates rather than a general grey wash.
-        engine->postfx->fog_enabled = true;
+        engine->postfx->settings->fog_enabled = true;
         // Low density keeps extinction (scene dimming) small; sun_boost scales
         // the in-scatter only, so it brightens the beam without washing the room.
-        engine->postfx->fog_density = 0.035f;
-        engine->postfx->fog_height_falloff = 9.0f;
-        engine->postfx->fog_floor_y = 0.0f;
-        engine->postfx->fog_far = 40.0f;
-        engine->postfx->fog_anisotropy = 0.82f; // strong forward scatter -> punchy beam
-        engine->postfx->fog_sun_boost = 3.5f;
-        postfx_set_fog_ambient(engine->postfx, (vec3){0.004f, 0.004f, 0.004f});
+        engine->postfx->settings->fog_density = 0.035f;
+        engine->postfx->settings->fog_height_falloff = 9.0f;
+        engine->postfx->settings->fog_floor_y = 0.0f;
+        engine->postfx->settings->fog_far = 40.0f;
+        engine->postfx->settings->fog_anisotropy = 0.82f; // strong forward scatter -> punchy beam
+        engine->postfx->settings->fog_sun_boost = 3.5f;
+        glm_vec3_copy((vec3){0.004f, 0.004f, 0.004f}, engine->postfx->settings->fog_ambient);
+        engine->postfx->settings->fog_ambient_from_sky = false;
     }
 
     Scene* scene = create_scene();

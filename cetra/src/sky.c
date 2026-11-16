@@ -653,11 +653,13 @@ void sky_publish_to_postfx(const SkyAtmosphere* sky, struct PostFX* fx) {
     // sky path, since its sun term already arrives via the light publish. A copy,
     // not a computation: the march behind it runs once per sun move.
     //
-    // fog_ambient_from_sky is what stops this from silently overwriting a value
-    // someone else owns; postfx_set_fog_ambient clears it, because a control
-    // that snaps back every frame is worse than no control.
-    if (sky && sky->enabled && fx->fog_ambient_from_sky)
-        glm_vec3_copy((float*)sky->zenith_radiance, fx->fog_ambient);
+    // Published beside the setting rather than over it, so the app's own value is never
+    // overwritten; the fog takes this one while settings->fog_ambient_from_sky. Once published it
+    // stays, so a sky switched off leaves its last zenith, as a copy over the setting did.
+    if (sky && sky->enabled) {
+        glm_vec3_copy((float*)sky->zenith_radiance, fx->fog_ambient_sky);
+        fx->fog_ambient_sky_valid = true;
+    }
 
     if (sky && sky->enabled && sky->aerial_lut) {
         fx->aerial_volume = sky->aerial_lut;

@@ -2689,8 +2689,8 @@ static void on_init(Game* game) {
     // Pinned rather than adaptive: auto-exposure is the top determinism hazard
     // for anything compared across builds, and every arm here reads a frame or a
     // counter from this app.
-    engine->exposure.automatic = false;
-    engine->exposure.multiplier = 1.8f;
+    engine->exposure.settings->automatic = false;
+    engine->exposure.settings->multiplier = 1.8f;
 
     if (g_args.render_mode > 0)
         engine->current_render_mode = (RenderMode)g_args.render_mode;
@@ -2731,20 +2731,22 @@ static void on_init(Game* game) {
     // extinction is per metre and the numbers are small.
     if (engine->postfx && !g_args.no_fog) {
         PostFX* fx = engine->postfx;
-        fx->fog_enabled = true;
-        fx->fog_density = 0.0022f;
-        fx->fog_height_falloff = 42.0f; // thick in the valleys, thin off the ridges
-        fx->fog_floor_y = -30.0f;
-        fx->fog_near = 0.0f; // derive from fog_far
-        fx->fog_far = 1400.0f;
+        fx->settings->fog_enabled = true;
+        fx->settings->fog_density = 0.0022f;
+        fx->settings->fog_height_falloff = 42.0f; // thick in the valleys, thin off the ridges
+        fx->settings->fog_floor_y = -30.0f;
+        fx->settings->fog_near = 0.0f; // derive from fog_far
+        fx->settings->fog_far = 1400.0f;
         // Forward-scattering, so looking toward the sun lights the medium up and
         // looking away leaves it flat -- most of what reads as "moody".
-        fx->fog_anisotropy = 0.72f;
-        fx->fog_sun_boost = 2.2f;
+        fx->settings->fog_anisotropy = 0.72f;
+        fx->settings->fog_sun_boost = 2.2f;
         // With the sky, the fog's ambient follows the sun; this dusk blue is
         // the fallback sun's, which has no zenith radiance to publish.
-        if (g_args.no_sky)
-            postfx_set_fog_ambient(fx, (vec3){0.030f, 0.038f, 0.055f});
+        if (g_args.no_sky) {
+            glm_vec3_copy((vec3){0.030f, 0.038f, 0.055f}, fx->settings->fog_ambient);
+            fx->settings->fog_ambient_from_sky = false;
+        }
     }
 
     engine->show_gui = !engine->headless;
@@ -2967,14 +2969,13 @@ static void on_pre_render(Game* game, double alpha) {
                               input_action_value(&game->input, "look_x"),
                               input_action_value(&game->input, "look_y"));
         }
-    }
 
-    // The descent, before the engine's transform walk gives a newly attached
-    // patch its global transform and before the draw list is asked what to draw.
-    // Against the camera the frame will actually use, which is why it is here and
-    // not in the fixed-step update: at a fixed step the selection would lag the
-    // view by up to a frame, and the morph is a function of exactly this eye.
-    if (camera) {
+        // The descent, before the engine's transform walk gives a newly attached
+        // patch its global transform and before the draw list is asked what to draw.
+        // Against the camera the frame will actually use, which is why it is here and
+        // not in the fixed-step update: at a fixed step the selection would lag the
+        // view by up to a frame, and the morph is a function of exactly this eye.
+        //
         // Residency first: the quadtree hangs its patches under a node of its
         // own and does not care, but a region that loads here has to be in the
         // graph before the transform walk reaches it.
@@ -3350,7 +3351,7 @@ int main(int argc, char** argv) {
     }
     game->engine->exit_after_frames = g_args.frames;
     if (game->engine->postfx)
-        game->engine->postfx->glare_enabled = g_args.glare != 0;
+        game->engine->postfx->settings->glare_enabled = g_args.glare != 0;
     engine_set_screenshot_path(game->engine, g_args.screenshot);
     game->engine->screenshot_every = g_args.screenshot_every;
     input_bind(&game->input, g_actions, sizeof(g_actions) / sizeof(g_actions[0]));

@@ -183,6 +183,10 @@ typedef struct FogVolume {
 
 #define SCENE_MAX_OCCLUDERS 64
 
+// Max distinct per-material SSS scatter profiles per scene. C-side only: the
+// gather takes one profile per walk, so no shader mirrors this array.
+#define MAX_SSS_PROFILES 8
+
 // A world-space box the occlusion cull may treat as solid (spec 11.98). The
 // author's contract: it must sit ENTIRELY inside opaque geometry. The raster is
 // conservative everywhere else, so a violated contract -- a box poking out of
@@ -311,6 +315,12 @@ typedef struct Scene {
     // never entered.
     Decal decals[DECAL_MAX]; // scene_add_decal, scene_clear_decals
     int decal_count;
+    // Per-material SSS scatter profiles: rgb = per-channel scatter weight (skin ~(1,0.3,0.2),
+    // red widest), w = world-space blur radius. pbr_frag tags each skin pixel with its
+    // material's profile index; slot 0 is the default skin profile, used when the scene
+    // configures none.
+    vec4 sss_profiles[MAX_SSS_PROFILES]; // scene_add_sss_profile, scene_reset_sss_profiles
+    int sss_profile_count;
     // The program the XYZ gizmo overlay draws every node with; NULL until
     // installed, and nothing draws one. Borrowed from the engine's registry.
     ShaderProgram* xyz_shader_program; // scene_set_xyz_program
@@ -482,6 +492,14 @@ void scene_update_particle_systems(Scene* scene, float dt, float t);
 // registers it, and a mesh carrying another scene's material is refused, by
 // name, rather than drawn from a registry that will free it.
 void scene_add_material(Scene* scene, Material* material);
+
+// Per-material SSS scatter profiles. The app resets the table when it configures
+// a scene's skin materials, then adds one profile per distinct skin material
+// (color = per-channel scatter weight, radius = world-space blur width); the
+// returned slot index is written to material->subsurface_profile so pbr_frag can
+// tag each of that material's pixels. Returns -1 if the table is full.
+void scene_reset_sss_profiles(Scene* scene);
+int scene_add_sss_profile(Scene* scene, const float* color, float radius);
 // Give up a material this scene owns, which then belongs to whichever scene registers it next:
 // how a model loaded into a scene of its own lends its materials to the one that draws it.
 // False when this scene does not own it.

@@ -40,8 +40,8 @@ void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn);
 // Apply the scene file's material overrides onto matching materials by authored name: their
 // parameters, textures, layers and roads, and their shaders (spec 13.29) -- a late-draw program,
 // a surface hook from shaderHooks, and the params either reads. The engine owns the programs and
-// the hooks. Subsurface is NOT applied here: it also has to register a scatter profile with
-// PostFX, so it stays in configure_sss_materials where that engine handle is in scope.
+// the hooks. Subsurface is NOT applied here: it also registers a scatter profile on the scene,
+// and the command line's overrides of it, so it stays in configure_sss_materials.
 void apply_cscene_material_overrides(struct Engine* engine, Scene* scene,
                                      const CetraSceneDesc* cscn);
 

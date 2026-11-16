@@ -18,56 +18,9 @@ typedef enum MeteringMode {
     METERING_SPOT,        // a central disc votes; nothing else does
 } MeteringMode;
 
-// The camera's exposure, and the one place that decides what it is.
-//
-// Exposure used to be four things in three files: a linear multiplier on PostFX,
-// an EV100 camera added by spec 10.0, an adaptation gain metered in two shaders
-// and applied in a third, and render.c's ViewParams publish picking one of them.
-// Nothing was wrong individually; there was just no single answer to "what is
-// the exposure this frame", which is precisely the question the working-space
-// contract (shaders/include/view.glsl) is stated in terms of.
-//
-// The whole exposure is exposure_multiplier(): camera x adaptation. That is what
-// pre-exposes the scene, so 1.0 in the HDR buffer is diffuse white no matter
-// which mechanism produced it -- and every WS_* threshold, and bloom's, then
-// means what it says. Applying the adaptation gain later, at the tonemap, would
-// leave the buffer off the scale its own thresholds assume by however far the
-// adaptation had travelled -- up to 20 stops on a sunlit scene.
-//
-// Pre-exposing by the gain only became possible once nothing upstream of the
-// meter was a fixed multiple of WHITE (spec 10.1 phase 5). While pbr_frag still
-// clamped nits and carried a 3%-of-white ambient floor, those terms measured
-// brighter as the gain closed -- the meter divides pre-exposure back out -- and
-// the exposure ratcheted instead of settling. Anything added upstream of the
-// metering pass has to be a fixed multiple of RADIANCE, or that returns.
-typedef struct Exposure {
-    // ENGINE-OWNED: what the meter reported. Read freely, never write.
-
-    // Last frame's metered geometric-mean luminance, in ABSOLUTE scene radiance
-    // (the meter divides the pre-exposure back out). One frame stale by
-    // construction: this frame's value cannot exist before this frame is shaded,
-    // and shading needs the exposure. The lag is far below the adaptation time
-    // constant, so it is invisible; the alternative is a circular dependency.
-    //
-    // `adapted_valid` is false until a frame has actually been metered, which is
-    // what keeps the first frame from adapting to uninitialised memory.
-    float adapted_luminance;
-    bool adapted_valid;
-
-    // What the last submitted measurement was, and what it became after the
-    // metered bounds were applied. Diagnostic, but they are the only record:
-    // exposure_submit_measurement folds the reading into adapted_luminance and
-    // drops both, so nothing outside that call could otherwise see either.
-    //
-    // `last_target_log2` is the value the adaptation is actually converging TO.
-    // Comparing `adapted` against the RAW reading instead looks equivalent and is
-    // not -- on a frame the bounds clamp, the two never meet however long it
-    // runs, which reads as an adaptation that never settles.
-    float last_raw_log2;
-    float last_target_log2;
-
-    // SETTINGS: plain stores. Write them directly, at any time.
-
+// What the camera is set to: plain values an app writes at any time. Nothing here is the
+// meter's, so a copy is a whole description and two are compared byte for byte.
+typedef struct ExposureSettings {
     // Selects which of the two fields below is the camera. Photometric lights
     // are the wrong magnitude for a hand-picked multiplier -- a 127 cd bulb at
     // 2 m is ~32 lux, and nothing about "0.7846" tells you whether that lands
@@ -152,11 +105,65 @@ typedef struct Exposure {
     // that decides what the exposure is, and a report of that decision made
     // anywhere else would be reading the pieces back out and re-deriving it.
     bool probe;
+} ExposureSettings;
+
+// The camera's exposure, and the one place that decides what it is.
+//
+// Exposure used to be four things in three files: a linear multiplier on PostFX,
+// an EV100 camera added by spec 10.0, an adaptation gain metered in two shaders
+// and applied in a third, and render.c's ViewParams publish picking one of them.
+// Nothing was wrong individually; there was just no single answer to "what is
+// the exposure this frame", which is precisely the question the working-space
+// contract (shaders/include/view.glsl) is stated in terms of.
+//
+// The whole exposure is exposure_multiplier(): camera x adaptation. That is what
+// pre-exposes the scene, so 1.0 in the HDR buffer is diffuse white no matter
+// which mechanism produced it -- and every WS_* threshold, and bloom's, then
+// means what it says. Applying the adaptation gain later, at the tonemap, would
+// leave the buffer off the scale its own thresholds assume by however far the
+// adaptation had travelled -- up to 20 stops on a sunlit scene.
+//
+// Pre-exposing by the gain only became possible once nothing upstream of the
+// meter was a fixed multiple of WHITE (spec 10.1 phase 5). While pbr_frag still
+// clamped nits and carried a 3%-of-white ambient floor, those terms measured
+// brighter as the gain closed -- the meter divides pre-exposure back out -- and
+// the exposure ratcheted instead of settling. Anything added upstream of the
+// metering pass has to be a fixed multiple of RADIANCE, or that returns.
+typedef struct Exposure {
+    // ENGINE-OWNED: what the meter reported. Read freely, never write.
+
+    // Last frame's metered geometric-mean luminance, in ABSOLUTE scene radiance
+    // (the meter divides the pre-exposure back out). One frame stale by
+    // construction: this frame's value cannot exist before this frame is shaded,
+    // and shading needs the exposure. The lag is far below the adaptation time
+    // constant, so it is invisible; the alternative is a circular dependency.
+    //
+    // `adapted_valid` is false until a frame has actually been metered, which is
+    // what keeps the first frame from adapting to uninitialised memory.
+    float adapted_luminance;
+    bool adapted_valid;
+
+    // What the last submitted measurement was, and what it became after the
+    // metered bounds were applied. Diagnostic, but they are the only record:
+    // exposure_submit_measurement folds the reading into adapted_luminance and
+    // drops both, so nothing outside that call could otherwise see either.
+    //
+    // `last_target_log2` is the value the adaptation is actually converging TO.
+    // Comparing `adapted` against the RAW reading instead looks equivalent and is
+    // not -- on a frame the bounds clamp, the two never meet however long it
+    // runs, which reads as an adaptation that never settles.
+    float last_raw_log2;
+    float last_target_log2;
+
+    // Borrowed: what the camera is set to.
+    ExposureSettings* settings;
 } Exposure;
 
-// Initialise in place. No allocation: an Engine always has exactly one, so a
-// pointer would only invite the NULL checks that had four different answers.
-void exposure_init(Exposure* ex);
+// The settings every camera starts from.
+void exposure_settings_init(ExposureSettings* settings);
+// Initialise in place, no reading yet, running with `settings`, which is borrowed. No
+// allocation: a meter lives inside what owns it.
+void exposure_init(Exposure* ex, ExposureSettings* settings);
 
 // EV100 = log2(N^2 / t * 100 / ISO), the photographic definition.
 float exposure_ev100(const Exposure* ex);

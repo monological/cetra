@@ -713,7 +713,7 @@ so the caustics refract through the rings as well.
 
 `glare.c` plus four `glare_*_frag` passes and `include/glare_threshold.glsl` (specs 13.4 and 13.5,
 after Clearwater). **Off by default**; a `.cscn` turns it on with `post.glare`, an app with
-`postfx->glare_enabled`.
+`postfx->settings->glare_enabled`.
 
 **How it works.** The aperture's diffraction pattern is the power spectrum of a round lens with
 flattened sides, scratches and dust. It is summed over 32 wavelengths between Clearwater's eight
@@ -742,7 +742,7 @@ conserved to 1.007 (`glare-conserves`). A frame with nothing past the threshold 
 `include/local_exposure.glsl` (spec 13.19). The sources are Durand & Dorsey 2002, Chen, Paris &
 Durand 2007 and Unreal 5's Local Exposure; `docs/papers/README.md` says what each gave.
 **Off by default**; a `.cscn` turns it on with `post.local_exposure`, an app with
-`postfx->local_exposure_enabled`.
+`postfx->settings->local_exposure_enabled`.
 
 **How it works.** The frame's luminance, in EXPOSED log2, is split into a base and a detail.
 - **The base:** a bilateral grid sliced at each pixel's own luminance, mixed with a heavily

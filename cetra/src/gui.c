@@ -843,7 +843,7 @@ static void _engine_gui_panel(Engine* engine) {
         if (igCheckbox("MSAA 4x", &msaa))
             engine_set_msaa_samples(engine, msaa ? 4 : 1);
         igSameLine(0, -1);
-        igCheckbox("TAA", &fx->taa_enabled);
+        igCheckbox("TAA", &fx->settings->taa_enabled);
         igSameLine(0, -1);
         // The jittered alpha lookup (spec 11.101) only does anything while TAA
         // accumulates, which is why it sits on this row: flip it beside TAA
@@ -862,7 +862,7 @@ static void _engine_gui_panel(Engine* engine) {
             // Not being dragged: track the live value, so a scale the setter
             // clamped or refused shows here rather than the stale request.
             pending_scale = engine->render_scale;
-        if (!fx->taa_enabled && engine->render_scale < 1.0f) {
+        if (!fx->settings->taa_enabled && engine->render_scale < 1.0f) {
             // Without the resolve there is nothing to reconstruct with, so the
             // frame is magnified rather than upscaled: softer, not faster.
             igTextDisabled("(needs TAA to reconstruct; magnifying)");
@@ -871,21 +871,23 @@ static void _engine_gui_panel(Engine* engine) {
         // Index maps to the enum minus PASSTHROUGH, which is not a look and
         // stays out of the picker
         static const char* const tonemap_names[] = {"ACES", "PBR Neutral", "AgX", "Linear"};
-        int tm = (int)fx->tonemap_mode - 1;
+        int tm = (int)fx->settings->tonemap_mode - 1;
         if (igCombo_Str_arr("Tonemap", &tm, tonemap_names,
                             (int)(sizeof(tonemap_names) / sizeof(tonemap_names[0])), -1))
-            fx->tonemap_mode = (PostFXTonemapMode)(tm + 1);
-        igCheckbox("Auto Exposure", &engine->exposure.automatic);
+            fx->settings->tonemap_mode = (PostFXTonemapMode)(tm + 1);
+        igCheckbox("Auto Exposure", &engine->exposure.settings->automatic);
         // Two controls because they are two quantities, shown one at a time.
         // One slider over one range could not serve both: under a physical
         // camera the value is stops, where the linear range 0.05..8 cannot
         // reach 0 (neutral) and cannot stop down at all.
-        if (engine->exposure.physical) {
-            igSliderFloat("EV Bias", &engine->exposure.bias_stops, -6.0f, 6.0f, "%+.2f EV", 0);
+        if (engine->exposure.settings->physical) {
+            igSliderFloat("EV Bias", &engine->exposure.settings->bias_stops, -6.0f, 6.0f,
+                          "%+.2f EV", 0);
             if (igIsItemHovered(0))
                 igSetTooltip("Exposure compensation on the physical camera. Positive opens up.");
         } else {
-            igSliderFloat("Exposure", &engine->exposure.multiplier, 0.05f, 8.0f, "%.2f", 0);
+            igSliderFloat("Exposure", &engine->exposure.settings->multiplier, 0.05f, 8.0f, "%.2f",
+                          0);
             if (igIsItemHovered(0))
                 igSetTooltip("Linear multiplier. Authoring a post.camera in a .cscn switches "
                              "this to an EV bias instead.");
@@ -917,13 +919,13 @@ static void _engine_gui_panel(Engine* engine) {
 
         if (igTreeNode_Str("Metering")) {
             static const char* const meter_names[] = {"Uniform", "Centre-weighted", "Spot"};
-            int mode = (int)engine->exposure.meter_mode;
+            int mode = (int)engine->exposure.settings->meter_mode;
             if (igCombo_Str_arr("Mode", &mode, meter_names,
                                 (int)(sizeof(meter_names) / sizeof(meter_names[0])), -1))
-                engine->exposure.meter_mode = (MeteringMode)mode;
-            if (engine->exposure.meter_mode != METERING_UNIFORM) {
-                igSliderFloat("Radius", &engine->exposure.meter_radius, 0.05f, 1.0f, "%.2f",
-                              ImGuiSliderFlags_AlwaysClamp);
+                engine->exposure.settings->meter_mode = (MeteringMode)mode;
+            if (engine->exposure.settings->meter_mode != METERING_UNIFORM) {
+                igSliderFloat("Radius", &engine->exposure.settings->meter_radius, 0.05f, 1.0f,
+                              "%.2f", ImGuiSliderFlags_AlwaysClamp);
                 if (igIsItemHovered(0))
                     igSetTooltip("Fraction of the frame's half-diagonal, in UV -- an ellipse in "
                                  "pixels on a non-square frame.");
@@ -932,12 +934,12 @@ static void _engine_gui_panel(Engine* engine) {
             // shader falls back to the whole population if they cross, so a
             // slider drag through the middle degrades to a plain mean instead of
             // to a black frame.
-            igSliderFloat("Low %", &engine->exposure.meter_low, 0.0f, 0.95f, "%.2f",
+            igSliderFloat("Low %", &engine->exposure.settings->meter_low, 0.0f, 0.95f, "%.2f",
                           ImGuiSliderFlags_AlwaysClamp);
             if (igIsItemHovered(0))
                 igSetTooltip("Fraction of the DARKEST pixels ignored. High by default: a meter "
                              "that includes the black background is measuring the background.");
-            igSliderFloat("High %", &engine->exposure.meter_high, 0.05f, 1.0f, "%.2f",
+            igSliderFloat("High %", &engine->exposure.settings->meter_high, 0.05f, 1.0f, "%.2f",
                           ImGuiSliderFlags_AlwaysClamp);
             if (igIsItemHovered(0))
                 igSetTooltip("Everything above this fraction is ignored -- the highlight tail.");
@@ -945,57 +947,62 @@ static void _engine_gui_panel(Engine* engine) {
             // tooltip -- igIsItemHovered refers to the LAST item, so a single
             // tooltip after two sliders describes only the second.
             igTextDisabled("Adaptation rate, per frame");
-            igSliderFloat("Adapt Up", &engine->exposure.adapt_rate_up, 0.001f, 1.0f, "%.3f",
-                          ImGuiSliderFlags_AlwaysClamp);
-            igSliderFloat("Adapt Down", &engine->exposure.adapt_rate_down, 0.001f, 1.0f, "%.3f",
-                          ImGuiSliderFlags_AlwaysClamp);
+            igSliderFloat("Adapt Up", &engine->exposure.settings->adapt_rate_up, 0.001f, 1.0f,
+                          "%.3f", ImGuiSliderFlags_AlwaysClamp);
+            igSliderFloat("Adapt Down", &engine->exposure.settings->adapt_rate_down, 0.001f, 1.0f,
+                          "%.3f", ImGuiSliderFlags_AlwaysClamp);
             igTreePop();
         }
 
-        _begin_effect_group("Bloom", &fx->bloom_enabled);
-        igSliderFloat("Bloom Strength", &fx->bloom_strength, 0.0f, 0.1f, "%.3f", 0);
-        igSliderFloat("Bloom Threshold", &fx->bloom_threshold, 0.0f, 8.0f, "%.2f", 0);
+        _begin_effect_group("Bloom", &fx->settings->bloom_enabled);
+        igSliderFloat("Bloom Strength", &fx->settings->bloom_strength, 0.0f, 0.1f, "%.3f", 0);
+        igSliderFloat("Bloom Threshold", &fx->settings->bloom_threshold, 0.0f, 8.0f, "%.2f", 0);
         _end_effect_group();
 
         // Under bloom because it reads the same thresholded pyramid, though it
         // no longer needs bloom switched on to get one.
-        _begin_effect_group("Lens Flare", &fx->flare_enabled);
-        igSliderFloat("Flare Strength", &fx->flare_strength, 0.0f, 0.15f, "%.3f", 0);
-        igSliderInt("Ghosts", &fx->flare_ghosts, 0, 8, "%d", 0);
-        igSliderFloat("Ghost Spacing", &fx->flare_ghost_spacing, 0.15f, 0.45f, "%.3f", 0);
-        igSliderFloat("Halo Width", &fx->flare_halo_width, 0.0f, 1.0f, "%.2f", 0);
-        igSliderFloat("Flare Dispersion", &fx->flare_chroma, 0.0f, 12.0f, "%.1f px", 0);
+        _begin_effect_group("Lens Flare", &fx->settings->flare_enabled);
+        igSliderFloat("Flare Strength", &fx->settings->flare_strength, 0.0f, 0.15f, "%.3f", 0);
+        igSliderInt("Ghosts", &fx->settings->flare_ghosts, 0, 8, "%d", 0);
+        igSliderFloat("Ghost Spacing", &fx->settings->flare_ghost_spacing, 0.15f, 0.45f, "%.3f", 0);
+        igSliderFloat("Halo Width", &fx->settings->flare_halo_width, 0.0f, 1.0f, "%.2f", 0);
+        igSliderFloat("Flare Dispersion", &fx->settings->flare_chroma, 0.0f, 12.0f, "%.1f px", 0);
         // Bounded by the pyramid that exists at this resolution rather than a
         // constant: the mip count falls out of the frame size, so a fixed top
         // would let the slider travel past the last real level and do nothing.
-        igSliderInt("Source Mip", &fx->flare_source_lod, 0,
+        igSliderInt("Source Mip", &fx->settings->flare_source_lod, 0,
                     fx->bloom_mips > 0 ? fx->bloom_mips - 1 : 0, "%d", 0);
         _end_effect_group();
 
-        _begin_effect_group("Diffraction Glare", &fx->glare_enabled);
-        igSliderFloat("Glare Strength", &fx->glare_strength, 0.0f, 1.0f, "%.2f", 0);
-        igSliderFloat("Glare Threshold", &fx->glare_threshold, 1.0f, 100.0f, "%.1f",
+        _begin_effect_group("Diffraction Glare", &fx->settings->glare_enabled);
+        igSliderFloat("Glare Strength", &fx->settings->glare_strength, 0.0f, 1.0f, "%.2f", 0);
+        igSliderFloat("Glare Threshold", &fx->settings->glare_threshold, 1.0f, 100.0f, "%.1f",
                       ImGuiSliderFlags_Logarithmic);
         _end_effect_group();
 
         // At 1 a contrast changes nothing; Unreal suggests 0.6-1, a scene with a bright window and
         // a high exposure key may want less.
-        _begin_effect_group("Local Exposure", &fx->local_exposure_enabled);
-        igSliderFloat("Highlight Contrast", &fx->local_exposure_highlights, 0.0f, 1.0f, "%.2f", 0);
-        igSliderFloat("Shadow Contrast", &fx->local_exposure_shadows, 0.0f, 1.0f, "%.2f", 0);
-        igSliderFloat("Detail Strength", &fx->local_exposure_detail, 0.0f, 2.0f, "%.2f", 0);
-        igSliderFloat("Blurred Luminance Blend", &fx->local_exposure_blend, 0.0f, 1.0f, "%.2f", 0);
-        igSliderFloat("Blur Kernel", &fx->local_exposure_kernel, 0.05f, 1.0f, "%.2f", 0);
-        igSliderFloat("Middle Grey Bias", &fx->local_exposure_grey_bias, -2.0f, 2.0f, "%.2f EV", 0);
+        _begin_effect_group("Local Exposure", &fx->settings->local_exposure_enabled);
+        igSliderFloat("Highlight Contrast", &fx->settings->local_exposure_highlights, 0.0f, 1.0f,
+                      "%.2f", 0);
+        igSliderFloat("Shadow Contrast", &fx->settings->local_exposure_shadows, 0.0f, 1.0f, "%.2f",
+                      0);
+        igSliderFloat("Detail Strength", &fx->settings->local_exposure_detail, 0.0f, 2.0f, "%.2f",
+                      0);
+        igSliderFloat("Blurred Luminance Blend", &fx->settings->local_exposure_blend, 0.0f, 1.0f,
+                      "%.2f", 0);
+        igSliderFloat("Blur Kernel", &fx->settings->local_exposure_kernel, 0.05f, 1.0f, "%.2f", 0);
+        igSliderFloat("Middle Grey Bias", &fx->settings->local_exposure_grey_bias, -2.0f, 2.0f,
+                      "%.2f EV", 0);
         _end_effect_group();
 
-        _begin_effect_group("Ambient Occlusion (GTAO)", &fx->ssao_enabled);
+        _begin_effect_group("Ambient Occlusion (GTAO)", &fx->settings->ssao_enabled);
         // Log scale + wide range: the AO/GI reach is a world-space distance, so
         // apps scale it to the scene (meter-scale models sit near the bottom,
         // large-unit scenes in the hundreds).
-        _length_slider("AO Radius", &fx->ssao_radius, 0.05f, 1000.0f, size, "%.2f m",
+        _length_slider("AO Radius", &fx->settings->ssao_radius, 0.05f, 1000.0f, size, "%.2f m",
                        ImGuiSliderFlags_Logarithmic);
-        igSliderFloat("AO Strength", &fx->ssao_strength, 0.0f, 1.0f, "%.2f", 0);
+        igSliderFloat("AO Strength", &fx->settings->ssao_strength, 0.0f, 1.0f, "%.2f", 0);
         static const char* const spec_occ_names[] = {"Off", "Legacy", "Split"};
         // The combo writes its INDEX straight back into the enum, so a label
         // dropped here without the enum value (or the reverse) compiles clean
@@ -1005,18 +1012,18 @@ static void _engine_gui_panel(Engine* engine) {
         _Static_assert(sizeof(spec_occ_names) / sizeof(*spec_occ_names) ==
                            POSTFX_SPEC_OCC_SPLIT + 1,
                        "spec_occ_names must label every PostFXSpecOccMode");
-        int so = (int)fx->spec_occlusion_mode;
+        int so = (int)fx->settings->spec_occlusion_mode;
         if (igCombo_Str_arr("Specular Occlusion", &so, spec_occ_names,
                             (int)(sizeof(spec_occ_names) / sizeof(spec_occ_names[0])), -1))
-            fx->spec_occlusion_mode = (PostFXSpecOccMode)so;
-        igCheckbox("AO Edge Filter", &fx->ao_edge_filter_enabled);
+            fx->settings->spec_occlusion_mode = (PostFXSpecOccMode)so;
+        igCheckbox("AO Edge Filter", &fx->settings->ao_edge_filter_enabled);
         _end_effect_group();
 
-        _begin_effect_group("Contact Shadows", &fx->contact_shadows_enabled);
-        igSliderFloat("CS Strength", &fx->cs_strength, 0.0f, 1.0f, "%.2f", 0);
+        _begin_effect_group("Contact Shadows", &fx->settings->contact_shadows_enabled);
+        igSliderFloat("CS Strength", &fx->settings->cs_strength, 0.0f, 1.0f, "%.2f", 0);
         // Log scale + wide range: the march reach is a world-space distance the
         // app scales to the scene, like SSR Distance.
-        _length_slider("CS Distance", &fx->cs_distance, 0.01f, 1000.0f, size, "%.3f m",
+        _length_slider("CS Distance", &fx->settings->cs_distance, 0.01f, 1000.0f, size, "%.3f m",
                        ImGuiSliderFlags_Logarithmic);
         // The pass needs something to march toward -- a shadow-casting
         // directional, or a local light that has no shadow map to be sharpened
@@ -1025,66 +1032,64 @@ static void _engine_gui_panel(Engine* engine) {
             igTextDisabled("(needs a directional or a map-less local light)");
         _end_effect_group();
 
-        _begin_effect_group("SSR", &fx->ssr_enabled);
-        igSliderFloat("SSR Strength", &fx->ssr_strength, 0.0f, 2.0f, "%.2f", 0);
+        _begin_effect_group("SSR", &fx->settings->ssr_enabled);
+        igSliderFloat("SSR Strength", &fx->settings->ssr_strength, 0.0f, 2.0f, "%.2f", 0);
         // Log scale + wide range: the march reach is a world-space distance
         // the app scales to the scene (a couple of units on meter-scale
         // models, thousands on large-unit assets)
-        _length_slider("SSR Distance", &fx->ssr_max_distance, 1.0f, 20000.0f, size, "%.2f m",
-                       ImGuiSliderFlags_Logarithmic);
-        igSliderFloat("SSR Floor Rough", &fx->ssr_floor_roughness, 0.0f, 1.0f, "%.2f", 0);
-        bool ssr_full_res = fx->ssr_full_res;
-        if (igCheckbox("SSR Full Res", &ssr_full_res))
-            postfx_set_ssr_full_res(fx, ssr_full_res);
-        igCheckbox("SSR Temporal (needs TAA)", &fx->ssr_temporal);
-        igCheckbox("SSR Denoise", &fx->ssr_denoise);
-        igSliderFloat("SSR Jitter", &fx->ssr_jitter, 0.0f, 0.2f, "%.3f", 0);
+        _length_slider("SSR Distance", &fx->settings->ssr_max_distance, 1.0f, 20000.0f, size,
+                       "%.2f m", ImGuiSliderFlags_Logarithmic);
+        igSliderFloat("SSR Floor Rough", &fx->settings->ssr_floor_roughness, 0.0f, 1.0f, "%.2f", 0);
+        igCheckbox("SSR Full Res", &fx->settings->ssr_full_res);
+        igCheckbox("SSR Temporal (needs TAA)", &fx->settings->ssr_temporal);
+        igCheckbox("SSR Denoise", &fx->settings->ssr_denoise);
+        igSliderFloat("SSR Jitter", &fx->settings->ssr_jitter, 0.0f, 0.2f, "%.3f", 0);
         _end_effect_group();
 
-        _begin_effect_group("SSGI", &fx->ssgi_enabled);
-        igSliderFloat("GI Intensity", &fx->ssgi_intensity, 0.0f, 4.0f, "%.2f", 0);
+        _begin_effect_group("SSGI", &fx->settings->ssgi_enabled);
+        igSliderFloat("GI Intensity", &fx->settings->ssgi_intensity, 0.0f, 4.0f, "%.2f", 0);
         _end_effect_group();
 
-        _begin_effect_group("Volumetric Fog", &fx->fog_enabled);
+        _begin_effect_group("Volumetric Fog", &fx->settings->fog_enabled);
         // Log scale + wide range: density and falloff are world-space
         // quantities apps scale to the scene (tiny values on large-unit
         // assets) — the SSR Distance slider precedent. Density is per metre, so its range goes as
         // the inverse of the typical size.
-        igSliderFloat("Fog Density", &fx->fog_density, 0.00001f / size, 1.0f / size, "%.5f",
-                      ImGuiSliderFlags_Logarithmic);
-        _length_slider("Height Falloff", &fx->fog_height_falloff, 0.05f, 5000.0f, size, "%.2f",
-                       ImGuiSliderFlags_Logarithmic);
-        igSliderFloat("Anisotropy", &fx->fog_anisotropy, -0.9f, 0.9f, "%.2f", 0);
-        igSliderFloat("Sun Boost", &fx->fog_sun_boost, 0.0f, 8.0f, "%.2f", 0);
+        igSliderFloat("Fog Density", &fx->settings->fog_density, 0.00001f / size, 1.0f / size,
+                      "%.5f", ImGuiSliderFlags_Logarithmic);
+        _length_slider("Height Falloff", &fx->settings->fog_height_falloff, 0.05f, 5000.0f, size,
+                       "%.2f", ImGuiSliderFlags_Logarithmic);
+        igSliderFloat("Anisotropy", &fx->settings->fog_anisotropy, -0.9f, 0.9f, "%.2f", 0);
+        igSliderFloat("Sun Boost", &fx->settings->fog_sun_boost, 0.0f, 8.0f, "%.2f", 0);
         // The volume's own depth range, which is NOT the camera's: the mapping
         // is exponential, so a near pinned to the clip plane spends most of the
         // slices on air in front of the lens. 0 derives it from Far.
-        _length_slider("Volume Near", &fx->fog_near, 0.0f, 20.0f, size, "%.2f",
+        _length_slider("Volume Near", &fx->settings->fog_near, 0.0f, 20.0f, size, "%.2f",
                        ImGuiSliderFlags_Logarithmic);
-        _length_slider("Volume Far", &fx->fog_far, 1.0f, 5000.0f, size, "%.1f",
+        _length_slider("Volume Far", &fx->settings->fog_far, 1.0f, 5000.0f, size, "%.1f",
                        ImGuiSliderFlags_Logarithmic);
-        igSliderFloat("Depth Distribution", &fx->fog_depth_dist, 0.25f, 4.0f, "%.2f", 0);
-        igSliderFloat("Temporal Blend", &fx->fog_temporal_blend, 0.0f, 0.98f, "%.2f", 0);
-        igSliderInt("History Miss Samples", &fx->fog_history_miss_samples, 1,
+        igSliderFloat("Depth Distribution", &fx->settings->fog_depth_dist, 0.25f, 4.0f, "%.2f", 0);
+        igSliderFloat("Temporal Blend", &fx->settings->fog_temporal_blend, 0.0f, 0.98f, "%.2f", 0);
+        igSliderInt("History Miss Samples", &fx->settings->fog_history_miss_samples, 1,
                     POSTFX_FOG_MISS_SAMPLES_MAX, "%d", 0);
         // Grid XY is what resolves a beam's silhouette; a change reallocates the
         // volumes and restarts their history at the next fog frame.
-        igSliderInt("Grid X", &fx->froxel_grid_x, 40, 640, "%d", 0);
-        igSliderInt("Grid Y", &fx->froxel_grid_y, 24, 360, "%d", 0);
-        igSliderInt("Grid Z", &fx->froxel_grid_z, 16, 256, "%d", 0);
+        igSliderInt("Grid X", &fx->settings->froxel_grid_x, 40, 640, "%d", 0);
+        igSliderInt("Grid Y", &fx->settings->froxel_grid_y, 24, 360, "%d", 0);
+        igSliderInt("Grid Z", &fx->settings->froxel_grid_z, 16, 256, "%d", 0);
         // Shadow softness in the medium. k is the exponential's sharpness: high
         // converges back toward the hard binary compare, low goes soft and
         // starts leaking light through blockers. Sweeping it IS the demo.
-        igCheckbox("ESM Shadows", &fx->fog_esm_enabled);
-        igSliderFloat("ESM Sharpness", &fx->fog_esm_k, 5.0f, 200.0f, "%.0f",
+        igCheckbox("ESM Shadows", &fx->settings->fog_esm_enabled);
+        igSliderFloat("ESM Sharpness", &fx->settings->fog_esm_k, 5.0f, 200.0f, "%.0f",
                       ImGuiSliderFlags_Logarithmic);
         // Editing takes ownership away from the sky, which otherwise republishes
         // its own zenith radiance every frame and the picker would snap back.
-        if (igColorEdit3("Fog Ambient", fx->fog_ambient, 0))
-            fx->fog_ambient_from_sky = false;
+        if (igColorEdit3("Fog Ambient", fx->settings->fog_ambient, 0))
+            fx->settings->fog_ambient_from_sky = false;
         _end_effect_group();
 
-        igCheckbox("Normals G-buffer", &fx->normals_enabled);
+        igCheckbox("Normals G-buffer", &fx->settings->normals_enabled);
         igSliderFloat("Spec AA", &engine->specular_aa_strength, 0.0f, 2.0f, "%.2f", 0);
         igCheckbox("Energy Comp", &engine->energy_comp_enabled);
         igCheckbox("Clearcoat", &engine->clearcoat_enabled);
@@ -1104,13 +1109,12 @@ static void _engine_gui_panel(Engine* engine) {
          * The whole row group hides when there are no profiles, which is every scene that
          * authors no subsurface material.
          */
-        if (engine->postfx && engine->postfx->sss_profile_count > 0) {
+        if (scene && scene->sss_profile_count > 0) {
             igIndent(0.0f);
-            for (int p = 0; p < engine->postfx->sss_profile_count; p++) {
+            for (int p = 0; p < scene->sss_profile_count; p++) {
                 char label[32];
                 snprintf(label, sizeof(label), "SSS Radius %d", p);
-                _length_slider(label, &engine->postfx->sss_profiles[p][3], 0.0f, 2.0f, size, "%.3f",
-                               0);
+                _length_slider(label, &scene->sss_profiles[p][3], 0.0f, 2.0f, size, "%.3f", 0);
             }
             igUnindent(0.0f);
         }
@@ -1136,43 +1140,44 @@ static void _engine_gui_panel(Engine* engine) {
         igCollapsingHeader_TreeNodeFlags("Finishing", ImGuiTreeNodeFlags_DefaultOpen)) {
         PostFX* fx = engine->postfx;
 
-        _begin_effect_group("Vignette", &fx->vignette_enabled);
-        igSliderFloat("Vig Strength", &fx->vignette_strength, 0.0f, 1.0f, "%.2f", 0);
-        igSliderFloat("Vig Radius", &fx->vignette_radius, 0.0f, 1.0f, "%.2f", 0);
+        _begin_effect_group("Vignette", &fx->settings->vignette_enabled);
+        igSliderFloat("Vig Strength", &fx->settings->vignette_strength, 0.0f, 1.0f, "%.2f", 0);
+        igSliderFloat("Vig Radius", &fx->settings->vignette_radius, 0.0f, 1.0f, "%.2f", 0);
         _end_effect_group();
 
         // Grouped with the other lens artifacts even though it is applied far
         // earlier in the shader -- a lens effect, so it acts on the light
         // before the sensor rather than in the finishing block these sit in.
-        _begin_effect_group("Chromatic Aberration", &fx->ca_enabled);
-        igSliderFloat("CA Pixels", &fx->ca_strength, 0.0f, 40.0f, "%.1f px", 0);
+        _begin_effect_group("Chromatic Aberration", &fx->settings->ca_enabled);
+        igSliderFloat("CA Pixels", &fx->settings->ca_strength, 0.0f, 40.0f, "%.1f px", 0);
         _end_effect_group();
 
         // Grouped here and applied earlier still, for the reason above: the
         // retina's spectral response sits after the lens and before the tone
         // curve. Visible only on a dim frame -- the global gate is an exact zero
         // in daylight, so dragging these in a lit scene does nothing, by design.
-        _begin_effect_group("Purkinje Shift", &fx->purkinje_enabled);
-        igSliderFloat("Rod Blend", &fx->purkinje_strength, 0.0f, 1.0f, "%.2f", 0);
+        _begin_effect_group("Purkinje Shift", &fx->settings->purkinje_enabled);
+        igSliderFloat("Rod Blend", &fx->settings->purkinje_strength, 0.0f, 1.0f, "%.2f", 0);
         // Narrower than the CLI's [-30, 30] and [0, 4] on purpose: these are the
         // usable range, and a slider spanning the validation bound would put the
         // whole shipping look in a few pixels of travel. A restored snapshot
         // beyond a slider's end is clamped the first time it is dragged.
-        igSliderFloat("Mesopic Bias", &fx->purkinje_bias_ev, -12.0f, 12.0f, "%.1f stops", 0);
-        igSliderFloat("Rod Acuity Loss", &fx->purkinje_acuity, 0.0f, 2.0f, "%.2f", 0);
-        igSliderFloat("Rod Noise", &fx->purkinje_noise, 0.0f, 2.0f, "%.2f", 0);
+        igSliderFloat("Mesopic Bias", &fx->settings->purkinje_bias_ev, -12.0f, 12.0f, "%.1f stops",
+                      0);
+        igSliderFloat("Rod Acuity Loss", &fx->settings->purkinje_acuity, 0.0f, 2.0f, "%.2f", 0);
+        igSliderFloat("Rod Noise", &fx->settings->purkinje_noise, 0.0f, 2.0f, "%.2f", 0);
         _end_effect_group();
 
-        _begin_effect_group("Sharpen", &fx->sharpen_enabled);
-        igSliderFloat("Sharpen Amount", &fx->sharpen_strength, 0.0f, 3.0f, "%.2f", 0);
+        _begin_effect_group("Sharpen", &fx->settings->sharpen_enabled);
+        igSliderFloat("Sharpen Amount", &fx->settings->sharpen_strength, 0.0f, 3.0f, "%.2f", 0);
         _end_effect_group();
 
-        _begin_effect_group("Grain", &fx->grain_enabled);
-        igSliderFloat("Grain Amount", &fx->grain_strength, 0.0f, 0.3f, "%.3f", 0);
+        _begin_effect_group("Grain", &fx->settings->grain_enabled);
+        igSliderFloat("Grain Amount", &fx->settings->grain_strength, 0.0f, 0.3f, "%.3f", 0);
         _end_effect_group();
 
-        _begin_effect_group("Dither", &fx->dither_enabled);
-        igSliderFloat("Dither LSB", &fx->dither_strength, 0.0f, 4.0f, "%.2f", 0);
+        _begin_effect_group("Dither", &fx->settings->dither_enabled);
+        igSliderFloat("Dither LSB", &fx->settings->dither_strength, 0.0f, 4.0f, "%.2f", 0);
         _end_effect_group();
 
         // After everything above, the game's overlay included; this panel is drawn over it.
@@ -1184,10 +1189,10 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("CRT Colour Bleed", &engine->crt_bleed, 0.0f, 1.0f, "%.2f", 0);
         _end_effect_group();
 
-        _begin_effect_group("Color Grade", &fx->grade_enabled);
-        igDragFloat3("Lift", fx->grade_lift, 0.005f, -1.0f, 1.0f, "%.3f", 0);
-        igDragFloat3("Gamma", fx->grade_gamma, 0.01f, 0.1f, 4.0f, "%.3f", 0);
-        igDragFloat3("Gain", fx->grade_gain, 0.01f, 0.0f, 4.0f, "%.3f", 0);
+        _begin_effect_group("Color Grade", &fx->settings->grade_enabled);
+        igDragFloat3("Lift", fx->settings->grade_lift, 0.005f, -1.0f, 1.0f, "%.3f", 0);
+        igDragFloat3("Gamma", fx->settings->grade_gamma, 0.01f, 0.1f, 4.0f, "%.3f", 0);
+        igDragFloat3("Gain", fx->settings->grade_gain, 0.01f, 0.0f, 4.0f, "%.3f", 0);
         _end_effect_group();
 
         // The LUT has no enable checkbox because the loaded texture IS the
@@ -1198,28 +1203,30 @@ static void _engine_gui_panel(Engine* engine) {
         if (fx->lut_texture) {
             igSeparatorText("Color LUT");
             igTextDisabled("%s (%d\xc2\xb3)", fx->lut_name, fx->lut_size);
-            igSliderFloat("LUT Strength", &fx->lut_strength, 0.0f, 1.0f, "%.2f", 0);
-            int interp = (int)fx->lut_interp;
+            igSliderFloat("LUT Strength", &fx->settings->lut_strength, 0.0f, 1.0f, "%.2f", 0);
+            int interp = (int)fx->settings->lut_interp;
             static const char* const interp_names[] = {"Trilinear", "Tetrahedral"};
             if (igCombo_Str_arr("LUT Interp", &interp, interp_names,
                                 (int)(sizeof(interp_names) / sizeof(interp_names[0])), -1))
-                fx->lut_interp = (PostFXLutInterp)interp;
+                fx->settings->lut_interp = (PostFXLutInterp)interp;
         }
 
-        _begin_effect_group("Depth of Field", &fx->dof_enabled);
-        igCheckbox("Autofocus", &fx->dof_autofocus);
+        _begin_effect_group("Depth of Field", &fx->settings->dof_enabled);
+        igCheckbox("Autofocus", &fx->settings->dof_autofocus);
         // Manual focus distance is only meaningful when autofocus is off.
-        igBeginDisabled(fx->dof_autofocus);
-        _length_slider("Focus Dist", &fx->dof_focus_distance, 0.0f, 100.0f, size, "%.2f", 0);
+        igBeginDisabled(fx->settings->dof_autofocus);
+        _length_slider("Focus Dist", &fx->settings->dof_focus_distance, 0.0f, 100.0f, size, "%.2f",
+                       0);
         igEndDisabled();
-        _length_slider("Focus Range", &fx->dof_focus_range, 0.1f, 100.0f, size, "%.2f", 0);
-        igSliderFloat("Max CoC", &fx->dof_max_coc, 0.0f, 40.0f, "%.1f", 0);
-        igSliderInt("Blades", &fx->dof_blades, 0, 9, "%d", 0);
-        igSliderFloat("Rotation", &fx->dof_rotation, 0.0f, 180.0f, "%.0f deg", 0);
+        _length_slider("Focus Range", &fx->settings->dof_focus_range, 0.1f, 100.0f, size, "%.2f",
+                       0);
+        igSliderFloat("Max CoC", &fx->settings->dof_max_coc, 0.0f, 40.0f, "%.1f", 0);
+        igSliderInt("Blades", &fx->settings->dof_blades, 0, 9, "%d", 0);
+        igSliderFloat("Rotation", &fx->settings->dof_rotation, 0.0f, 180.0f, "%.0f deg", 0);
         _end_effect_group();
 
-        _begin_effect_group("Motion Blur", &fx->motion_blur_enabled);
-        igSliderFloat("Shutter", &fx->motion_blur_scale, 0.0f, 2.0f, "%.2f", 0);
+        _begin_effect_group("Motion Blur", &fx->settings->motion_blur_enabled);
+        igSliderFloat("Shutter", &fx->settings->motion_blur_scale, 0.0f, 2.0f, "%.2f", 0);
         _end_effect_group();
     }
 

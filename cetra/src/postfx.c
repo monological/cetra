@@ -119,14 +119,14 @@ static void free_pingpong(PingPong* pp) {
 }
 
 // (Re)create the SSR reflection buffer + the Hi-Z traversal pyramid at the
-// current SSR resolution: full-res when fx->ssr_full_res (sharp reflections;
+// current SSR resolution: full-res when fx->ssr_built_full_res (sharp reflections;
 // the half-res march's hard hit/miss coverage edge was the striping source),
 // else half-res. Depth/HDR sources the march samples are already full-res.
 // Any existing reflection buffer and pyramid must be destroyed first: this
 // overwrites the handles rather than reusing them.
 static bool create_ssr_buffers(PostFX* fx) {
-    int w = fx->ssr_full_res ? fx->width : fx->half_width;
-    int h = fx->ssr_full_res ? fx->height : fx->half_height;
+    int w = fx->ssr_built_full_res ? fx->width : fx->half_width;
+    int h = fx->ssr_built_full_res ? fx->height : fx->half_height;
     // HDR reflection buffer; carries premultiplied scene color * weight.
     if (!gl_color_fbo_create(w, h, GL_RGBA16F, &fx->ssr_fbo, &fx->ssr_texture))
         return false;
@@ -176,21 +176,29 @@ static void destroy_ssr_buffers(PostFX* fx) {
     fx->ssr_prev.tex = 0; // whatever it named is gone
 }
 
-// Runtime resolution switch: delete the SSR buffers and rebuild them at the new
-// resolution. No-op if unchanged.
-void postfx_set_ssr_full_res(PostFX* fx, bool full_res) {
-    if (!fx || fx->ssr_full_res == full_res)
+// The SSR buffers rebuilt at the resolution the settings now ask for, when it is not the one they
+// were built at. Run at the top of each run, so a setting written between runs takes effect at the
+// next.
+static void postfx_sync_ssr_res(PostFX* fx) {
+    if (fx->settings->ssr_full_res == fx->ssr_built_full_res)
         return;
     destroy_ssr_buffers(fx);
-    fx->ssr_full_res = full_res;
+    fx->ssr_built_full_res = fx->settings->ssr_full_res;
     create_ssr_buffers(fx);
 }
 
-void postfx_set_fog_ambient(PostFX* fx, const vec3 rgb) {
-    if (!fx)
-        return;
-    glm_vec3_copy((float*)rgb, fx->fog_ambient);
-    fx->fog_ambient_from_sky = false;
+// Where the depth of field focuses: the published autofocus distance under autofocus, when there
+// is one (negative when the engine had no camera to measure from), else the settings'.
+static float postfx_focus_distance(const PostFX* fx) {
+    const PostFXSettings* s = fx->settings;
+    return s->dof_autofocus && fx->dof_autofocus_distance >= 0.0f ? fx->dof_autofocus_distance
+                                                                  : s->dof_focus_distance;
+}
+
+const float* postfx_fog_ambient(const PostFX* fx) {
+    return fx->settings->fog_ambient_from_sky && fx->fog_ambient_sky_valid
+               ? fx->fog_ambient_sky
+               : fx->settings->fog_ambient;
 }
 
 // Depth-only FBO used as the blit target when resolving the MSAA depth
@@ -311,9 +319,6 @@ static bool postfx_ensure_taau_program(PostFX* fx) {
 // Every resolution-dependent target, allocated from the sizes already on fx.
 // Paired with postfx_free_targets, and called by BOTH create_postfx and the
 // runtime resize -- which is why it allocates only, and touches no setting.
-// In particular it reads fx->ssr_full_res rather than establishing it: that
-// is a user-facing toggle (the GUI checkbox and postfx_set_ssr_full_res own
-// it) and a resize must not silently return it to its default.
 static bool postfx_alloc_targets(PostFX* fx) {
     // The HDR resolve target must be RGBA16F to match the MSAA source
     // (multisample blits require identical formats); the bloom chain never
@@ -371,7 +376,7 @@ static bool postfx_alloc_targets(PostFX* fx) {
     // The SSGI targets (GI radiance MRT + accumulation/a-trous pairs) are
     // lazily allocated on first enable -- see postfx_ensure_ssgi_targets.
     // SSR reflection buffer + Hi-Z traversal pyramid, at the resolution
-    // fx->ssr_full_res selects (see create_ssr_buffers).
+    // fx->ssr_built_full_res records (see create_ssr_buffers).
     if (!create_ssr_buffers(fx))
         return false;
     // Render-res resolve target for the scene pass's aux G-buffer (.xy motion +
@@ -523,10 +528,154 @@ static void postfx_invalidate_targets(PostFX* fx) {
     fx->spec_ready = false;
 }
 
-PostFX* create_postfx(PostFXPrograms* programs, int width, int height, int ss_scale,
-                      float render_scale) {
-    if (!programs) {
-        log_error("create_postfx: no programs");
+void postfx_settings_init(PostFXSettings* s) {
+    if (!s)
+        return;
+    memset(s, 0, sizeof(*s));
+    // Working space (shaders/include/view.glsl), so these read as stops over
+    // diffuse white rather than as absolute radiance: bloom starts exactly at
+    // white, fades in over the half stop below it, and ignores anything past
+    // +3. That is why they survived the photometric switch unchanged -- the
+    // buffer they threshold is pre-exposed, so the numbers still mean what they
+    // meant when a "1.0 is white" scene was the only kind the engine had.
+    s->bloom_threshold = 1.0f;
+    s->bloom_knee = 0.5f;
+    s->bloom_max_brightness = 8.0f;
+    // The pyramid's level 0 accumulates every coarser level, carrying
+    // several times the energy one blurred buffer did -- the composite
+    // strength drops to match
+    s->bloom_strength = 0.015f;
+    s->bloom_enabled = true;
+
+    // Off unless a scene or an app asks: a star round every bright point is a look, and most
+    // scenes are not after it. Once on, all of the light past the threshold moves into it, which
+    // is what an aperture does (spec 13.5). The threshold is Clearwater's 14 before its exposure
+    // of 0.63 -- 8.8 in the working space, which is already exposed.
+    s->glare_enabled = false;
+    s->glare_strength = 1.0f;
+    s->glare_threshold = 8.8f;
+
+    // Unreal's defaults, every one of which leaves the frame as it was: switching it on asks for
+    // nothing until a contrast is turned down.
+    s->local_exposure_enabled = false;
+    s->local_exposure_highlights = 1.0f;
+    s->local_exposure_shadows = 1.0f;
+    s->local_exposure_detail = 1.0f;
+    s->local_exposure_blend = 0.6f;
+    s->local_exposure_kernel = 0.5f;
+    s->local_exposure_grey_bias = 0.0f;
+
+    s->flare_enabled = false;
+    // Measured on the flare fixture: 0.02 is present but easy to miss, 0.06
+    // is unmistakable, and past ~0.15 the ghosts stop being artifacts and
+    // start being the image. Bloom composites the SAME pyramid at 0.015, and
+    // this sums roughly five taps of it, so the numbers are not comparable.
+    s->flare_strength = 0.03f;
+    s->flare_ghosts = 4;
+    // Fraction of the mirrored-source-to-centre vector between ghosts. Below
+    // ~0.2 they stack into one smear; near 1.0 they pile onto frame centre,
+    // which is where the falloff weights them highest.
+    s->flare_ghost_spacing = 0.28f;
+    s->flare_halo_width = 0.32f;
+    s->flare_chroma = 2.0f; // pixels at the frame edge
+    s->flare_source_lod = 2;
+    s->ssao_enabled = true;
+    s->ssao_strength = 0.8f;
+    s->spec_occlusion_mode =
+        POSTFX_SPEC_OCC_SPLIT;          // Ambient spec on its own target, occluded in post
+    s->ao_edge_filter_enabled = true;   // Depth-aware AO blur (no silhouette bleed)
+    s->contact_shadows_enabled = false; // Opt-in (spec 9.3); off leaves the frame untouched
+    s->cs_strength = 0.23f;             // Subtle: it stacks on CSM + AO in the same crevices, so a
+                                        // higher weight crushes near-contacts to hard black
+    s->ssgi_enabled = false;            // experimental; off by default
+    s->ssgi_intensity = 1.0f;
+    s->normals_enabled = true;
+    s->ssr_enabled = true;
+    s->ssr_strength = 1.0f;
+    // Glossy surfaces only (the floor and polished trim): rougher curved
+    // surfaces self-graze their own silhouette in screen space and dash
+    s->ssr_max_roughness = 0.25f;
+    s->ssr_floor_roughness = 0.1f;
+    // Full-res tracing keeps reflections sharp; the denoiser resolves the stochastic march.
+    s->ssr_full_res = true;
+    s->ssr_temporal = true;
+    s->ssr_denoise = true;
+    s->ssr_jitter = 0.03f;
+    s->debug_view = POSTFX_DEBUG_NONE;
+    s->tonemap_mode = POSTFX_TONEMAP_NEUTRAL;
+
+    // Finishing grade: a subtle vignette is a safe, pleasing default for a
+    // viewer; sharpen/grade/grain are opt-in (grain in particular reads like
+    // specular speckle on metal, and a grade is a per-shot artistic choice)
+    s->sharpen_enabled = false;
+    s->sharpen_strength = 0.5f;
+    s->grade_enabled = false;
+    glm_vec3_zero(s->grade_lift);
+    glm_vec3_one(s->grade_gamma);
+    glm_vec3_one(s->grade_gain);
+    s->vignette_enabled = true;
+    s->vignette_strength = 0.25f;
+    s->vignette_radius = 0.6f;
+    s->ca_enabled = false;
+    s->ca_strength = 3.0f; // pixels at the corner
+    // Off: a perceptual model is a look, and the criterion three lines down is
+    // that a defect fix defaults on and a look defaults off.
+    s->purkinje_enabled = false;
+    s->purkinje_strength = 0.7f;
+    s->purkinje_bias_ev = 0.0f;
+    s->purkinje_acuity = 1.0f;
+    s->purkinje_noise = 1.0f;
+    s->grain_enabled = false;
+    s->grain_strength = 0.015f;
+    // On by default: banding is a defect of the 8-bit write, not a look.
+    s->dither_enabled = true;
+    s->dither_strength = 1.0f;
+    s->lut_strength = 1.0f;
+    s->lut_interp = POSTFX_LUT_TETRAHEDRAL;
+    s->rescale_histories = true;
+
+    s->taa_enabled = false; // Enabled per-app (the render app turns it on when windowed)
+
+    // Depth of field (off by default; targets allocated lazily on first enable)
+    s->dof_enabled = false;
+    s->dof_autofocus = true; // Track the camera's subject unless a focus is pinned
+    s->dof_max_coc = 6.0f;   // ~12px max blur — a natural background falloff,
+                             // not the over-creamy look of a larger radius
+    s->dof_blades = 0;       // Circular aperture; >= 3 warps the kernel to an N-gon
+    s->dof_rotation = 0.0f;
+
+    // Volumetric fog (off by default; targets allocated lazily on first
+    // enable). Its density is the medium's, per metre, and a small scene states its own.
+    s->fog_enabled = false;
+    s->fog_density = 0.02f;
+    s->fog_floor_y = 0.0f;
+    s->fog_near = 0.0f; // derive
+    s->fog_depth_dist = 1.0f;
+    s->fog_temporal_blend = 0.9f;
+    s->fog_history_miss_samples = 4;
+    // Sharper than this and the exponential stops surviving the blur (and fp32);
+    // softer and blockers leak light through their own shadow.
+    s->fog_esm_k = 40.0f;
+    s->fog_esm_enabled = true;
+    s->froxel_grid_x = POSTFX_FROXEL_X;
+    s->froxel_grid_y = POSTFX_FROXEL_Y;
+    s->froxel_grid_z = POSTFX_FROXEL_Z;
+    s->fog_anisotropy = 0.45f;
+    s->fog_sun_boost = 1.0f;
+    glm_vec3_copy((vec3){0.05f, 0.05f, 0.05f}, s->fog_ambient);
+    s->fog_ambient_from_sky = true;
+
+    // Motion blur (off by default; target allocated lazily on first enable).
+    s->motion_blur_enabled = false;
+    s->motion_blur_scale = 1.0f; // full-shutter velocity
+
+    postfx_settings_reset_lengths(s, 1.0f);
+}
+
+PostFX* create_postfx(PostFXPrograms* programs, PostFXSettings* settings, int width, int height,
+                      int ss_scale, float render_scale) {
+    if (!programs || !settings) {
+        log_error("create_postfx: no programs or no settings");
         return NULL;
     }
     if (width <= 0 || height <= 0) {
@@ -549,6 +698,7 @@ PostFX* create_postfx(PostFXPrograms* programs, int width, int height, int ss_sc
         return NULL;
     }
     fx->programs = programs;
+    fx->settings = settings;
 
     // The scene and the pre-TAA chain render at the render resolution (post
     // size x render_scale); the TAA seam brings the frame to post size, and
@@ -556,149 +706,22 @@ PostFX* create_postfx(PostFXPrograms* programs, int width, int height, int ss_sc
     postfx_derive_sizes(fx, width, height, ss_scale, render_scale);
 
     fx->exposure = NULL; // borrowed; the engine installs its own, see exposure.h
-    // Working space (shaders/include/view.glsl), so these read as stops over
-    // diffuse white rather than as absolute radiance: bloom starts exactly at
-    // white, fades in over the half stop below it, and ignores anything past
-    // +3. That is why they survived the photometric switch unchanged -- the
-    // buffer they threshold is pre-exposed, so the numbers still mean what they
-    // meant when a "1.0 is white" scene was the only kind the engine had.
-    fx->bloom_threshold = 1.0f;
-    fx->bloom_knee = 0.5f;
-    fx->bloom_max_brightness = 8.0f;
-    // The pyramid's level 0 accumulates every coarser level, carrying
-    // several times the energy one blurred buffer did -- the composite
-    // strength drops to match
-    fx->bloom_strength = 0.015f;
-    fx->bloom_enabled = true;
-
-    // Off unless a scene or an app asks: a star round every bright point is a look, and most
-    // scenes are not after it. Once on, all of the light past the threshold moves into it, which
-    // is what an aperture does (spec 13.5). The threshold is Clearwater's 14 before its exposure
-    // of 0.63 -- 8.8 in the working space, which is already exposed.
-    fx->glare_enabled = false;
-    fx->glare_strength = 1.0f;
-    fx->glare_threshold = 8.8f;
-
-    // Unreal's defaults, every one of which leaves the frame as it was: switching it on asks for
-    // nothing until a contrast is turned down.
-    fx->local_exposure_enabled = false;
-    fx->local_exposure_highlights = 1.0f;
-    fx->local_exposure_shadows = 1.0f;
-    fx->local_exposure_detail = 1.0f;
-    fx->local_exposure_blend = 0.6f;
-    fx->local_exposure_kernel = 0.5f;
-    fx->local_exposure_grey_bias = 0.0f;
-
-    fx->flare_enabled = false;
-    // Measured on the flare fixture: 0.02 is present but easy to miss, 0.06
-    // is unmistakable, and past ~0.15 the ghosts stop being artifacts and
-    // start being the image. Bloom composites the SAME pyramid at 0.015, and
-    // this sums roughly five taps of it, so the numbers are not comparable.
-    fx->flare_strength = 0.03f;
-    fx->flare_ghosts = 4;
-    // Fraction of the mirrored-source-to-centre vector between ghosts. Below
-    // ~0.2 they stack into one smear; near 1.0 they pile onto frame centre,
-    // which is where the falloff weights them highest.
-    fx->flare_ghost_spacing = 0.28f;
-    fx->flare_halo_width = 0.32f;
-    fx->flare_chroma = 2.0f; // pixels at the frame edge
-    fx->flare_source_lod = 2;
-    fx->ssao_enabled = true;
-    fx->ssao_strength = 0.8f;
-    fx->spec_occlusion_mode =
-        POSTFX_SPEC_OCC_SPLIT;           // Ambient spec on its own target, occluded in post
-    fx->ao_edge_filter_enabled = true;   // Depth-aware AO blur (no silhouette bleed)
-    fx->contact_shadows_enabled = false; // Opt-in (spec 9.3); off leaves the frame untouched
-    fx->cs_strength = 0.23f;             // Subtle: it stacks on CSM + AO in the same crevices, so a
-                                         // higher weight crushes near-contacts to hard black
-    fx->ssgi_enabled = false;            // experimental; off by default
-    fx->ssgi_intensity = 1.0f;
-    fx->normals_enabled = true;
-    fx->ssr_enabled = true;
-    fx->ssr_strength = 1.0f;
-    // Glossy surfaces only (the floor and polished trim): rougher curved
-    // surfaces self-graze their own silhouette in screen space and dash
-    fx->ssr_max_roughness = 0.25f;
-    fx->ssr_floor_roughness = 0.1f;
-    fx->debug_view = POSTFX_DEBUG_NONE;
-    fx->tonemap_mode = POSTFX_TONEMAP_NEUTRAL;
-
-    // Finishing grade: a subtle vignette is a safe, pleasing default for a
-    // viewer; sharpen/grade/grain are opt-in (grain in particular reads like
-    // specular speckle on metal, and a grade is a per-shot artistic choice)
-    fx->sharpen_enabled = false;
-    fx->sharpen_strength = 0.5f;
-    fx->grade_enabled = false;
-    glm_vec3_zero(fx->grade_lift);
-    glm_vec3_one(fx->grade_gamma);
-    glm_vec3_one(fx->grade_gain);
-    fx->vignette_enabled = true;
-    fx->vignette_strength = 0.25f;
-    fx->vignette_radius = 0.6f;
-    fx->ca_enabled = false;
-    fx->ca_strength = 3.0f; // pixels at the corner
-    // Off: a perceptual model is a look, and the criterion three lines down is
-    // that a defect fix defaults on and a look defaults off.
-    fx->purkinje_enabled = false;
-    fx->purkinje_strength = 0.7f;
-    fx->purkinje_bias_ev = 0.0f;
-    fx->purkinje_acuity = 1.0f;
-    fx->purkinje_noise = 1.0f;
-    fx->grain_enabled = false;
-    fx->grain_strength = 0.015f;
-    // On by default: banding is a defect of the 8-bit write, not a look.
-    fx->dither_enabled = true;
-    fx->dither_strength = 1.0f;
     // No LUT until an app loads one. `lut_texture` 0 is what gates the branch,
     // so there is no separate enable to keep in step with it.
     fx->lut_texture = 0;
     fx->lut_size = 0;
-    fx->lut_strength = 1.0f;
-    fx->lut_interp = POSTFX_LUT_TETRAHEDRAL;
     fx->lut_name[0] = '\0';
     fx->frame_index = 0;
     fx->pre_exposure = 1.0f;
-    fx->rescale_histories = true;
-
-    fx->taa_enabled = false; // Enabled per-app (the render app turns it on when windowed)
-
-    // Depth of field (off by default; targets allocated lazily on first enable)
-    fx->dof_enabled = false;
-    fx->dof_autofocus = true; // Track the camera's subject unless a focus is pinned
-    fx->dof_max_coc = 6.0f;   // ~12px max blur — a natural background falloff,
-                              // not the over-creamy look of a larger radius
-    fx->dof_blades = 0;       // Circular aperture; >= 3 warps the kernel to an N-gon
-    fx->dof_rotation = 0.0f;
     fx->dof_ready = false;
     fx->flare_ready = false;
-
-    // Volumetric fog (off by default; targets allocated lazily on first
-    // enable). Its density is the medium's, per metre, and a small scene states its own.
-    fx->fog_enabled = false;
-    fx->fog_density = 0.02f;
-    fx->fog_floor_y = 0.0f;
-    fx->fog_near = 0.0f; // derive
-    fx->fog_depth_dist = 1.0f;
-    fx->fog_temporal_blend = 0.9f;
-    fx->fog_history_miss_samples = 4;
     fx->fog_esm_array = 0;
     fx->fog_esm_scratch = 0;
     fx->fog_esm_fbo = 0;
     fx->fog_esm_layers = 0;
-    // Sharper than this and the exponential stops surviving the blur (and fp32);
-    // softer and blockers leak light through their own shadow.
-    fx->fog_esm_k = 40.0f;
-    fx->fog_esm_enabled = true;
-    fx->froxel_grid_x = POSTFX_FROXEL_X;
-    fx->froxel_grid_y = POSTFX_FROXEL_Y;
-    fx->froxel_grid_z = POSTFX_FROXEL_Z;
     fx->froxel_built_x = 0;
     fx->froxel_built_y = 0;
     fx->froxel_built_z = 0;
-    fx->fog_anisotropy = 0.45f;
-    fx->fog_sun_boost = 1.0f;
-    glm_vec3_copy((vec3){0.05f, 0.05f, 0.05f}, fx->fog_ambient);
-    fx->fog_ambient_from_sky = true;
     fx->froxel_ready = false;
     fx->froxel_prev_frame = -1;   // no froxel frame yet; 0 would match frame 0
     fx->fog_layer_frame = -1;     // likewise for the composited layer's history
@@ -706,32 +729,12 @@ PostFX* create_postfx(PostFXPrograms* programs, int width, int height, int ss_sc
     fx->rain_cover_layer = -1;    // likewise; 0 is a layer, so the off state has to be said
     // -1 is "no profile"; a calloc'd 0 would name the first one.
     fx->fog_spot_ies_profile = -1;
-
-    // Motion blur (off by default; target allocated lazily on first enable).
-    fx->motion_blur_enabled = false;
-    fx->motion_blur_scale = 1.0f; // full-shutter velocity
     fx->motion_blur_ready = false;
-
-    // Separable SSS profile ( targets allocated lazily on first skin frame).
-    // The engine toggle gates the effect; these set the blur width/tint.
-    // Default skin profile in slot 0 (rgb = per-channel scatter weight with red
-    // widest, w = world radius); the app overwrites/extends this per skin material.
-    glm_vec4_copy((vec4){1.0f, 0.3f, 0.2f, 0.2f}, fx->sss_profiles[0]);
-    fx->sss_profile_count = 1;
-    postfx_reset_lengths(fx, 1.0f);
     fx->sss_ready = false;
     fx->oit_ready = false;
     fx->spec_ready = false;
-
-    // SSR tracing resolution and denoiser defaults. Set BEFORE the targets are
-    // allocated because create_ssr_buffers sizes off ssr_full_res -- and kept
-    // here rather than inside postfx_alloc_targets because these are settings:
-    // the allocation runs again on every resize, and sweeping them into it
-    // would quietly undo the GUI's SSR controls each time.
-    fx->ssr_full_res = true; // Full-res tracing keeps reflections sharp
-    fx->ssr_temporal = true;
-    fx->ssr_denoise = true;
-    fx->ssr_jitter = 0.03f;
+    // The reflection buffers are sized off this, before the targets are allocated below.
+    fx->ssr_built_full_res = settings->ssr_full_res;
 
     if (!postfx_alloc_targets(fx)) {
         free_postfx(fx);
@@ -808,7 +811,7 @@ static bool postfx_ensure_dof_targets(PostFX* fx) {
         !gl_color_fbo_create(fx->post_width, fx->post_height, GL_RGBA16F, &fx->dof_fbo,
                              &fx->dof_texture)) {
         log_error("Failed to allocate depth-of-field targets");
-        fx->dof_enabled = false;
+        fx->settings->dof_enabled = false;
         return false;
     }
     // Near field joins the gather FBO as attachment 1 (the SSGI-on-GTAO
@@ -823,7 +826,7 @@ static bool postfx_ensure_dof_targets(PostFX* fx) {
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         log_error("DoF gather MRT framebuffer is not complete");
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        fx->dof_enabled = false;
+        fx->settings->dof_enabled = false;
         return false;
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -914,9 +917,9 @@ static bool postfx_ensure_froxel_targets(PostFX* fx) {
     // A dimension change invalidates the volumes AND the history in them, so it
     // drops the adjacency stamp too -- reprojecting a differently-sized history
     // would read neighbours, not this cell.
-    if (fx->froxel_ready &&
-        (fx->froxel_built_x != fx->froxel_grid_x || fx->froxel_built_y != fx->froxel_grid_y ||
-         fx->froxel_built_z != fx->froxel_grid_z)) {
+    if (fx->froxel_ready && (fx->froxel_built_x != fx->settings->froxel_grid_x ||
+                             fx->froxel_built_y != fx->settings->froxel_grid_y ||
+                             fx->froxel_built_z != fx->settings->froxel_grid_z)) {
         glDeleteTextures(2, fx->froxel_scatter);
         glDeleteTextures(1, &fx->froxel_integrated);
         glDeleteFramebuffers(1, &fx->froxel_fbo);
@@ -928,9 +931,12 @@ static bool postfx_ensure_froxel_targets(PostFX* fx) {
     }
     if (fx->froxel_ready)
         return true;
-    fx->froxel_built_x = fx->froxel_grid_x > 0 ? fx->froxel_grid_x : POSTFX_FROXEL_X;
-    fx->froxel_built_y = fx->froxel_grid_y > 0 ? fx->froxel_grid_y : POSTFX_FROXEL_Y;
-    fx->froxel_built_z = fx->froxel_grid_z > 0 ? fx->froxel_grid_z : POSTFX_FROXEL_Z;
+    fx->froxel_built_x =
+        fx->settings->froxel_grid_x > 0 ? fx->settings->froxel_grid_x : POSTFX_FROXEL_X;
+    fx->froxel_built_y =
+        fx->settings->froxel_grid_y > 0 ? fx->settings->froxel_grid_y : POSTFX_FROXEL_Y;
+    fx->froxel_built_z =
+        fx->settings->froxel_grid_z > 0 ? fx->settings->froxel_grid_z : POSTFX_FROXEL_Z;
     // GL_TEXTURE_3D rather than the codebase's usual GL_TEXTURE_2D_ARRAY: the
     // composite reads a single trilinear tap that filters ACROSS slices, which
     // an array texture does not do, and CLAMP on R makes a lookup past the last
@@ -1083,7 +1089,8 @@ static void postfx_run_motion_blur(PostFX* fx, GLuint canvas_fbo, GLuint canvas_
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
     uniform_set_vec2(fx->programs->motion_blur->uniforms, "texelSize", aux_texel);
-    uniform_set_float(fx->programs->motion_blur->uniforms, "scale", fx->motion_blur_scale);
+    uniform_set_float(fx->programs->motion_blur->uniforms, "scale",
+                      fx->settings->motion_blur_scale);
     uniform_set_float(fx->programs->motion_blur->uniforms, "maxBlurPx", (float)MOTION_BLUR_TILE);
     draw_fullscreen_quad(fx->programs->quad_vao);
 
@@ -1099,7 +1106,7 @@ static void postfx_run_motion_blur(PostFX* fx, GLuint canvas_fbo, GLuint canvas_
 // decays, and the froxel volume's 0.9 took tens of frames to forget a step, longest where the fog
 // is deepest. 1 for a history never written, and under the diagnostic switch.
 static float _history_scale(const PostFX* fx, float written) {
-    if (!fx->rescale_histories || !(written > 0.0f))
+    if (!fx->settings->rescale_histories || !(written > 0.0f))
         return 1.0f;
     return fx->pre_exposure / written;
 }
@@ -1150,7 +1157,7 @@ static void postfx_run_spec_occ_composite(PostFX* fx, const SplitOcclusion* spli
     const float ao_res[2] = {(float)fx->half_width, (float)fx->half_height};
     uniform_set_vec2(prog->uniforms, "aoRes", ao_res);
     uniform_set_int(prog->uniforms, "aoActive", split->active ? 1 : 0);
-    uniform_set_float(prog->uniforms, "aoStrength", fx->ssao_strength);
+    uniform_set_float(prog->uniforms, "aoStrength", fx->settings->ssao_strength);
     uniform_set_int(prog->uniforms, "ssrPrevActive", ssr_prev ? 1 : 0);
     uniform_set_float(prog->uniforms, "ssrPrevScale",
                       _history_scale(fx, fx->ssr_prev.pre_exposure));
@@ -1415,31 +1422,18 @@ bool postfx_resize(PostFX* fx, int width, int height, int ss_scale, float render
     return true;
 }
 
-void postfx_reset_lengths(PostFX* fx, float typical_size) {
-    if (!fx)
+void postfx_settings_reset_lengths(PostFXSettings* settings, float typical_size) {
+    if (!settings)
         return;
     const float s = typical_size;
-    fx->ssao_radius = 0.4f * s;
-    fx->cs_distance = 0.3f * s; // view-space reach
-    fx->ssr_max_distance = 8.0f * s;
-    fx->ssr_thickness_min = 0.05f * s; // view units
-    fx->dof_focus_distance = 3.0f * s;
-    fx->dof_focus_range = 1.5f * s;
-    fx->fog_height_falloff = 4.0f * s;
-    fx->fog_far = 60.0f * s;
-}
-
-void postfx_reset_sss_profiles(PostFX* fx) {
-    if (fx)
-        fx->sss_profile_count = 0;
-}
-
-int postfx_add_sss_profile(PostFX* fx, const float* color, float radius) {
-    if (!fx || fx->sss_profile_count >= MAX_SSS_PROFILES)
-        return -1;
-    int slot = fx->sss_profile_count++;
-    glm_vec4_copy((vec4){color[0], color[1], color[2], radius}, fx->sss_profiles[slot]);
-    return slot;
+    settings->ssao_radius = 0.4f * s;
+    settings->cs_distance = 0.3f * s; // view-space reach
+    settings->ssr_max_distance = 8.0f * s;
+    settings->ssr_thickness_min = 0.05f * s; // view units
+    settings->dof_focus_distance = 3.0f * s;
+    settings->dof_focus_range = 1.5f * s;
+    settings->fog_height_falloff = 4.0f * s;
+    settings->fog_far = 60.0f * s;
 }
 
 static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, int h,
@@ -1487,6 +1481,8 @@ static void _sss_fold_into_canvas(PostFX* fx, GLuint canvas_fbo) {
 static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool taa_resolving) {
     // World radius -> screen pixels: a world unit at view depth d spans
     // 0.5 * proj[1][1] * height / d pixels.
+    if (!fx->sss_profiles)
+        return;
     const float proj_scale = 0.5f * projection[1][1] * (float)fx->height;
     const int count = fx->sss_profile_count > 0 ? fx->sss_profile_count : 1;
 
@@ -1619,9 +1615,9 @@ static void postfx_measure_luminance(PostFX* fx, GLuint scene_tex) {
     uniform_set_vec2(fx->programs->lum_histogram->uniforms, "binRange",
                      (vec2){LUM_HISTOGRAM_MIN_LOG2, LUM_HISTOGRAM_MAX_LOG2});
     uniform_set_int(fx->programs->lum_histogram->uniforms, "meterMode",
-                    (int)fx->exposure->meter_mode);
+                    (int)fx->exposure->settings->meter_mode);
     uniform_set_float(fx->programs->lum_histogram->uniforms, "meterRadius",
-                      fx->exposure->meter_radius);
+                      fx->exposure->settings->meter_radius);
     draw_fullscreen_quad(fx->programs->quad_vao);
 
     glBindFramebuffer(GL_FRAMEBUFFER, fx->lum_reduce_fbo);
@@ -1631,7 +1627,7 @@ static void postfx_measure_luminance(PostFX* fx, GLuint scene_tex) {
     uniform_set_int(fx->programs->lum_reduce->uniforms, "binCount", LUM_HISTOGRAM_BINS);
     uniform_set_int(fx->programs->lum_reduce->uniforms, "rowCount", LUM_HISTOGRAM_ROWS);
     uniform_set_vec2(fx->programs->lum_reduce->uniforms, "percentiles",
-                     (vec2){fx->exposure->meter_low, fx->exposure->meter_high});
+                     (vec2){fx->exposure->settings->meter_low, fx->exposure->settings->meter_high});
     draw_fullscreen_quad(fx->programs->quad_vao);
     check_gl_error("postfx luminance measure");
 }
@@ -1688,10 +1684,11 @@ static void postfx_run_bloom(PostFX* fx, GLuint scene_tex) {
     glUseProgram(fx->programs->bloom_bright->id);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, scene_tex);
-    uniform_set_float(fx->programs->bloom_bright->uniforms, "threshold", fx->bloom_threshold);
-    uniform_set_float(fx->programs->bloom_bright->uniforms, "knee", fx->bloom_knee);
+    uniform_set_float(fx->programs->bloom_bright->uniforms, "threshold",
+                      fx->settings->bloom_threshold);
+    uniform_set_float(fx->programs->bloom_bright->uniforms, "knee", fx->settings->bloom_knee);
     uniform_set_float(fx->programs->bloom_bright->uniforms, "maxBrightness",
-                      fx->bloom_max_brightness);
+                      fx->settings->bloom_max_brightness);
     draw_fullscreen_quad(fx->programs->quad_vao);
 
     // Downsample the chain: each level reads a 13-tap filter of the level
@@ -1755,7 +1752,7 @@ static bool postfx_ensure_flare(PostFX* fx) {
         // Latch off rather than retry: this runs every frame, and a driver
         // refusing the target would otherwise leak an FBO and a texture per
         // frame. Same shape as the froxel volume and the DoF chain.
-        fx->flare_enabled = false;
+        fx->settings->flare_enabled = false;
         return false;
     }
     fx->flare_ready = true;
@@ -1780,10 +1777,10 @@ static bool postfx_run_flare(PostFX* fx) {
     glBindTexture(GL_TEXTURE_2D, fx->bloom_texture);
     UniformManager* u = fx->programs->flare->uniforms;
     uniform_set_int(u, "bloomTex", 0);
-    uniform_set_int(u, "ghostCount", fx->flare_ghosts);
-    uniform_set_float(u, "ghostSpacing", fx->flare_ghost_spacing);
-    uniform_set_float(u, "haloWidth", fx->flare_halo_width);
-    uniform_set_float(u, "chroma", fx->flare_chroma);
+    uniform_set_int(u, "ghostCount", fx->settings->flare_ghosts);
+    uniform_set_float(u, "ghostSpacing", fx->settings->flare_ghost_spacing);
+    uniform_set_float(u, "haloWidth", fx->settings->flare_halo_width);
+    uniform_set_float(u, "chroma", fx->settings->flare_chroma);
     uniform_set_vec2(u, "texelSize",
                      (vec2){1.0f / (float)fx->out_width, 1.0f / (float)fx->out_height});
     // Clamped to what the pyramid actually has: the mip count follows the
@@ -1791,7 +1788,9 @@ static bool postfx_run_flare(PostFX* fx) {
     // level in a small window and the flare softens without saying why.
     const int top_mip = fx->bloom_mips > 0 ? fx->bloom_mips - 1 : 0;
     uniform_set_float(u, "sourceLod",
-                      (float)(fx->flare_source_lod < top_mip ? fx->flare_source_lod : top_mip));
+                      (float)(fx->settings->flare_source_lod < top_mip
+                                  ? fx->settings->flare_source_lod
+                                  : top_mip));
     draw_fullscreen_quad(fx->programs->quad_vao);
     check_gl_error("postfx lens flare");
     profiler_scope_end(fx->profiler);
@@ -1840,9 +1839,9 @@ static void postfx_run_dof(PostFX* fx, GLuint canvas_tex, mat4 projection) {
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
     uniform_set_mat4(fx->programs->dof_coc->uniforms, "projection", (float*)projection);
-    uniform_set_float(fx->programs->dof_coc->uniforms, "focusDistance", fx->dof_focus_distance);
-    uniform_set_float(fx->programs->dof_coc->uniforms, "focusRange", fx->dof_focus_range);
-    uniform_set_float(fx->programs->dof_coc->uniforms, "maxCoC", fx->dof_max_coc);
+    uniform_set_float(fx->programs->dof_coc->uniforms, "focusDistance", postfx_focus_distance(fx));
+    uniform_set_float(fx->programs->dof_coc->uniforms, "focusRange", fx->settings->dof_focus_range);
+    uniform_set_float(fx->programs->dof_coc->uniforms, "maxCoC", fx->settings->dof_max_coc);
     draw_fullscreen_quad(fx->programs->quad_vao);
 
     // Pass 2: per-tile CoC maxima (far in .r, near in .g).
@@ -1857,7 +1856,7 @@ static void postfx_run_dof(PostFX* fx, GLuint canvas_tex, mat4 projection) {
     // Pass 3: dilate the maxima so a defocused tile's reach covers every tile
     // its blur can spill into. K from maxCoC: a blur of C half-res texels
     // spills at most ceil(C / DOF_TILE) tiles.
-    int dilate = (int)ceilf(fx->dof_max_coc / (float)DOF_TILE);
+    int dilate = (int)ceilf(fx->settings->dof_max_coc / (float)DOF_TILE);
     dilate = dilate < 1 ? 1 : (dilate > 8 ? 8 : dilate);
     glBindFramebuffer(GL_FRAMEBUFFER, fx->dof_dilate_fbo);
     glUseProgram(fx->programs->dof_dilate->id);
@@ -1880,7 +1879,7 @@ static void postfx_run_dof(PostFX* fx, GLuint canvas_tex, mat4 projection) {
     glBindTexture(GL_TEXTURE_2D, fx->dof_dilate_texture);
     uniform_set_vec2(fx->programs->dof_gather->uniforms, "texelSize", dof_texel);
     float kernel[DOF_TAPS][2];
-    dof_build_kernel(fx->dof_blades, fx->dof_rotation, kernel);
+    dof_build_kernel(fx->settings->dof_blades, fx->settings->dof_rotation, kernel);
     // Ranged upload of the contiguous array (the SSS-profile idiom).
     GLint kloc = uniform_location(fx->programs->dof_gather->uniforms, "kernel[0]");
     if (kloc >= 0)
@@ -1901,9 +1900,10 @@ static void postfx_run_dof(PostFX* fx, GLuint canvas_tex, mat4 projection) {
     glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
     uniform_set_mat4(fx->programs->dof_composite->uniforms, "projection", (float*)projection);
     uniform_set_float(fx->programs->dof_composite->uniforms, "focusDistance",
-                      fx->dof_focus_distance);
-    uniform_set_float(fx->programs->dof_composite->uniforms, "focusRange", fx->dof_focus_range);
-    uniform_set_float(fx->programs->dof_composite->uniforms, "maxCoC", fx->dof_max_coc);
+                      postfx_focus_distance(fx));
+    uniform_set_float(fx->programs->dof_composite->uniforms, "focusRange",
+                      fx->settings->dof_focus_range);
+    uniform_set_float(fx->programs->dof_composite->uniforms, "maxCoC", fx->settings->dof_max_coc);
     draw_fullscreen_quad(fx->programs->quad_vao);
 
     check_gl_error("postfx dof");
@@ -1939,23 +1939,23 @@ void free_postfx(PostFX* fx) {
     free(fx);
 }
 
-void postfx_apply_film_look(PostFX* fx) {
-    if (!fx)
+void postfx_settings_apply_film_look(PostFXSettings* s) {
+    if (!s)
         return;
-    fx->vignette_enabled = true;
-    fx->vignette_strength = 0.5f;
-    fx->vignette_radius = 0.55f;
-    fx->grain_enabled = true;
-    fx->grain_strength = 0.09f;
-    fx->sharpen_enabled = true;
+    s->vignette_enabled = true;
+    s->vignette_strength = 0.5f;
+    s->vignette_radius = 0.55f;
+    s->grain_enabled = true;
+    s->grain_strength = 0.09f;
+    s->sharpen_enabled = true;
     // Kept gentle on purpose: the unsharp mask amplifies this model's fine
     // scratched-metal specular into bright edge halos, so pushing it harder
     // reads as speckle. Punch comes from the vignette + grain instead.
-    fx->sharpen_strength = 0.25f;
-    fx->grade_enabled = true;
-    glm_vec3_copy((vec3){0.0f, 0.0f, 0.01f}, fx->grade_lift); // whisper-cool shadows
-    glm_vec3_one(fx->grade_gamma);
-    glm_vec3_copy((vec3){1.05f, 1.0f, 0.95f}, fx->grade_gain); // warm highlights
+    s->sharpen_strength = 0.25f;
+    s->grade_enabled = true;
+    glm_vec3_copy((vec3){0.0f, 0.0f, 0.01f}, s->grade_lift); // whisper-cool shadows
+    glm_vec3_one(s->grade_gamma);
+    glm_vec3_copy((vec3){1.05f, 1.0f, 0.95f}, s->grade_gain); // warm highlights
 }
 
 bool postfx_load_lut(PostFX* fx, const char* path) {
@@ -2152,21 +2152,21 @@ static void postfx_run_passes(PostFX* fx, PostFXLocation at, GLuint fbo, GLuint 
 }
 
 bool postfx_wants_normals(const PostFX* fx) {
-    if (!fx || !fx->normals_enabled)
+    if (!fx || !fx->settings->normals_enabled)
         return false;
     // SSAO orients its sample hemisphere with these normals, SSR reflects off
     // them, and SSGI's sweep + edge-aware denoise consume them (without the
     // buffer both degrade to depth-derived normals); the debug view forces the
     // buffer on so it can be inspected with every consumer disabled
-    return fx->ssao_enabled || fx->ssr_enabled || fx->ssgi_enabled ||
-           fx->debug_view == POSTFX_DEBUG_NORMALS;
+    return fx->settings->ssao_enabled || fx->settings->ssr_enabled || fx->settings->ssgi_enabled ||
+           fx->settings->debug_view == POSTFX_DEBUG_NORMALS;
 }
 
 bool postfx_taa_active(const PostFX* fx) {
     // The single "TAA runs this frame" producer predicate: the engine gates the
     // jitter and the velocity buffer on it, and the resolve pass runs on it, so
     // they cannot disagree. Mirrors postfx_wants_normals.
-    return fx && fx->taa_enabled;
+    return fx && fx->settings->taa_enabled;
 }
 
 bool postfx_taau_active(const PostFX* fx) {
@@ -2182,7 +2182,7 @@ bool postfx_has_medium(const PostFX* fx) {
     // cannot any more, because two of the three arming sources are republished every
     // frame. Without this the pass re-arms, re-fails and re-logs twice a frame forever.
     return fx && !fx->froxel_failed &&
-           (fx->fog_enabled || fx->water_medium != 0 || fx->local_fog_count > 0 ||
+           (fx->settings->fog_enabled || fx->water_medium != 0 || fx->local_fog_count > 0 ||
             fx->rain_sigma > 0.0f);
 }
 
@@ -2200,15 +2200,16 @@ bool postfx_wants_aux_gbuffer(const PostFX* fx) {
     // the buffer for the same reason fog does. Keyed on the published volume
     // rather than a toggle: with no sky there is nothing to composite.
     return fx &&
-           (fx->taa_enabled || fx->ssao_enabled || fx->ssgi_enabled || postfx_has_medium(fx) ||
-            fx->motion_blur_enabled || fx->contact_shadows_enabled || fx->aerial_volume != 0);
+           (fx->settings->taa_enabled || fx->settings->ssao_enabled || fx->settings->ssgi_enabled ||
+            postfx_has_medium(fx) || fx->settings->motion_blur_enabled ||
+            fx->settings->contact_shadows_enabled || fx->aerial_volume != 0);
 }
 
 bool postfx_wants_albedo(const PostFX* fx) {
     // Attachment 3 (base color) is needed by SSGI's indirect-diffuse composite
     // and by the albedo debug view -- without the latter, --albedo-debug alone
     // was silently suppressed and showed the normal render instead.
-    return fx && (fx->ssgi_enabled || fx->debug_view == POSTFX_DEBUG_ALBEDO);
+    return fx && (fx->settings->ssgi_enabled || fx->settings->debug_view == POSTFX_DEBUG_ALBEDO);
 }
 
 bool postfx_wants_spec_split(const PostFX* fx) {
@@ -2217,8 +2218,8 @@ bool postfx_wants_spec_split(const PostFX* fx) {
     // the tonemap mode: a passthrough frame blits hdr and never runs the
     // composite, so splitting would silently discard the specular -- keep it
     // inline there instead.
-    return fx && fx->spec_occlusion_mode == POSTFX_SPEC_OCC_SPLIT &&
-           fx->tonemap_mode != POSTFX_TONEMAP_PASSTHROUGH;
+    return fx && fx->settings->spec_occlusion_mode == POSTFX_SPEC_OCC_SPLIT &&
+           fx->settings->tonemap_mode != POSTFX_TONEMAP_PASSTHROUGH;
 }
 
 bool postfx_ssr_active(const PostFX* fx, bool normals_written) {
@@ -2226,7 +2227,7 @@ bool postfx_ssr_active(const PostFX* fx, bool normals_written) {
     // the normals buffer it marches against was actually produced. Both the
     // postfx pass and the shadow catcher's floor marker derive from this so
     // they cannot disagree about whether the floor is being reflected.
-    return fx && fx->ssr_enabled && normals_written;
+    return fx && fx->settings->ssr_enabled && normals_written;
 }
 
 bool postfx_contact_shadows_have_light(const PostFX* fx) {
@@ -2380,8 +2381,8 @@ static GLuint run_atrous(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, i
 // medium is all far away sets fog_near itself to buy those slices back;
 // fog_depth_dist biases the curve without moving either end.
 float postfx_fog_near(const PostFX* fx, mat4 projection) {
-    if (fx->fog_near > 0.0f)
-        return fx->fog_near;
+    if (fx->settings->fog_near > 0.0f)
+        return fx->settings->fog_near;
     // The C twin of depth.glsl's nearPlaneDist(): the same one coefficient
     // form at ndcZ = -1, which reads P32 / (P22 - 1) under glm_perspective
     // ([2][3] = -1, [3][3] = 0) and (P32 + 1) / P22 under glm_ortho with no
@@ -2394,18 +2395,18 @@ static void upload_fog_uniforms(PostFX* fx, UniformManager* u, mat4 projection, 
     uniform_set_mat4(u, "projection", (float*)projection);
     uniform_set_mat4(u, "invView", (float*)inv_view);
     uniform_set_float(u, "fogNear", postfx_fog_near(fx, projection));
-    uniform_set_float(u, "fogFar", fx->fog_far);
-    uniform_set_float(u, "fogDepthDist", fx->fog_depth_dist);
-    uniform_set_vec3(u, "ambientColor", fx->fog_ambient);
+    uniform_set_float(u, "fogFar", fx->settings->fog_far);
+    uniform_set_float(u, "fogDepthDist", fx->settings->fog_depth_dist);
+    uniform_set_vec3(u, "ambientColor", postfx_fog_ambient(fx));
     // Zero when the app has not asked for global fog, because the pass now runs for media
     // the app did NOT ask for -- a submerged camera, an authored volume. fog_enabled means
     // "the global height medium exists"; the gate above means "some medium does". Before
     // there was only one medium the two were the same statement, and uploading the density
     // unconditionally would now put the app's height fog in every frame that has a box in
     // it.
-    uniform_set_float(u, "density", fx->fog_enabled ? fx->fog_density : 0.0f);
-    uniform_set_float(u, "heightFalloff", fx->fog_height_falloff);
-    uniform_set_float(u, "floorY", fx->fog_floor_y);
+    uniform_set_float(u, "density", fx->settings->fog_enabled ? fx->settings->fog_density : 0.0f);
+    uniform_set_float(u, "heightFalloff", fx->settings->fog_height_falloff);
+    uniform_set_float(u, "floorY", fx->settings->fog_floor_y);
     // Water's medium, published by water_publish_to_postfx. 0 when there is no water,
     // which is the one "air only" state -- no separate enable to disagree with it.
     uniform_set_int(u, "waterMedium", fx->water_medium);
@@ -2437,8 +2438,8 @@ static void upload_fog_uniforms(PostFX* fx, UniformManager* u, mat4 projection, 
         if (loc >= 0)
             glUniform3fv(loc, fx->local_fog_count, (const GLfloat*)fx->local_fog_tint);
     }
-    uniform_set_float(u, "anisotropy", fx->fog_anisotropy);
-    uniform_set_float(u, "sunBoost", fx->fog_sun_boost);
+    uniform_set_float(u, "anisotropy", fx->settings->fog_anisotropy);
+    uniform_set_float(u, "sunBoost", fx->settings->fog_sun_boost);
     // The rain's medium, and where it reaches. rainSigma 0 is the off state and skips all of it.
     uniform_set_float(u, "rainSigma", fx->rain_sigma);
     uniform_set_float(u, "rainForwardG", fx->rain_forward_g);
@@ -2519,7 +2520,7 @@ static bool postfx_build_fog_esm(PostFX* fx) {
     int cascade_layers = fx->fog_shadow_map_array ? fx->fog_light_count * fx->fog_cascade_count : 0;
     bool spot = fx->fog_spot_enabled && fx->fog_spot_shadowed && fx->fog_punctual_shadow_maps;
     int layers = cascade_layers + (spot ? 1 : 0);
-    if (layers <= 0 || !fx->programs->fog_esm || !fx->fog_esm_enabled)
+    if (layers <= 0 || !fx->programs->fog_esm || !fx->settings->fog_esm_enabled)
         return false;
 
     if (fx->fog_esm_layers != layers) {
@@ -2547,7 +2548,7 @@ static bool postfx_build_fog_esm(PostFX* fx) {
     UniformManager* eu = fx->programs->fog_esm->uniforms;
     uniform_set_int(eu, "srcDepth", 0);
     uniform_set_int(eu, "srcEsm", 1);
-    uniform_set_float(eu, "esmK", fx->fog_esm_k);
+    uniform_set_float(eu, "esmK", fx->settings->fog_esm_k);
     glBindVertexArray(fx->programs->quad_vao);
     // Completeness is only meaningful once a layer is attached, and a driver
     // that rejects a layered array attachment would otherwise fail silently.
@@ -2577,10 +2578,10 @@ static void upload_inject_uniforms(PostFX* fx, UniformManager* u, mat4 projectio
     upload_fog_uniforms(fx, u, projection, inv_view);
     uniform_set_int(u, "froxelDepth", fx->froxel_built_z);
     uniform_set_int(u, "temporal", temporal);
-    uniform_set_float(u, "temporalBlend", fx->fog_temporal_blend);
+    uniform_set_float(u, "temporalBlend", fx->settings->fog_temporal_blend);
     uniform_set_float(u, "historyScale", _history_scale(fx, fx->froxel_prev_pre));
     uniform_set_int(u, "esmEnabled", esm_on ? 1 : 0);
-    uniform_set_float(u, "esmK", fx->fog_esm_k);
+    uniform_set_float(u, "esmK", fx->settings->fog_esm_k);
     // Where the spot's ESM landed: the layer after the cascades.
     uniform_set_int(u, "spotEsmLayer", fx->fog_light_count * fx->fog_cascade_count);
     uniform_set_int(u, "frameIndex", fx->frame_index);
@@ -2588,7 +2589,7 @@ static void upload_inject_uniforms(PostFX* fx, UniformManager* u, mat4 projectio
     uniform_set_mat4(u, "prevProjection", (float*)fx->froxel_prev_proj);
     uniform_set_float(u, "prevFogNear", postfx_fog_near(fx, fx->froxel_prev_proj));
     uniform_set_int(u, "missSamples",
-                    glm_imin(fx->fog_history_miss_samples, POSTFX_FOG_MISS_SAMPLES_MAX));
+                    glm_imin(fx->settings->fog_history_miss_samples, POSTFX_FOG_MISS_SAMPLES_MAX));
 }
 
 // Print how many fog cells took several samples this frame (spec 13.45): the inject's count, drawn
@@ -2613,7 +2614,7 @@ static void postfx_fog_miss_probe(PostFX* fx, GLuint volume, mat4 projection, ma
     GLuint cells = 0;
     glGetQueryObjectuiv(query, GL_QUERY_RESULT, &cells);
     glDeleteQueries(1, &query);
-    const bool armed = temporal && fx->fog_history_miss_samples > 1;
+    const bool armed = temporal && fx->settings->fog_history_miss_samples > 1;
     printf("fog-miss-probe frame=%d armed=%d cells=%u\n", fx->frame_index, armed ? 1 : 0, cells);
 }
 
@@ -2673,7 +2674,7 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view, bool
     glActiveTexture(GL_TEXTURE0);
     upload_inject_uniforms(fx, iu, projection, inv_view, esm_on, temporal);
     draw_volume_slices(fx, fx->froxel_scatter[write], iu);
-    if (fx->fog_miss_probe)
+    if (fx->settings->fog_miss_probe)
         postfx_fog_miss_probe(fx, fx->froxel_scatter[write], projection, inv_view, esm_on,
                               temporal);
 
@@ -2685,8 +2686,8 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view, bool
     glBindTexture(GL_TEXTURE_3D, fx->froxel_scatter[write]);
     uniform_set_mat4(gu, "projection", (float*)projection);
     uniform_set_float(gu, "fogNear", postfx_fog_near(fx, projection));
-    uniform_set_float(gu, "fogFar", fx->fog_far);
-    uniform_set_float(gu, "fogDepthDist", fx->fog_depth_dist);
+    uniform_set_float(gu, "fogFar", fx->settings->fog_far);
+    uniform_set_float(gu, "fogDepthDist", fx->settings->fog_depth_dist);
     uniform_set_int(gu, "froxelDepth", fx->froxel_built_z);
     draw_volume_slices(fx, fx->froxel_integrated, gu);
 
@@ -2769,8 +2770,8 @@ static bool postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
     uniform_set_vec2(cu, "oitNearFar", writes->oit_near_far);
     uniform_set_mat4(cu, "projection", (float*)projection);
     uniform_set_float(cu, "fogNear", postfx_fog_near(fx, projection));
-    uniform_set_float(cu, "fogFar", fx->fog_far);
-    uniform_set_float(cu, "fogDepthDist", fx->fog_depth_dist);
+    uniform_set_float(cu, "fogFar", fx->settings->fog_far);
+    uniform_set_float(cu, "fogDepthDist", fx->settings->fog_depth_dist);
     uniform_set_float(cu, "aerialFar", fx->aerial_far);
     // A slice count of zero IS the "medium absent" signal -- the shader reads a
     // neutral (0,0,0,1) for it. One state per medium rather than a count plus a
@@ -2822,7 +2823,7 @@ static bool postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
 // reflection buffer (stochastic when denoising), temporally accumulate + a-trous
 // denoise, then premultiplied-composite onto the canvas before bloom so
 // reflected highlights bloom like direct ones. Owns the ssr_history/ssr_atrous
-// lifecycle. Traces at full or half RENDER res per fx->ssr_full_res, marching
+// lifecycle. Traces at full or half RENDER res per fx->ssr_built_full_res, marching
 // the render-res depth/normals and reading the canvas as its radiance source
 // (post-TAA consumers read stabilized color); only the fold magnifies. Same
 // extracted-stage shape as postfx_run_atmosphere; inv_projection is passed in
@@ -2832,8 +2833,8 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
                            mat4 inv_projection, mat4 view) {
     // SSR traces at full res (sharp) or half res, per ssr_full_res; the
     // buffer + Hi-Z pyramid were sized to match in create_ssr_buffers.
-    int ssr_w = fx->ssr_full_res ? fx->width : fx->half_width;
-    int ssr_h = fx->ssr_full_res ? fx->height : fx->half_height;
+    int ssr_w = fx->ssr_built_full_res ? fx->width : fx->half_width;
+    int ssr_h = fx->ssr_built_full_res ? fx->height : fx->half_height;
     // Rebuild the min-depth pyramid the traversal walks: level 0
     // takes the conservative min over the full-res depth, every
     // further level the min of the 2x2 below. The source level is
@@ -2863,7 +2864,7 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
             // is a 1:1 copy, not a 2x2 reduction (which would sample depth
             // at twice the coordinate and corrupt the whole pyramid).
             uniform_set_int(fx->programs->ssr_hiz->uniforms, "copySrc",
-                            (mip == 0 && fx->ssr_full_res) ? 1 : 0);
+                            (mip == 0 && fx->ssr_built_full_res) ? 1 : 0);
             draw_fullscreen_quad(fx->programs->quad_vao);
             src_w = mip_w;
             src_h = mip_h;
@@ -2900,8 +2901,8 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     uniform_set_int(fx->programs->ssr->uniforms, "hizMips", fx->hiz_mips);
     uniform_set_mat4(fx->programs->ssr->uniforms, "projection", (float*)projection);
     uniform_set_mat4(fx->programs->ssr->uniforms, "invProjection", (float*)inv_projection);
-    uniform_set_float(fx->programs->ssr->uniforms, "maxDistance", fx->ssr_max_distance);
-    uniform_set_float(fx->programs->ssr->uniforms, "thicknessMin", fx->ssr_thickness_min);
+    uniform_set_float(fx->programs->ssr->uniforms, "maxDistance", fx->settings->ssr_max_distance);
+    uniform_set_float(fx->programs->ssr->uniforms, "thicknessMin", fx->settings->ssr_thickness_min);
     // The march budget is spent in screen columns, so it scales with the
     // trace width or the reach halves every time the resolution doubles
     // (a floor-hugging grazing ray crawls ~one column per iteration). The
@@ -2913,23 +2914,24 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     if (march_budget > 1024)
         march_budget = 1024;
     uniform_set_int(fx->programs->ssr->uniforms, "marchBudget", march_budget);
-    uniform_set_float(fx->programs->ssr->uniforms, "floorRoughness", fx->ssr_floor_roughness);
-    uniform_set_float(fx->programs->ssr->uniforms, "maxRoughness", fx->ssr_max_roughness);
+    uniform_set_float(fx->programs->ssr->uniforms, "floorRoughness",
+                      fx->settings->ssr_floor_roughness);
+    uniform_set_float(fx->programs->ssr->uniforms, "maxRoughness", fx->settings->ssr_max_roughness);
     // Strength folds into the march's premultiplied weight (clamped
     // there) so the composite stays a straight premultiplied lerp
-    uniform_set_float(fx->programs->ssr->uniforms, "strength", fx->ssr_strength);
+    uniform_set_float(fx->programs->ssr->uniforms, "strength", fx->settings->ssr_strength);
     // Stochastic march: jitter the ray per pixel so the deterministic
     // Hi-Z grid stripes scatter into noise a resolver can clean. The
     // a-trous denoise (below) resolves it spatially every frame, so this
     // runs whenever the denoiser is on -- no TAA required. Off ->
     // deterministic march, bit-identical.
-    int ssr_stochastic = fx->ssr_denoise ? 1 : 0;
+    int ssr_stochastic = fx->settings->ssr_denoise ? 1 : 0;
     uniform_set_int(fx->programs->ssr->uniforms, "ssrStochastic", ssr_stochastic);
     // Temporal accumulation runs when enabled AND TAA is resolving (it
     // needs per-frame jitter + motion vectors). The seed and the
     // accumulator pass below share this one predicate so the seed only
     // advances when there's an accumulator to average it.
-    bool ssr_temporal_on = fx->ssr_temporal && taa_resolving;
+    bool ssr_temporal_on = fx->settings->ssr_temporal && taa_resolving;
     // Advance the per-pixel random each frame ONLY when temporal is on
     // (independent of the projection jitter, so it converges even in
     // headless with TAA on). Without temporal, freeze the seed: the
@@ -2938,7 +2940,7 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     // sessions (the PCSS seed's bound, render.c).
     int ssr_seed = ssr_temporal_on ? fx->frame_index % 4096 : 0;
     uniform_set_int(fx->programs->ssr->uniforms, "ssrFrameIndex", ssr_seed);
-    uniform_set_float(fx->programs->ssr->uniforms, "ssrJitter", fx->ssr_jitter);
+    uniform_set_float(fx->programs->ssr->uniforms, "ssrJitter", fx->settings->ssr_jitter);
     // The probes live in world space, and so does the height fog a replacing wet pair's hit
     // is seen through, while SSR marches in view space.
     mat4 inv_view;
@@ -2946,11 +2948,11 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     uniform_set_mat4(fx->programs->ssr->uniforms, "invView", (float*)inv_view);
     // That fog: the global height medium the environment's reflection is baked through.
     uniform_set_float(fx->programs->ssr->uniforms, "ssrFogDensity",
-                      fx->fog_enabled ? fx->fog_density : 0.0f);
+                      fx->settings->fog_enabled ? fx->settings->fog_density : 0.0f);
     uniform_set_float(fx->programs->ssr->uniforms, "ssrFogFalloff",
-                      fmaxf(fx->fog_height_falloff, 1e-3f));
-    uniform_set_float(fx->programs->ssr->uniforms, "ssrFogFloorY", fx->fog_floor_y);
-    uniform_set_vec3(fx->programs->ssr->uniforms, "ssrFogInscatter", fx->fog_ambient);
+                      fmaxf(fx->settings->fog_height_falloff, 1e-3f));
+    uniform_set_float(fx->programs->ssr->uniforms, "ssrFogFloorY", fx->settings->fog_floor_y);
+    uniform_set_vec3(fx->programs->ssr->uniforms, "ssrFogInscatter", postfx_fog_ambient(fx));
     // Local-probe fallback for rays the march cannot answer.
     uniform_set_int(fx->programs->ssr->uniforms, "probeEnabled", fx->probe_enabled ? 1 : 0);
     if (fx->probe_enabled) {
@@ -2996,7 +2998,7 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     // weights keep the blur on the floor and stop it at the silhouette.
     // SVGF order: denoise the accumulation. Skipped when the denoiser is
     // off -> bit-identical to the pre-denoise reflection.
-    if (fx->ssr_denoise) {
+    if (fx->settings->ssr_denoise) {
         ssr_result = run_atrous(fx, fx->programs->ssr_atrous, &fx->ssr_atrous, ssr_w, ssr_h,
                                 ssr_result, have_normals);
         check_gl_error("postfx ssr denoise");
@@ -3098,8 +3100,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
     const bool spec_written = writes->spec;
     if (!fx)
         return;
+    postfx_sync_ssr_res(fx);
 
-    PostFXTonemapMode mode = frame_is_hdr ? fx->tonemap_mode : POSTFX_TONEMAP_PASSTHROUGH;
+    PostFXTonemapMode mode = frame_is_hdr ? fx->settings->tonemap_mode : POSTFX_TONEMAP_PASSTHROUGH;
     // What writes the window, settled once for the frame: everything below and the present that
     // follows the overlay read this rather than asking again.
     fx->show = _postfx_show(fx, mode != POSTFX_TONEMAP_PASSTHROUGH);
@@ -3220,7 +3223,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
                                          fx->height);
             } else {
                 log_error("split spec-occ unavailable; falling back to legacy");
-                fx->spec_occlusion_mode = POSTFX_SPEC_OCC_LEGACY;
+                fx->settings->spec_occlusion_mode = POSTFX_SPEC_OCC_LEGACY;
             }
         }
         // Wet ground has its share of the environment's reflection REPLACED rather than being
@@ -3255,8 +3258,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         GLuint cs_result_tex = 0;
         bool cs_accum_ran = false;
         const bool cs_key_light = fx->fog_light_count > 0;
-        const bool cs_active = fx->contact_shadows_enabled && aux_written &&
-                               postfx_contact_shadows_have_light(fx) && fx->cs_distance > 0.0f &&
+        const bool cs_active = fx->settings->contact_shadows_enabled && aux_written &&
+                               postfx_contact_shadows_have_light(fx) &&
+                               fx->settings->cs_distance > 0.0f &&
                                postfx_ensure_contact_targets(fx);
         if (cs_active) {
             profiler_scope_begin(fx->profiler, "contact shadows");
@@ -3293,7 +3297,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
             // cannot describe two different lights.
             uniform_set_vec3(cu, "keyRadiance", fx->fog_light_color[0]);
             uniform_set_int(cu, "hasKeyLight", cs_key_light ? 1 : 0);
-            uniform_set_float(cu, "csDistance", fx->cs_distance);
+            uniform_set_float(cu, "csDistance", fx->settings->cs_distance);
             uniform_set_int(cu, "temporal", taa_resolving ? 1 : 0);
             // % 4096 keeps the shader's float hash well-conditioned over
             // long sessions (the PCSS/SSR seed bound)
@@ -3332,7 +3336,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         // app's passes (spec 13.29). GTAO no longer needs it -- it reconstructs from the aux
         // buffer's linear Z.
         bool ssr_active = postfx_ssr_active(fx, have_normals);
-        bool dof_active = fx->dof_enabled;
+        bool dof_active = fx->settings->dof_enabled;
         // SSS needs it for a reason the other two do not: it wants a depth that is a
         // SAMPLE rather than a mean. A depth blit resolves by selecting; a colour blit
         // averages, and a depth averaged with the cleared far value describes a surface
@@ -3363,14 +3367,14 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         // pass). AO-only denoise (blur + temporal accum) stays gated on ssao_enabled.
         // SSGI implies the GTAO sweep (they share it); its targets are lazily
         // allocated on first enable.
-        const bool ssgi_active = fx->ssgi_enabled && postfx_ensure_ssgi_targets(fx);
-        const bool gtao_active = fx->ssao_enabled || ssgi_active;
+        const bool ssgi_active = fx->settings->ssgi_enabled && postfx_ensure_ssgi_targets(fx);
+        const bool gtao_active = fx->settings->ssao_enabled || ssgi_active;
         // The reflection lobe is only worth measuring when the split composite
         // is there to apply it AND the masks are actually being swept for AO.
         // With AO off the composite already folds the specular back untouched
         // through its own aoActive == 0 arm, so there is nothing for this to say.
         const bool spec_occ_swept =
-            split_live && fx->ssao_enabled && postfx_ensure_spec_occ_targets(fx);
+            split_live && fx->settings->ssao_enabled && postfx_ensure_spec_occ_targets(fx);
         bool ao_accum_ran = false;
         bool gi_accum_ran = false;
         bool spec_occ_accum_ran = false;
@@ -3414,7 +3418,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
                                           (float)fx->half_height / 4.0f};
             uniform_set_vec2(fx->programs->gtao->uniforms, "noiseScale", noise_scale);
             uniform_set_mat4(fx->programs->gtao->uniforms, "projection", (float*)projection);
-            uniform_set_float(fx->programs->gtao->uniforms, "radius", fx->ssao_radius);
+            uniform_set_float(fx->programs->gtao->uniforms, "radius", fx->settings->ssao_radius);
             uniform_set_int(fx->programs->gtao->uniforms, "temporal", taa_resolving ? 1 : 0);
             // % 4096: same float-hash conditioning bound as PCSS/SSR
             uniform_set_int(fx->programs->gtao->uniforms, "frameIndex", fx->frame_index % 4096);
@@ -3424,7 +3428,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
             draw_fullscreen_quad(fx->programs->quad_vao);
             profiler_scope_end(fx->profiler);
 
-            if (fx->ssao_enabled) {
+            if (fx->settings->ssao_enabled) {
                 // Accumulate the RAW sweep, then blur the accumulation -- the
                 // SVGF order the SSGI chain below already uses, and not merely a
                 // stylistic match to it.
@@ -3464,7 +3468,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
                                            1.0f / (float)fx->half_height};
                 uniform_set_vec2(fx->programs->ssao_blur->uniforms, "texelSize", ao_texel);
                 uniform_set_int(fx->programs->ssao_blur->uniforms, "edgeAware",
-                                fx->ao_edge_filter_enabled ? 1 : 0);
+                                fx->settings->ao_edge_filter_enabled ? 1 : 0);
                 draw_fullscreen_quad(fx->programs->quad_vao);
                 ao_result_tex = fx->ssao_texture[1];
                 profiler_scope_end(fx->profiler);
@@ -3492,7 +3496,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
                     glBindTexture(GL_TEXTURE_2D, fx->aux_texture);
                     uniform_set_vec2(fx->programs->ssao_blur->uniforms, "texelSize", ao_texel);
                     uniform_set_int(fx->programs->ssao_blur->uniforms, "edgeAware",
-                                    fx->ao_edge_filter_enabled ? 1 : 0);
+                                    fx->settings->ao_edge_filter_enabled ? 1 : 0);
                     draw_fullscreen_quad(fx->programs->quad_vao);
                     profiler_scope_end(fx->profiler);
                 }
@@ -3505,14 +3509,14 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
 
         if (split_live) {
             const SplitOcclusion split = {
-                .ao = fx->ssao_enabled ? ao_result_tex : 0,
+                .ao = fx->settings->ssao_enabled ? ao_result_tex : 0,
                 .spec_occ = spec_occ_swept ? fx->spec_occ_texture : 0,
                 .normals = have_normals ? fx->normal_texture : 0,
                 .aux = aux_written ? fx->aux_texture : 0,
                 // The term needs the AO chain to have run, the normals for its guard, and the aux
                 // depth for both magnifications. Missing any of them, the specular goes back
                 // unoccluded rather than read an unbound unit.
-                .active = fx->ssao_enabled && have_normals && aux_written,
+                .active = fx->settings->ssao_enabled && have_normals && aux_written,
             };
             profiler_scope_begin(fx->profiler, "spec occ composite");
             postfx_run_spec_occ_composite(fx, &split, wet_replace);
@@ -3618,7 +3622,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
             glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, fx->albedo_texture);
             uniform_set_float(fx->programs->ssgi_composite->uniforms, "intensity",
-                              fx->ssgi_intensity);
+                              fx->settings->ssgi_intensity);
             glEnable(GL_BLEND);
             glBlendFunc(GL_ONE, GL_ONE);
             draw_fullscreen_quad(fx->programs->quad_vao);
@@ -3645,7 +3649,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         // Motion blur (4.15): velocity-driven blur on the linear HDR scene,
         // blitted back into the canvas so DoF/bloom/tonemap see it. Needs the
         // aux velocity buffer; skipped (frame untouched) when off or unavailable.
-        if (fx->motion_blur_enabled && aux_written && postfx_ensure_motion_blur_targets(fx)) {
+        if (fx->settings->motion_blur_enabled && aux_written &&
+            postfx_ensure_motion_blur_targets(fx)) {
             profiler_scope_begin(fx->profiler, "motion blur");
             postfx_run_motion_blur(fx, canvas_fbo, canvas_tex);
             profiler_scope_end(fx->profiler);
@@ -3664,8 +3669,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
                 .fog_volume = fog_built ? fx->froxel_integrated : 0,
                 .fog_slices = fog_built ? fx->froxel_built_z : 0,
                 .fog_near = postfx_fog_near(fx, projection),
-                .fog_far = fx->fog_far,
-                .fog_depth_dist = fx->fog_depth_dist,
+                .fog_far = fx->settings->fog_far,
+                .fog_depth_dist = fx->settings->fog_depth_dist,
             };
             fx->late_draw(fx->late_draw_user, &late);
         }
@@ -3726,10 +3731,10 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
          * reason: built whenever a consumer wants one, not owned by one of them.
          */
         const bool meter_wanted =
-            fx->exposure && (fx->exposure->automatic || fx->purkinje_enabled ||
-                             fx->debug_view == POSTFX_DEBUG_PURKINJE);
+            fx->exposure && (fx->exposure->settings->automatic || fx->settings->purkinje_enabled ||
+                             fx->settings->debug_view == POSTFX_DEBUG_PURKINJE);
         // The value, not just the texture -- and this half pays the blocking read.
-        const bool adapting = fx->exposure && fx->exposure->automatic;
+        const bool adapting = fx->exposure && fx->exposure->settings->automatic;
         if (meter_wanted) {
             profiler_scope_begin(fx->profiler, "luminance measure");
             postfx_measure_luminance(fx, scene_tex);
@@ -3746,7 +3751,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
             // After the submit, so the report carries this frame's adapted value
             // rather than last frame's. `measured` is passed in because the
             // blend consumes it and nothing keeps the raw reading.
-            if (fx->exposure->probe)
+            if (fx->exposure->settings->probe)
                 exposure_probe_report(fx->exposure, measured, fx->frame_index);
             profiler_scope_end(fx->profiler);
         } else {
@@ -3761,9 +3766,10 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         // nothing visible -- which is what lets the flare stand on its own
         // instead of carrying "needs bloom" through the CLI, the GUI, two
         // headers and a shader.
-        const bool flare_wanted = fx->flare_enabled && fx->flare_strength > 0.0f;
+        const bool flare_wanted =
+            fx->settings->flare_enabled && fx->settings->flare_strength > 0.0f;
         bool flare_active = false;
-        if (fx->bloom_enabled || flare_wanted) {
+        if (fx->settings->bloom_enabled || flare_wanted) {
             profiler_scope_begin(fx->profiler, "bloom pyramid");
             postfx_run_bloom(fx, scene_tex);
             profiler_scope_end(fx->profiler);
@@ -3775,13 +3781,15 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         // A glare that cannot be built or run is latched off here, the one place that asks; glare.c
         // has already said why.
         GLuint glare_tex = 0;
-        if (fx->glare_enabled && fx->glare_strength > 0.0f && !fx->glare_failed) {
+        if (fx->settings->glare_enabled && fx->settings->glare_strength > 0.0f &&
+            !fx->glare_failed) {
             if (!fx->glare)
                 fx->glare = create_glare();
             if (fx->glare) {
                 profiler_scope_begin(fx->profiler, "glare");
                 glare_tex = glare_run(fx->glare, scene_tex, fx->out_width, fx->out_height,
-                                      fx->glare_threshold, fx->programs->quad_vao, fx->glare_probe);
+                                      fx->settings->glare_threshold, fx->programs->quad_vao,
+                                      fx->settings->glare_probe);
                 profiler_scope_end(fx->profiler);
             }
             if (!glare_tex)
@@ -3791,24 +3799,24 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         // tonemap is about to read, centred on the middle grey the camera maps the frame's mean
         // to. Latched off where it cannot be built, as the glare is.
         GLuint le_tex = 0;
-        const float le_grey =
-            log2f(fx->exposure ? fx->exposure->key : 0.18f) + fx->local_exposure_grey_bias;
-        if (fx->local_exposure_enabled && !fx->local_exposure_failed) {
+        const float le_grey = log2f(fx->exposure ? fx->exposure->settings->key : 0.18f) +
+                              fx->settings->local_exposure_grey_bias;
+        if (fx->settings->local_exposure_enabled && !fx->local_exposure_failed) {
             if (!fx->local_exposure)
                 fx->local_exposure = create_local_exposure();
             if (fx->local_exposure) {
                 profiler_scope_begin(fx->profiler, "local exposure");
-                le_tex = local_exposure_run(fx->local_exposure, scene_tex, fx->post_width,
-                                            fx->post_height, le_grey, fx->local_exposure_kernel,
-                                            fx->programs->quad_vao);
+                le_tex = local_exposure_run(
+                    fx->local_exposure, scene_tex, fx->post_width, fx->post_height, le_grey,
+                    fx->settings->local_exposure_kernel, fx->programs->quad_vao);
                 profiler_scope_end(fx->profiler);
-                if (le_tex && fx->local_exposure_probe)
+                if (le_tex && fx->settings->local_exposure_probe)
                     local_exposure_probe(fx->local_exposure, le_grey);
             }
             if (!le_tex)
                 fx->local_exposure_failed = true;
         }
-        if (fx->negative_probe) {
+        if (fx->settings->negative_probe) {
             // Its own scope, as the exposure read has: the readback drains the pipeline.
             profiler_scope_begin(fx->profiler, "negative probe (drains)");
             postfx_negative_probe(scene_tex, fx->frame_index);
@@ -3869,33 +3877,35 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         if (le_tex) {
             local_exposure_upload_layout(fx->local_exposure, tm);
             uniform_set_float(tm, "leMiddleGrey", le_grey);
-            uniform_set_float(tm, "leHighlights", fx->local_exposure_highlights);
-            uniform_set_float(tm, "leShadows", fx->local_exposure_shadows);
-            uniform_set_float(tm, "leDetail", fx->local_exposure_detail);
-            uniform_set_float(tm, "leBlend", fminf(fmaxf(fx->local_exposure_blend, 0.0f), 1.0f));
+            uniform_set_float(tm, "leHighlights", fx->settings->local_exposure_highlights);
+            uniform_set_float(tm, "leShadows", fx->settings->local_exposure_shadows);
+            uniform_set_float(tm, "leDetail", fx->settings->local_exposure_detail);
+            uniform_set_float(tm, "leBlend",
+                              fminf(fmaxf(fx->settings->local_exposure_blend, 0.0f), 1.0f));
         }
         uniform_set_int(tm, "glareTex", 13);
-        uniform_set_float(tm, "glareStrength", fminf(fmaxf(fx->glare_strength, 0.0f), 1.0f));
+        uniform_set_float(tm, "glareStrength",
+                          fminf(fmaxf(fx->settings->glare_strength, 0.0f), 1.0f));
         uniform_set_int(tm, "glareEnabled", glare_tex ? 1 : 0);
-        uniform_set_float(tm, "glareThreshold", fx->glare_threshold);
+        uniform_set_float(tm, "glareThreshold", fx->settings->glare_threshold);
         float halo_share[3];
         glare_halo_share(fx->glare, halo_share);
         uniform_set_vec3(tm, "glareHaloShare", halo_share);
-        uniform_set_float(tm, "bloomStrength", fx->bloom_strength);
-        uniform_set_int(tm, "bloomEnabled", fx->bloom_enabled ? 1 : 0);
+        uniform_set_float(tm, "bloomStrength", fx->settings->bloom_strength);
+        uniform_set_int(tm, "bloomEnabled", fx->settings->bloom_enabled ? 1 : 0);
         uniform_set_int(tm, "flareTex", 8);
-        uniform_set_float(tm, "flareStrength", fx->flare_strength);
+        uniform_set_float(tm, "flareStrength", fx->settings->flare_strength);
         uniform_set_int(tm, "flareEnabled", flare_active ? 1 : 0);
         // False when the split composite already applied AO this frame --
         // split_live owns the handoff, the shader never re-derives it.
-        uniform_set_int(tm, "aoEnabled", fx->ssao_enabled && !split_live ? 1 : 0);
-        uniform_set_float(tm, "aoStrength", fx->ssao_strength);
+        uniform_set_int(tm, "aoEnabled", fx->settings->ssao_enabled && !split_live ? 1 : 0);
+        uniform_set_float(tm, "aoStrength", fx->settings->ssao_strength);
         // Specular occlusion keeps GTAO off reflections. Needs the aux buffer
         // (linZ + roughness) and the normals; both ride the same AO-on gating,
         // so require them here too. Metallic is opportunistic (SSGI's albedo).
         const bool spec_occ_active =
-            fx->spec_occlusion_mode != POSTFX_SPEC_OCC_OFF && aux_written && have_normals;
-        uniform_set_int(tm, "specOccMode", spec_occ_active ? fx->spec_occlusion_mode : 0);
+            fx->settings->spec_occlusion_mode != POSTFX_SPEC_OCC_OFF && aux_written && have_normals;
+        uniform_set_int(tm, "specOccMode", spec_occ_active ? fx->settings->spec_occlusion_mode : 0);
         uniform_set_int(tm, "specOccHasMetallic", albedo_written ? 1 : 0);
         // The matrix rather than its two focal reciprocals: the shader's view
         // ray reads the projection kind off it (spec 11.104).
@@ -3908,17 +3918,17 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         // form 1 - strength*(1 - cs) is identity at cs == 1, so a lit frame is
         // byte-identical to the feature off.
         uniform_set_int(tm, "csEnabled", cs_active ? 1 : 0);
-        uniform_set_float(tm, "csStrength", fx->cs_strength);
+        uniform_set_float(tm, "csStrength", fx->settings->cs_strength);
         // Suppress debug views whose source buffer was not produced, and
         // say so once per requested view rather than silently every frame
-        PostFXDebugView debug_view = fx->debug_view;
-        if ((debug_view == POSTFX_DEBUG_AO && !fx->ssao_enabled) ||
+        PostFXDebugView debug_view = fx->settings->debug_view;
+        if ((debug_view == POSTFX_DEBUG_AO && !fx->settings->ssao_enabled) ||
             (debug_view == POSTFX_DEBUG_NORMALS && !have_normals) ||
             (debug_view == POSTFX_DEBUG_SSR && !ssr_active) ||
             (debug_view == POSTFX_DEBUG_ALBEDO && !albedo_written) ||
             (debug_view == POSTFX_DEBUG_SSGI && !ssgi_active) ||
             (debug_view == POSTFX_DEBUG_SPEC_OCC && !spec_occ_active) ||
-            (debug_view == POSTFX_DEBUG_BENT && !fx->ssao_enabled) ||
+            (debug_view == POSTFX_DEBUG_BENT && !fx->settings->ssao_enabled) ||
             (debug_view == POSTFX_DEBUG_CONTACT && !cs_active)) {
             static PostFXDebugView warned_view = POSTFX_DEBUG_NONE;
             if (warned_view != debug_view) {
@@ -3934,27 +3944,27 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         // Finishing stack (sharpen -> grade -> vignette -> gamma -> LUT -> grain -> dither)
         const float texel[2] = {1.0f / (float)fx->out_width, 1.0f / (float)fx->out_height};
         uniform_set_vec2(tm, "texelSize", texel);
-        uniform_set_int(tm, "sharpenEnabled", fx->sharpen_enabled ? 1 : 0);
-        uniform_set_float(tm, "sharpenStrength", fx->sharpen_strength);
-        uniform_set_int(tm, "gradeEnabled", fx->grade_enabled ? 1 : 0);
-        uniform_set_vec3(tm, "gradeLift", fx->grade_lift);
-        uniform_set_vec3(tm, "gradeGamma", fx->grade_gamma);
-        uniform_set_vec3(tm, "gradeGain", fx->grade_gain);
-        uniform_set_int(tm, "vignetteEnabled", fx->vignette_enabled ? 1 : 0);
-        uniform_set_float(tm, "vignetteStrength", fx->vignette_strength);
-        uniform_set_float(tm, "vignetteRadius", fx->vignette_radius);
-        uniform_set_int(tm, "caEnabled", fx->ca_enabled ? 1 : 0);
-        uniform_set_float(tm, "caStrength", fx->ca_strength);
-        uniform_set_int(tm, "purkinjeEnabled", fx->purkinje_enabled ? 1 : 0);
-        uniform_set_float(tm, "purkinjeStrength", fx->purkinje_strength);
-        uniform_set_float(tm, "purkinjeBiasEV", fx->purkinje_bias_ev);
-        uniform_set_float(tm, "purkinjeAcuity", fx->purkinje_acuity);
-        uniform_set_float(tm, "purkinjeNoise", fx->purkinje_noise);
+        uniform_set_int(tm, "sharpenEnabled", fx->settings->sharpen_enabled ? 1 : 0);
+        uniform_set_float(tm, "sharpenStrength", fx->settings->sharpen_strength);
+        uniform_set_int(tm, "gradeEnabled", fx->settings->grade_enabled ? 1 : 0);
+        uniform_set_vec3(tm, "gradeLift", fx->settings->grade_lift);
+        uniform_set_vec3(tm, "gradeGamma", fx->settings->grade_gamma);
+        uniform_set_vec3(tm, "gradeGain", fx->settings->grade_gain);
+        uniform_set_int(tm, "vignetteEnabled", fx->settings->vignette_enabled ? 1 : 0);
+        uniform_set_float(tm, "vignetteStrength", fx->settings->vignette_strength);
+        uniform_set_float(tm, "vignetteRadius", fx->settings->vignette_radius);
+        uniform_set_int(tm, "caEnabled", fx->settings->ca_enabled ? 1 : 0);
+        uniform_set_float(tm, "caStrength", fx->settings->ca_strength);
+        uniform_set_int(tm, "purkinjeEnabled", fx->settings->purkinje_enabled ? 1 : 0);
+        uniform_set_float(tm, "purkinjeStrength", fx->settings->purkinje_strength);
+        uniform_set_float(tm, "purkinjeBiasEV", fx->settings->purkinje_bias_ev);
+        uniform_set_float(tm, "purkinjeAcuity", fx->settings->purkinje_acuity);
+        uniform_set_float(tm, "purkinjeNoise", fx->settings->purkinje_noise);
         // Whether unit 7's content is defined this frame. The shader can see
         // neither the bind nor the draws, so it is told.
         uniform_set_int(tm, "purkinjeHasMeter", meter_wanted ? 1 : 0);
-        uniform_set_int(tm, "grainEnabled", fx->grain_enabled ? 1 : 0);
-        uniform_set_float(tm, "grainStrength", fx->grain_strength);
+        uniform_set_int(tm, "grainEnabled", fx->settings->grain_enabled ? 1 : 0);
+        uniform_set_float(tm, "grainStrength", fx->settings->grain_strength);
         // Wrapped at 2^24: uniform_set_int compares through a float, exact below that.
         uniform_set_int(tm, "noiseFrame", fx->frame_index & 0xFFFFFF);
         // The loaded texture IS the enable: there is no second flag that could
@@ -3962,14 +3972,14 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         // unit 11 with nothing bound to it.
         uniform_set_int(tm, "lutEnabled", fx->lut_texture ? 1 : 0);
         uniform_set_float(tm, "lutSize", (float)fx->lut_size);
-        uniform_set_float(tm, "lutStrength", fx->lut_strength);
-        uniform_set_int(tm, "lutInterp", (int)fx->lut_interp);
+        uniform_set_float(tm, "lutStrength", fx->settings->lut_strength);
+        uniform_set_int(tm, "lutInterp", (int)fx->settings->lut_interp);
         // No frame term here, deliberately -- see the shader's dither block. Only when this pass
         // writes the window: whatever writes it after this one dithers instead, or the dither is
         // resampled into its picture.
         uniform_set_int(tm, "ditherEnabled",
-                        fx->dither_enabled && fx->show == POSTFX_SHOW_WINDOW ? 1 : 0);
-        uniform_set_float(tm, "ditherStrength", fx->dither_strength);
+                        fx->settings->dither_enabled && fx->show == POSTFX_SHOW_WINDOW ? 1 : 0);
+        uniform_set_float(tm, "ditherStrength", fx->settings->dither_strength);
         draw_fullscreen_quad(fx->programs->quad_vao);
         profiler_scope_end(fx->profiler);
 

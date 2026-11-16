@@ -217,7 +217,7 @@ int main(int argc, char** argv) {
     // straight into the framebuffer with no display encode, so passthrough
     // rather than the preset's linear curve, which encodes.
     engine_set_2d_preset(engine, scene);
-    engine->postfx->tonemap_mode = POSTFX_TONEMAP_PASSTHROUGH;
+    engine->postfx->settings->tonemap_mode = POSTFX_TONEMAP_PASSTHROUGH;
     engine->show_fps = !headless;
 
     // The sketch cleared to black.

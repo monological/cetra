@@ -824,20 +824,20 @@ static void build_post(Engine* engine, bool night, bool grade) {
     PostFX* fx = engine->postfx;
     if (!fx)
         return;
-    postfx_apply_film_look(fx);
+    postfx_settings_apply_film_look(fx->settings);
     // No film grain; on request, a console's picture on a living-room television (spec 13.28).
-    fx->grain_enabled = false;
+    fx->settings->grain_enabled = false;
     engine->crt_enabled = g_args.crt;
-    fx->contact_shadows_enabled = true;
+    fx->settings->contact_shadows_enabled = true;
     // A puddle in the road mirrors a lamp head or a window across the street,
     // ten to twenty metres up its reflected ray. The default reach of eight fades
     // those out and leaves wet ground reflecting nothing.
-    fx->ssr_max_distance = 40.0f;
+    fx->settings->ssr_max_distance = 40.0f;
     // The film look warms the highlights; this place is green-grey, and the
     // grade that makes it so is the LUT (tools/make_grade.py).
-    glm_vec3_one(fx->grade_gain);
+    glm_vec3_one(fx->settings->grade_gain);
     if (grade && postfx_load_lut(fx, "assets/lut/silent_grade.cube"))
-        fx->lut_strength = 1.0f;
+        fx->settings->lut_strength = 1.0f;
 
     // A thin haze everywhere at night -- enough to put a beam in the flashlight
     // -- and the street's fog volumes on top of it. None by day: the ambient
@@ -847,39 +847,43 @@ static void build_post(Engine* engine, bool night, bool grade) {
     // down the cellar stair or inside the cabin stops dead at the yard's level; its density at
     // the floor is raised by what the falloff takes off over that depth, so every height is as it
     // was.
-    fx->fog_enabled = !g_args.no_fog;
-    fx->fog_height_falloff = 60.0f;
-    fx->fog_floor_y = LAKE_Y;
-    fx->fog_density = night ? 0.02f * expf(-LAKE_Y / fx->fog_height_falloff) : 0.0f;
-    fx->fog_far = 60.0f;
-    fx->fog_anisotropy = 0.7f;
+    fx->settings->fog_enabled = !g_args.no_fog;
+    fx->settings->fog_height_falloff = 60.0f;
+    fx->settings->fog_floor_y = LAKE_Y;
+    fx->settings->fog_density =
+        night ? 0.02f * expf(-LAKE_Y / fx->settings->fog_height_falloff) : 0.0f;
+    fx->settings->fog_far = 60.0f;
+    fx->settings->fog_anisotropy = 0.7f;
     // At night the fog's own glow, and not the sky's: the night sky's radiance
     // is a deep navy, and fog lit by it swallows the street into black. A dim
     // grey-green veil is what the houses fade INTO, which is what reads as fog.
     // By day the overcast dome lights it, which is the sky the fog fades into.
-    if (night)
-        postfx_set_fog_ambient(fx, (vec3){5.0f, 5.6f, 5.2f});
+    if (night) {
+        glm_vec3_copy((vec3){5.0f, 5.6f, 5.2f}, fx->settings->fog_ambient);
+        fx->settings->fog_ambient_from_sky = false;
+    }
 
     // An exposure per pixel on top of the camera's (spec 13.19), which is what lets a window onto
     // the day come down without the kitchen around it going dark. By day only: the night's
     // exposure is pinned, and its look with it.
-    fx->local_exposure_enabled = g_args.local_exposure < 0 ? !night : g_args.local_exposure == 1;
+    fx->settings->local_exposure_enabled =
+        g_args.local_exposure < 0 ? !night : g_args.local_exposure == 1;
     if (!night) {
-        fx->local_exposure_highlights = DAY_LE_HIGHLIGHTS;
-        fx->local_exposure_shadows = DAY_LE_SHADOWS;
-        fx->local_exposure_blend = DAY_LE_BLEND;
+        fx->settings->local_exposure_highlights = DAY_LE_HIGHLIGHTS;
+        fx->settings->local_exposure_shadows = DAY_LE_SHADOWS;
+        fx->settings->local_exposure_blend = DAY_LE_BLEND;
     }
     if (g_args.le_highlights >= 0.0f)
-        fx->local_exposure_highlights = g_args.le_highlights;
+        fx->settings->local_exposure_highlights = g_args.le_highlights;
     if (g_args.le_shadows >= 0.0f)
-        fx->local_exposure_shadows = g_args.le_shadows;
+        fx->settings->local_exposure_shadows = g_args.le_shadows;
     if (g_args.le_blend >= 0.0f)
-        fx->local_exposure_blend = g_args.le_blend;
-    fx->local_exposure_probe = g_args.le_probe;
-    fx->negative_probe = g_args.negative_probe;
-    fx->rescale_histories = !g_args.no_history_rescale;
+        fx->settings->local_exposure_blend = g_args.le_blend;
+    fx->settings->local_exposure_probe = g_args.le_probe;
+    fx->settings->negative_probe = g_args.negative_probe;
+    fx->settings->rescale_histories = !g_args.no_history_rescale;
     if (g_args.fog_miss_samples > 0)
-        fx->fog_history_miss_samples = g_args.fog_miss_samples;
+        fx->settings->fog_history_miss_samples = g_args.fog_miss_samples;
 }
 
 // Door `i`, or NULL when it was not hung.
@@ -1450,13 +1454,13 @@ static void on_init(Game* game) {
     // key lands on the night's pin -- a dim room never opens past the night.
     Exposure* ex = &engine->exposure;
     if (g_args.day) {
-        ex->key = DAY_METER_KEY;
-        ex->meter_min_log2 = log2f(ex->key / EXPOSURE_NIGHT);
+        ex->settings->key = DAY_METER_KEY;
+        ex->settings->meter_min_log2 = log2f(ex->settings->key / EXPOSURE_NIGHT);
     } else {
-        ex->automatic = false;
-        ex->multiplier = EXPOSURE_NIGHT;
+        ex->settings->automatic = false;
+        ex->settings->multiplier = EXPOSURE_NIGHT;
     }
-    ex->probe = g_args.exposure_probe;
+    ex->settings->probe = g_args.exposure_probe;
     load_seam(engine, "mind-exposure");
     g_settle_start = g_load_mark;
 }
@@ -1684,7 +1688,8 @@ static void on_pre_render(Game* game, double alpha) {
     // moves, so nothing else that sets the exposure is overruled the rest of the time.
     inspect_frame(&g_inspect);
     if (!g_args.day && g_lights.hold != g_exposure_hold) {
-        engine->exposure.multiplier = EXPOSURE_NIGHT * glm_lerp(1.0f, EXPOSURE_HELD, g_lights.hold);
+        engine->exposure.settings->multiplier =
+            EXPOSURE_NIGHT * glm_lerp(1.0f, EXPOSURE_HELD, g_lights.hold);
         g_exposure_hold = g_lights.hold;
     }
 
@@ -1898,7 +1903,7 @@ static void on_pre_render(Game* game, double alpha) {
                 : fmaxf(g_fade - step / FADE_OUT_SECONDS, 0.0f);
     const float shown = glm_smoothstep(0.0f, 1.0f, g_fade);
     if (engine->postfx)
-        glm_vec3_fill(engine->postfx->grade_gain, shown);
+        glm_vec3_fill(engine->postfx->settings->grade_gain, shown);
     world_heard(game, shown);
     if (g_args.startup_ms)
         trace_settling(engine, lit, up);

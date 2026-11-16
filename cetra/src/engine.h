@@ -582,6 +582,8 @@ typedef struct Engine {
 
     // HDR post-processing (bloom + tone mapping)
     PostFX* postfx;
+    // What the post chain does: plain settings, written directly at any time (postfx.h)
+    PostFXSettings post_settings;
     // The post chain's programs, made once and shared by every chain
     struct PostFXPrograms* postfx_programs;
 
@@ -601,6 +603,8 @@ typedef struct Engine {
     // zero and rendered a black frame as the fallback for an invariant that
     // cannot fail.
     Exposure exposure;
+    // What the camera's exposure is set to: plain settings, written directly at any time.
+    ExposureSettings exposure_settings;
 
     InputState input;
     // The scripted input, or NULL for the real devices (engine_set_input_script).

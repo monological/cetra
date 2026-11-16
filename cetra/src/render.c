@@ -167,13 +167,14 @@ void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh,
 // Uploaded per program switch rather than per material because
 // _update_program_material_uniforms has no Engine, and widening its signature
 // to reach postfx would be a far larger blast radius than one call here.
-static void _upload_skin_preint_uniforms(const Engine* engine, UniformManager* u) {
+static void _upload_skin_preint_uniforms(const Engine* engine, const Scene* scene,
+                                         UniformManager* u) {
     const PostFX* fx = engine->postfx;
     if (!fx)
         return;
     GLint prof_loc = uniform_location(u, "sssProfiles[0]");
-    if (prof_loc >= 0 && fx->sss_profile_count > 0)
-        glUniform4fv(prof_loc, fx->sss_profile_count, (const GLfloat*)fx->sss_profiles);
+    if (prof_loc >= 0 && scene && scene->sss_profile_count > 0)
+        glUniform4fv(prof_loc, scene->sss_profile_count, (const GLfloat*)scene->sss_profiles);
 
     // Zero when the blur will not run: the shader reads this as "the
     // screen-space pass will deliver nothing", so pre-integration takes the
@@ -532,7 +533,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // irradiance probe shows up later as GI that changes when you move.
             uniform_set_int(u, "skinPreintEnabled",
                             engine->skin_preint_enabled && !engine->capturing ? 1 : 0);
-            _upload_skin_preint_uniforms(engine, u);
+            _upload_skin_preint_uniforms(engine, scene, u);
             uniform_set_int(u, "clusterDebug", engine->cluster_debug ? 1 : 0);
             // Asserted by every pass rather than cleaned up by the one that set
             // it: the prepass and the shading pass carry their own SubmitState,
@@ -2236,7 +2237,7 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     float saved_near = camera->near_clip;
     float saved_far = camera->far_clip;
 
-    bool saved_taa = engine->postfx ? engine->postfx->taa_enabled : false;
+    bool saved_taa = engine->postfx ? engine->postfx->settings->taa_enabled : false;
     // Each capture face re-enters engine_render_scene with TAA off, which
     // republishes a zero jitter. Restoring it keeps a capture taken AFTER the
     // main raster (this API is public) from handing the TAAU resolve a zero
@@ -2275,7 +2276,7 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     engine->refraction_enabled = false;
     engine->capturing = true;
     if (engine->postfx)
-        engine->postfx->taa_enabled = false;
+        engine->postfx->settings->taa_enabled = false;
 
     // Scene GL state: capture may run before the render loop's per-frame
     // preamble has ever executed, so establish it explicitly. Culling is put
@@ -2389,7 +2390,7 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     engine->current_render_mode = saved_render_mode;
     glPolygonMode(GL_FRONT_AND_BACK, (GLenum)saved_polygon_mode[0]);
     if (engine->postfx) {
-        engine->postfx->taa_enabled = saved_taa;
+        engine->postfx->settings->taa_enabled = saved_taa;
         engine->postfx->taau_jitter_px[0] = saved_jitter[0];
         engine->postfx->taau_jitter_px[1] = saved_jitter[1];
     }

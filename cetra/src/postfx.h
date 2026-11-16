@@ -12,10 +12,6 @@
 
 struct Profiler;
 
-// Max distinct per-material SSS scatter profiles per scene. C-side only: the
-// gather takes one profile per walk, so no shader mirrors this array.
-#define MAX_SSS_PROFILES 8
-
 // The scatter pyramid stops being sampled while its texels are still small
 // against the subject, so the widest term it can deliver is set by that cap
 // rather than by a constant. postfx_sss_max_sigma_per_depth reports it; there is
@@ -229,22 +225,194 @@ typedef enum PostFXShow {
     POSTFX_SHOW_CRT,        // the picture, through the CRT
 } PostFXShow;
 
+// What the post chain does, as plain values an app writes at any time, in feature order. Nothing
+// here is written by the engine or holds a GPU object, so a copy is a whole description and two
+// are compared byte for byte; the chain reacts to a change at its next run (postfx_run).
+typedef struct PostFXSettings {
+    float bloom_threshold;      // Linear luminance where bloom starts
+    float bloom_knee;           // Soft-knee width around the threshold
+    float bloom_max_brightness; // Firefly clamp on the bloom input
+    float bloom_strength;
+    bool bloom_enabled;
+
+    // Lens flare (spec 11.21): ghosts of a bright source, mirrored through
+    // frame centre, composited additively in the tonemap beside bloom. Reads
+    // the bloom pyramid; see lens_flare_frag.glsl for why and how.
+    bool flare_enabled;
+    float flare_strength;
+    int flare_ghosts;
+    float flare_ghost_spacing; // Fraction of the centre vector between ghosts
+    float flare_halo_width;    // Halo ring radius in UV units
+    float flare_chroma;        // Per-channel radial offset; 0 = achromatic
+    int flare_source_lod;      // Pyramid mip the ghosts read, clamped to what exists
+
+    // Diffraction glare (spec 13.4): the star an aperture draws round light brighter than
+    // `glare_threshold`, composited in the tonemap beside bloom. Off by default.
+    bool glare_enabled;
+    float glare_strength;  // share of the light past the threshold moved into the star, 0..1
+    float glare_threshold; // working-space radiance a point must pass to star
+    bool glare_probe;      // print the source's light against the glare's, once a frame
+
+    // Local exposure (spec 13.19): an exposure per pixel on top of the camera's, from the
+    // frame's luminance split into an edge-aware base and its detail. Off by default; at the
+    // defaults below it is the identity.
+    bool local_exposure_enabled;
+    float local_exposure_highlights; // base contrast above middle grey, 1 = unchanged (0.6-1)
+    float local_exposure_shadows;    // and below it
+    float local_exposure_detail;     // detail contrast, 1 = unchanged
+    float local_exposure_blend;      // share of the base from the blurred luminance, 0..1
+    float local_exposure_kernel;     // the blurred luminance's kernel, a share of frame width
+    float local_exposure_grey_bias;  // stops added to the middle grey the base scales about
+    bool local_exposure_probe;       // print the frame's luminance percentiles, once a frame
+
+    bool negative_probe; // print how much of the frame reaches the tonemap below zero, each frame
+    bool fog_miss_probe; // print how many fog cells took several samples, each fog frame
+
+    bool ssao_enabled;
+    float ssao_radius; // Occlusion reach in view-space units
+    float ssao_strength;
+    PostFXSpecOccMode spec_occlusion_mode; // How the AO factor treats specular (see the enum)
+    bool ao_edge_filter_enabled; // Depth-bilateral AO blur (no silhouette bleed onto the floor)
+
+    // Screen-space contact shadows (spec 9.3): a full-internal-res depth march
+    // toward the key light and toward every clustered local light with no
+    // punctual shadow map (spec 11.56), composited in tonemap as a direct-light
+    // occlusion multiplier beside AO. Needs no shadow map itself. Off by
+    // default; enabled false leaves the frame untouched. Targets are lazily
+    // allocated (cs_ready) and freed unconditionally.
+    bool contact_shadows_enabled;
+    float cs_strength;    // Composite darkening weight [0,1]
+    float cs_distance;    // March reach in view-space units (0 = off, C-gated)
+    bool ssgi_enabled;    // Screen-space GI: one-bounce indirect diffuse (extends the GTAO sweep)
+    float ssgi_intensity; // Composite multiplier on the gathered indirect radiance
+    bool normals_enabled; // Master switch for the normals G-buffer (MRT)
+    bool ssr_enabled;
+    float ssr_strength;        // Composite multiplier on the reflections
+    float ssr_max_distance;    // March length in view-space units
+    float ssr_thickness_min;   // Acceptance-slab floor behind a surface (view units)
+    float ssr_max_roughness;   // Reflections fade out toward this roughness
+    float ssr_floor_roughness; // Roughness the shadow catcher publishes
+    bool ssr_temporal;         // Temporally accumulate the reflection (needs TAA; averages march
+                               // step-banding into a smooth reflection)
+    bool ssr_denoise;          // SSR denoiser: stochastic march (grid stripes -> noise) + spatial
+                      // a-trous, so temporal/a-trous can resolve it into a clean reflection
+    float ssr_jitter;  // Base stochastic ray-jitter spread (floor under roughness)
+    bool ssr_full_res; // Trace SSR at full res (sharp; kills the half-res march's serrated
+                       // reflection edges); off = half-res. A change reallocates the reflection
+                       // buffers at the next run.
+
+    // Volumetric fog (spec 9.5): a camera-frustum froxel volume gathers
+    // single-scattered light from the shadow casters, the clustered local
+    // lights, and an ambient term through an exponential height-fog density,
+    // composited into the HDR scene before DoF/bloom as
+    // scene*transmittance + inscatter. Off by default; fog_enabled false leaves
+    // the frame untouched. World-space parameters are scene-scaled by apps.
+    bool fog_enabled;
+    float fog_density;        // Extinction at floor height (1/world units)
+    float fog_height_falloff; // World units for a 1/e density drop
+    float fog_floor_y;        // World height of max density; no medium below it
+    float fog_near;           // Near end of the volume's depth range; 0 = derive from fog_far
+    float fog_far;            // Far end of the volume's depth range: where its slices are spent
+    float fog_depth_dist;     // Slice bias on top of the exponential; 1 = pure exponential,
+                              // >1 bunches slices toward fog_far, <1 toward the camera
+    float fog_temporal_blend; // Weight the froxel accumulator gives its history
+    // Samples averaged by a cell with no history to blend, 1..POSTFX_FOG_MISS_SAMPLES_MAX;
+    // 1 = the one jittered sample every cell takes
+    int fog_history_miss_samples;
+    // Volume dimensions, defaulted from the POSTFX_FROXEL_* constants. Runtime
+    // because XY is what resolves a beam's SILHOUETTE: the volume traces it at
+    // this density and the composite can only put a one-cell ramp under each
+    // step, so anything sharp enough to clip at the tonemap shows the grid.
+    // Changing any of them reallocates the volumes at the next fog frame.
+    int froxel_grid_x;
+    int froxel_grid_y;
+    int froxel_grid_z;
+    float fog_anisotropy; // Henyey-Greenstein g (forward scattering)
+    float fog_sun_boost;  // Artistic multiplier on the shaft in-scatter
+    // Isotropic ambient in-scatter radiance, unless fog_ambient_from_sky and a sky publishes
+    // its zenith (PostFX.fog_ambient_sky). An app taking it from the sky clears that flag.
+    vec3 fog_ambient;
+    bool fog_ambient_from_sky; // Default true: the sky's zenith radiance where there is a sky
+    float fog_esm_k;           // Exponent scale; the one tuning constant
+    bool fog_esm_enabled;      // false falls the medium back to the exact binary tap
+
+    PostFXDebugView debug_view;
+    PostFXTonemapMode tonemap_mode;
+
+    // Finishing grade: a "look" stack applied in the composite pass after tone
+    // mapping. All optional; with every toggle off the frame is unchanged.
+    bool sharpen_enabled;
+    float sharpen_strength; // Unsharp-mask amount
+    bool grade_enabled;
+    vec3 grade_lift;  // Raises shadows (0 = none)
+    vec3 grade_gamma; // Per-channel midtone curve (1 = none)
+    vec3 grade_gain;  // Scales highlights (1 = none)
+    bool vignette_enabled;
+    float vignette_strength; // Edge darkening, 0..1
+    float vignette_radius;   // Fraction of the half-diagonal kept bright
+    // Chromatic aberration. A lens effect, so it lands on the scene sample
+    // before the tonemap rather than in the finishing block with the others.
+    bool ca_enabled;
+    float ca_strength; // Channel separation at the corner, in pixels
+    // Purkinje / scotopic shift (spec 11.83): the RETINA's spectral response, so
+    // it lands after the lens effects above and before the tone curve, which
+    // stands in for the response curve. Not in the finishing block, which is all
+    // downstream of the tonemap.
+    bool purkinje_enabled;
+    float purkinje_strength; // Blend toward full rod vision; 0 is a bit-exact identity
+    // Stops, added to both ramps. ONE knob, because the quantity it corrects for
+    // -- this engine's photometric scale -- is one unknown scalar.
+    float purkinje_bias_ev;
+    // The paper's other two halves, separately toggled because each conflicts
+    // with an existing stage and either may want dropping on the numbers.
+    float purkinje_acuity; // Rod spatial pooling; fights the sharpen stage below
+    float purkinje_noise;  // Retinal photon noise; distinct from `grain`, which is the SENSOR's
+    bool grain_enabled;
+    float grain_strength;
+    // Dither applied at the 8-bit write, so a shallow gradient stops quantizing
+    // to contour bands. Screen-space static: it carries no frame term.
+    bool dither_enabled;
+    float dither_strength; // Peak amplitude in 8-bit LSB (1 = textbook TPDF)
+    float lut_strength;    // Blend toward the graded result; 0 is a bit-exact identity
+    PostFXLutInterp lut_interp;
+    bool rescale_histories; // false = histories keep the exposure they were written at
+
+    // Temporal anti-aliasing. Consumes the per-pixel velocity buffer and a
+    // reprojected history to resolve sub-pixel-jittered frames.
+    bool taa_enabled;
+
+    // Depth of field. Targets are lazily allocated on first enable (dof_ready)
+    // so the feature costs no memory while off. CoC + gather run at half the
+    // render resolution; the composite is post-res.
+    bool dof_enabled;
+    bool dof_autofocus;       // Focus on the camera's subject each frame
+    float dof_focus_distance; // View-space distance kept sharp, unless autofocus
+    float dof_focus_range;    // Ramp width to full blur
+    float dof_max_coc;        // Max blur radius, half-res texels
+    int dof_blades;           // Aperture blade count (< 3 = circular)
+    float dof_rotation;       // Aperture rotation, degrees
+
+    // Motion blur (McGuire velocity reconstruction, 4.15). Reads the aux
+    // velocity buffer (.xy) + resolved HDR, gathers along the velocity, and
+    // blits the result back into hdr_fbo. Target lazily allocated
+    // (motion_blur_ready) so the feature is free while off; off by default, so
+    // the pass is skipped and the frame is byte-identical to master.
+    bool motion_blur_enabled;
+    float motion_blur_scale; // Shutter: velocity multiplier (1 = full frame)
+} PostFXSettings;
+
+// One run of the chain: the targets and histories it draws with, the programs and settings it
+// borrows, and what other subsystems publish into it each frame.
 typedef struct PostFX {
-    // SETTINGS throughout, in feature order, except:
+    // ENGINE-OWNED throughout, read only: the sizes and mip counts, every GLuint, every PingPong
+    // history, every *_ready / *_failed lazy-alloc latch, frame_index, the borrowed programs,
+    // settings, exposure and profiler, and the blocks other subsystems PUBLISH here each frame
+    // (the probe set, the fog volumes, the cloud shadow, the water medium, the fog casters and
+    // spot, the aerial volume, the rain, the late draw, the pre-exposure, the skin profiles, the
+    // sky's fog ambient, the autofocus distance, the CRT), each marked at its declaration.
     //
-    // ENGINE-OWNED, read only: the sizes and mip counts, every GLuint and
-    // ShaderProgram*, every PingPong history, every *_ready / *_failed
-    // lazy-alloc latch, frame_index, the borrowed exposure and profiler, and
-    // the blocks other subsystems PUBLISH here each frame (the probe set, the
-    // fog volumes, the cloud shadow, the water medium, the fog casters and
-    // spot, the aerial volume, the rain, the late draw, the pre-exposure), each
-    // marked at its declaration.
-    //
-    // BY FUNCTION: ssr_full_res (postfx_set_ssr_full_res, which reallocates
-    // the reflection buffers), fog_ambient (postfx_set_fog_ambient, which also
-    // takes it away from the sky), the SSS profile table (postfx_add /
-    // postfx_reset_sss_profile), the LUT's texture, size and name
-    // (postfx_load_lut / postfx_clear_lut), and the app passes (postfx_add_pass).
+    // BY FUNCTION: the LUT's texture, size and name (postfx_load_lut / postfx_clear_lut), and the
+    // app passes (postfx_add_pass). What the chain does is its settings (PostFXSettings).
     int width, height;             // Render size: what the scene and the pre-TAA
                                    // chain rasterize at (post size x render_scale)
     int post_width, post_height;   // Post size (display x ss_scale): the TAAU
@@ -322,6 +490,11 @@ typedef struct PostFX {
 
     // Borrowed, never owned: the engine's one set, shared by every chain it runs.
     struct PostFXPrograms* programs;
+    // Borrowed: what this run of the chain does.
+    PostFXSettings* settings;
+    // The reflection buffers' resolution, as last allocated: the run reallocates them when
+    // settings->ssr_full_res differs.
+    bool ssr_built_full_res;
 
     // Borrowed, never owned -- the Engine holds it and installs it before the
     // first run. The post chain runs the metering passes that FEED exposure but
@@ -330,88 +503,21 @@ typedef struct PostFX {
     // luminance back.
     Exposure* exposure;
 
-    float bloom_threshold;      // Linear luminance where bloom starts
-    float bloom_knee;           // Soft-knee width around the threshold
-    float bloom_max_brightness; // Firefly clamp on the bloom input
-    float bloom_strength;
-    bool bloom_enabled;
-
-    // Lens flare (spec 11.21): ghosts of a bright source, mirrored through
-    // frame centre, composited additively in the tonemap beside bloom. Reads
-    // the bloom pyramid; see lens_flare_frag.glsl for why and how.
-    bool flare_enabled;
-    float flare_strength;
-    int flare_ghosts;
-    float flare_ghost_spacing;       // Fraction of the centre vector between ghosts
-    float flare_halo_width;          // Halo ring radius in UV units
-    float flare_chroma;              // Per-channel radial offset; 0 = achromatic
-    int flare_source_lod;            // Pyramid mip the ghosts read, clamped to what exists
     bool flare_ready;                // Lazy-alloc guard for the target below
     GLuint flare_fbo, flare_texture; // Quarter post-res
     int flare_width, flare_height;
 
-    // Diffraction glare (spec 13.4): the star an aperture draws round light brighter than
-    // `glare_threshold`, composited in the tonemap beside bloom. Off by default.
-    bool glare_enabled;
-    float glare_strength;  // share of the light past the threshold moved into the star, 0..1
-    float glare_threshold; // working-space radiance a point must pass to star
-    bool glare_probe;      // print the source's light against the glare's, once a frame
-    struct Glare* glare;   // engine-owned; made on first use
-    bool glare_failed;     // could not be made; never retried
+    struct Glare* glare; // engine-owned; made on first use
+    bool glare_failed;   // could not be made; never retried
 
-    // Local exposure (spec 13.19): an exposure per pixel on top of the camera's, from the
-    // frame's luminance split into an edge-aware base and its detail. Off by default; at the
-    // defaults below it is the identity.
-    bool local_exposure_enabled;
-    float local_exposure_highlights;      // base contrast above middle grey, 1 = unchanged (0.6-1)
-    float local_exposure_shadows;         // and below it
-    float local_exposure_detail;          // detail contrast, 1 = unchanged
-    float local_exposure_blend;           // share of the base from the blurred luminance, 0..1
-    float local_exposure_kernel;          // the blurred luminance's kernel, a share of frame width
-    float local_exposure_grey_bias;       // stops added to the middle grey the base scales about
-    bool local_exposure_probe;            // print the frame's luminance percentiles, once a frame
     struct LocalExposure* local_exposure; // engine-owned; made on first use
     bool local_exposure_failed;           // could not be made; never retried
 
-    bool negative_probe; // print how much of the frame reaches the tonemap below zero, each frame
-    bool fog_miss_probe; // print how many fog cells took several samples, each fog frame
-
-    bool ssao_enabled;
-    float ssao_radius; // Occlusion reach in view-space units
-    float ssao_strength;
-    PostFXSpecOccMode spec_occlusion_mode; // How the AO factor treats specular (see the enum)
-    bool ao_edge_filter_enabled; // Depth-bilateral AO blur (no silhouette bleed onto the floor)
-
-    // Screen-space contact shadows (spec 9.3): a full-internal-res depth march
-    // toward the key light and toward every clustered local light with no
-    // punctual shadow map (spec 11.56), composited in tonemap as a direct-light
-    // occlusion multiplier beside AO. Needs no shadow map itself. Off by
-    // default; enabled false leaves the frame untouched. Targets are lazily
-    // allocated (cs_ready) and freed unconditionally.
-    bool contact_shadows_enabled;
-    float cs_strength;     // Composite darkening weight [0,1]
-    float cs_distance;     // March reach in view-space units (0 = off, C-gated)
     int cs_mapless_lights; // Point/spot lights with no live punctual map (0 = none)
     bool cs_ready;         // Lazy-alloc guard for the targets below
     GLuint cs_fbo[2];      // R8 at full internal res: [0] raw march, [1] bilateral-blurred
     GLuint cs_texture[2];
-    PingPong cs_history;  // R16F temporal accumulation (0.9 feedback bands in 8 bits)
-    bool ssgi_enabled;    // Screen-space GI: one-bounce indirect diffuse (extends the GTAO sweep)
-    float ssgi_intensity; // Composite multiplier on the gathered indirect radiance
-    bool normals_enabled; // Master switch for the normals G-buffer (MRT)
-    bool ssr_enabled;
-    float ssr_strength;        // Composite multiplier on the reflections
-    float ssr_max_distance;    // March length in view-space units
-    float ssr_thickness_min;   // Acceptance-slab floor behind a surface (view units)
-    float ssr_max_roughness;   // Reflections fade out toward this roughness
-    float ssr_floor_roughness; // Roughness the shadow catcher publishes
-    bool ssr_temporal;         // Temporally accumulate the reflection (needs TAA; averages march
-                               // step-banding into a smooth reflection)
-    bool ssr_denoise;          // SSR denoiser: stochastic march (grid stripes -> noise) + spatial
-                      // a-trous, so temporal/a-trous can resolve it into a clean reflection
-    float ssr_jitter;  // Base stochastic ray-jitter spread (floor under roughness)
-    bool ssr_full_res; // Trace SSR at full res (sharp; kills the half-res march's serrated
-                       // reflection edges); off = half-res, byte-identical to the old path
+    PingPong cs_history; // R16F temporal accumulation (0.9 feedback bands in 8 bits)
 
     // Local reflection probe, filled per frame by the engine from the current
     // scene (postfx never learns about Scene): the SSR pass samples it where
@@ -431,47 +537,15 @@ typedef struct PostFX {
     bool probe_multi;
     GLuint probe_atlas;
 
-    // Volumetric fog (spec 9.5): a camera-frustum froxel volume gathers
-    // single-scattered light from the shadow casters, the clustered local
-    // lights, and an ambient term through an exponential height-fog density,
-    // composited into the HDR scene before DoF/bloom as
-    // scene*transmittance + inscatter. Off by default; fog_enabled false leaves
-    // the frame untouched. World-space parameters are scene-scaled by apps.
-    bool fog_enabled;
-    float fog_density;        // Extinction at floor height (1/world units)
-    float fog_height_falloff; // World units for a 1/e density drop
-    float fog_floor_y;        // World height of max density; no medium below it
-    float fog_near;           // Near end of the volume's depth range; 0 = derive from fog_far
-    float fog_far;            // Far end of the volume's depth range: where its slices are spent
-    float fog_depth_dist;     // Slice bias on top of the exponential; 1 = pure exponential,
-                              // >1 bunches slices toward fog_far, <1 toward the camera
-    float fog_temporal_blend; // Weight the froxel accumulator gives its history
-    // Samples averaged by a cell with no history to blend, 1..POSTFX_FOG_MISS_SAMPLES_MAX;
-    // 1 = the one jittered sample every cell takes
-    int fog_history_miss_samples;
-    // Volume dimensions, defaulted from the POSTFX_FROXEL_* constants. Runtime
-    // because XY is what resolves a beam's SILHOUETTE: the volume traces it at
-    // this density and the composite can only put a one-cell ramp under each
-    // step, so anything sharp enough to clip at the tonemap shows the grid.
-    // Changing any of them reallocates the volumes at the next fog frame.
-    int froxel_grid_x;
-    int froxel_grid_y;
-    int froxel_grid_z;
     int froxel_built_x; // Dimensions the live volumes were allocated at
     int froxel_built_y;
     int froxel_built_z;
-    float fog_anisotropy; // Henyey-Greenstein g (forward scattering)
-    float fog_sun_boost;  // Artistic multiplier on the shaft in-scatter
-    // Isotropic ambient in-scatter radiance. The sky's while
-    // fog_ambient_from_sky is set; postfx_set_fog_ambient to take it.
-    vec3 fog_ambient;
-    bool fog_ambient_from_sky; // Default true: the sky's zenith radiance, every frame
-    bool froxel_ready;         // Lazy-alloc guard for the volumes below
-    GLuint froxel_fbo;         // Attachment-less; a layer is bound per slice draw
-    GLuint froxel_scatter[2];  // RGBA16F volumes: in-scatter radiance + extinction, indexed by
-                               // frame parity so a frame reprojects against the previous one
-                               // without copying a whole volume
-    GLuint froxel_integrated;  // RGBA16F volume: front-to-back inscatter + transmittance
+    bool froxel_ready;        // Lazy-alloc guard for the volumes below
+    GLuint froxel_fbo;        // Attachment-less; a layer is bound per slice draw
+    GLuint froxel_scatter[2]; // RGBA16F volumes: in-scatter radiance + extinction, indexed by
+                              // frame parity so a frame reprojects against the previous one
+                              // without copying a whole volume
+    GLuint froxel_integrated; // RGBA16F volume: front-to-back inscatter + transmittance
     // The camera the previous froxel frame was built with. PostFX keeps its own
     // copy because engine->prev_view_proj already holds THIS frame's matrix by
     // the time postfx runs (the scene pass stashes it at its end).
@@ -609,8 +683,6 @@ typedef struct PostFX {
     GLuint fog_esm_scratch; // Ping target for the separable blur
     GLuint fog_esm_fbo;     // Re-attached per layer
     int fog_esm_layers;     // Layers the pair was allocated for
-    float fog_esm_k;        // Exponent scale; the one tuning constant
-    bool fog_esm_enabled;   // false falls the medium back to the exact binary tap
 
     // One volumetric spot light (the flashlight), published alongside the
     // directional casters. The fog march scatters it per step (cone + distance
@@ -635,43 +707,6 @@ typedef struct PostFX {
     GLuint fog_punctual_shadow_maps;
     int fog_spot_shadow_layer; // Which layer of it holds this spot
 
-    PostFXDebugView debug_view;
-    PostFXTonemapMode tonemap_mode;
-
-    // Finishing grade: a "look" stack applied in the composite pass after tone
-    // mapping. All optional; with every toggle off the frame is unchanged.
-    bool sharpen_enabled;
-    float sharpen_strength; // Unsharp-mask amount
-    bool grade_enabled;
-    vec3 grade_lift;  // Raises shadows (0 = none)
-    vec3 grade_gamma; // Per-channel midtone curve (1 = none)
-    vec3 grade_gain;  // Scales highlights (1 = none)
-    bool vignette_enabled;
-    float vignette_strength; // Edge darkening, 0..1
-    float vignette_radius;   // Fraction of the half-diagonal kept bright
-    // Chromatic aberration. A lens effect, so it lands on the scene sample
-    // before the tonemap rather than in the finishing block with the others.
-    bool ca_enabled;
-    float ca_strength; // Channel separation at the corner, in pixels
-    // Purkinje / scotopic shift (spec 11.83): the RETINA's spectral response, so
-    // it lands after the lens effects above and before the tone curve, which
-    // stands in for the response curve. Not in the finishing block, which is all
-    // downstream of the tonemap.
-    bool purkinje_enabled;
-    float purkinje_strength; // Blend toward full rod vision; 0 is a bit-exact identity
-    // Stops, added to both ramps. ONE knob, because the quantity it corrects for
-    // -- this engine's photometric scale -- is one unknown scalar.
-    float purkinje_bias_ev;
-    // The paper's other two halves, separately toggled because each conflicts
-    // with an existing stage and either may want dropping on the numbers.
-    float purkinje_acuity; // Rod spatial pooling; fights the sharpen stage below
-    float purkinje_noise;  // Retinal photon noise; distinct from `grain`, which is the SENSOR's
-    bool grain_enabled;
-    float grain_strength;
-    // Dither applied at the 8-bit write, so a shallow gradient stops quantizing
-    // to contour bands. Screen-space static: it carries no frame term.
-    bool dither_enabled;
-    float dither_strength; // Peak amplitude in 8-bit LSB (1 = textbook TPDF)
     // Published per frame by the engine, whose the CRT is (spec 13.28): it shows this frame's
     // picture, so the tone map draws into the picture rather than the window.
     bool crt_on;
@@ -700,30 +735,19 @@ typedef struct PostFX {
     // longer has the path to.
     GLuint lut_texture; // 0 = none loaded, which is what disables the branch
     int lut_size;       // LUT_3D_SIZE of the loaded table; the inset divides by it
-    float lut_strength; // Blend toward the graded result; 0 is a bit-exact identity
-    PostFXLutInterp lut_interp;
-    char lut_name[64]; // Basename of the loaded file, for the GUI readout
-    int frame_index;   // Copied from engine->total_frames; seeds deterministic grain
+    char lut_name[64];  // Basename of the loaded file, for the GUI readout
+    int frame_index;    // Copied from engine->total_frames; seeds deterministic grain
     // Published per frame by the scene pass: the pre-exposure the frame was shaded at, which a
     // history of radiance is read at.
     float pre_exposure;
-    bool rescale_histories; // false = histories keep the exposure they were written at
+    // Published per frame by the sky: its zenith radiance, the fog's ambient while
+    // settings->fog_ambient_from_sky. Valid once a sky has published one, and kept after.
+    vec3 fog_ambient_sky;
+    bool fog_ambient_sky_valid;
+    // Published per frame by the engine under settings->dof_autofocus: the camera's distance to
+    // its subject, which the depth of field focuses at in place of dof_focus_distance.
+    float dof_autofocus_distance;
 
-    // Temporal anti-aliasing. Consumes the per-pixel velocity buffer and a
-    // reprojected history to resolve sub-pixel-jittered frames. History buffers
-    // and the resolve program live below (added with the resolve pass).
-    bool taa_enabled;
-
-    // Depth of field. Targets are lazily allocated on first enable (dof_ready)
-    // so the feature costs no memory while off. CoC + gather run at half the
-    // render resolution; the composite is post-res.
-    bool dof_enabled;
-    bool dof_autofocus;                        // Recompute focus each frame from camera->subject
-    float dof_focus_distance;                  // View-space distance kept sharp
-    float dof_focus_range;                     // Ramp width to full blur
-    float dof_max_coc;                         // Max blur radius, half-res texels
-    int dof_blades;                            // Aperture blade count (< 3 = circular)
-    float dof_rotation;                        // Aperture rotation, degrees
     bool dof_ready;                            // Lazy-alloc guard for the targets below
     GLuint dof_coc_fbo, dof_coc_texture;       // Half-res: scene + signed CoC in .a
     GLuint dof_gather_fbo;                     // Half-res MRT: far (att0) + near (att1)
@@ -734,16 +758,9 @@ typedef struct PostFX {
     GLuint dof_tile_fbo, dof_tile_texture;     // RG16F per-tile (maxFarCoC, maxNearCoC)
     GLuint dof_dilate_fbo, dof_dilate_texture; // RG16F neighborhood-dilated tile maxima
 
-    // Motion blur (McGuire velocity reconstruction, 4.15). Reads the aux
-    // velocity buffer (.xy) + resolved HDR, gathers along the velocity, and
-    // blits the result back into hdr_fbo. Target lazily allocated
-    // (motion_blur_ready) so the feature is free while off; off by default, so
-    // the pass is skipped and the frame is byte-identical to master.
-    bool motion_blur_enabled;
-    float motion_blur_scale;                    // Shutter: velocity multiplier (1 = full frame)
-    bool motion_blur_ready;                     // Lazy-alloc guard for the targets below
-    int motion_blur_tile_w, motion_blur_tile_h; // Tile-max resolution (width/TILE, ceil)
-    GLuint motion_blur_tile_fbo, motion_blur_tile_texture;         // RG16F per-tile max velocity
+    bool motion_blur_ready;                                // Lazy-alloc guard for the targets below
+    int motion_blur_tile_w, motion_blur_tile_h;            // Tile-max resolution (width/TILE, ceil)
+    GLuint motion_blur_tile_fbo, motion_blur_tile_texture; // RG16F per-tile max velocity
     GLuint motion_blur_neighbor_fbo, motion_blur_neighbor_texture; // RG16F 3x3-tile max velocity
 
     // Screen-space subsurface scattering. Resolves the scene pass's skin-diffuse
@@ -751,12 +768,9 @@ typedef struct PostFX {
     // per-channel), and additive-blends blur - diffuse into the canvas so the
     // diffuse softens while specular stays sharp. Lazily allocated (sss_ready).
     // Off when engine->sss_enabled is off (attachment 4 unwritten -> pass skipped).
-    // Per-material scatter profiles: rgb = per-channel scatter weight (skin
-    // ~(1,0.3,0.2), red widest), w = world-space blur radius. pbr_frag tags each
-    // skin pixel with its material's profile index (in the diffuse alpha); the
-    // pyramid seed keeps only pixels matching the walk's own tag. Slot 0 is the
-    // default skin profile (used when a scene configures no profiles).
-    vec4 sss_profiles[MAX_SSS_PROFILES];
+    // The scene's scatter profiles (Scene.sss_profiles), published per frame by the engine; the
+    // pyramid seed keeps only pixels matching the walk's own profile tag.
+    const vec4* sss_profiles;
     int sss_profile_count;
     bool sss_ready; // Lazy-alloc guard for the targets below
     GLuint sss_diffuse_fbo,
@@ -811,13 +825,17 @@ typedef struct PostFX {
     void* late_draw_user;
 } PostFX;
 
-// `programs` is borrowed and outlives the chain. width/height are the display
+// The settings every chain starts from: each feature at its default, the tuning lengths at a
+// typical size of 1.
+void postfx_settings_init(PostFXSettings* settings);
+
+// `programs` and `settings` are borrowed and outlive the chain. width/height are the display
 // (downsample-target) size; ss_scale supersamples the internal render + post
 // chain by that integer factor (1 = off). render_scale in [0.5, 1] shrinks only
 // the render-res half of the chain (the scene + every pass before the TAA
 // seam); 1 leaves every size as it was.
-PostFX* create_postfx(struct PostFXPrograms* programs, int width, int height, int ss_scale,
-                      float render_scale);
+PostFX* create_postfx(struct PostFXPrograms* programs, PostFXSettings* settings, int width,
+                      int height, int ss_scale, float render_scale);
 
 // The one render-scale clamp. Three doors reach it -- the engine setter, the
 // create, and the resize -- and a scale that differed between them would size
@@ -831,8 +849,8 @@ float postfx_clamp_render_scale(float render_scale);
 int postfx_scaled_dim(int post_dim, float render_scale);
 
 // Rebuild every resolution-dependent target at a new display size / ss_scale /
-// render scale. Settings, per-frame published state, the SSS profile table and
-// the borrowed exposure pointer all survive. The 2D temporal histories are
+// render scale. The borrowed settings, per-frame published state and the
+// borrowed exposure pointer all survive. The 2D temporal histories are
 // reset; the froxel volumes and their adjacency stamp deliberately do not
 // (fixed dimensions, and they reproject through their own stored camera).
 // The caller must rebuild the engine's MSAA scene target to the matching
@@ -843,26 +861,18 @@ int postfx_scaled_dim(int post_dim, float render_scale);
 bool postfx_resize(PostFX* fx, int width, int height, int ss_scale, float render_scale);
 void free_postfx(PostFX* fx);
 
-// Every tuning length PostFX defaults to, written as its metre default times `typical_size` (spec
-// 13.57): the AO radius, the contact-shadow reach, SSR's reach and thickness floor, the DoF focus
-// and range, and the fog's height falloff and far. Not the SSS profiles' radii, which are the
-// materials' own and physical.
-void postfx_reset_lengths(PostFX* fx, float typical_size);
-
-// Per-material SSS scatter profiles. The app resets the table when it configures
-// a scene's skin materials, then adds one profile per distinct skin material
-// (color = per-channel scatter weight, radius = world-space blur width); the
-// returned slot index is written to material->subsurface_profile so pbr_frag can
-// tag each of that material's pixels. Returns -1 if the table is full.
-void postfx_reset_sss_profiles(PostFX* fx);
-int postfx_add_sss_profile(PostFX* fx, const float* color, float radius);
+// Every tuning length the settings default to, written as its metre default times `typical_size`
+// (spec 13.57): the AO radius, the contact-shadow reach, SSR's reach and thickness floor, the DoF
+// focus and range, and the fog's height falloff and far. Not the SSS profiles' radii, which are
+// the materials' own and physical.
+void postfx_settings_reset_lengths(PostFXSettings* settings, float typical_size);
 
 // Enable the whole finishing stack at a cinematic "film" look (stronger
 // vignette, visible grain, extra sharpen, teal-cool shadows / warm highlights).
 //
 // Deliberately does NOT touch the LUT: there is no sane default for one, since
 // it needs a file.
-void postfx_apply_film_look(PostFX* fx);
+void postfx_settings_apply_film_look(PostFXSettings* settings);
 
 // Load a .cube colour-grading LUT and upload it (spec 11.58). Returns false and
 // leaves any previously loaded table in place on a refusal, each of which
@@ -994,14 +1004,8 @@ bool postfx_ssr_active(const PostFX* fx, bool normals_written);
 // postfx_has_medium exists to prevent, one arming source later.
 bool postfx_contact_shadows_have_light(const PostFX* fx);
 
-// Switch SSR tracing between full-res (sharp) and half-res, reallocating the
-// reflection buffer + Hi-Z pyramid at the new resolution. Safe to call at runtime.
-void postfx_set_ssr_full_res(PostFX* fx, bool full_res);
-
-// Stores the fog's ambient in-scatter and takes ownership of it: clears
-// fog_ambient_from_sky, so the sky stops stamping its zenith radiance over the
-// value every frame. The pair in one call, because a store without the clear
-// is silently undone at the next publish.
-void postfx_set_fog_ambient(PostFX* fx, const vec3 rgb);
+// The fog's ambient in-scatter this frame: the sky's zenith, published, under
+// settings->fog_ambient_from_sky when a sky published one; else the settings' own.
+const float* postfx_fog_ambient(const PostFX* fx);
 
 #endif // _POSTFX_H_

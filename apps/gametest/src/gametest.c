@@ -1970,18 +1970,17 @@ static void build_cavern_fog(Scene* scene, PostFX* fx) {
      *
      * So the ambient is a dim turquoise rather than nothing: it is the water's glow
      * hanging in the air of the shaft, and it is what makes depth read as depth instead
-     * of as a hole. fog_ambient_from_sky still has to go, or the sky stamps its zenith
-     * radiance over this every frame and the pit fills with daylight --
-     * postfx_set_fog_ambient clears that flag as well as writing the value, which is why
-     * it is a call and not a field write.
+     * of as a hole. fog_ambient_from_sky still has to go, or the fog takes the sky's
+     * zenith radiance instead and the pit fills with daylight.
      *
      * fog_sun_boost stays at zero, and that one was right: it gathers shaft in-scatter
      * through the same visibility test the shadow map answers, and that test reports LIT
      * for anything outside the cascade, which down here is most of the basin. There are
      * no god rays in a cave lit from its floor.
      */
-    postfx_set_fog_ambient(fx, (vec3){0.02f, 0.09f, 0.10f});
-    fx->fog_sun_boost = 0.0f;
+    glm_vec3_copy((vec3){0.02f, 0.09f, 0.10f}, fx->settings->fog_ambient);
+    fx->settings->fog_ambient_from_sky = false;
+    fx->settings->fog_sun_boost = 0.0f;
 
     /*
      * No GLOBAL air term: this scene wants fog in the cavern and nowhere else.
@@ -1998,13 +1997,13 @@ static void build_cavern_fog(Scene* scene, PostFX* fx) {
      * the scene never asked for, and it is recorded here because the next reader will
      * otherwise reach for fog_enabled and find it already false.
      */
-    fx->fog_density = 0.0f;
+    fx->settings->fog_density = 0.0f;
 
     // The froxel volume is spent over the camera's depth range, and 60 is the default.
     // The shaft floor sits ~190 under the platform, so at the default every slice is
     // used up long before the fog is reached and the box renders as nothing at all.
-    if (fx->fog_far < 400.0f)
-        fx->fog_far = 400.0f;
+    if (fx->settings->fog_far < 400.0f)
+        fx->settings->fog_far = 400.0f;
 
     printf("Cavern fog: box y %g to %g, half %g, density %g, sun boost off\n", (double)bottom,
            (double)top, (double)(GROTTO_BASIN_HALF + 10.0f), (double)vol.density);
@@ -8765,7 +8764,7 @@ static void ui_tonemap_changed(UIElement* el, void* user) {
     (void)el;
     Engine* engine = user;
     if (engine && engine->postfx)
-        engine->postfx->tonemap_mode = ui_tonemap;
+        engine->postfx->settings->tonemap_mode = ui_tonemap;
 }
 
 // The selector binds an index; the file holds a NAME. The copy happens here
@@ -9046,7 +9045,7 @@ static bool ui_install(Engine* engine) {
               engine);
     ui_slider(set_panel, "SFX", 0.0f, 1.0f, &ui_settings.sfx_volume, ui_settings_changed, engine);
     if (engine->postfx)
-        ui_toggle(set_panel, "Bloom", &engine->postfx->bloom_enabled, NULL, NULL);
+        ui_toggle(set_panel, "Bloom", &engine->postfx->settings->bloom_enabled, NULL, NULL);
     ui_toggle(set_panel, "VSync", &ui_settings.vsync, ui_settings_changed, engine);
     // The camera, as a player states it (spec 12.19). Sensitivity scales the
     // rates the rig was authored with rather than replacing them, so a slow pan
@@ -9071,7 +9070,7 @@ static bool ui_install(Engine* engine) {
         ui_selector(set_panel, "Monitor", ui_monitor_names, ui_monitor_count, &ui_monitor_index,
                     ui_monitor_changed, engine);
     static const char* const modes[] = {"Passthrough", "ACES", "Neutral", "AgX", "Linear"};
-    ui_tonemap = engine->postfx ? engine->postfx->tonemap_mode : POSTFX_TONEMAP_NEUTRAL;
+    ui_tonemap = engine->postfx ? engine->postfx->settings->tonemap_mode : POSTFX_TONEMAP_NEUTRAL;
     ui_selector(set_panel, "Tonemap", modes, 5, &ui_tonemap, ui_tonemap_changed, engine);
 
     // ESCAPE HATCH 1 on screen: an element the app paints itself, which still
@@ -9891,7 +9890,7 @@ int main(int argc, const char* argv[]) {
     }
     game->engine->exit_after_frames = frames;
     if (game->engine->postfx)
-        game->engine->postfx->glare_enabled = glare_on;
+        game->engine->postfx->settings->glare_enabled = glare_on;
     engine_set_screenshot_path(game->engine, screenshot);
     game->engine->screenshot_every = screenshot_every;
 

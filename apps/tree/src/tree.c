@@ -675,10 +675,11 @@ static void render_tree_gui(const Engine* engine, Scene* scene) {
 
         igSeparatorText("Atmosphere");
         if (engine->postfx) {
-            igCheckbox("Fog", &engine->postfx->fog_enabled);
-            igSliderFloat("Fog Density", &engine->postfx->fog_density, 0.0f, 0.0015f, "%.5f", 0);
-            igSliderFloat("Fog Height", &engine->postfx->fog_height_falloff, 5.0f, 200.0f, "%.0f",
-                          0);
+            igCheckbox("Fog", &engine->postfx->settings->fog_enabled);
+            igSliderFloat("Fog Density", &engine->postfx->settings->fog_density, 0.0f, 0.0015f,
+                          "%.5f", 0);
+            igSliderFloat("Fog Height", &engine->postfx->settings->fog_height_falloff, 5.0f, 200.0f,
+                          "%.0f", 0);
         }
 
         /*
@@ -762,7 +763,8 @@ static void render_tree_gui(const Engine* engine, Scene* scene) {
                           ImGuiSliderFlags_Logarithmic);
             igCheckbox("Aerial Perspective", &sky->aerial_enabled);
             if (engine->postfx)
-                igCheckbox("Sky drives Fog Ambient", &engine->postfx->fog_ambient_from_sky);
+                igCheckbox("Sky drives Fog Ambient",
+                           &engine->postfx->settings->fog_ambient_from_sky);
             igCheckbox("Debug: LUTs", &sky->debug_luts);
         }
         if (scene) {
@@ -1298,7 +1300,7 @@ int main(int argc, char** argv) {
     // Off by default in the engine; this is the scene it is for -- the sun low over the sea,
     // its glints bright enough to star.
     if (engine->postfx)
-        engine->postfx->glare_enabled = !args.no_glare;
+        engine->postfx->settings->glare_enabled = !args.no_glare;
 
     engine_set_mouse_button_callback(engine, mouse_button_callback);
     engine_set_key_callback(engine, key_callback);
@@ -1595,11 +1597,9 @@ int main(int argc, char** argv) {
     material_set_normal_tex(leaf_material, leaf_normal_tex);
     material_set_roughness_tex(leaf_material, leaf_roughness_tex);
 
-    if (engine->postfx) {
-        postfx_reset_sss_profiles(engine->postfx);
-        leaf_material->subsurface_profile =
-            postfx_add_sss_profile(engine->postfx, (vec3){0.45f, 0.75f, 0.2f}, 0.25f);
-    }
+    scene_reset_sss_profiles(scene);
+    leaf_material->subsurface_profile =
+        scene_add_sss_profile(scene, (vec3){0.45f, 0.75f, 0.2f}, 0.25f);
     apply_season(season);
     prev_season = season;
 
@@ -1849,30 +1849,30 @@ int main(int argc, char** argv) {
      */
     PostFX* fx = engine->postfx;
     if (fx) {
-        fx->tonemap_mode = POSTFX_TONEMAP_NEUTRAL;
-        postfx_apply_film_look(fx);
-        fx->grain_strength = 0.015f;
+        fx->settings->tonemap_mode = POSTFX_TONEMAP_NEUTRAL;
+        postfx_settings_apply_film_look(fx->settings);
+        fx->settings->grain_strength = 0.015f;
 
         // Off unless asked for: the haze flattens this scene, and without it the
         // dusk sky reads as a gradient and the ground has depth. The parameters
         // below stay live either way -- the GUI's own Fog checkbox is what they
         // are tuned for, and --fog is the only way to reach that state headless.
-        fx->fog_enabled = args.fog != 0;
-        fx->fog_density = 0.0005f;
-        fx->fog_height_falloff = 75.0f;
-        fx->fog_floor_y = 0.0f;
-        fx->fog_far = 800.0f;
+        fx->settings->fog_enabled = args.fog != 0;
+        fx->settings->fog_density = 0.0005f;
+        fx->settings->fog_height_falloff = 75.0f;
+        fx->settings->fog_floor_y = 0.0f;
+        fx->settings->fog_far = 800.0f;
 
-        fx->dof_enabled = false;
-        fx->dof_autofocus = true;
-        fx->dof_focus_distance = 620.0f;
-        fx->dof_focus_range = 320.0f;
+        fx->settings->dof_enabled = false;
+        fx->settings->dof_autofocus = true;
+        fx->settings->dof_focus_distance = 620.0f;
+        fx->settings->dof_focus_range = 320.0f;
 
-        if (fx->ssao_radius < 1.6f)
-            fx->ssao_radius = 1.6f;
-        fx->contact_shadows_enabled = true;
-        fx->ssr_enabled = true;
-        fx->ssgi_enabled = true;
+        if (fx->settings->ssao_radius < 1.6f)
+            fx->settings->ssao_radius = 1.6f;
+        fx->settings->contact_shadows_enabled = true;
+        fx->settings->ssr_enabled = true;
+        fx->settings->ssgi_enabled = true;
     }
     engine->oit_enabled = true;
 

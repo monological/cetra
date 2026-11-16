@@ -99,6 +99,10 @@ Scene* create_scene() {
     scene->rain = NULL;
     scene->fire = NULL;
     glm_vec3_zero(scene->ambient_radiance); // no IBL and no authored ambient = black
+    // Default skin profile in slot 0 (rgb = per-channel scatter weight with red
+    // widest, w = world radius); the app overwrites/extends this per skin material.
+    glm_vec4_copy((vec4){1.0f, 0.3f, 0.2f, 0.2f}, scene->sss_profiles[0]);
+    scene->sss_profile_count = 1;
     glm_vec3_zero(scene->world_origin);
     glm_vec3_zero(scene->pending_origin);
     scene->on_origin_shift = NULL;
@@ -437,6 +441,19 @@ void scene_update_particle_systems(Scene* scene, float dt, float t) {
         return;
     for (size_t i = 0; i < scene->particle_system_count; i++)
         particle_system_update(scene->particle_systems[i], dt, t);
+}
+
+void scene_reset_sss_profiles(Scene* scene) {
+    if (scene)
+        scene->sss_profile_count = 0;
+}
+
+int scene_add_sss_profile(Scene* scene, const float* color, float radius) {
+    if (!scene || scene->sss_profile_count >= MAX_SSS_PROFILES)
+        return -1;
+    int slot = scene->sss_profile_count++;
+    glm_vec4_copy((vec4){color[0], color[1], color[2], radius}, scene->sss_profiles[slot]);
+    return slot;
 }
 
 void scene_add_material(Scene* scene, Material* material) {

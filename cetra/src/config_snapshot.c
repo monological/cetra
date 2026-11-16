@@ -39,6 +39,7 @@ typedef enum ConfigOwner {
     CFG_ENGINE = 0,
     CFG_POSTFX,
     CFG_EXPOSURE,
+    CFG_EXPOSURE_METER,
     CFG_SCENE,
     CFG_CAMERA,
     CFG_SHADOW,
@@ -139,24 +140,25 @@ typedef struct ConfigField {
  * What survives is owner-vs-SECTION mismatch, which files a key under the wrong
  * JSON object and is cosmetic. Corruption to misfiling is the trade.
  */
-#define CFG_STRUCT_CFG_ENGINE        Engine
-#define CFG_STRUCT_CFG_POSTFX        PostFX
-#define CFG_STRUCT_CFG_EXPOSURE      Exposure
-#define CFG_STRUCT_CFG_SCENE         Scene
-#define CFG_STRUCT_CFG_CAMERA        Camera
-#define CFG_STRUCT_CFG_SHADOW        ShadowSystem
-#define CFG_STRUCT_CFG_SKY           SkyAtmosphere
-#define CFG_STRUCT_CFG_CLOUDS        CloudLayer
-#define CFG_STRUCT_CFG_IBL           IBLResources
-#define CFG_STRUCT_CFG_GI            GIWorld
-#define CFG_STRUCT_CFG_CLUSTER       LightClusterContext
-#define CFG_STRUCT_CFG_WATER         Water
-#define CFG_STRUCT_CFG_WATER_WINDSEA WaterWaveTrain
-#define CFG_STRUCT_CFG_WATER_SWELL   WaterWaveTrain
-#define CFG_STRUCT_CFG_RAIN          Rain
-#define CFG_STRUCT_CFG_PROBE_ELEM    ReflectionProbe
-#define CFG_STRUCT_CFG_DECAL_ELEM    Decal
-#define CFG_STRUCT_CFG_LIGHT_ELEM    Light
+#define CFG_STRUCT_CFG_ENGINE         Engine
+#define CFG_STRUCT_CFG_POSTFX         PostFXSettings
+#define CFG_STRUCT_CFG_EXPOSURE       ExposureSettings
+#define CFG_STRUCT_CFG_EXPOSURE_METER Exposure
+#define CFG_STRUCT_CFG_SCENE          Scene
+#define CFG_STRUCT_CFG_CAMERA         Camera
+#define CFG_STRUCT_CFG_SHADOW         ShadowSystem
+#define CFG_STRUCT_CFG_SKY            SkyAtmosphere
+#define CFG_STRUCT_CFG_CLOUDS         CloudLayer
+#define CFG_STRUCT_CFG_IBL            IBLResources
+#define CFG_STRUCT_CFG_GI             GIWorld
+#define CFG_STRUCT_CFG_CLUSTER        LightClusterContext
+#define CFG_STRUCT_CFG_WATER          Water
+#define CFG_STRUCT_CFG_WATER_WINDSEA  WaterWaveTrain
+#define CFG_STRUCT_CFG_WATER_SWELL    WaterWaveTrain
+#define CFG_STRUCT_CFG_RAIN           Rain
+#define CFG_STRUCT_CFG_PROBE_ELEM     ReflectionProbe
+#define CFG_STRUCT_CFG_DECAL_ELEM     Decal
+#define CFG_STRUCT_CFG_LIGHT_ELEM     Light
 
 #define CFG_ROW(owner_, type_, section_, key_, member_) \
     {owner_, type_, section_, key_, offsetof(CFG_STRUCT_##owner_, member_), NULL, 0, NULL}
@@ -294,14 +296,6 @@ static void _apply_typical_size(ConfigApplyCtx* ctx, void* base, const ConfigFie
     if ((float)v[0] == *(const float*)_field_ptr_const(base, f))
         return;
     engine_set_typical_size(ctx->engine, (float)v[0]);
-}
-
-static void _apply_ssr_full_res(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
-                                const double* v, int n) {
-    (void)base;
-    (void)f;
-    (void)n;
-    postfx_set_ssr_full_res(ctx->engine->postfx, v[0] != 0.0);
 }
 
 /*
@@ -503,7 +497,7 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ssr", "temporal", ssr_temporal),
     CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ssr", "denoise", ssr_denoise),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.ssr", "jitter", ssr_jitter),
-    CFG_ROW_FN(CFG_POSTFX, CFG_BOOL, "postfx.ssr", "full_res", ssr_full_res, _apply_ssr_full_res),
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.ssr", "full_res", ssr_full_res),
 
     CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.fog", "enabled", fog_enabled),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "density", fog_density),
@@ -604,8 +598,8 @@ static const ConfigField CFG_FIELDS[] = {
      * Carrying the two makes the
      * first restored frame continue rather than converge.
      */
-    CFG_ROW(CFG_EXPOSURE, CFG_FLOAT, "exposure", "adapted_luminance", adapted_luminance),
-    CFG_ROW(CFG_EXPOSURE, CFG_BOOL, "exposure", "adapted_valid", adapted_valid),
+    CFG_ROW(CFG_EXPOSURE_METER, CFG_FLOAT, "exposure", "adapted_luminance", adapted_luminance),
+    CFG_ROW(CFG_EXPOSURE_METER, CFG_BOOL, "exposure", "adapted_valid", adapted_valid),
 
     // --- scene
     CFG_ROW(CFG_SCENE, CFG_VEC3, "scene", "ambient_radiance", ambient_radiance),
@@ -1002,8 +996,10 @@ static void* _owner_base(ConfigOwner owner, Engine* engine, Scene* scene) {
         case CFG_ENGINE:
             return engine;
         case CFG_POSTFX:
-            return engine ? engine->postfx : NULL;
+            return engine && engine->postfx ? engine->postfx->settings : NULL;
         case CFG_EXPOSURE:
+            return engine ? engine->exposure.settings : NULL;
+        case CFG_EXPOSURE_METER:
             return engine ? &engine->exposure : NULL;
         case CFG_SCENE:
             return scene;
@@ -1377,6 +1373,7 @@ static bool _row_captured(const ConfigField* f) {
             return strcmp(f->section, "engine") != 0 && strcmp(f->section, "engine.overlays") != 0;
         case CFG_POSTFX:
         case CFG_EXPOSURE:
+        case CFG_EXPOSURE_METER:
         case CFG_CAMERA:
             return false;
         case CFG_GI:

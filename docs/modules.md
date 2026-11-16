@@ -10,7 +10,7 @@ linked doc explains the subsystem. `cetra/src/ext/` is vendored and not listed.
 | `engine.c/h` | The window, the frame loop, idle mode, input and the input script, the G-buffer, the program cache and the embedded post chain. See `docs/architecture.md`. |
 | `engine_internal.h` | Private: the pass brackets and frame plumbing the renderer, shadows, captures and post chain call between them, and the lit-surface variant cache. |
 | `input.c/h` | The engine's input state: keys, the ordered typed-key list, the pointer and its latched press and release, and the platform's shortcut modifiers. |
-| `scene.c/h` | The scene graph and its transform walk, and what a scene owns: lights, materials, particles, shadows, IBL, sky, probes, GI, water, rain. See `docs/architecture.md`. |
+| `scene.c/h` | The scene graph and its transform walk, and what a scene owns: lights, materials and their skin profiles, particles, shadows, IBL, sky, probes, GI, water, rain. See `docs/architecture.md`. |
 | `camera.c/h` | A camera's pose, its projection, the same pose as an orbit, and `fit_clip`. See `docs/architecture.md`. |
 | `render.c/h` | The ordered scene passes (opaque, skybox, catcher, water, transparent and OIT, particles) and the variant resolver. See `docs/architecture.md`. |
 | `draw_list.c/h` | One frame's drawable meshes flattened out of the graph once, in the walk's order, with their bounds, LOD and cull bits, for every pass. |
@@ -74,9 +74,9 @@ linked doc explains the subsystem. `cetra/src/ext/` is vendored and not listed.
 
 | Module | Purpose |
 |--------|---------|
-| `postfx.c/h` | The HDR post chain: bloom, tonemap, exposure, TAA, GTAO, SSGI, SSR, SSS, fog, motion blur, DoF, OIT composite, app passes. See `docs/architecture.md`. |
+| `postfx.c/h` | The HDR post chain: bloom, tonemap, exposure, TAA, GTAO, SSGI, SSR, SSS, fog, motion blur, DoF, OIT composite, app passes; what it does is its plain settings (`PostFXSettings`), borrowed. See `docs/architecture.md`. |
 | `postfx_programs.c/h` | The post chain's programs, noise tile, white stand-in and fullscreen quad, made once per engine and borrowed by every chain. |
-| `exposure.c/h` | The camera's exposure, the one place that decides it, and the metering modes. See `docs/shader-subsystems.md`. |
+| `exposure.c/h` | The camera's exposure, the one place that decides it, and the metering modes; its settings (`ExposureSettings`) apart from the meter's readings. See `docs/shader-subsystems.md`. |
 | `glare.c/h` | Diffraction glare by FFT. See `docs/shader-subsystems.md`. |
 | `local_exposure.c/h` | Local exposure's bilateral grid and blurred luminance, in one atlas the tonemap slices. See `docs/shader-subsystems.md`. |
 | `lut.c/h` | Adobe `.cube` colour-grading LUT reader; refuses a bad file by name, never truncates. |

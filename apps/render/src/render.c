@@ -3090,7 +3090,7 @@ static void render_frame_update(Engine* engine, float dt) {
     if (frame_schedule->loading_lift_at == (int)engine->total_frames)
         engine_hide_loading_screen(engine);
     if (frame_schedule->exposure_at_frame == (int)engine->total_frames) {
-        engine->exposure.multiplier = frame_schedule->exposure_at_value;
+        engine->exposure.settings->multiplier = frame_schedule->exposure_at_value;
         fprintf(stderr, "frame %d: exposure multiplier %g\n", frame_schedule->exposure_at_frame,
                 (double)frame_schedule->exposure_at_value);
     }
@@ -3588,11 +3588,11 @@ static void tag_material_sss(Material* m, int slot, const float* prof_color) {
     glm_vec3_copy((float*)prof_color, m->subsurface_color);
 }
 
-void configure_sss_materials(Engine* engine, Scene* scene, float radius, const float* color,
+void configure_sss_materials(Scene* scene, float radius, const float* color,
                              const CetraSceneDesc* cscn) {
-    if (!engine || !engine->postfx || !scene || !scene->root_node)
+    if (!scene || !scene->root_node)
         return;
-    postfx_reset_sss_profiles(engine->postfx);
+    scene_reset_sss_profiles(scene);
 
     // Scene file (.cscn) material overrides take priority: profiles are keyed
     // by authored material name, matched against the scene's flat material
@@ -3610,7 +3610,7 @@ void configure_sss_materials(Engine* engine, Scene* scene, float radius, const f
             if (first_sss && color && color[0] >= 0.0f)
                 glm_vec3_copy((float*)color, prof_color);
             float prof_radius = radius >= 0.0f ? radius : mo->sss_radius;
-            int slot = postfx_add_sss_profile(engine->postfx, prof_color, prof_radius);
+            int slot = scene_add_sss_profile(scene, prof_color, prof_radius);
             if (slot < 0) {
                 fprintf(stderr, "Warning: SSS profile table full; '%s' skipped\n", mo->material);
                 continue;
@@ -3651,7 +3651,7 @@ void configure_sss_materials(Engine* engine, Scene* scene, float radius, const f
         if (k == 0 && color && color[0] >= 0.0f)
             glm_vec3_copy((float*)color, prof_color); // --sss-color overrides the first
         float prof_radius = radius >= 0.0f ? radius : skins[k].radius;
-        int slot = postfx_add_sss_profile(engine->postfx, prof_color, prof_radius);
+        int slot = scene_add_sss_profile(scene, prof_color, prof_radius);
         for (size_t i = 0; i < node->mesh_count; i++) {
             Mesh* mesh = node->meshes[i];
             if (!mesh || !mesh->material)
@@ -3893,13 +3893,13 @@ int main(int argc, char** argv) {
     {
         Exposure* ex = &engine->exposure;
         if (args.aperture > 0.0f) {
-            ex->physical = true;
-            ex->aperture = args.aperture;
-            ex->shutter_speed = args.shutter_speed;
-            ex->iso = args.iso;
+            ex->settings->physical = true;
+            ex->settings->aperture = args.aperture;
+            ex->settings->shutter_speed = args.shutter_speed;
+            ex->settings->iso = args.iso;
             // -E means stops under a camera, so it lands on bias_stops rather
             // than the multiplier. Absent, 0 = neutral compensation.
-            ex->bias_stops = args.has_exposure ? args.exposure : 0.0f;
+            ex->settings->bias_stops = args.has_exposure ? args.exposure : 0.0f;
             // A physical camera IS the exposure decision, so adaptation does not
             // also get a say -- they are alternative methods, not stacking ones.
             // Left on, metering compares absolute scene radiance against an
@@ -3909,110 +3909,111 @@ int main(int argc, char** argv) {
             // absolute nits. An explicit --taa-style override can still turn it
             // back on; this is only the default when a camera is authored.
             if (args.auto_exposure_override < 0)
-                ex->automatic = false;
-            printf("Physical exposure: f/%.1f %.4gs ISO%.0f -> EV100 %.2f\n", ex->aperture,
-                   ex->shutter_speed, ex->iso, exposure_ev100(ex));
+                ex->settings->automatic = false;
+            printf("Physical exposure: f/%.1f %.4gs ISO%.0f -> EV100 %.2f\n",
+                   ex->settings->aperture, ex->settings->shutter_speed, ex->settings->iso,
+                   exposure_ev100(ex));
         } else if (args.has_exposure) {
             // Positive by construction: the check above rejects any other value
             // once we know no camera is in play.
-            ex->multiplier = args.exposure;
+            ex->settings->multiplier = args.exposure;
         }
         // An explicit override wins; failing that, naming an exposure pins the
         // frame, which is what every scene authored before the key existed.
         if (args.auto_exposure_override >= 0)
-            ex->automatic = args.auto_exposure_override != 0;
+            ex->settings->automatic = args.auto_exposure_override != 0;
         else if (args.has_exposure)
-            ex->automatic = false;
+            ex->settings->automatic = false;
         // Set last, and deliberately NOT gated on `automatic`: the probe reports
         // only from frames the meter actually ran, so asking for it on a pinned
         // frame prints nothing. That silence is the honest answer -- there is no
         // measurement on a pinned frame -- and it is worth being able to observe
         // rather than having the flag refuse.
-        ex->probe = args.exposure_probe != 0;
+        ex->settings->probe = args.exposure_probe != 0;
         if (args.meter_low >= 0.0f)
-            ex->meter_low = args.meter_low;
+            ex->settings->meter_low = args.meter_low;
         if (args.meter_high >= 0.0f)
-            ex->meter_high = args.meter_high;
+            ex->settings->meter_high = args.meter_high;
         if (args.meter_mode >= 0)
-            ex->meter_mode = (MeteringMode)args.meter_mode;
+            ex->settings->meter_mode = (MeteringMode)args.meter_mode;
         if (args.meter_radius >= 0.0f)
-            ex->meter_radius = args.meter_radius;
+            ex->settings->meter_radius = args.meter_radius;
         if (args.adapt_up >= 0.0f)
-            ex->adapt_rate_up = args.adapt_up;
+            ex->settings->adapt_rate_up = args.adapt_up;
         if (args.adapt_down >= 0.0f)
-            ex->adapt_rate_down = args.adapt_down;
+            ex->settings->adapt_rate_down = args.adapt_down;
     }
     if (args.no_history_rescale && engine->postfx)
-        engine->postfx->rescale_histories = false;
+        engine->postfx->settings->rescale_histories = false;
     if (args.no_ssao && engine->postfx) {
-        engine->postfx->ssao_enabled = false;
+        engine->postfx->settings->ssao_enabled = false;
     }
     if (args.spec_occ_mode >= 0 && engine->postfx) {
-        engine->postfx->spec_occlusion_mode = (PostFXSpecOccMode)args.spec_occ_mode;
+        engine->postfx->settings->spec_occlusion_mode = (PostFXSpecOccMode)args.spec_occ_mode;
     }
     if (args.no_ao_edge_filter && engine->postfx) {
-        engine->postfx->ao_edge_filter_enabled = false;
+        engine->postfx->settings->ao_edge_filter_enabled = false;
     }
     if (args.ssao_debug && engine->postfx) {
-        engine->postfx->debug_view = POSTFX_DEBUG_AO;
+        engine->postfx->settings->debug_view = POSTFX_DEBUG_AO;
     }
     if (args.spec_occ_debug && engine->postfx) {
-        engine->postfx->debug_view = POSTFX_DEBUG_SPEC_OCC;
+        engine->postfx->settings->debug_view = POSTFX_DEBUG_SPEC_OCC;
     }
     if (args.bent_debug && engine->postfx) {
-        engine->postfx->debug_view = POSTFX_DEBUG_BENT;
+        engine->postfx->settings->debug_view = POSTFX_DEBUG_BENT;
     }
     if (args.debug_purkinje && engine->postfx) {
-        engine->postfx->debug_view = POSTFX_DEBUG_PURKINJE;
+        engine->postfx->settings->debug_view = POSTFX_DEBUG_PURKINJE;
     }
     if (args.ssgi && engine->postfx) {
-        engine->postfx->ssgi_enabled = true;
+        engine->postfx->settings->ssgi_enabled = true;
     }
     if (args.ssgi_debug && engine->postfx) {
-        engine->postfx->debug_view = POSTFX_DEBUG_SSGI;
+        engine->postfx->settings->debug_view = POSTFX_DEBUG_SSGI;
     }
     if (args.fog && engine->postfx) {
-        engine->postfx->fog_enabled = true;
+        engine->postfx->settings->fog_enabled = true;
     }
     if (args.contact_shadows && engine->postfx) {
-        engine->postfx->contact_shadows_enabled = true;
+        engine->postfx->settings->contact_shadows_enabled = true;
         if (args.cs_strength >= 0.0f)
-            engine->postfx->cs_strength = args.cs_strength;
+            engine->postfx->settings->cs_strength = args.cs_strength;
         // The reach (args.cs_distance, incl. 0 = off) is applied in the
         // scene-scaling block below, which owns the world-space post params.
     }
     if (args.contact_shadows_debug && engine->postfx) {
-        engine->postfx->debug_view = POSTFX_DEBUG_CONTACT;
+        engine->postfx->settings->debug_view = POSTFX_DEBUG_CONTACT;
     }
     if (args.albedo_debug && engine->postfx) {
-        engine->postfx->debug_view = POSTFX_DEBUG_ALBEDO;
+        engine->postfx->settings->debug_view = POSTFX_DEBUG_ALBEDO;
     }
     if (args.no_normals_mrt && engine->postfx) {
-        engine->postfx->normals_enabled = false;
+        engine->postfx->settings->normals_enabled = false;
     }
     if (args.normals_debug && engine->postfx) {
-        engine->postfx->debug_view = POSTFX_DEBUG_NORMALS;
+        engine->postfx->settings->debug_view = POSTFX_DEBUG_NORMALS;
     }
     if (args.no_ssr && engine->postfx) {
-        engine->postfx->ssr_enabled = false;
+        engine->postfx->settings->ssr_enabled = false;
     }
     if (args.no_ssr_full_res && engine->postfx) {
-        postfx_set_ssr_full_res(engine->postfx, false);
+        engine->postfx->settings->ssr_full_res = false;
     }
     if (args.no_ssr_temporal && engine->postfx) {
-        engine->postfx->ssr_temporal = false;
+        engine->postfx->settings->ssr_temporal = false;
     }
     if (args.no_ssr_denoise && engine->postfx) {
-        engine->postfx->ssr_denoise = false;
+        engine->postfx->settings->ssr_denoise = false;
     }
     if (args.ssr_jitter >= 0.0f && engine->postfx) {
-        engine->postfx->ssr_jitter = args.ssr_jitter;
+        engine->postfx->settings->ssr_jitter = args.ssr_jitter;
     }
     if (args.ssr_debug && engine->postfx) {
-        engine->postfx->debug_view = POSTFX_DEBUG_SSR;
+        engine->postfx->settings->debug_view = POSTFX_DEBUG_SSR;
     }
     if (args.ssr_strength >= 0.0f && engine->postfx) {
-        engine->postfx->ssr_strength = args.ssr_strength;
+        engine->postfx->settings->ssr_strength = args.ssr_strength;
     }
     if (args.specular_aa >= 0.0f) {
         engine->specular_aa_strength = args.specular_aa;
@@ -4082,75 +4083,75 @@ int main(int argc, char** argv) {
     if (engine->postfx) {
         PostFX* fx = engine->postfx;
         if (args.glare_enable >= 0)
-            fx->glare_enabled = args.glare_enable != 0;
+            fx->settings->glare_enabled = args.glare_enable != 0;
         if (args.glare_strength >= 0.0f)
-            fx->glare_strength = args.glare_strength;
+            fx->settings->glare_strength = args.glare_strength;
         if (args.glare_threshold >= 0.0f)
-            fx->glare_threshold = args.glare_threshold;
-        fx->glare_probe = args.glare_probe != 0;
+            fx->settings->glare_threshold = args.glare_threshold;
+        fx->settings->glare_probe = args.glare_probe != 0;
         if (args.le_enable >= 0)
-            fx->local_exposure_enabled = args.le_enable != 0;
+            fx->settings->local_exposure_enabled = args.le_enable != 0;
         if (args.le_highlights >= 0.0f)
-            fx->local_exposure_highlights = args.le_highlights;
+            fx->settings->local_exposure_highlights = args.le_highlights;
         if (args.le_shadows >= 0.0f)
-            fx->local_exposure_shadows = args.le_shadows;
+            fx->settings->local_exposure_shadows = args.le_shadows;
         if (args.le_detail >= 0.0f)
-            fx->local_exposure_detail = args.le_detail;
+            fx->settings->local_exposure_detail = args.le_detail;
         if (args.le_blend >= 0.0f)
-            fx->local_exposure_blend = args.le_blend;
+            fx->settings->local_exposure_blend = args.le_blend;
         if (args.le_kernel >= 0.0f)
-            fx->local_exposure_kernel = args.le_kernel;
+            fx->settings->local_exposure_kernel = args.le_kernel;
         if (args.le_grey_bias_set)
-            fx->local_exposure_grey_bias = args.le_grey_bias;
-        fx->local_exposure_probe = args.le_probe != 0;
-        fx->negative_probe = args.negative_probe != 0;
+            fx->settings->local_exposure_grey_bias = args.le_grey_bias;
+        fx->settings->local_exposure_probe = args.le_probe != 0;
+        fx->settings->negative_probe = args.negative_probe != 0;
         if (args.no_bloom) {
-            fx->bloom_enabled = false;
+            fx->settings->bloom_enabled = false;
         } else if (args.bloom_enable >= 0) {
-            fx->bloom_enabled = args.bloom_enable != 0;
+            fx->settings->bloom_enabled = args.bloom_enable != 0;
         }
         if (args.bloom_strength >= 0.0f) {
-            fx->bloom_strength = args.bloom_strength;
+            fx->settings->bloom_strength = args.bloom_strength;
         }
         if (args.bloom_threshold >= 0.0f) {
-            fx->bloom_threshold = args.bloom_threshold;
+            fx->settings->bloom_threshold = args.bloom_threshold;
         }
         if (args.fog_anisotropy > -900.0f) {
-            fx->fog_anisotropy = args.fog_anisotropy;
+            fx->settings->fog_anisotropy = args.fog_anisotropy;
         }
         if (args.fog_near >= 0.0f) {
-            fx->fog_near = args.fog_near;
+            fx->settings->fog_near = args.fog_near;
         }
         if (args.fog_far > 0.0f) {
-            fx->fog_far = args.fog_far;
+            fx->settings->fog_far = args.fog_far;
         }
         if (args.fog_depth_dist > 0.0f) {
-            fx->fog_depth_dist = args.fog_depth_dist;
+            fx->settings->fog_depth_dist = args.fog_depth_dist;
         }
         if (args.fog_miss_samples > 0)
-            fx->fog_history_miss_samples = args.fog_miss_samples;
-        fx->fog_miss_probe = args.fog_miss_probe != 0;
+            fx->settings->fog_history_miss_samples = args.fog_miss_samples;
+        fx->settings->fog_miss_probe = args.fog_miss_probe != 0;
         if (args.tonemap_mode != 0) {
-            fx->tonemap_mode = (PostFXTonemapMode)args.tonemap_mode;
+            fx->settings->tonemap_mode = (PostFXTonemapMode)args.tonemap_mode;
         }
         // --film applies the whole finishing look first, so individual
         // finishing flags below can still override any part of it.
         if (args.film_preset) {
-            postfx_apply_film_look(fx);
+            postfx_settings_apply_film_look(fx->settings);
         }
         if (args.no_vignette) {
-            fx->vignette_enabled = false;
+            fx->settings->vignette_enabled = false;
         }
         if (args.vignette >= 0.0f) {
-            fx->vignette_enabled = true;
-            fx->vignette_strength = args.vignette;
+            fx->settings->vignette_enabled = true;
+            fx->settings->vignette_strength = args.vignette;
         }
         if (args.no_dither) {
-            fx->dither_enabled = false;
+            fx->settings->dither_enabled = false;
         }
         if (args.dither >= 0.0f) {
-            fx->dither_enabled = true;
-            fx->dither_strength = args.dither;
+            fx->settings->dither_enabled = true;
+            fx->settings->dither_strength = args.dither;
         }
         if (args.crt)
             engine->crt_enabled = true;
@@ -4170,31 +4171,31 @@ int main(int argc, char** argv) {
             g_loading_preview = true;
         }
         if (args.grain >= 0.0f) {
-            fx->grain_enabled = true;
-            fx->grain_strength = args.grain;
+            fx->settings->grain_enabled = true;
+            fx->settings->grain_strength = args.grain;
         }
         if (args.flare >= 0.0f) {
-            fx->flare_enabled = true;
-            fx->flare_strength = args.flare;
+            fx->settings->flare_enabled = true;
+            fx->settings->flare_strength = args.flare;
         }
         if (args.chromatic >= 0.0f) {
-            fx->ca_enabled = true;
-            fx->ca_strength = args.chromatic;
+            fx->settings->ca_enabled = true;
+            fx->settings->ca_strength = args.chromatic;
         }
         if (args.sharpen >= 0.0f) {
-            fx->sharpen_enabled = true;
-            fx->sharpen_strength = args.sharpen;
+            fx->settings->sharpen_enabled = true;
+            fx->settings->sharpen_strength = args.sharpen;
         }
         if (args.grade_set) {
-            fx->grade_enabled = true;
-            glm_vec3_copy(args.grade_lift, fx->grade_lift);
-            glm_vec3_copy(args.grade_gamma, fx->grade_gamma);
-            glm_vec3_copy(args.grade_gain, fx->grade_gain);
+            fx->settings->grade_enabled = true;
+            glm_vec3_copy(args.grade_lift, fx->settings->grade_lift);
+            glm_vec3_copy(args.grade_gamma, fx->settings->grade_gamma);
+            glm_vec3_copy(args.grade_gain, fx->settings->grade_gain);
         }
         if (args.lut_strength >= 0.0f)
-            fx->lut_strength = args.lut_strength;
+            fx->settings->lut_strength = args.lut_strength;
         if (args.lut_interp >= 0)
-            fx->lut_interp = (PostFXLutInterp)args.lut_interp;
+            fx->settings->lut_interp = (PostFXLutInterp)args.lut_interp;
         // --no-lut wins over a path from either source, which is what makes it
         // the only way to stop a scene-authored LUT from loading.
         if (args.no_lut)
@@ -4203,25 +4204,25 @@ int main(int argc, char** argv) {
             postfx_load_lut(fx, args.lut_path);
 
         if (args.purkinje >= 0)
-            fx->purkinje_enabled = args.purkinje != 0;
+            fx->settings->purkinje_enabled = args.purkinje != 0;
         if (args.purkinje_strength >= 0.0f)
-            fx->purkinje_strength = args.purkinje_strength;
+            fx->settings->purkinje_strength = args.purkinje_strength;
         if (args.purkinje_bias_ev > -900.0f)
-            fx->purkinje_bias_ev = args.purkinje_bias_ev;
+            fx->settings->purkinje_bias_ev = args.purkinje_bias_ev;
         if (args.purkinje_acuity >= 0.0f)
-            fx->purkinje_acuity = args.purkinje_acuity;
+            fx->settings->purkinje_acuity = args.purkinje_acuity;
         if (args.purkinje_noise >= 0.0f)
-            fx->purkinje_noise = args.purkinje_noise;
+            fx->settings->purkinje_noise = args.purkinje_noise;
         if (args.no_purkinje_acuity)
-            fx->purkinje_acuity = 0.0f;
+            fx->settings->purkinje_acuity = 0.0f;
         if (args.no_purkinje_noise)
-            fx->purkinje_noise = 0.0f;
+            fx->settings->purkinje_noise = 0.0f;
         // Sticky, and LAST. Every value flag above arms the feature, so a plain
         // `purkinje = 0` would be order-dependent -- --no-purkinje followed by
         // --purkinje-strength 0.5 would render a shifted frame. The --no-moon
         // lesson, where every off leg of a gate twin was silently on.
         if (args.no_purkinje)
-            fx->purkinje_enabled = false;
+            fx->settings->purkinje_enabled = false;
     }
     if (args.render_mode > 0) {
         engine->current_render_mode = (RenderMode)args.render_mode;
@@ -4303,7 +4304,7 @@ int main(int argc, char** argv) {
     // block should see the base material settled before anything layers on it.
     apply_cscene_material_overrides(engine, scene, cscn);
     apply_cscene_post_passes(engine, cscn);
-    configure_sss_materials(engine, scene, args.sss_radius, args.sss_color, cscn);
+    configure_sss_materials(scene, args.sss_radius, args.sss_color, cscn);
     // Applied to every skin material rather than only those that authored a
     // value, so the flag doubles as "turn this on for this scene at strength X"
     // -- which is what tuning it against sss radius actually needs. Runs after
@@ -4893,33 +4894,34 @@ int main(int argc, char** argv) {
     // with the scene so the model stays sharp and the backdrop falls away.
     if ((args.dof || args.film_preset) && !args.no_dof && engine->postfx) {
         PostFX* fx = engine->postfx;
-        fx->dof_enabled = true;
+        fx->settings->dof_enabled = true;
         if (args.dof_focus > 0.0f) {
             // A pinned manual focus plane turns autofocus off
-            fx->dof_focus_distance = args.dof_focus;
-            fx->dof_autofocus = false;
+            fx->settings->dof_focus_distance = args.dof_focus;
+            fx->settings->dof_autofocus = false;
         } else {
             // Autofocus (the default) tracks the subject each frame; seed it
             // with the initial camera-to-model distance for frame zero
-            fx->dof_focus_distance = glm_vec3_distance(auto_cam_pos, scene_center);
-            fx->dof_autofocus = true;
+            fx->settings->dof_focus_distance = glm_vec3_distance(auto_cam_pos, scene_center);
+            fx->settings->dof_autofocus = true;
         }
-        fx->dof_focus_range = args.dof_range > 0.0f ? args.dof_range : scene_radius * 1.5f;
+        fx->settings->dof_focus_range =
+            args.dof_range > 0.0f ? args.dof_range : scene_radius * 1.5f;
         if (args.dof_max_coc > 0.0f)
-            fx->dof_max_coc = args.dof_max_coc;
+            fx->settings->dof_max_coc = args.dof_max_coc;
         if (args.dof_blades >= 0)
-            fx->dof_blades = args.dof_blades;
+            fx->settings->dof_blades = args.dof_blades;
         if (args.dof_rotation >= 0.0f)
-            fx->dof_rotation = args.dof_rotation;
+            fx->settings->dof_rotation = args.dof_rotation;
     }
 
     // Motion blur: off unless requested. Velocity comes from the aux buffer
     // (already produced for TAA/SSAO), so this is a toggle plus an optional
     // shutter scale.
     if (args.motion_blur && engine->postfx) {
-        engine->postfx->motion_blur_enabled = true;
+        engine->postfx->settings->motion_blur_enabled = true;
         if (args.motion_blur_scale >= 0.0f)
-            engine->postfx->motion_blur_scale = args.motion_blur_scale;
+            engine->postfx->settings->motion_blur_scale = args.motion_blur_scale;
     }
 
     // Clip planes tuned for depth precision, not just coverage. A huge
@@ -4956,9 +4958,10 @@ int main(int argc, char** argv) {
     // the typical size has already scaled; --ao-radius pins an explicit reach.
     if (engine->postfx) {
         if (args.ao_radius > 0.0f) {
-            engine->postfx->ssao_radius = args.ao_radius;
+            engine->postfx->settings->ssao_radius = args.ao_radius;
         } else if (scene_radius > 0.0f) {
-            engine->postfx->ssao_radius = fmaxf(engine->postfx->ssao_radius, scene_radius * 0.01f);
+            engine->postfx->settings->ssao_radius =
+                fmaxf(engine->postfx->settings->ssao_radius, scene_radius * 0.01f);
         }
 
         // The SSR march reach and thickness floor are world-space distances
@@ -4967,17 +4970,18 @@ int main(int argc, char** argv) {
         // below the depth quantization at its distances. Scale both up with
         // the scene (never down: small scenes keep the tuned defaults).
         if (scene_radius > 0.0f) {
-            engine->postfx->ssr_max_distance =
-                fmaxf(engine->postfx->ssr_max_distance, scene_radius * 2.0f);
-            engine->postfx->ssr_thickness_min =
-                fmaxf(engine->postfx->ssr_thickness_min, scene_radius * 0.002f);
+            engine->postfx->settings->ssr_max_distance =
+                fmaxf(engine->postfx->settings->ssr_max_distance, scene_radius * 2.0f);
+            engine->postfx->settings->ssr_thickness_min =
+                fmaxf(engine->postfx->settings->ssr_thickness_min, scene_radius * 0.002f);
 
             // Contact-shadow reach is a world-space distance like the AO radius:
             // a few percent of the scene, so the march covers the near-contact
             // gap without streaking. A CLI --cs-distance (incl. 0 = off) wins.
-            engine->postfx->cs_distance =
-                args.cs_distance >= 0.0f ? args.cs_distance
-                                         : fmaxf(engine->postfx->cs_distance, scene_radius * 0.02f);
+            engine->postfx->settings->cs_distance =
+                args.cs_distance >= 0.0f
+                    ? args.cs_distance
+                    : fmaxf(engine->postfx->settings->cs_distance, scene_radius * 0.02f);
 
             // Fog parameters are world-space too: fixed meter-scale density
             // on a large-unit scene is invisible (or opaque soup on a tiny
@@ -4985,16 +4989,17 @@ int main(int argc, char** argv) {
             // camera-to-subject path at ground level — present, not
             // smothering; the falloff spans half the model height; sky rays
             // march the whole dome interior.
-            engine->postfx->fog_density =
+            engine->postfx->settings->fog_density =
                 args.fog_density > 0.0f ? args.fog_density : 0.08f / scene_radius;
-            engine->postfx->fog_height_falloff =
+            engine->postfx->settings->fog_height_falloff =
                 args.fog_height > 0.0f ? args.fog_height : scene_radius * 0.5f;
-            engine->postfx->fog_far = scene_radius * 5.0f;
-            engine->postfx->fog_floor_y = scene_floor_y;
+            engine->postfx->settings->fog_far = scene_radius * 5.0f;
+            engine->postfx->settings->fog_floor_y = scene_floor_y;
         }
         // Authored fog in-scatter, after the density block so it survives it.
         if (cscn && cscn->has_fog_ambient) {
-            postfx_set_fog_ambient(engine->postfx, cscn->fog_ambient);
+            glm_vec3_copy(cscn->fog_ambient, engine->postfx->settings->fog_ambient);
+            engine->postfx->settings->fog_ambient_from_sky = false;
             printf("Scene file: fog ambient %.3f %.3f %.3f cd/m2\n", cscn->fog_ambient[0],
                    cscn->fog_ambient[1], cscn->fog_ambient[2]);
         }

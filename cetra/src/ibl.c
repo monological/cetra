@@ -16,25 +16,24 @@
 #include "ext/stb_image.h"
 
 // Unit cube vertices for skybox and cubemap face rendering
-static const float cube_vertices[] = {
-    // positions
-    -1.0f, 1.0f,  -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  -1.0f, -1.0f,
-    1.0f,  -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, -1.0f, 1.0f,  -1.0f,
+static const float cube_vertices[] = {// positions
+                                      -1.0f, 1.0f,  -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  -1.0f, -1.0f,
+                                      1.0f,  -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, -1.0f, 1.0f,  -1.0f,
 
-    -1.0f, -1.0f, 1.0f,  -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  -1.0f,
-    -1.0f, 1.0f,  -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, -1.0f, 1.0f,
+                                      -1.0f, -1.0f, 1.0f,  -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  -1.0f,
+                                      -1.0f, 1.0f,  -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, -1.0f, 1.0f,
 
-    1.0f,  -1.0f, -1.0f, 1.0f,  -1.0f, 1.0f,  1.0f,  1.0f,  1.0f,
-    1.0f,  1.0f,  1.0f,  1.0f,  1.0f,  -1.0f, 1.0f,  -1.0f, -1.0f,
+                                      1.0f,  -1.0f, -1.0f, 1.0f,  -1.0f, 1.0f,  1.0f,  1.0f,  1.0f,
+                                      1.0f,  1.0f,  1.0f,  1.0f,  1.0f,  -1.0f, 1.0f,  -1.0f, -1.0f,
 
-    -1.0f, -1.0f, 1.0f,  -1.0f, 1.0f,  1.0f,  1.0f,  1.0f,  1.0f,
-    1.0f,  1.0f,  1.0f,  1.0f,  -1.0f, 1.0f,  -1.0f, -1.0f, 1.0f,
+                                      -1.0f, -1.0f, 1.0f,  -1.0f, 1.0f,  1.0f,  1.0f,  1.0f,  1.0f,
+                                      1.0f,  1.0f,  1.0f,  1.0f,  -1.0f, 1.0f,  -1.0f, -1.0f, 1.0f,
 
-    -1.0f, 1.0f,  -1.0f, 1.0f,  1.0f,  -1.0f, 1.0f,  1.0f,  1.0f,
-    1.0f,  1.0f,  1.0f,  -1.0f, 1.0f,  1.0f,  -1.0f, 1.0f,  -1.0f,
+                                      -1.0f, 1.0f,  -1.0f, 1.0f,  1.0f,  -1.0f, 1.0f,  1.0f,  1.0f,
+                                      1.0f,  1.0f,  1.0f,  -1.0f, 1.0f,  1.0f,  -1.0f, 1.0f,  -1.0f,
 
-    -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, -1.0f,
-    1.0f,  -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, 1.0f};
+                                      -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, -1.0f,
+                                      1.0f,  -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, 1.0f};
 
 // Cubemap face view matrices looking out from origin
 void ibl_capture_views(vec3 origin, mat4 views[6]) {
@@ -625,13 +624,13 @@ void ibl_prefilter_cubemap(IBLResources* ibl, ShaderProgram* program, GLuint src
 static void ibl_resolve_medium(IBLResources* ibl, const Engine* engine) {
     ibl->medium = (IBLMedium){0};
     const PostFX* fx = engine->postfx;
-    if (!ibl->reflect_fog || !fx || !fx->fog_enabled || fx->fog_density <= 0.0f)
+    if (!ibl->reflect_fog || !fx || !fx->settings->fog_enabled || fx->settings->fog_density <= 0.0f)
         return;
-    ibl->medium.density = fx->fog_density;
+    ibl->medium.density = fx->settings->fog_density;
     // The shader divides by it; a zero falloff is a medium with no height at all.
-    ibl->medium.falloff = fmaxf(fx->fog_height_falloff, 1e-3f);
-    ibl->medium.reach = fx->fog_far;
-    glm_vec3_copy((float*)fx->fog_ambient, ibl->medium.inscatter);
+    ibl->medium.falloff = fmaxf(fx->settings->fog_height_falloff, 1e-3f);
+    ibl->medium.reach = fx->settings->fog_far;
+    glm_vec3_copy((float*)postfx_fog_ambient(fx), ibl->medium.inscatter);
 }
 
 // Bake the split-sum BRDF tables: GGX A/B in RG, the Charlie sheen
