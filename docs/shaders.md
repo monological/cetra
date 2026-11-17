@@ -87,7 +87,8 @@ CPU must agree on is the half that drifts:
   constants that place a light's views); `gi_constants.glsl` (the resident GI cap both sides size
   their arrays by); `fire_constants.glsl`; `loading_constants.glsl`; `canvas_constants.glsl` (the
   canvas's record kinds and end flags, `u`-suffixed because a record's fields are unsigned, and the
-  glyph table's shape).
+  glyph table's shape); `tag_constants.glsl` (a tag table's texels, which the canvas's shaders and
+  the 3D programs read, and a 3D view's class count, head flags and lanes).
 - `pbr_features.glsl` (from `program.h`): the variant bits, which C emits as a mask and the shader
   reads back through the same names, plus `CETRA_HAS` and the `#ifndef` default that makes an
   unspliced source the uber-shader. It lives apart from `pbr_frag` so a chunk can gate its own

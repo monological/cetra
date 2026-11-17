@@ -277,10 +277,6 @@ void instance_chunk_upload_ordered(Ubo* ubo, InstanceChunk* chunk, const DrawLis
 void submit_draw_run(SubmitState* state, UniformManager* u, const DrawItem* item, size_t instances,
                      bool two_sided, SubmitStats* stats);
 
-// Which of a view's surfaces a draw keeps by their tags (tags.glsl's uTagLane): every one, the
-// solid, or the see-through. A hidden surface is kept by none.
-enum { TAG_LANE_ALL = 0, TAG_LANE_SOLID = 1, TAG_LANE_GHOSTS = 2 };
-
 // The tag and class of a draw that carries one object; a batched draw reads its instances' from
 // the instance block.
 static inline void submit_item_tag(UniformManager* u, const DrawItem* item) {

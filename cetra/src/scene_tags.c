@@ -12,10 +12,6 @@ struct SceneTags {
     SceneTagState* states;
     size_t cap;
     uint64_t generation, outline_generation;
-    uint32_t outlined; // tags whose outline is set
-    // The least and greatest tag whose outline has been set since none was: every outlined tag
-    // lies within, and one cleared inside leaves it as it was.
-    uint32_t outlined_lo, outlined_hi;
     uint32_t hidden; // tags hidden
     TagTable table;
 };
@@ -38,44 +34,25 @@ void free_scene_tags(SceneTags* tags) {
     free(tags);
 }
 
-// The canvas's layout, nothing raised in 3D.
-static void _tag_texels(SceneTagState s, uint8_t out[4 * TAG_TABLE_TEXELS]) {
-    tag_table_pack(s.colour, s.outline, s.dim, s.hidden, false, s.lit, out);
-}
-
 bool scene_tags_set(SceneTags* tags, uint32_t tag, SceneTagState state) {
-    if (!tags)
+    if (!tags || !tag_table_admits(tag, "scene tags"))
         return false;
-    if (tag == 0 || tag >= TAG_TABLE_LIMIT) {
-        log_error("scene tags: tag %u is refused (1 to %u)", tag, TAG_TABLE_LIMIT - 1);
-        return false;
-    }
     const size_t had = tags->cap;
     if (!grow_array((void**)&tags->states, &tags->cap, (size_t)tag + 1, sizeof(SceneTagState), 256))
         return false;
     memset(tags->states + had, 0, (tags->cap - had) * sizeof(SceneTagState));
-    const SceneTagState was = tags->states[tag];
-    uint8_t texels[4 * TAG_TABLE_TEXELS], before[4 * TAG_TABLE_TEXELS];
-    _tag_texels(state, texels);
-    _tag_texels(was, before);
-    // Compared as the texels the shader reads, so a write of what is already there changes nothing
-    // and restarts no view. The outline's four bytes are counted apart.
-    const bool drawn = memcmp(texels, before, 4) != 0 || memcmp(texels + 8, before + 8, 4) != 0;
-    const bool ringed = memcmp(texels + 4, before + 4, 4) != 0;
-    if ((drawn || ringed) && !tag_table_write(&tags->table, tag, texels))
+    // The canvas's layout, nothing raised in 3D.
+    uint8_t texels[TAG_TABLE_BYTES];
+    tag_table_pack(state.colour, state.outline, state.dim, state.hidden, false, state.lit, texels);
+    unsigned changed = 0;
+    if (!tag_table_write(&tags->table, tag, texels, &changed))
         return false;
-    tags->outlined += (state.outline != 0) - (was.outline != 0);
-    if (tags->outlined == 0) {
-        tags->outlined_lo = tags->outlined_hi = 0;
-    } else if (state.outline != 0) {
-        const bool first = tags->outlined_hi == 0;
-        tags->outlined_lo = first || tag < tags->outlined_lo ? tag : tags->outlined_lo;
-        tags->outlined_hi = tag > tags->outlined_hi ? tag : tags->outlined_hi;
-    }
-    tags->hidden += (uint32_t)state.hidden - (uint32_t)was.hidden;
+    tags->hidden += (uint32_t)state.hidden - (uint32_t)tags->states[tag].hidden;
     tags->states[tag] = state;
-    tags->generation += drawn;
-    tags->outline_generation += ringed;
+    // Counted as the texels the shader reads change, so a write of what is already there restarts
+    // no view, and an outline's apart.
+    tags->generation += (changed & TAG_TABLE_DRAWN) != 0;
+    tags->outline_generation += (changed & TAG_TABLE_RINGED) != 0;
     return true;
 }
 
@@ -94,23 +71,29 @@ uint64_t scene_tags_outline_generation(const SceneTags* tags) {
 }
 
 bool scene_tags_outlined(const SceneTags* tags) {
-    return tags && tags->outlined > 0;
+    return tags && tags->table.outlined > 0;
 }
 
 bool scene_tags_outlined_within(const SceneTags* tags, uint32_t lo, uint32_t hi) {
-    return scene_tags_outlined(tags) && lo <= tags->outlined_hi && hi >= tags->outlined_lo;
+    return scene_tags_outlined(tags) && lo <= tags->table.outlined_hi &&
+           hi >= tags->table.outlined_lo;
 }
 
 bool scene_tags_hides(const SceneTags* tags) {
     return tags && tags->hidden > 0;
 }
 
-uint32_t scene_tags_bind(SceneTags* tags, int unit) {
+uint32_t scene_tags_upload(SceneTags* tags) {
     if (!tags)
         return 0;
     tag_table_upload(&tags->table);
+    return tags->table.count;
+}
+
+void scene_tags_bind(const SceneTags* tags, int unit) {
+    if (!tags)
+        return;
     glActiveTexture(GL_TEXTURE0 + (GLenum)unit);
     glBindTexture(GL_TEXTURE_BUFFER, tags->table.texture);
     glActiveTexture(GL_TEXTURE0);
-    return tags->table.count;
 }

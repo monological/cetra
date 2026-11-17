@@ -198,7 +198,7 @@ typedef struct Mesh {
     float* tex_coords2; // Array of texture coordinates (UV1) for lightmaps/AO
     float* colors;      // Array of vertex colors (RGBA)
     // The object each vertex is of (spec 14.39), one a vertex; 0 = its node's, NULL = all 0. A
-    // triangle's three corners carry one object: a surface a view drops is collapsed per vertex.
+    // triangle's three corners carry one object.
     uint32_t* tags;
 
     // CDLOD morph targets, 3 floats per vertex each, NULL on almost every mesh

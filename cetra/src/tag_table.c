@@ -4,18 +4,28 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ext/log.h"
 #include "util.h"
 
-#define TAG_TABLE_BYTES (4 * TAG_TABLE_TEXELS)
+// A tag's texel `i`, within its bytes.
+#define TEXEL(bytes, i) ((bytes) + 4 * (i))
 
 void tag_table_pack(uint32_t colour, uint32_t outline, float dim, bool hidden, bool raised,
                     bool lit, uint8_t out[TAG_TABLE_BYTES]) {
-    rgba_bytes(colour, out);
-    rgba_bytes(outline, out + 4);
-    out[8] = (uint8_t)lroundf(glm_clamp(dim, 0.0f, 1.0f) * 255.0f);
-    out[9] = hidden ? 255 : 0;
-    out[10] = raised ? 255 : 0;
-    out[11] = lit ? 255 : 0;
+    rgba_bytes(colour, TEXEL(out, TAG_TEXEL_COLOUR));
+    rgba_bytes(outline, TEXEL(out, TAG_TEXEL_OUTLINE));
+    uint8_t* misc = TEXEL(out, TAG_TEXEL_MISC);
+    misc[0] = (uint8_t)lroundf(glm_clamp(dim, 0.0f, 1.0f) * 255.0f);
+    misc[1] = hidden ? 255 : 0;
+    misc[2] = raised ? 255 : 0;
+    misc[3] = lit ? 255 : 0;
+}
+
+bool tag_table_admits(uint32_t tag, const char* who) {
+    if (tag != 0 && tag < TAG_TABLE_LIMIT)
+        return true;
+    log_error("%s: tag %u is refused (1 to %u)", who, tag, TAG_TABLE_LIMIT - 1);
+    return false;
 }
 
 void tag_table_init(TagTable* table) {
@@ -31,12 +41,37 @@ void tag_table_release(TagTable* table) {
     tag_table_init(table);
 }
 
-bool tag_table_write(TagTable* table, uint32_t tag, const uint8_t texels[TAG_TABLE_BYTES]) {
+// Whether a tag's bytes set its outline.
+static bool _ringed(const uint8_t bytes[TAG_TABLE_BYTES]) {
+    static const uint8_t none[4];
+    return memcmp(TEXEL(bytes, TAG_TEXEL_OUTLINE), none, 4) != 0;
+}
+
+bool tag_table_write(TagTable* table, uint32_t tag, const uint8_t texels[TAG_TABLE_BYTES],
+                     unsigned* changed) {
     const size_t had = table->cap;
     if (!grow_array((void**)&table->texels, &table->cap, (size_t)tag + 1, TAG_TABLE_BYTES, 256))
         return false;
     memset(table->texels + had * TAG_TABLE_BYTES, 0, (table->cap - had) * TAG_TABLE_BYTES);
-    memcpy(table->texels + (size_t)tag * TAG_TABLE_BYTES, texels, TAG_TABLE_BYTES);
+    uint8_t* at = table->texels + (size_t)tag * TAG_TABLE_BYTES;
+    const bool was_ringed = _ringed(at), ringed = _ringed(texels);
+    if (changed) {
+        const bool drawn =
+            memcmp(TEXEL(at, TAG_TEXEL_COLOUR), TEXEL(texels, TAG_TEXEL_COLOUR), 4) != 0 ||
+            memcmp(TEXEL(at, TAG_TEXEL_MISC), TEXEL(texels, TAG_TEXEL_MISC), 4) != 0;
+        const bool ring =
+            memcmp(TEXEL(at, TAG_TEXEL_OUTLINE), TEXEL(texels, TAG_TEXEL_OUTLINE), 4) != 0;
+        *changed = (drawn ? TAG_TABLE_DRAWN : 0u) | (ring ? TAG_TABLE_RINGED : 0u);
+    }
+    table->outlined += (uint32_t)ringed - (uint32_t)was_ringed;
+    if (table->outlined == 0) {
+        table->outlined_lo = table->outlined_hi = 0;
+    } else if (ringed) {
+        const bool first = table->outlined_hi == 0;
+        table->outlined_lo = first || tag < table->outlined_lo ? tag : table->outlined_lo;
+        table->outlined_hi = tag > table->outlined_hi ? tag : table->outlined_hi;
+    }
+    memcpy(at, texels, TAG_TABLE_BYTES);
     if (tag + 1 > table->count)
         table->count = tag + 1;
     if (table->dirty_from == table->dirty_to) {

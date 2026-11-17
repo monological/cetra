@@ -3291,6 +3291,7 @@ static void _engine_decide_view(const Engine* engine, const Scene* scene, SceneV
                                 bool world_moving) {
     SceneViewState* vs = view->state;
     vs->average_n = -1;
+    scene_view_latch_tags(view);
     const bool changed = _view_changed(engine, scene, view, world_moving);
     if (view->hidden || !_view_drawable(view)) {
         vs->away = true;
@@ -3353,7 +3354,7 @@ static void _engine_say_view_limits(Engine* engine, const Scene* scene, const Sc
     // Tags are per vertex, so which surfaces lie in a kept lamp's reach is the GPU's to know: said
     // when the view hides or ghosts anything while any lamp's shadow is kept.
     if (!engine->said_kept_tags && scene->shadow_system &&
-        scene->shadow_system->tile_block_count > 0 && scene_view_hides_by_tags(view)) {
+        scene->shadow_system->tile_block_count > 0 && scene_view_drops_by_tags(view)) {
         log_info("A view hides or draws see-through by its tags while a lamp's shadow is kept, "
                  "which every view takes and which draws every surface as it is");
         engine->said_kept_tags = true;

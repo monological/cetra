@@ -20,8 +20,8 @@ typedef struct SceneTagState {
     // A matte paint in place of the material's colour, 0xRRGGBBAA in the display's sRGB, the
     // alpha its share; 0 = the material's. Over a class's colour (SceneTagClass).
     uint32_t colour;
-    // A ring round the silhouette, drawn over the view's finished picture, so a change restarts
-    // no still view; full where the surface is seen, fainter where it is hidden. 0 = none.
+    // A ring round the silhouette, full where the surface is seen and fainter where it is hidden;
+    // a change restarts no still view. 0 = none.
     uint32_t outline;
     float dim;   // 0 = as drawn, 1 = black
     bool hidden; // drawn in no pass, shadows included

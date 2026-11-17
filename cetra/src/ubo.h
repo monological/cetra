@@ -14,6 +14,8 @@
 #include "layers_vt_pages.h"
 // And again: roads.h owns the road and segment caps.
 #include "roads.h"
+// And again: tag_constants.glsl owns a view's class count and its head's flags.
+#include "../shaders/include/tag_constants.glsl"
 
 // Uniform-buffer plumbing for std140 blocks (first used by clustered forward
 // lighting, spec 9.1). GLSL 330 cannot write layout(binding=N) -- that
@@ -224,12 +226,7 @@ _Static_assert(UBO_DECALS_BLOCK_SIZE <= UBO_GUARANTEED_BLOCK_SIZE,
  * programs whose fragment stage has no unit to spare, and it is bytes: 256 classes is 4 KB, a
  * view's own, bound with the view.
  */
-#define UBO_TAG_VIEW_CLASSES    256
-#define UBO_TAG_VIEW_BLOCK_SIZE (16 + 16 * UBO_TAG_VIEW_CLASSES)
-// The head's flags: the view draws with tags; some surface of it drops in some pass, hidden or
-// see-through, which a depth-only program reads the table to find.
-#define UBO_TAG_VIEW_ON    1u
-#define UBO_TAG_VIEW_DROPS 2u
+#define UBO_TAG_VIEW_BLOCK_SIZE (16 + 16 * TAG_VIEW_CLASSES)
 
 typedef struct Ubo {
     GLuint id;

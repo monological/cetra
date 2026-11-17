@@ -5,6 +5,8 @@
 // tile's offset from the view's integer centre, still in int32, so the first float anything
 // becomes is a distance from the view.
 
+#include "tag_constants.glsl"
+
 uniform isamplerBuffer uTiles; // per tile: its origin less the view's centre, and whether it shows
 uniform samplerBuffer uStyles; // a colour per style
 uniform samplerBuffer uTags;   // three texels per tag: colour, outline, (dim, hidden, raised, lit)
@@ -30,7 +32,7 @@ vec4 canvasClip(vec2 pos) {
 }
 
 vec4 canvasTagTexel(uint tag, int i) {
-    return texelFetch(uTags, int(tag) * 3 + i);
+    return texelFetch(uTags, int(tag) * TAG_TABLE_TEXELS + i);
 }
 
 // A shape's colour, from u = (head, net, object, tile): the object's colour if it states one,
@@ -52,18 +54,18 @@ bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised, 
     bool tagged = u.y != 0u || u.z != 0u;
     vec4 netColour = vec4(0.0), objectColour = vec4(0.0), objectOutline = vec4(0.0);
     if (u.y != 0u && u.y < uint(uTagCount)) {
-        netColour = canvasTagTexel(u.y, 0);
-        outline = canvasTagTexel(u.y, 1);
-        vec4 m = canvasTagTexel(u.y, 2);
+        netColour = canvasTagTexel(u.y, TAG_TEXEL_COLOUR);
+        outline = canvasTagTexel(u.y, TAG_TEXEL_OUTLINE);
+        vec4 m = canvasTagTexel(u.y, TAG_TEXEL_MISC);
         dim = m.r;
         hidden = m.g > 0.5;
         raised = max(raised, m.b);
         lit = max(lit, m.a);
     }
     if (u.z != 0u && u.z < uint(uTagCount)) {
-        objectColour = canvasTagTexel(u.z, 0);
-        objectOutline = canvasTagTexel(u.z, 1);
-        vec4 m = canvasTagTexel(u.z, 2);
+        objectColour = canvasTagTexel(u.z, TAG_TEXEL_COLOUR);
+        objectOutline = canvasTagTexel(u.z, TAG_TEXEL_OUTLINE);
+        vec4 m = canvasTagTexel(u.z, TAG_TEXEL_MISC);
         dim = max(dim, m.r);
         hidden = hidden || m.g > 0.5;
         raised = max(raised, m.b);

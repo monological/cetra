@@ -6,7 +6,7 @@
 
 flat in vec4 OutlineColour;
 
-uniform float uStrength; // 1 for the seen pass, outline_hidden for the hidden one
+uniform float uStrength; // the mask's strength where this draw lands, times the outline's own
 
 out vec4 Mask;
 

@@ -319,6 +319,9 @@ an ancestor's. A view draws them by two things:
   hidden), the fade (`tag_fade`, what is not lit, untagged surfaces included, fades and turns
   see-through), and the outline's width and hidden strength.
 
+A view takes both once a frame, where the frame decides what it draws, so every pass of the frame
+draws one state: a write made later in the frame, in the render hook, is the next frame's.
+
 What every view shares draws no view's tags: captures, kept lamp faces and the rain's cover take
 every surface as it is (the engine says once when a view's tags hide or ghost something while a
 lamp's shadow is kept). The mechanism -- the drop, the lanes, the paint, the outline -- is in

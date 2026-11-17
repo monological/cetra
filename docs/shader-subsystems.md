@@ -934,6 +934,11 @@ vertex does, in every program that draws a scene's meshes.
   pass -- hiding nothing, nothing see-through -- says so in its block's head, and the depth-only
   programs then skip the table. A triangle's corners carry one object, or a dropped corner
   stretches it.
+- **A view's tags are settled once a frame**, where the frame decides what each view draws
+  (`scene_view_latch_tags`): its table's writes uploaded, its block built in one pass over its
+  rows, and the head's flags -- draws with tags, drops something, ghosts, outlines -- the one
+  answer the rest of the frame reads, the variant chosen and the change record included. A write
+  after it is the next frame's.
 - **Every pass binds the tags it draws with** where it begins: a scene pass its view's, as it sets
   its view's mask on the cull view (a capture's view has none), and a shadow layer its view's, or
   none for a layer every view takes -- a kept face, the rain's cover -- as it takes no view's mask.

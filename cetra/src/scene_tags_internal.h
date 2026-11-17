@@ -17,8 +17,10 @@ uint64_t scene_tags_outline_generation(const SceneTags* tags);
 bool scene_tags_outlined(const SceneTags* tags);
 bool scene_tags_outlined_within(const SceneTags* tags, uint32_t lo, uint32_t hi);
 bool scene_tags_hides(const SceneTags* tags);
-// The table brought up to date on the GPU and bound to `unit`; its count, one past the largest tag
-// set, which the shader reads no tag past. 0 for NULL tags, with nothing bound.
-uint32_t scene_tags_bind(SceneTags* tags, int unit);
+// The table brought up to date on the GPU; its count, one past the largest tag set, which the
+// shader reads no tag past. 0 for NULL tags.
+uint32_t scene_tags_upload(SceneTags* tags);
+// The table bound to `unit`; nothing for NULL tags.
+void scene_tags_bind(const SceneTags* tags, int unit);
 
 #endif // _SCENE_TAGS_INTERNAL_H_

@@ -1161,17 +1161,24 @@ static bool _keep_lean_prepass(const DrawItem* item, const void* ctx) {
     return item_is_prepassable(item) && !(item->flags & DRAW_ALPHA_MASKED);
 }
 
-// The lean depth program, made the first time a pass asks for it rather than at init, so a run
-// that never asks compiles nothing; registered, so the engine frees it with every other program.
-// NULL when it cannot be made, latched so a compile error is not compiled and logged every frame.
-static ShaderProgram* _depth_prepass_program(Engine* engine) {
-    if (!engine->depth_prepass_program && !engine->depth_prepass_failed) {
-        engine->depth_prepass_program = create_depth_prepass_program();
-        engine->depth_prepass_failed = engine->depth_prepass_program == NULL;
-        if (engine->depth_prepass_program)
-            engine_add_program(engine, engine->depth_prepass_program);
+// A program the engine makes the first time a pass asks for it rather than at init, so a run that
+// never asks compiles nothing; registered, so the engine frees it with every other program. NULL
+// when it cannot be made, latched in `failed` so a compile error is not compiled and logged every
+// frame.
+static ShaderProgram* _lazy_program(Engine* engine, ShaderProgram** slot, bool* failed,
+                                    ShaderProgram* (*create)(void)) {
+    if (!*slot && !*failed) {
+        *slot = create();
+        *failed = *slot == NULL;
+        if (*slot)
+            engine_add_program(engine, *slot);
     }
-    return engine->depth_prepass_program;
+    return *slot;
+}
+
+static ShaderProgram* _depth_prepass_program(Engine* engine) {
+    return _lazy_program(engine, &engine->depth_prepass_program, &engine->depth_prepass_failed,
+                         create_depth_prepass_program);
 }
 
 // Depth for the whole opaque lane, so the shading pass rejects hidden fragments
@@ -1203,11 +1210,11 @@ static ShaderProgram* _depth_prepass_program(Engine* engine) {
 static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* list,
                                   const SceneView* sv, mat4 view, mat4 projection,
                                   const CullView* cull) {
-    if (!engine->depth_prepass_program || !scene || !list)
+    ShaderProgram* program = _depth_prepass_program(engine);
+    if (!program || !scene || !list)
         return false;
 
     SubmitStats* stats = _submit_stats(engine);
-    ShaderProgram* program = engine->depth_prepass_program;
     UniformManager* u = program->uniforms;
     SubmitState state = {0};
     InstanceChunk chunk;
@@ -1913,11 +1920,9 @@ void engine_render_scene(Engine* engine, Scene* scene, SceneView* sv) {
     // from the pass it is supposed to agree with.
     glDisable(GL_BLEND);
     bool prepassed = false;
-    if (engine->depth_prepass_enabled && !vs->capturing && render_mode == RENDER_MODE_PBR) {
-        _depth_prepass_program(engine);
+    if (engine->depth_prepass_enabled && !vs->capturing && render_mode == RENDER_MODE_PBR)
         prepassed =
             _submit_depth_prepass(engine, scene, opaque_list, sv, *view, draw_projection, &cull);
-    }
     // Both halves of the bracket here, adjacent, rather than the relax inside the
     // prepass and the restore 400 lines away in the caller. GL_LEQUAL and not
     // GL_EQUAL because a program without depth_prepass_safe sits the pass out and
@@ -2915,14 +2920,22 @@ static void _submit_outline_items(const Engine* engine, const Scene* scene, cons
 void render_view_outline(Engine* engine, Scene* scene, SceneView* sv) {
     SceneViewState* vs = sv->state;
     const PostFX* fx = vs->postfx;
-    const bool wanted = scene && fx && fx->picture.fbo && scene_view_draws_tags(sv) &&
-                        scene_tags_outlined(sv->tags) && !engine->outline_failed;
-    if (!wanted) {
+    // Its programs, the prepass's among them: without its depth every hidden surface would ring as
+    // though seen.
+    ShaderProgram* mask = NULL;
+    ShaderProgram* ring = NULL;
+    if (scene && fx && fx->picture.fbo && scene_view_outlines(sv)) {
+        mask = _lazy_program(engine, &engine->outline_mask_program, &engine->outline_failed,
+                             create_outline_mask_program);
+        ring = _lazy_program(engine, &engine->outline_ring_program, &engine->outline_failed,
+                             create_outline_ring_program);
+    }
+    if (!mask || !ring || !_depth_prepass_program(engine)) {
         vs->overlay_valid = false;
         return;
     }
     const int w = fx->picture.w, h = fx->picture.h;
-    const uint64_t generation = scene_tags_outline_generation(sv->tags);
+    const uint64_t generation = vs->tag_outline_generation;
     // Drawn again where what the ring is drawn from can have moved: a frame the view drew that is
     // not a later frame of an average -- a TAA frame, or an average's first -- or a write to the
     // table's outlines. A later frame of an average draws the scene its first did, and the ring
@@ -2931,18 +2944,6 @@ void render_view_outline(Engine* engine, Scene* scene, SceneView* sv) {
     if (vs->overlay_valid && !moved && vs->outline_generation == generation && vs->overlay.w == w &&
         vs->overlay.h == h)
         return;
-    if (!engine->outline_mask_program) {
-        engine->outline_mask_program = create_outline_mask_program();
-        engine->outline_ring_program = create_outline_ring_program();
-        engine->outline_failed = !engine->outline_mask_program || !engine->outline_ring_program;
-        if (engine->outline_mask_program)
-            engine_add_program(engine, engine->outline_mask_program);
-        if (engine->outline_ring_program)
-            engine_add_program(engine, engine->outline_ring_program);
-        if (engine->outline_failed)
-            return;
-    }
-    _depth_prepass_program(engine);
     if (!gl_color_target_ensure_depth(&vs->outline_mask, w, h, GL_RGBA8, "outline mask") ||
         !gl_color_target_ensure_format(&vs->overlay, w, h, GL_RGBA8, "outline overlay")) {
         vs->overlay_valid = false;
@@ -2978,15 +2979,13 @@ void render_view_outline(Engine* engine, Scene* scene, SceneView* sv) {
     // through, at full: what is left at the hidden strength is what something hides.
     glDepthMask(GL_FALSE);
     glDisable(GL_DEPTH_TEST);
-    _submit_outline_items(engine, scene, sv, engine->outline_mask_program, &cull,
-                          sv->settings.outline_hidden);
+    _submit_outline_items(engine, scene, sv, mask, &cull, sv->settings.outline_hidden);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
-    _submit_outline_items(engine, scene, sv, engine->outline_mask_program, &cull, 1.0f);
+    _submit_outline_items(engine, scene, sv, mask, &cull, 1.0f);
     glDisable(GL_DEPTH_TEST);
 
     // The ring, from the mask into the overlay.
-    ShaderProgram* ring = engine->outline_ring_program;
     float per_point, per_point_down;
     engine_fb_per_point(engine, &per_point, &per_point_down);
     glBindFramebuffer(GL_FRAMEBUFFER, vs->overlay.fbo);

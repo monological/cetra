@@ -169,90 +169,61 @@ SceneView* create_capture_view(Engine* engine) {
     return view;
 }
 
-static bool _view_has_class_rows(const SceneView* view) {
-    static const SceneTagClass none[SCENE_TAG_CLASSES];
-    return memcmp(view->settings.tag_classes, none, sizeof(none)) != 0;
-}
-
-bool scene_view_draws_tags(const SceneView* view) {
-    if (!view || view->state->capturing || !view->state->engine->tags_supported)
-        return false;
-    return view->tags || view->settings.tag_fade > 0.0f ||
-           view->settings.render_mode == RENDER_MODE_TAGS || _view_has_class_rows(view);
-}
-
-bool scene_view_ghosts(const SceneView* view) {
-    if (!scene_view_draws_tags(view))
-        return false;
-    if (view->settings.tag_fade > 0.0f)
-        return true;
-    for (int c = 1; c < SCENE_TAG_CLASSES; c++)
-        if (view->settings.tag_classes[c].see_through > 0.0f &&
-            !view->settings.tag_classes[c].hidden)
-            return true;
-    return false;
-}
-
-bool scene_view_hides_by_tags(const SceneView* view) {
-    if (!scene_view_draws_tags(view))
-        return false;
-    if (scene_view_ghosts(view) || scene_tags_hides(view->tags))
-        return true;
-    for (int c = 1; c < SCENE_TAG_CLASSES; c++)
-        if (view->settings.tag_classes[c].hidden)
-            return true;
-    return false;
-}
-
-_Static_assert(UBO_TAG_VIEW_CLASSES == SCENE_TAG_CLASSES,
+_Static_assert(TAG_VIEW_CLASSES == SCENE_TAG_CLASSES,
                "the view's tag block holds a row for each of its classes");
 
 static uint32_t _unorm16(float v) {
     return (uint32_t)lroundf(glm_clamp(v, 0.0f, 1.0f) * 65535.0f);
 }
 
-// The view's block as tags.glsl reads it: its head -- flags, the table's `count`, the fade -- then
-// a row a class, the colour, see-through and flat in 16 bits each, and whether it is hidden. Class
-// 0 is none and its row left zero.
-static void _tag_block_fill(const SceneView* view, uint32_t count,
-                            uint32_t block[UBO_TAG_VIEW_BLOCK_SIZE / 4]) {
-    memset(block, 0, UBO_TAG_VIEW_BLOCK_SIZE);
-    const float fade = glm_clamp(view->settings.tag_fade, 0.0f, 1.0f);
-    block[0] = UBO_TAG_VIEW_ON | (scene_view_hides_by_tags(view) ? UBO_TAG_VIEW_DROPS : 0u);
-    block[1] = count;
-    memcpy(&block[2], &fade, sizeof(fade));
-    for (int c = 1; c < SCENE_TAG_CLASSES; c++) {
-        const SceneTagClass* k = &view->settings.tag_classes[c];
+// The block is built in one pass over the rows, as tags.glsl reads it: its head -- the flags, the
+// table's count, the fade -- then a row a class, the colour, see-through and flat in 16 bits each,
+// and whether it is hidden. Class 0 is none and its row left zero. The flags are what the rest of
+// the frame asks of the view, so it asks one answer.
+void scene_view_latch_tags(SceneView* view) {
+    SceneViewState* vs = view->state;
+    const SceneViewSettings* s = &view->settings;
+    uint32_t block[UBO_TAG_VIEW_BLOCK_SIZE / 4] = {0};
+    bool rows = false, ghosts = s->tag_fade > 0.0f, drops = false;
+    for (int c = 1; c < TAG_VIEW_CLASSES; c++) {
+        const SceneTagClass* k = &s->tag_classes[c];
         uint32_t* row = &block[4 + 4 * c];
         row[0] = k->colour;
         row[1] = _unorm16(k->see_through) | (_unorm16(k->flat) << 16);
         row[2] = k->hidden ? 1u : 0u;
+        rows = rows || row[0] != 0 || row[1] != 0 || row[2] != 0;
+        ghosts = ghosts || ((row[1] & 0xFFFFu) != 0 && !k->hidden);
+        drops = drops || k->hidden;
+    }
+    const bool on =
+        !vs->capturing && vs->engine->tags_supported &&
+        (view->tags || s->tag_fade > 0.0f || s->render_mode == RENDER_MODE_TAGS || rows);
+    vs->tag_outline_generation = scene_tags_outline_generation(on ? view->tags : NULL);
+    if (on && !vs->tag_block)
+        vs->tag_block = create_ubo(UBO_TAG_VIEW_BLOCK_SIZE, UBO_BINDING_TAG_VIEW);
+    if (!on || !vs->tag_block) {
+        memset(vs->tag_block_data, 0, sizeof(vs->tag_block_data));
+        return;
+    }
+    const float fade = glm_clamp(s->tag_fade, 0.0f, 1.0f);
+    drops = drops || ghosts || scene_tags_hides(view->tags);
+    block[0] = TAG_VIEW_ON | (drops ? TAG_VIEW_DROPS : 0u) | (ghosts ? TAG_VIEW_GHOSTS : 0u) |
+               (scene_tags_outlined(view->tags) ? TAG_VIEW_OUTLINED : 0u);
+    block[1] = scene_tags_upload(view->tags);
+    memcpy(&block[2], &fade, sizeof(fade));
+    // Held as the block holds it, which a block never uploaded cannot match: its head is never 0.
+    if (memcmp(block, vs->tag_block_data, sizeof(block)) != 0) {
+        ubo_upload(vs->tag_block, block, sizeof(block));
+        memcpy(vs->tag_block_data, block, sizeof(block));
     }
 }
 
 void engine_bind_tags(const Engine* engine, const SceneView* view) {
-    GLuint bound = engine->tag_block_none->id;
-    if (view && scene_view_draws_tags(view)) {
-        SceneViewState* vs = view->state;
-        // The table first: its writes go up and it takes its unit, and its count goes in the block.
-        const uint32_t count = scene_tags_bind(view->tags, TEXUNIT_TAGS);
-        if (!vs->tag_block)
-            vs->tag_block = create_ubo(UBO_TAG_VIEW_BLOCK_SIZE, UBO_BINDING_TAG_VIEW);
-        if (vs->tag_block) {
-            // Built every bind and uploaded only when it differs from what the block holds, so a
-            // write to a class row, the fade or the table's length is in the next pass that binds,
-            // and the passes of a frame that changed none of them upload nothing.
-            uint32_t block[UBO_TAG_VIEW_BLOCK_SIZE / 4];
-            _tag_block_fill(view, count, block);
-            if (!vs->tag_block_held || memcmp(block, vs->tag_block_data, sizeof(block)) != 0) {
-                ubo_upload(vs->tag_block, block, sizeof(block));
-                memcpy(vs->tag_block_data, block, sizeof(block));
-                vs->tag_block_held = true;
-            }
-            bound = vs->tag_block->id;
-        }
-    }
-    glBindBufferBase(GL_UNIFORM_BUFFER, UBO_BINDING_TAG_VIEW, bound);
+    const bool own = scene_view_draws_tags(view);
+    if (own)
+        scene_tags_bind(view->tags, TEXUNIT_TAGS);
+    glBindBufferBase(GL_UNIFORM_BUFFER, UBO_BINDING_TAG_VIEW,
+                     own ? view->state->tag_block->id : engine->tag_block_none->id);
 }
 
 void free_scene_view(SceneView* view) {
@@ -966,9 +937,14 @@ GLuint scene_view_resolve_scene_depth(SceneView* view) {
 // depth-test against opaque geometry (without writing depth). Same sample count as
 // the scene depth or the FBO would be incomplete. Recreated on a size change; torn
 // down with the MSAA attachments (they share the depth renderbuffer).
-static bool _ensure_oit_targets(SceneViewState* vs, int rw, int rh) {
+bool scene_view_oit_ready(SceneView* view) {
+    SceneViewState* vs = view->state;
+    int rw, rh;
+    scene_view_render_size(view, &rw, &rh);
     if (vs->oit_fbo != 0 && vs->oit_w == rw && vs->oit_h == rh)
         return true;
+    GLint bound = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &bound);
     if (vs->oit_fbo) {
         glDeleteTextures(1, &vs->oit_accum_multisample_texture);
         glDeleteTextures(1, &vs->oit_revealage_multisample_texture);
@@ -982,7 +958,9 @@ static bool _ensure_oit_targets(SceneViewState* vs, int rw, int rh) {
                                 GL_COLOR_ATTACHMENT6, rw, rh, vs->msaa_samples_built);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
                               vs->depth_renderbuffer);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    const bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)bound);
+    if (!complete) {
         log_error("OIT framebuffer incomplete");
         gl_delete_texture(&vs->oit_accum_multisample_texture);
         gl_delete_texture(&vs->oit_revealage_multisample_texture);
@@ -999,25 +977,12 @@ static bool _ensure_oit_targets(SceneViewState* vs, int rw, int rh) {
 // the independent per-target blend (accum sums, revealage multiplies 1-alpha).
 // Returns false if the targets couldn't be allocated (caller falls back to the
 // classic unsorted late pass). Leaves depth-write to the caller (off).
-bool scene_view_oit_ready(SceneView* view) {
-    SceneViewState* vs = view->state;
-    int rw, rh;
-    scene_view_render_size(view, &rw, &rh);
-    if (vs->oit_fbo != 0 && vs->oit_w == rw && vs->oit_h == rh)
-        return true;
-    GLint bound = 0;
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &bound);
-    const bool ready = _ensure_oit_targets(vs, rw, rh);
-    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)bound);
-    return ready;
-}
-
 bool scene_view_begin_oit_pass(SceneView* view) {
+    if (!scene_view_oit_ready(view))
+        return false;
     SceneViewState* vs = view->state;
     int rw, rh;
     scene_view_render_size(view, &rw, &rh);
-    if (!_ensure_oit_targets(vs, rw, rh))
-        return false;
     glBindFramebuffer(GL_FRAMEBUFFER, vs->oit_fbo);
     glViewport(0, 0, rw, rh);
     // Only slots 5 (accum) and 6 (revealage) active; the shader's AccumOut /

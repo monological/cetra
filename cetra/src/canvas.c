@@ -45,9 +45,9 @@ enum {
 struct CanvasTags {
     CanvasTagState* states;
     size_t cap;
-    // Tags whose state draws a ring, and that raise: a layer's pass for either
-    // is drawn only while some tag asks for it.
-    uint32_t outlined, raised;
+    // Tags that raise: a layer's raised pass is drawn only while some tag asks for it, as its
+    // rings are only while the table has an outline.
+    uint32_t raised;
     uint64_t generation;
     TagTable table;
 };
@@ -71,25 +71,19 @@ void free_canvas_tags(CanvasTags* tags) {
 }
 
 bool canvas_tags_set(CanvasTags* tags, uint32_t tag, CanvasTagState state) {
-    if (!tags)
+    if (!tags || !tag_table_admits(tag, "canvas"))
         return false;
-    if (tag == 0 || tag >= TAG_TABLE_LIMIT) {
-        log_error("canvas: tag %u is refused (1 to %u)", tag, TAG_TABLE_LIMIT - 1);
-        return false;
-    }
     const size_t had = tags->cap;
     if (!grow_array((void**)&tags->states, &tags->cap, (size_t)tag + 1, sizeof(CanvasTagState),
                     256))
         return false;
     memset(tags->states + had, 0, (tags->cap - had) * sizeof(CanvasTagState));
-    uint8_t texels[4 * TAG_TABLE_TEXELS];
+    uint8_t texels[TAG_TABLE_BYTES];
     tag_table_pack(state.colour, state.outline, state.dim, state.hidden, state.raised, state.lit,
                    texels);
-    if (!tag_table_write(&tags->table, tag, texels))
+    if (!tag_table_write(&tags->table, tag, texels, NULL))
         return false;
-    const CanvasTagState was = tags->states[tag];
-    tags->outlined += (state.outline != 0) - (was.outline != 0);
-    tags->raised += state.raised - was.raised;
+    tags->raised += state.raised - tags->states[tag].raised;
     tags->states[tag] = state;
     tags->generation++;
     return true;
@@ -1046,7 +1040,7 @@ static void _draw_layer(const CanvasData* d, const CanvasLayer* layer) {
         // The raised pass only while some tag raises, and the rings' two only
         // while one draws a ring.
         if ((pass == CANVAS_PASS_RAISED && !d->tags->raised) ||
-            (CANVAS_PASS_RINGS(pass) && !d->tags->outlined))
+            (CANVAS_PASS_RINGS(pass) && !d->tags->table.outlined))
             continue;
         // Alpha alone in the coverage pass, by max, and the nearest ring's, by min; the
         // colour passes paint by alpha and zero it.

@@ -141,11 +141,12 @@ typedef struct SceneViewState {
         const struct SceneTags* tags; // the table borrowed, and its generation
         uint64_t tag_generation;
     } record;
-    // The block the view's class rows, fade and table count go up in (spec 14.39), and what it
-    // holds (`tag_block_held` once it holds anything).
+    // The view's tags this frame (spec 14.39), as scene_view_latch_tags settled them: the block its
+    // passes bind and what it holds, all zeros while the view draws no tags; and its table's
+    // outline writes, which its outline is drawn under.
     struct Ubo* tag_block;
     uint32_t tag_block_data[UBO_TAG_VIEW_BLOCK_SIZE / 4];
-    bool tag_block_held;
+    uint64_t tag_outline_generation;
     // This frame draws its see-through surfaces through the OIT passes: it ghosts, and OIT can
     // run. Otherwise those surfaces stay in the opaque passes.
     bool ghosts_this_frame;
@@ -187,19 +188,33 @@ typedef struct SceneViewState {
 // A view for the captures: no target or chain, its camera placed by each face.
 struct SceneView* create_capture_view(struct Engine* engine);
 
-// Whether the view draws with tags (spec 14.39): a table, a class row, a fade or the tags render
-// mode. A capture never does.
-bool scene_view_draws_tags(const struct SceneView* view);
-// Whether it draws a surface see-through: a fade, or a class row less than solid. Its opaque items
-// are then drawn through the transparent passes too.
-bool scene_view_ghosts(const struct SceneView* view);
-// Whether it draws any surface otherwise than as it is solid: hidden by a tag or a class, or
-// see-through.
-bool scene_view_hides_by_tags(const struct SceneView* view);
-// `view`'s tags bound for a pass drawing the scene: its block on UBO_BINDING_TAG_VIEW, up to date,
-// and its table on TEXUNIT_TAGS. NULL, a view drawing no tags or a capture's binds the engine's
-// block of zeros, which draws every surface as it is.
+// The view's tags for this frame (spec 14.39), from its settings and its table as they stand, its
+// table's writes uploaded: once a frame, where the frame decides what each view draws. Every pass
+// of the frame draws with them; a write after is the next frame's. A capture draws no tags.
+void scene_view_latch_tags(struct SceneView* view);
+// `view`'s tags bound for a pass drawing the scene: its block on UBO_BINDING_TAG_VIEW and its table
+// on TEXUNIT_TAGS. NULL or a view drawing no tags binds the engine's block of zeros, which draws
+// every surface as it is.
 void engine_bind_tags(const struct Engine* engine, const struct SceneView* view);
+
+// What the view's tags do this frame: it draws with tags at all (a table, a class row, a fade or
+// the tags render mode); some surface of it drops in some pass, hidden or see-through; it draws
+// some surface see-through; some tag has an outline. False for NULL.
+static inline bool scene_view_tags_have(const struct SceneView* view, uint32_t flag) {
+    return view && (view->state->tag_block_data[0] & flag) != 0;
+}
+static inline bool scene_view_draws_tags(const struct SceneView* view) {
+    return scene_view_tags_have(view, TAG_VIEW_ON);
+}
+static inline bool scene_view_drops_by_tags(const struct SceneView* view) {
+    return scene_view_tags_have(view, TAG_VIEW_DROPS);
+}
+static inline bool scene_view_ghosts(const struct SceneView* view) {
+    return scene_view_tags_have(view, TAG_VIEW_GHOSTS);
+}
+static inline bool scene_view_outlines(const struct SceneView* view) {
+    return scene_view_tags_have(view, TAG_VIEW_OUTLINED);
+}
 
 // The window's framebuffer pixels to a point, across and down: 1 where the window has no size.
 void engine_fb_per_point(const struct Engine* engine, float* sx, float* sy);

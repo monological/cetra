@@ -11,25 +11,20 @@
 // instance's or the node's. A dropped corner is moved outside the clip volume, and a triangle's
 // three corners carry one object, so a dropped surface goes whole -- and costs no fragment.
 
+#include "tag_constants.glsl"
+
 layout(location = 4) in uint aTag;
 
 uniform uvec2 uNodeTag;          // object, class: a draw that carries one object
-uniform samplerBuffer uTagTable; // TEXUNIT_TAGS: three RGBA8 texels a tag
-// Which of a see-through view's surfaces this draw keeps: 0 = every one, 1 = the solid, 2 = the
-// see-through. Hidden ones are dropped by all three.
-uniform int uTagLane;
+uniform samplerBuffer uTagTable; // TEXUNIT_TAGS: TAG_TABLE_TEXELS RGBA8 texels a tag
+uniform int uTagLane;            // TAG_LANE_*
 
-// ubo.h's TagViewBlock: the head -- flags, the table's count, the fade's bits, clamped -- and a row
-// a class (UBO_TAG_VIEW_CLASSES of them): the paint, see-through and flat as unorm16 halves of y,
-// hidden.
+// ubo.h's TagViewBlock: the head -- TAG_VIEW_* flags, the table's count, the fade's bits, clamped
+// -- and a row a class: the paint, see-through and flat as unorm16 halves of y, hidden.
 layout(std140) uniform TagViewBlock {
     uvec4 uTagHead;
-    uvec4 uTagClass[256];
+    uvec4 uTagClass[TAG_VIEW_CLASSES];
 };
-
-// ubo.h's flags: the view draws with tags; some surface of it drops in some pass.
-#define CETRA_TAG_VIEW_ON    1u
-#define CETRA_TAG_VIEW_DROPS 2u
 
 // Outside every side of the clip volume, and the same point for all three corners: clipped, and
 // degenerate besides, so a pass drawing under depth clamp draws nothing of it either.
@@ -56,7 +51,9 @@ bool cetraTagInTable(uint object) {
 
 // An object's outline, display sRGB with its strength in alpha; 0 for none or no object.
 vec4 cetraTagOutline(uint object) {
-    return cetraTagInTable(object) ? texelFetch(uTagTable, int(object) * 3 + 1) : vec4(0.0);
+    return cetraTagInTable(object)
+               ? texelFetch(uTagTable, int(object) * TAG_TABLE_TEXELS + TAG_TEXEL_OUTLINE)
+               : vec4(0.0);
 }
 
 // `node` is the instance's or the node's object and class: cetra_instance_tag(uNodeTag) where the
@@ -69,7 +66,7 @@ CetraTag cetraTag(uvec2 node) {
     t.opacity = 1.0;
     t.flatShare = 0.0;
     t.dim = 0.0;
-    if ((uTagHead.x & CETRA_TAG_VIEW_ON) == 0u)
+    if ((uTagHead.x & TAG_VIEW_ON) == 0u)
         return t;
     t.object = aTag != 0u ? aTag : node.x;
     bool hidden = false;
@@ -84,9 +81,9 @@ CetraTag cetraTag(uvec2 node) {
     }
     // A tag's own colour over its class's, the canvas's rule of an object over its net.
     if (cetraTagInTable(t.object)) {
-        int at = int(t.object) * 3;
-        vec4 colour = texelFetch(uTagTable, at);
-        vec4 misc = texelFetch(uTagTable, at + 2);
+        int at = int(t.object) * TAG_TABLE_TEXELS;
+        vec4 colour = texelFetch(uTagTable, at + TAG_TEXEL_COLOUR);
+        vec4 misc = texelFetch(uTagTable, at + TAG_TEXEL_MISC);
         if (any(greaterThan(colour, vec4(0.0))))
             t.paint = colour;
         t.dim = misc.x;
@@ -95,8 +92,8 @@ CetraTag cetraTag(uvec2 node) {
     }
     float fade = lit ? 0.0 : uintBitsToFloat(uTagHead.z);
     t.opacity = (1.0 - seeThrough) * (1.0 - fade);
-    t.drop = hidden || t.opacity <= 0.0 || (uTagLane == 1 && t.opacity < 1.0) ||
-             (uTagLane == 2 && t.opacity >= 1.0);
+    t.drop = hidden || t.opacity <= 0.0 || (uTagLane == TAG_LANE_SOLID && t.opacity < 1.0) ||
+             (uTagLane == TAG_LANE_GHOSTS && t.opacity >= 1.0);
     return t;
 }
 
@@ -104,7 +101,7 @@ CetraTag cetraTag(uvec2 node) {
 // nothing in any pass is answered without the table, which is the common case for the depth-only
 // programs that call this: a view painting or outlining, hiding nothing.
 vec4 cetraTagPosition(uvec2 node, vec4 clip) {
-    if ((uTagHead.x & CETRA_TAG_VIEW_DROPS) == 0u)
+    if ((uTagHead.x & TAG_VIEW_DROPS) == 0u)
         return clip;
     return cetraTag(node).drop ? CETRA_TAG_DROPPED : clip;
 }

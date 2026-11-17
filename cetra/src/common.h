@@ -64,8 +64,8 @@
 // The tag table (spec 14.39), read by the VERTEX stage of every program that draws a scene's
 // meshes. Outside the 0-15 ledger on purpose: pbr_frag's full variant declares a sampler on each
 // of those, and two sampler types on one unit in one program fail at draw. A unit's number is
-// bounded by GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, not by a stage's sixteen; the engine checks it
-// at init and draws no tags where it is short.
+// bounded by GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, not by a stage's sixteen: no tags are drawn
+// where that is 16 or fewer.
 #define TEXUNIT_TAGS 16
 
 // (Light data moved off the default uniform block entirely: analytic lights
