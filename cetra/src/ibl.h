@@ -4,6 +4,7 @@
 #include <GL/glew.h>
 #include <cglm/cglm.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "program.h"
 
@@ -142,6 +143,9 @@ void free_ibl_resources(IBLResources* ibl);
 
 // HDR loading
 int load_hdr_environment(IBLResources* ibl, const char* hdr_path);
+// The same from an HDR file's bytes in memory -- one built into the program by
+// cetra_embed_files, say -- which the caller keeps.
+int load_hdr_environment_memory(IBLResources* ibl, const void* bytes, size_t size);
 
 // Precomputation (run once after HDR load)
 int precompute_ibl(IBLResources* ibl, struct Engine* engine);

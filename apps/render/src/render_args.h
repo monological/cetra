@@ -588,6 +588,11 @@ typedef struct {
     char change_kind[32];
     char change_arg[64];
     int view_probe;
+    // --background-exact r,g,b: the background the window shows, a display colour, held exactly.
+    // --hdr-memory: -e's file read into memory and loaded from the bytes.
+    float background_exact[3];
+    int background_exact_set;
+    int hdr_memory;
     int show_help;
 } RenderArgs;
 

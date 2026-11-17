@@ -30,8 +30,10 @@ typedef struct SceneViewSettings {
     float render_scale;        // the scene's share of the post size, 0.5..1; 1 headless without
                                // headless_jitter, which the upscale reconstructs from
     // What a pixel the scene draws nothing in is cleared to: a working-space value, carried by the
-    // chain like any surface.
+    // chain like any surface; or, background_exact, the display colour wanted on screen, which the
+    // engine turns back through the view's tone curve and display encode to the value it clears to.
     vec3 background;
+    bool background_exact;
     RenderMode render_mode; // PBR, or a debug view of one input
     bool show_wireframe;    // every edge of every face, albedo-only, no culling
     bool show_xyz;          // the XYZ gizmo on every node

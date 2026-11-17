@@ -45,7 +45,8 @@ typedef struct GBufferAttachment {
 static void _gbuffer_attachments(const SceneView* view,
                                  GBufferAttachment out[GBUFFER_ATTACHMENT_COUNT]) {
     SceneViewState* vs = view->state;
-    const float* bg = view->settings.background;
+    const float* bg =
+        view->settings.background_exact ? vs->exact_background : view->settings.background;
     out[0] = (GBufferAttachment){&vs->multisample_texture,
                                  NULL,
                                  GL_RGBA16F,

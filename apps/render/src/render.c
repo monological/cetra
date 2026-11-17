@@ -129,6 +129,8 @@ static void print_usage(const char* prog) {
                     "                            material-silent, node:NAME, light, settings:V,\n"
                     "                            settings-same:V, engine, typical)\n");
     fprintf(stderr, "      --view-probe          Print each view's frame: drawn, averaged, done\n");
+    fprintf(stderr, "      --background-exact r,g,b  The background, a display colour, exactly\n");
+    fprintf(stderr, "      --hdr-memory          Load -e's environment from its bytes in memory\n");
     fprintf(stderr, "      --cluster-heatmap  Tint fragments by cluster light count\n");
     fprintf(stderr, "      --no-shadows       Keep key lights but disable shadow maps\n");
     fprintf(stderr,
@@ -2230,6 +2232,15 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 snprintf(args->change_arg, sizeof(args->change_arg), "%s", spec + used + 1);
         } else if (strcmp(argv[i], "--view-probe") == 0) {
             args->view_probe = 1;
+        } else if (strcmp(argv[i], "--background-exact") == 0 && i + 1 < argc) {
+            if (sscanf(argv[++i], "%f,%f,%f", &args->background_exact[0],
+                       &args->background_exact[1], &args->background_exact[2]) != 3) {
+                fprintf(stderr, "Error: --background-exact wants r,g,b in 0..1\n");
+                return -1;
+            }
+            args->background_exact_set = 1;
+        } else if (strcmp(argv[i], "--hdr-memory") == 0) {
+            args->hdr_memory = 1;
         } else if (strcmp(argv[i], "--cluster-heatmap") == 0) {
             args->cluster_heatmap = 1;
         } else if (strcmp(argv[i], "--point-light-grid") == 0) {
@@ -2867,6 +2878,25 @@ static void grid_frame(Engine* engine, const RenderArgs* args, int frame) {
             camera_set_position(&view->camera, eye);
         }
     }
+}
+
+// --hdr-memory: the file's bytes read whole and the environment loaded from them, as a program
+// with the file built in would. -1 when the file cannot be read or decoded.
+static int load_hdr_from_file_bytes(IBLResources* ibl, const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "Error: --hdr-memory: cannot open %s\n", path);
+        return -1;
+    }
+    fseek(f, 0, SEEK_END);
+    const long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    unsigned char* bytes = size > 0 ? malloc((size_t)size) : NULL;
+    const bool read = bytes && fread(bytes, 1, (size_t)size, f) == (size_t)size;
+    fclose(f);
+    const int result = read ? load_hdr_environment_memory(ibl, bytes, (size_t)size) : -1;
+    free(bytes);
+    return result;
 }
 
 /*
@@ -4142,6 +4172,10 @@ int main(int argc, char** argv) {
     view_settings.render_scale = view_render_scale;
     view_settings.headless_jitter = args.headless_jitter != 0;
     view_settings.accumulate_frames = args.accumulate;
+    if (args.background_exact_set) {
+        glm_vec3_copy(args.background_exact, view_settings.background);
+        view_settings.background_exact = true;
+    }
     // The view's camera, and the one view, filling the window.
     const SceneViewDesc view_desc = {
         .camera = {.position = {0.0f, 150.0f, 100.0f},
@@ -4825,7 +4859,8 @@ int main(int argc, char** argv) {
 
     if (args.hdr_path) {
         IBLResources* ibl = create_ibl_resources();
-        if (ibl && load_hdr_environment(ibl, args.hdr_path) == 0) {
+        if (ibl && (args.hdr_memory ? load_hdr_from_file_bytes(ibl, args.hdr_path)
+                                    : load_hdr_environment(ibl, args.hdr_path)) == 0) {
             if (precompute_ibl(ibl, engine) == 0) {
                 scene->ibl = ibl;
                 scene->render_skybox = true;

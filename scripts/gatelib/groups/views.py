@@ -129,6 +129,15 @@ def run_views_gate(workdir):
       still-off         accumulation off: 40 of 40 frames drawn.
       still-taau        accumulation below render scale 1 is said once and the view keeps TAA's
                         upscale, drawing 40 of 40.
+
+    The exact background, a frame of nothing but background, vignette and bloom off:
+
+      background-exact  under Neutral, ACES, AgX and the linear curve, three colours each, every
+                        pixel reads back the colour asked with the dither off, and within one code
+                        with it on; an exposure six times larger moves it 0 px.
+      background-log    an exact background under a vignette is said once; without one, not.
+      hdr-memory        an environment loaded from its file's bytes is the same file loaded by its
+                        path, 0 px.
     """
     arm = Arms(17)
     board = asset("board_fixture.cscn")
@@ -508,5 +517,66 @@ def run_views_gate(workdir):
         ok = draws == 40 and says == 1
         return ok, (f"{draws} of 40 frames drawn below render scale 1 (want 40), said {says} "
                     f"time(s) (want 1)")
+
+    # ---- the exact background: the board's camera turned up into empty space, so the whole
+    # frame is background, with the vignette and bloom off -- a stage that changes a pixel by
+    # where it is, and light added onto a bright background, as a camera's would.
+    def sky(tag, extra, exposure="0.0088"):
+        return _views_run(workdir, f"bg_{tag}", board, 64, 48, [
+            "--no-auto-exposure", "-E", exposure, "--cam-eye", "0,1,0",
+            "--cam-target", "0,2,0.001", "--no-vignette", "--no-bloom"] + extra, frames=3)
+
+    colours = [(26, 27, 38), (128, 128, 128), (232, 228, 216)]
+
+    def exact(colour):
+        return ["--background-exact", ",".join(f"{c / 255:.6f}" for c in colour)]
+
+    @arm("background-exact")
+    def _():
+        worst_off, worst_on, said = 0, 0, []
+        for curve in ("neutral", "aces", "agx", "linear"):
+            for colour in colours:
+                want = np.array(colour, dtype=np.float64)
+                off, _ = sky(f"{curve}_off", ["--tonemap", curve, "--no-dither"] + exact(colour))
+                on, _ = sky(f"{curve}_on", ["--tonemap", curve] + exact(colour))
+                if off is None or on is None:
+                    return False, f"a {curve} run failed"
+                worst_off = max(worst_off, int(np.abs(off - want).max()))
+                worst_on = max(worst_on, int(np.abs(on - want).max()))
+        bright, _ = sky("exposure_a", exact(colours[0]))
+        dim, _ = sky("exposure_b", exact(colours[0]), exposure="0.05")
+        if bright is None or dim is None:
+            return False, "an exposure run failed"
+        moved = _differ(bright, dim)
+        ok = worst_off == 0 and worst_on <= 1 and moved == 0
+        return ok, (f"four curves by three colours: off by at most {worst_off} code(s) with the "
+                    f"dither off (want 0), {worst_on} with it on (want <= 1); an exposure six "
+                    f"times larger moved it {moved} px (want 0)")
+
+    @arm("background-log")
+    def _():
+        line = "exact background has a stage over it"
+        _, vignetted = _views_run(workdir, "bg_log", board, 64, 48, [
+            "--no-auto-exposure", "-E", "0.0088", "--cam-eye", "0,1,0", "--cam-target",
+            "0,2,0.001", "--no-bloom"] + exact(colours[0]), frames=5)
+        _, clean = sky("log_clean", exact(colours[0]))
+        if vignetted is None or clean is None:
+            return False, "a run failed"
+        said, quiet = vignetted.count(line), clean.count(line)
+        return said == 1 and quiet == 0, (f"said {said} time(s) under a vignette (want 1), {quiet} "
+                                          f"without one (want 0)")
+
+    @arm("hdr-memory")
+    def _():
+        env = asset("abandoned_window/abandoned_window_env.hdr")
+        flags = board_flags + ["-e", env]
+        path, _ = _views_run(workdir, "hdr_path", board, 400, 300, flags)
+        memory, said = _views_run(workdir, "hdr_memory", board, 400, 300, flags + ["--hdr-memory"])
+        if path is None or memory is None:
+            return False, "a run failed"
+        loaded = "Loaded HDR from memory" in said
+        d = _differ(path, memory)
+        return loaded and d == 0, (f"the environment from its bytes {d} px from the same file by "
+                                   f"its path (want 0), loaded from memory {loaded}")
 
     return arm.failed

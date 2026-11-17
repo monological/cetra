@@ -1,3 +1,5 @@
+#include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -329,6 +331,9 @@ static void extract_light_lobes(IBLResources* ibl, const float* data, int width,
     }
 }
 
+// A decoded equirect into the environment: `name` is what the cook keys its captures by.
+static int _ibl_adopt_hdr(IBLResources* ibl, float* data, int width, int height, const char* name);
+
 int load_hdr_environment(IBLResources* ibl, const char* hdr_path) {
     if (!ibl || !hdr_path)
         return -1;
@@ -350,7 +355,28 @@ int load_hdr_environment(IBLResources* ibl, const char* hdr_path) {
     }
 
     log_info("Loaded HDR: %s (%dx%d, requested 3 channels)", hdr_path, width, height);
+    return _ibl_adopt_hdr(ibl, data, width, height, hdr_path);
+}
 
+int load_hdr_environment_memory(IBLResources* ibl, const void* bytes, size_t size) {
+    if (!ibl || !bytes || size == 0 || size > INT_MAX)
+        return -1;
+    stbi_set_flip_vertically_on_load(1);
+    int width, height, nrComponents;
+    float* data = stbi_loadf_from_memory(bytes, (int)size, &width, &height, &nrComponents, 3);
+    stbi_set_flip_vertically_on_load(0);
+    if (!data) {
+        log_error("Failed to load an HDR image from %zu bytes", size);
+        return -1;
+    }
+    // Named by its content, so the cook keys an environment from bytes by what it is.
+    char name[48];
+    snprintf(name, sizeof(name), "memory:%08x:%zu", fnv1a_bytes(bytes, size), size);
+    log_info("Loaded HDR from memory: %s (%dx%d, requested 3 channels)", name, width, height);
+    return _ibl_adopt_hdr(ibl, data, width, height, name);
+}
+
+static int _ibl_adopt_hdr(IBLResources* ibl, float* data, int width, int height, const char* name) {
     glGenTextures(1, &ibl->hdr_texture);
     glBindTexture(GL_TEXTURE_2D, ibl->hdr_texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, width, height, 0, GL_RGB, GL_FLOAT, data);
@@ -373,7 +399,7 @@ int load_hdr_environment(IBLResources* ibl, const char* hdr_path) {
 
     ibl->hdr_width = width;
     ibl->hdr_height = height;
-    ibl->hdr_filepath = safe_strdup(hdr_path);
+    ibl->hdr_filepath = safe_strdup(name);
     ibl->initialized = true;
 
     return 0;

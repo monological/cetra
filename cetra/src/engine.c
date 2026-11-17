@@ -35,6 +35,7 @@
 #include "rain_render.h"
 #include "gi_volume.h"
 #include "probe_set.h"
+#include "background.h"
 #include "lighting_atlas.h"
 #include "layers_vt.h"
 #include "material_texture_array.h"
@@ -3302,6 +3303,20 @@ static void _engine_say_view_limits(Engine* engine, const Scene* scene, const Sc
         log_info("A view hides a node within a kept lamp's reach, whose shadow every view takes");
         engine->said_kept_hidden = true;
     }
+    // A stage that changes a cleared texel by where it is, or past what the inverse undoes.
+    // Bloom near something bright glows onto it, as a camera's would, and the dither moves it a
+    // code at most: neither is said.
+    const PostFXSettings* p = &view->settings.post;
+    if (view->settings.background_exact && !view->state->exact_stage_said &&
+        (p->vignette_enabled || p->grade_enabled || p->local_exposure_enabled || p->grain_enabled ||
+         p->purkinje_enabled || p->fog_enabled || p->sharpen_enabled ||
+         (view->state->postfx && view->state->postfx->lut_texture && p->lut_strength > 0.0f) ||
+         (scene->sky && scene->sky->enabled && scene->sky->aerial_enabled))) {
+        log_info("A view's exact background has a stage over it the engine cannot undo -- a "
+                 "vignette, a grade, a LUT, local exposure, grain, Purkinje, fog or aerial "
+                 "perspective -- so it is not shown exactly");
+        view->state->exact_stage_said = true;
+    }
 }
 
 static void _engine_draw_view(Engine* engine, Scene* scene, SceneView* view, EngineRenderFunc draw,
@@ -3380,6 +3395,19 @@ static void _engine_draw_view(Engine* engine, Scene* scene, SceneView* view, Eng
     // chain can occlude exactly that share and fold it back. Not gated on
     // AO -- with AO off the composite still owes the scene its specular.
     vs->spec_this_frame = frame_mode == RENDER_MODE_PBR && postfx_wants_spec_split(vs->postfx);
+    // An exact background, turned back through the curve this frame takes: a debug view's frame
+    // is copied as it is, like passthrough.
+    if (view->settings.background_exact) {
+        const PostFXTonemapMode mode = frame_mode == RENDER_MODE_PBR
+                                           ? view->settings.post.tonemap_mode
+                                           : POSTFX_TONEMAP_PASSTHROUGH;
+        if (!background_working(view->settings.background, mode, vs->exact_background) &&
+            !vs->exact_unreachable_said) {
+            log_info("A view's exact background is not a colour its tone curve can give; it "
+                     "shows the nearest");
+            vs->exact_unreachable_said = true;
+        }
+    }
     profiler_scope_begin(engine->profiler, "scene clear");
     scene_view_clear(view);
     profiler_scope_end(engine->profiler);
