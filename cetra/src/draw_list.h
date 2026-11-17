@@ -244,6 +244,8 @@ typedef struct CullView {
 // the other shifts every instance behind it. Four hand-written copies of this
 // had already drifted on the null guard.
 bool draw_item_visible(const DrawItem* item, const CullView* view);
+// Whether a view drawing by `mask` draws the item: one shared bit, or a mask of 0, every item.
+bool draw_item_in_mask(const DrawItem* item, uint32_t mask);
 
 // The object-space box the geometry this item draws actually occupies -- wind
 // and morph margins included, a live pose folded in. False = no bound can be

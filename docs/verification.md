@@ -639,10 +639,8 @@ app's panes, choosing its arms one by one.
 - **A view is compared with itself alone**: a grid view against `--views 1x1 --view-index K` at
   the cell's size, 0 px. The grid's views turn about one target, so no two show the same picture by
   accident, and `--view-turn 0` gives two of one camera.
-- **A lone view covering the window writes it directly** and a grid view through its picture, and
-  the two rasterise a varying's last bits differently. So an arm comparing a grid view with a lone
-  one passes `--view-picture` to the lone one: the copy is exact, the window's rasterisation is
-  not. `views-one` holds the direct write to the goldens.
+- **Every view is drawn through its picture**, a lone one covering the window as well, so a grid
+  view and the same view alone are the same bytes, and `views-one` holds the goldens to that path.
 - **What a view shows is cut from the screenshot by its rectangle**, at the framebuffer's scale.
 - **Resting is read off `--view-probe`**, a line per view per frame (drawn, the average's count,
   finished, draws so far), never off a frame count or the profiler, whose table averages its

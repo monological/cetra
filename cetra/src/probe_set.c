@@ -10,6 +10,7 @@
 #include "capture_key.h"
 #include "cook.h"
 #include "engine.h"
+#include "engine_internal.h"
 #include "gi_volume.h"
 #include "postfx.h"
 #include "profiler.h"
@@ -148,9 +149,8 @@ static uint16_t* probe_keep_column(void* user, size_t i, int slot) {
 static void probe_set_rank(ReflectionProbeSet* set, const struct Engine* engine,
                            LightingAtlas* atlas) {
     vec3 eye = {0.0f, 0.0f, 0.0f};
-    if (engine->focus_view)
-        glm_vec3_copy(engine->focus_view->camera.position, eye);
-    for (size_t i = 0; i < set->residency.count; ++i) {
+    // With no view the distances stay as they were, and so does the order.
+    for (size_t i = 0; engine_focus_eye(engine, eye) && i < set->residency.count; ++i) {
         const AABB box = probe_box(set->probes[i]);
         set->residency.items[i].distance = sqrtf(aabb_dist_sq(&box, eye));
     }

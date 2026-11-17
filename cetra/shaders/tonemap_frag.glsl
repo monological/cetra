@@ -1,6 +1,9 @@
 #version 330 core
-in vec2 TexCoords;
 out vec4 FragColor;
+// The pixel's centre in the frame, from its position rather than the interpolated varying, whose
+// last bits depend on the target rasterised into: the Purkinje grain hashes this, so the frame is
+// the same whatever it is drawn into. Set first thing in main.
+vec2 TexCoords;
 
 // Final post pass: composite bloom onto the linear HDR scene, then the local
 // exposure where it is on, the tone curve and the finishing stack. hdrTex
@@ -536,6 +539,7 @@ vec3 sceneToToned(vec2 uv, float aoFactor, vec3 bloomAdd, float localExposure)
 
 void main()
 {
+    TexCoords = gl_FragCoord.xy * texelSize;
     if (debugView == 1) {
         // The reconstructed value, not the stored one: a debug view answers
         // "what did this pixel get", and the half-res buffer is not what any

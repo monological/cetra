@@ -73,6 +73,7 @@ typedef struct MaterialLayersVt {
     bool pages_dirty;                         // table changed since the last UBO upload
     unsigned long long pages_loaded;          // lifetime page bakes, for the probe
     unsigned long long pages_evicted;         // lifetime evictions, for the probe
+    unsigned long long bakes;                 // lifetime composite bakes
 
     // Per-layer means of the SAME resampled data the taps read -- the material
     // texture array's top mip -- which is what makes the runtime detail ratio
@@ -130,6 +131,10 @@ void free_layers_vt_feedback(LayersVtFeedback* fb);
 // frame after material_texture_array_ensure_built, because the bake samples
 // the array; a no-op while the array is dirty.
 void material_layers_vt_ensure(struct Scene* scene, struct Engine* engine);
+
+// The composite bakes and page bakes the scene's materials have had, together: a count that moves
+// whenever either lands, which changes what the layered surfaces show.
+unsigned long long layers_vt_bakes(const struct Scene* scene);
 
 void free_material_layers_vt(MaterialLayersVt* vt);
 

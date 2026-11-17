@@ -219,3 +219,11 @@ void exposure_reset_adaptation(Exposure* ex) {
     ex->adapted_luminance = 0.0f;
     ex->adapted_valid = false;
 }
+
+// Reached means within the snap, which the blend turns into exactly the target.
+bool exposure_adapting(const Exposure* ex) {
+    if (!ex || !ex->settings || !ex->settings->automatic)
+        return false;
+    return !ex->adapted_valid || fabsf(log2f(fmaxf(ex->adapted_luminance, 1e-8f)) -
+                                       ex->last_target_log2) >= EXPOSURE_ADAPT_SNAP;
+}

@@ -518,8 +518,6 @@ static void postfx_invalidate_targets(PostFX* fx) {
     // One-shot latch: without clearing it, a transient failure at the old size
     // would permanently disable temporal fog at every later one.
     fx->fog_layer_failed = false;
-    // The same for the picture, which the chain finishes into.
-    fx->picture_failed = false;
     fx->fog_layer_frame = -1;
     fx->cs_ready = false;
     fx->motion_blur_ready = false;
@@ -1021,13 +1019,6 @@ static bool postfx_ensure_contact_targets(PostFX* fx) {
 // and format, so the copy is exact. GL 4.1 has no texture barrier, so a pass may not draw into the
 // texture it samples, and the frame keeps its handle, so whatever reads it next needs no
 // repointing.
-static void _postfx_copy_back(const GLColorTarget* scratch, GLuint dst_fbo) {
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, scratch->fbo);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst_fbo);
-    glBlitFramebuffer(0, 0, scratch->w, scratch->h, 0, 0, scratch->w, scratch->h,
-                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
-}
-
 // Allocate the motion-blur targets on first enable so the feature is free while
 // off (DoF pattern): the two RG16F tile buffers (tile-max + neighbor-max
 // velocity) at tile resolution. Its reconstruction draws into the post-res
@@ -1096,7 +1087,7 @@ static void postfx_run_motion_blur(PostFX* fx, GLuint canvas_fbo, GLuint canvas_
     draw_fullscreen_quad(fx->programs->quad_vao);
 
     // So the rest of the chain reads the blurred result.
-    _postfx_copy_back(&fx->hdr_scratch, canvas_fbo);
+    gl_color_target_copy(&fx->hdr_scratch, canvas_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     check_gl_error("postfx motion blur");
 }
@@ -2082,23 +2073,14 @@ bool postfx_draws_after_tone_map(const PostFX* fx, bool frame_is_hdr) {
 }
 
 // The picture this frame draws into, made here at output size: RGBA16F when the window is drawn
-// through a picture of its own, whose last write dithers, else RGBA8. 0, the window, when the
-// chain writes it directly, or when the picture cannot be made, which is retried only at another
-// size or format.
+// through a picture of its own, whose last write dithers, else RGBA8. 0 when it cannot be made,
+// which is retried only at another size or format.
 static GLuint _postfx_picture(PostFX* fx) {
-    if (fx->writes_window)
-        return 0;
     const GLenum format = fx->window_through_picture ? GL_RGBA16F : GL_RGBA8;
-    if (fx->picture_failed && fx->picture_failed_format == format)
-        return 0;
-    if (!gl_color_target_ensure_format(&fx->picture, fx->out_width, fx->out_height, format,
-                                       "picture")) {
-        fx->picture_failed = true;
-        fx->picture_failed_format = format;
-        return 0;
-    }
-    fx->picture_failed = false;
-    return fx->picture.fbo;
+    return gl_color_target_ensure_format(&fx->picture, fx->out_width, fx->out_height, format,
+                                         "picture")
+               ? fx->picture.fbo
+               : 0;
 }
 
 PostFXPass* postfx_add_pass(PostFX* fx, PostFXLocation at, ShaderProgram* program) {
@@ -2160,7 +2142,7 @@ static void postfx_run_passes(PostFX* fx, PostFXLocation at, GLuint fbo, GLuint 
         uniform_set_mat4(u, "view", (const float*)view);
         shader_params_upload(&pass->params, u);
         draw_fullscreen_quad(fx->programs->quad_vao);
-        _postfx_copy_back(scratch, fbo);
+        gl_color_target_copy(scratch, fbo);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glUseProgram(0);
@@ -3766,7 +3748,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
             postfx_measure_luminance(fx, scene_tex);
             profiler_scope_end(fx->profiler);
         }
-        if (adapting) {
+        // An average holds the exposure its first frame had: each of its frames is jittered, and
+        // a meter following them would move the exposure the average is equally weighted under.
+        if (adapting && fx->average_n < 0) {
             // Its own scope, and the number it reports is not comparable with
             // the others: the blocking read inside drains the pipeline, so this
             // row carries the whole frame's outstanding GPU work rather than the
@@ -3780,7 +3764,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
             if (fx->exposure->settings->probe)
                 exposure_probe_report(fx->exposure, measured, fx->frame_index);
             profiler_scope_end(fx->profiler);
-        } else {
+        } else if (!adapting) {
             // Drop the history, or re-enabling auto-exposure would pre-expose by
             // a value metered under whatever was on screen before.
             exposure_reset_adaptation(fx->exposure);

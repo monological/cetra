@@ -207,22 +207,33 @@ void gl_color_target_free(GLColorTarget* t) {
     gl_delete_texture(&t->tex);
     gl_delete_fbo(&t->fbo);
     t->w = t->h = 0;
+    t->failed = false;
 }
 
 bool gl_color_target_ensure_format(GLColorTarget* t, int w, int h, GLenum format,
                                    const char* what) {
-    if (t->fbo && t->w == w && t->h == h && t->format == format)
-        return true;
+    const bool same = t->w == w && t->h == h && t->format == format;
+    if (same && (t->fbo || t->failed))
+        return !t->failed;
     gl_color_target_free(t);
-    if (w <= 0 || h <= 0 || !gl_color_fbo_create(w, h, format, &t->fbo, &t->tex)) {
-        log_error("the %dx%d %s target could not be made", w, h, what);
-        gl_color_target_free(t);
-        return false;
-    }
+    // What this attempt is for, kept whether or not it is made: a failure is not retried at it.
     t->w = w;
     t->h = h;
     t->format = format;
+    if (w <= 0 || h <= 0 || !gl_color_fbo_create(w, h, format, &t->fbo, &t->tex)) {
+        log_error("the %dx%d %s target could not be made", w, h, what);
+        gl_delete_texture(&t->tex);
+        gl_delete_fbo(&t->fbo);
+        t->failed = true;
+        return false;
+    }
     return true;
+}
+
+void gl_color_target_copy(const GLColorTarget* src, GLuint dst_fbo) {
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, src->fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst_fbo);
+    glBlitFramebuffer(0, 0, src->w, src->h, 0, 0, src->w, src->h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 }
 
 bool gl_color_target_ensure(GLColorTarget* t, int w, int h, const char* what) {

@@ -104,14 +104,13 @@ typedef struct CloudLayer {
     // SETTINGS: wind_speed_kmh, wind_dir_deg, shadows_enabled. ENGINE-OWNED:
     // the rest, in feature order.
 
-    // Drift. The scroll accumulator advances by render_delta at the frame's first march, however
-    // many views march; the engine's frame clock makes that a fixed step headless (goldens stay
-    // byte-deterministic) and honestly frozen under a paused embedder clock.
+    // Drift. The scroll accumulator advances by render_delta once a frame (sky_clouds_advance),
+    // however many views march; the engine's frame clock makes that a fixed step headless (goldens
+    // stay byte-deterministic) and honestly frozen under a paused embedder clock.
     // Default speed 0 = still air.
     float wind_speed_kmh;
     float wind_dir_deg; // 0 = +Z, matching the sun azimuth convention
     double scroll;      // accumulated drift time, seconds
-    int scroll_frame;   // the frame the drift last advanced in; -1 = never
 
     GLuint shape_tex;  // 128^3 RGBA8 tiling volume
     GLuint detail_tex; // 32^3  RGBA8 tiling volume
@@ -420,10 +419,13 @@ int sky_bake_cloud_noise(SkyAtmosphere* sky);
 // March the cloud shell into one view's half-res target (sky_clouds.c), at render size rw x rh.
 // Call once per frame per view with the SAME view/projection the sky background will composite
 // with -- a camera latched anywhere earlier in the frame is one app-update stale, which turns the
-// temporal reprojection into an identity map. Binds its own FBO and restores the caller's GL
+// temporal reprojection into an identity map. `frame` is the view's own frame count, which the
+// history's parity and adjacency are kept by. Binds its own FBO and restores the caller's GL
 // state; no-op unless clouds are enabled and the noise is baked.
 void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, CloudMarch* march, mat4 view,
-                      mat4 projection, int rw, int rh);
+                      mat4 projection, int rw, int rh, long long frame);
+// The deck's drift by `dt` seconds, once a frame, while the clouds can be marched.
+void sky_clouds_advance(SkyAtmosphere* sky, double dt);
 
 // Re-bake everything the sun drives: sky-view LUT -> environment cubemap
 // (+ mips) -> ibl_bake_from_cubemap (irradiance + GGX and Charlie
@@ -523,6 +525,12 @@ bool sky_cycle_tick(SkyAtmosphere* sky, struct IBLResources* ibl, float dt);
 // sliced bake be compared against the startup atomic one with no hour
 // arithmetic anywhere in the comparison.
 void sky_cycle_request_rebake(SkyAtmosphere* sky);
+
+// Whether the sky changes of its own accord every frame: its clock runs, or its clouds drift.
+bool sky_animates(const SkyAtmosphere* sky);
+// Whether a sliced re-bake of the environment is under way, whose swap changes the picture: one
+// sky_cycle_tick would pump.
+bool sky_rebake_pending(const SkyAtmosphere* sky, const struct IBLResources* ibl);
 
 // Rebuild the aerial-perspective volume for this frame's camera. Unlike the
 // other bakes this is per-frame, because the volume is the camera's frustum.

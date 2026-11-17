@@ -196,6 +196,9 @@ void exposure_submit_measurement(Exposure* ex, float log2_luminance);
 // blending from a value measured under different conditions.
 void exposure_reset_adaptation(Exposure* ex);
 
+// Whether an automatic exposure has yet to meter a frame or to reach what it meters.
+bool exposure_adapting(const Exposure* ex);
+
 // One line per metered frame, on stdout, in the --water-fft-probe idiom.
 //
 // `raw_log2` is the measurement as it arrived, BEFORE the blend -- the one

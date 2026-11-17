@@ -83,7 +83,6 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     sky->clouds.coverage = 0.45f;
     sky->clouds.cloud_type = 0.6f;
     sky->clouds.density = 1.0f;
-    sky->clouds.scroll_frame = -1;
     // On with the deck rather than behind its own switch: a cloud that casts no shadow is
     // wrong, not un-featured. --no-cloud-shadows clears it, for bisecting.
     sky->clouds.shadows_enabled = true;
@@ -1328,6 +1327,17 @@ void sky_cycle_request_rebake(SkyAtmosphere* sky) {
         return;
     sky->cycle_dirty = true;
     sky->slicer.item = -1; // restart from the top on the next tick
+}
+
+bool sky_animates(const SkyAtmosphere* sky) {
+    return sky && sky->enabled &&
+           ((sky->cycle_enabled && sky->cycle_day_seconds > 0.0f) ||
+            (sky->clouds.enabled && sky->clouds.wind_speed_kmh > 0.0f));
+}
+
+bool sky_rebake_pending(const SkyAtmosphere* sky, const struct IBLResources* ibl) {
+    return sky && ibl && sky->enabled && ibl->precomputed &&
+           (sky->slicer.item >= 0 || sky->cycle_dirty);
 }
 
 void sky_place_moon_from_clock(SkyAtmosphere* sky) {

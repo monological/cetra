@@ -230,7 +230,6 @@ static Engine* _engine_alloc(const EngineConfig* cfg) {
     engine->crt_mask = 0.3f;
     engine->crt_curvature = 0.35f;
     engine->crt_bleed = 0.5f;
-    engine->window_direct = true;
     engine->show_gui = false;
     engine->show_fps = false;
     engine->show_camera_hud = false;
@@ -454,6 +453,13 @@ void engine_apply_swap_interval(const Engine* engine) {
     glfwSwapInterval((engine->vsync && !engine->headless) ? 1 : 0);
 }
 
+bool engine_focus_eye(const Engine* engine, vec3 out) {
+    if (!engine || !engine->focus_view)
+        return false;
+    glm_vec3_copy((float*)engine->focus_view->camera.position, out);
+    return true;
+}
+
 /*
  * Setup GLFW
  */
@@ -591,10 +597,10 @@ static void _engine_advance_frame(Engine* engine) {
 
 // Idle mode (spec 14.1) ------------------------------------------------------------------------
 
-// True when the scene has anything for the camera to draw: an item, an environment, water,
-// falling rain, a fire or a particle system. A frame with one asks for the next, so under idle
-// mode a 3D scene runs as it always has: a still 3D view drawn on demand is roadmap item 3's.
-// Read once the frame's draw list is built.
+// True when the scene has anything for a view to draw: an item, an environment, water, falling
+// rain, a fire or a particle system. A view drawing one asks for the next frame until its average
+// is finished, so under idle mode a view that does not average runs as it always has. Read once
+// the frame's draw list is built.
 static bool _engine_scene_draws(const Scene* scene) {
     if (!scene)
         return false;
@@ -618,7 +624,13 @@ static void _engine_frame_end_requests(Engine* engine) {
     const bool gui_wanted = engine->show_gui || engine->show_fps || engine->show_camera_hud;
     const bool gui_queued = engine->show_gui && engine->gui_frame_active &&
                             igGetCurrentContext()->InputEventsQueue.Size > 0;
-    if (engine_loading_screen_shown(engine) || gui_wanted != engine->gui_frame_active || gui_queued)
+    // A change said or a node moved after the views were decided is drawn by the next frame.
+    const Scene* scene = engine_get_scene(engine);
+    const bool changed_late =
+        engine->change_count + (scene ? scene->change_count : 0) != engine->decided_changes ||
+        (scene && scene->moved_mask);
+    if (engine_loading_screen_shown(engine) || gui_wanted != engine->gui_frame_active ||
+        gui_queued || (engine->view_count > 0 && changed_late))
         engine_request_frame(engine);
 }
 
@@ -1900,8 +1912,7 @@ static RenderMode _view_frame_mode(const SceneView* view) {
     return view->settings.show_wireframe ? RENDER_MODE_ALBEDO : view->settings.render_mode;
 }
 
-// Whether a view draws this frame: shown, with an area, and with the targets the frame top built.
-// A setting a hook wrote this frame is taken at the next frame top, never mid-frame.
+// Whether a view can draw: shown, with an area, and with targets built for its size.
 static bool _view_drawable(const SceneView* view) {
     const SceneViewState* vs = view->state;
     int w, h;
@@ -2601,9 +2612,26 @@ static bool _engine_crt_on(Engine* engine) {
     return engine->crt != NULL;
 }
 
-// The window's last write, when the chain drew this frame into its picture rather than the window:
-// the picture through the CRT, or as it is through the present pass. That write is the 8-bit one,
-// so it is the one that dithers (spec 11.24).
+// `picture` texel for texel into the bound framebuffer with its corner at `origin`, through the
+// present pass: dithered by `strength` when this is the window's last write.
+static void _engine_present_picture(const Engine* engine, const GLColorTarget* picture,
+                                    const int origin[2], bool dither, float strength) {
+    ShaderProgram* present = engine->postfx_programs->present;
+    glViewport(origin[0], origin[1], picture->w, picture->h);
+    glUseProgram(present->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, picture->tex);
+    uniform_set_vec2(present->uniforms, "pictureOrigin",
+                     (const float[]){(float)origin[0], (float)origin[1]});
+    uniform_set_int(present->uniforms, "ditherEnabled", dither ? 1 : 0);
+    uniform_set_float(present->uniforms, "ditherStrength", strength);
+    draw_fullscreen_quad(engine->postfx_programs->quad_vao);
+    glUseProgram(0);
+}
+
+// The window's last write, when the window is drawn this frame through its picture: the picture
+// through the CRT, or as it is through the present pass. That write is the 8-bit one, so it is
+// the one that dithers (spec 11.24).
 static void _engine_present_window(Engine* engine) {
     const GLColorTarget* picture = &engine->window_picture;
     // One dither for the whole window, the focus view's: it is the window's last write.
@@ -2626,17 +2654,8 @@ static void _engine_present_window(Engine* engine) {
     }
     profiler_scope_begin(engine->profiler, "present");
     const GLPassState pass = gl_pass_begin();
-    ShaderProgram* present = engine->postfx_programs->present;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glViewport(0, 0, picture->w, picture->h);
-    glUseProgram(present->id);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, picture->tex);
-    uniform_set_vec2(present->uniforms, "pictureOrigin", (const float[]){0.0f, 0.0f});
-    uniform_set_int(present->uniforms, "ditherEnabled", dither ? 1 : 0);
-    uniform_set_float(present->uniforms, "ditherStrength", dither_strength);
-    draw_fullscreen_quad(engine->postfx_programs->quad_vao);
-    glUseProgram(0);
+    _engine_present_picture(engine, picture, (const int[]){0, 0}, dither, dither_strength);
     gl_pass_end(&pass);
     profiler_scope_end(engine->profiler);
 }
@@ -2657,30 +2676,6 @@ static bool _engine_window_through_picture(Engine* engine) {
     return false;
 }
 
-// The view whose chain writes the window directly this frame: the only one that draws, when it
-// covers the whole window and the window is not drawn through a picture. NULL otherwise, when
-// every view draws into its picture and the window copies them.
-static SceneView* _engine_window_view(const Engine* engine) {
-    if (engine->window_through_picture || !engine->window_direct)
-        return NULL;
-    SceneView* only = NULL;
-    for (size_t i = 0; i < engine->view_count; i++) {
-        if (!_view_drawable(engine->views[i]))
-            continue;
-        if (only)
-            return NULL;
-        only = engine->views[i];
-    }
-    // A view that may rest keeps its picture to show while it does.
-    if (!only || only->settings.accumulate_frames > 0)
-        return NULL;
-    int rect[4];
-    scene_view_fb_rect(only, rect);
-    const bool covers =
-        rect[0] == 0 && rect[1] == 0 && rect[2] == engine->fb_width && rect[3] == engine->fb_height;
-    return covers ? only : NULL;
-}
-
 // The framebuffer the window's frame is composed in: the window's picture when it is drawn
 // through one, at the framebuffer's size, else the window. 0 also when the picture cannot be
 // made, the window then taking what would have gone into it, undithered.
@@ -2688,40 +2683,21 @@ static GLuint _engine_window_target(Engine* engine) {
     if (!engine->window_through_picture)
         return 0;
     GLColorTarget* picture = &engine->window_picture;
-    if (engine->window_picture_failed && picture->w == engine->fb_width &&
-        picture->h == engine->fb_height)
-        return 0;
-    if (!gl_color_target_ensure(picture, engine->fb_width, engine->fb_height, "window picture")) {
-        engine->window_picture_failed = true;
-        picture->w = engine->fb_width;
-        picture->h = engine->fb_height;
-        return 0;
-    }
-    engine->window_picture_failed = false;
-    return picture->fbo;
+    return gl_color_target_ensure(picture, engine->fb_width, engine->fb_height, "window picture")
+               ? picture->fbo
+               : 0;
 }
 
 // A view's finished picture into its rectangle in the bound framebuffer, as it is.
-static void _engine_copy_view(Engine* engine, const SceneView* view) {
+static void _engine_copy_view(const Engine* engine, const SceneView* view) {
     const SceneViewState* vs = view->state;
     const PostFX* fx = vs->postfx;
-    if (!fx || !fx->picture.fbo || fx->picture_failed)
+    if (!fx || !fx->picture.fbo)
         return;
     // A young average is shown as the TAA picture it began from, until it holds enough frames.
     const GLColorTarget* picture =
         vs->held_valid && view->frames_accumulated < VIEW_AVERAGE_SHOWN ? &vs->held : &fx->picture;
-    int rect[4];
-    scene_view_fb_rect(view, rect);
-    ShaderProgram* present = engine->postfx_programs->present;
-    glViewport(rect[0], rect[1], picture->w, picture->h);
-    glUseProgram(present->id);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, picture->tex);
-    uniform_set_vec2(present->uniforms, "pictureOrigin",
-                     (const float[]){(float)rect[0], (float)rect[1]});
-    uniform_set_int(present->uniforms, "ditherEnabled", 0);
-    draw_fullscreen_quad(engine->postfx_programs->quad_vao);
-    glUseProgram(0);
+    _engine_present_picture(engine, picture, vs->picture_rect, false, 0.0f);
 }
 
 // A view's post chain, from its scene target into its picture, after what the
@@ -2737,7 +2713,6 @@ static void _engine_run_view_chain(const Engine* engine, SceneView* view) {
     fx->frame_index = (int)vs->draw_index;
     fx->time = (float)engine->render_time;
     fx->window_through_picture = engine->window_through_picture;
-    fx->writes_window = view == engine->window_view;
     fx->average_n = vs->average_n;
     // Depth-of-field autofocus: keep the subject sharp as the camera orbits or
     // zooms by refocusing on the point the camera looks at (the orbit target),
@@ -2805,21 +2780,18 @@ static void _engine_present_frame(Engine* engine) {
     }
 
     // Everything up to the overlay draws into the window, or into the picture
-    // _engine_present_window shows after them. A view that wrote the window directly covers it.
+    // _engine_present_window shows after them.
     const GLuint target = _engine_window_target(engine);
     glBindFramebuffer(GL_FRAMEBUFFER, target);
     glViewport(0, 0, engine->fb_width, engine->fb_height);
-    if (!engine->window_view) {
-        glClearColor(engine->window_color[0], engine->window_color[1], engine->window_color[2],
-                     1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        const GLPassState pass = gl_pass_begin();
-        for (size_t i = 0; i < engine->view_count; i++)
-            if (_view_drawable(engine->views[i]))
-                _engine_copy_view(engine, engine->views[i]);
-        gl_pass_end(&pass);
-        glViewport(0, 0, engine->fb_width, engine->fb_height);
-    }
+    glClearColor(engine->window_color[0], engine->window_color[1], engine->window_color[2], 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    const GLPassState pass = gl_pass_begin();
+    for (size_t i = 0; i < engine->view_count; i++)
+        if (_view_drawable(engine->views[i]))
+            _engine_copy_view(engine, engine->views[i]);
+    gl_pass_end(&pass);
+    glViewport(0, 0, engine->fb_width, engine->fb_height);
 
     const Scene* fx_scene = engine_get_scene(engine);
     // Sky LUT debug overlay onto the composited frame (an acceptance tool,
@@ -3065,12 +3037,18 @@ static void engine_apply_origin_shift(Engine* engine, Scene* scene) {
 
 // What the scene passes read and the world gets once a frame: the texture uploads, the material
 // array, roads, the composite cache and the POM heights. Run before the frame's first scene pass,
-// after that view's shadows, or at the frame's end when no view draws.
+// after that view's shadows, or at the frame's end when no view draws. What lands here is missed by
+// every view not drawing a TAA frame, whose average then begins again.
 static void _engine_settle_world(Engine* engine, Scene* scene) {
+    const bool array_dirty = scene && scene->material_textures_dirty;
+    const bool heights_resolved = !scene || scene->heights_resolved;
+    const unsigned long long vt_bakes = layers_vt_bakes(scene);
+
     // Process pending async texture uploads (max 5 per frame to avoid stutter), each into
     // the pool it was asked for. Five delivered may leave more waiting, which the next frame
     // takes.
-    if (async_loader_process_pending(engine->async_loader, 5) == 5)
+    const size_t delivered = async_loader_process_pending(engine->async_loader, 5);
+    if (delivered == 5)
         engine_request_frame(engine);
 
     // (Re)build the material texture array once its sources have loaded
@@ -3088,10 +3066,29 @@ static void _engine_settle_world(Engine* engine, Scene* scene) {
 
     // POM (§4.11): resolve height maps once the async texture loader drains.
     heights_ensure_resolved(scene, engine);
+
+    const bool landed =
+        scene &&
+        (delivered > 0 || (array_dirty && !scene->material_textures_dirty) ||
+         (!heights_resolved && scene->heights_resolved) || layers_vt_bakes(scene) != vt_bakes);
+    // A view drawing a TAA frame this frame draws it with what landed; one resting, averaging or
+    // away has missed it, and starts again when it next draws.
+    for (size_t i = 0; landed && i < engine->view_count; i++) {
+        SceneView* view = engine->views[i];
+        SceneViewState* vs = view->state;
+        if (vs->draws_this_frame && vs->average_n < 0)
+            continue;
+        vs->missed = true;
+        if (!view->hidden)
+            engine_request_frame(engine);
+    }
 }
 
-// One view's part of the frame, from its shadows to its post chain. `*settled` says whether the
-// world has settled this frame; the first view to reach its scene pass settles it.
+// The nodes a view draws, as bits: 0 is every node, as a CullView's.
+static uint32_t _view_mask(const SceneView* view) {
+    return view->mask ? view->mask : ~0u;
+}
+
 // Whether a node `view` hides stands within reach of a kept lamp, whose shadow takes every node.
 static bool _view_hides_kept_caster(const Scene* scene, const SceneView* view) {
     const ShadowSystem* ss = scene->shadow_system;
@@ -3099,33 +3096,22 @@ static bool _view_hides_kept_caster(const Scene* scene, const SceneView* view) {
     if (!ss || !list || ss->tile_block_count == 0)
         return false;
     const CullView swaying = {.wind = scene->wind};
+    const uint32_t mask = _view_mask(view);
     for (size_t i = 0; i < list->count; i++) {
         const DrawItem* item = &list->items[i];
-        if (item->view_mask & view->mask)
+        if (item->view_mask & mask)
             continue;
         AABB box;
         if (!draw_item_bounds(item, &swaying, &box))
             continue;
         vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f};
         aabb_transform(box.min, box.max, item->node->global_transform, lo, hi);
-        for (int b = 0; b < ss->tile_block_count; b++) {
-            const ShadowTileBlock* block = &ss->tile_blocks[b];
-            if (!block->light)
-                continue;
-            vec3 nearest;
-            for (int a = 0; a < 3; a++)
-                nearest[a] = glm_clamp(block->centre[a], lo[a], hi[a]);
-            const float reach = light_cull_radius(block->light) + block->radius;
-            if (glm_vec3_distance(nearest, (float*)block->centre) <= reach)
-                return true;
-        }
+        if (shadow_tiles_reach(ss, lo, hi))
+            return true;
     }
     return false;
 }
 
-// What one view draws that the engine only half serves, said once each: water or rain in a view
-// other than the focus, whose caustic, ripple and cover windows are centred on the focus; and a
-// node the view hides within a kept lamp's reach, whose shadow is drawn for every view.
 /*
  * Still views (spec 14.38). A view with accumulation on draws a TAA frame whenever anything it
  * shows changed since the frame before; once nothing has, it draws accumulate_frames more, each
@@ -3138,16 +3124,13 @@ static bool _view_hides_kept_caster(const Scene* scene, const SceneView* view) {
 // What the scene does of its own accord every frame: the sky's clock and its clouds' drift, water,
 // rain, fire, particles, wind, a pose, a shader hook that animates. A pose counts whether or not
 // its animator runs: the engine cannot see an animator, and a still pose holds every view up.
+// Reads this frame's draw list, which the caller builds first: last frame's may hold what a hook
+// has freed since.
 static bool _scene_animates(const Scene* scene) {
     if (!scene)
         return false;
     if (scene->water || rain_draws(scene->rain) || fire_system_active(scene->fire) ||
-        scene->particle_system_count > 0 || scene->wind)
-        return true;
-    const SkyAtmosphere* sky = scene->sky;
-    if (sky && sky->enabled &&
-        ((sky->cycle_enabled && sky->cycle_day_seconds > 0.0f) ||
-         (sky->clouds.enabled && sky->clouds.wind_speed_kmh > 0.0f)))
+        scene->particle_system_count > 0 || scene->wind || sky_animates(scene->sky))
         return true;
     const DrawList* list = scene->draw_list;
     for (size_t i = 0; list && i < list->count; i++) {
@@ -3161,58 +3144,74 @@ static bool _scene_animates(const Scene* scene) {
 }
 
 // The engine's own work not yet done, which changes what a view shows when it lands: textures out,
-// GI or reflection probes owed a capture, a kept lamp's faces still opening or a mover's held.
+// GI or reflection probes owed a capture, a kept lamp's faces not yet drawn, the sky's re-bake.
+// What the world's settle delivers is marked a change as it lands (_engine_settle_world).
 static bool _engine_world_busy(const Engine* engine, const Scene* scene) {
     if (async_loader_is_busy(engine->async_loader))
         return true;
     if (!scene)
         return false;
-    if (gi_world_pending(scene->gi) || probe_set_pending(scene->probe_set))
-        return true;
-    const ShadowSystem* ss = scene->shadow_system;
-    for (int b = 0; ss && b < ss->tile_block_count; b++) {
-        const ShadowTileBlock* block = &ss->tile_blocks[b];
-        const uint64_t all = block->cells >= 64 ? ~0ull : (1ull << block->cells) - 1ull;
-        if (block->light && (block->dynamic != 0 || (block->valid & all) != all))
+    return gi_world_pending(scene->gi) || probe_set_pending(scene->probe_set) ||
+           shadow_tiles_pending(scene->shadow_system) || sky_rebake_pending(scene->sky, scene->ibl);
+}
+
+// Whether any view, shown or not, averages when still: the one kind the scene's own motion and the
+// world's work matter to.
+static bool _engine_any_view_averages(const Engine* engine) {
+    for (size_t i = 0; i < engine->view_count; i++)
+        if (engine->views[i]->settings.accumulate_frames > 0)
             return true;
-    }
     return false;
 }
 
-// The view's meter is still adapting toward what it reads.
-static bool _view_exposure_adapting(const SceneView* view) {
-    const Exposure* ex = &view->state->exposure;
-    if (!ex->settings || !ex->settings->automatic)
-        return false;
-    return !ex->adapted_valid ||
-           fabsf(log2f(fmaxf(ex->adapted_luminance, 1e-8f)) - ex->last_target_log2) > 0.01f;
+// A digest of what the view's chain holds by function -- its passes, each one's switch and
+// parameters, its grade -- which the settings' bytes do not carry.
+static uint64_t _view_chain_digest(const SceneView* view) {
+    const PostFX* fx = view->state->postfx;
+    if (!fx)
+        return 0;
+    uint64_t h = 1469598103934665603ull ^ (uint64_t)fx->lut_texture;
+    const unsigned char* bytes = (const unsigned char*)fx->passes;
+    const size_t n = (size_t)fx->pass_count * sizeof(fx->passes[0]);
+    for (size_t i = 0; i < n; i++)
+        h = (h ^ bytes[i]) * 1099511628211ull;
+    return h ^ (uint64_t)fx->pass_count;
 }
 
-// Whether anything `view` shows differs from last frame, and the record brought up to this frame.
+// Whether anything `view` shows differs from what it showed when this was last asked, and the
+// record brought up to now. Asked every frame, the view shown or not, so a change made while it is
+// hidden is not lost.
 static bool _view_changed(const Engine* engine, const Scene* scene, SceneView* view,
                           bool world_moving) {
     SceneViewState* vs = view->state;
     int rect[4];
     scene_view_fb_rect(view, rect);
+    const uint32_t mask = _view_mask(view);
     const uint64_t changes = engine->change_count + (scene ? scene->change_count : 0);
     const uint64_t epoch = scene_graph_epoch();
+    const uint64_t chain = _view_chain_digest(view);
+    const bool covered = loading_screen_covers(engine);
     const bool changed =
-        !vs->record.valid || world_moving ||
+        !vs->record.valid || world_moving || covered != vs->record.covered ||
+        scene != vs->record.scene ||
         memcmp(&vs->record.settings, &view->settings, sizeof(view->settings)) != 0 ||
         memcmp(vs->record.view, vs->view_matrix, sizeof(mat4)) != 0 ||
         memcmp(vs->record.projection, vs->projection_matrix, sizeof(mat4)) != 0 ||
-        memcmp(vs->record.rect, rect, sizeof(rect)) != 0 || vs->record.mask != view->mask ||
-        vs->record.changes != changes || vs->record.epoch != epoch ||
+        memcmp(vs->record.rect, rect, sizeof(rect)) != 0 || vs->record.mask != mask ||
+        vs->record.changes != changes || vs->record.epoch != epoch || vs->record.chain != chain ||
         vs->record.through != engine->window_through_picture ||
-        (scene && (scene->moved_mask & view->mask)) || _view_exposure_adapting(view);
+        (scene && (scene->moved_mask & mask)) || exposure_adapting(&vs->exposure);
     vs->record.valid = true;
+    vs->record.scene = scene;
     vs->record.settings = view->settings;
     glm_mat4_copy(vs->view_matrix, vs->record.view);
     glm_mat4_copy(vs->projection_matrix, vs->record.projection);
     memcpy(vs->record.rect, rect, sizeof(rect));
-    vs->record.mask = view->mask;
+    vs->record.mask = mask;
     vs->record.changes = changes;
     vs->record.epoch = epoch;
+    vs->record.chain = chain;
+    vs->record.covered = covered;
     vs->record.through = engine->window_through_picture;
     return changed;
 }
@@ -3223,43 +3222,53 @@ static void _view_hold_picture(SceneView* view) {
     SceneViewState* vs = view->state;
     const PostFX* fx = vs->postfx;
     vs->held_valid = false;
-    if (!fx || !fx->picture.fbo || fx->picture_failed ||
+    if (!fx || !fx->picture.fbo ||
         !gl_color_target_ensure_format(&vs->held, fx->picture.w, fx->picture.h, fx->picture.format,
                                        "held picture"))
         return;
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->picture.fbo);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, vs->held.fbo);
-    glBlitFramebuffer(0, 0, fx->picture.w, fx->picture.h, 0, 0, fx->picture.w, fx->picture.h,
-                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    gl_color_target_copy(&fx->picture, vs->held.fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     vs->held_valid = true;
 }
 
-// A cut: every history the view keeps dropped, and its average begun again.
+// The average begun again: nothing in it, nothing held, not finished.
+static void _view_restart_average(SceneView* view) {
+    view->finished = false;
+    view->frames_accumulated = 0;
+    view->state->held_valid = false;
+}
+
+// A cut: every history the view keeps dropped, its camera's last frame taken as this one so nothing
+// reads as having moved across the gap, and its average begun again.
 static void _view_cut(SceneView* view) {
     SceneViewState* vs = view->state;
     postfx_cut(vs->postfx);
     vs->clouds.prev_frame = -1;
-    vs->held_valid = false;
-    view->finished = false;
-    view->frames_accumulated = 0;
+    glm_mat4_mul(vs->projection_matrix, vs->view_matrix, vs->prev_view_proj);
+    glm_vec3_copy(view->camera.position, vs->prev_camera_position);
+    glm_vec3_zero(vs->camera_travel);
+    _view_restart_average(view);
 }
 
-// What `view` does this frame: a TAA frame, the next frame of its average, or nothing.
+// What `view` does this frame: a TAA frame, the next frame of its average, or nothing. A view that
+// cannot draw this frame -- hidden, sized to nothing, its targets refused -- is away: what changes
+// meanwhile is kept, and the frame it draws again is a cut if anything did.
 static void _engine_decide_view(const Engine* engine, const Scene* scene, SceneView* view,
                                 bool world_moving) {
     SceneViewState* vs = view->state;
     vs->average_n = -1;
-    if (view->hidden) {
-        vs->was_hidden = true;
+    const bool changed = _view_changed(engine, scene, view, world_moving);
+    if (view->hidden || !_view_drawable(view)) {
+        vs->away = true;
+        vs->missed = vs->missed || changed;
         vs->draws_this_frame = false;
         return;
     }
-    const bool changed = _view_changed(engine, scene, view, world_moving);
-    // Shown again: the picture kept is reused when nothing changed, and a change is a cut.
-    if (vs->was_hidden && changed)
+    if (vs->away && (vs->missed || changed))
         _view_cut(view);
-    vs->was_hidden = false;
+    const bool restart = changed || vs->missed;
+    vs->away = false;
+    vs->missed = false;
     vs->draws_this_frame = true;
 
     int frames = view->settings.accumulate_frames;
@@ -3269,10 +3278,9 @@ static void _engine_decide_view(const Engine* engine, const Scene* scene, SceneV
         vs->taau_said = true;
         frames = 0;
     }
-    if (frames <= 0 || changed) {
-        view->finished = false;
-        view->frames_accumulated = 0;
-        vs->held_valid = false;
+    // A frame under a covering loading screen draws no picture, so it is never one of an average.
+    if (frames <= 0 || restart || loading_screen_covers(engine)) {
+        _view_restart_average(view);
         return;
     }
     if (view->finished) {
@@ -3292,6 +3300,10 @@ static void _engine_decide_view(const Engine* engine, const Scene* scene, SceneV
     view->finished = view->frames_accumulated >= frames;
 }
 
+// What one view draws that the engine only half serves, said once each: water or rain in a view
+// other than the focus, whose caustic, ripple and cover windows are centred on the focus; a node
+// the view hides within a kept lamp's reach, whose shadow is drawn for every view; and a stage over
+// an exact background that the inverse cannot undo.
 static void _engine_say_view_limits(Engine* engine, const Scene* scene, const SceneView* view) {
     if (!engine->said_focus_world && view != engine->focus_view &&
         ((scene->water && water_will_draw(scene->water, view)) || rain_draws(scene->rain))) {
@@ -3299,7 +3311,8 @@ static void _engine_say_view_limits(Engine* engine, const Scene* scene, const Sc
                  "focus view's eye");
         engine->said_focus_world = true;
     }
-    if (!engine->said_kept_hidden && view->mask != ~0u && _view_hides_kept_caster(scene, view)) {
+    if (!engine->said_kept_hidden && _view_mask(view) != ~0u &&
+        _view_hides_kept_caster(scene, view)) {
         log_info("A view hides a node within a kept lamp's reach, whose shadow every view takes");
         engine->said_kept_hidden = true;
     }
@@ -3319,6 +3332,8 @@ static void _engine_say_view_limits(Engine* engine, const Scene* scene, const Sc
     }
 }
 
+// One view's part of the frame, from its shadows to its post chain. `*settled` says whether the
+// world has settled this frame; the first view to reach its scene pass settles it.
 static void _engine_draw_view(Engine* engine, Scene* scene, SceneView* view, EngineRenderFunc draw,
                               bool* settled) {
     SceneViewState* vs = view->state;
@@ -3340,9 +3355,11 @@ static void _engine_draw_view(Engine* engine, Scene* scene, SceneView* view, Eng
         // all four -- flat scopes mean the coarser wrapper simply wins.
         render_shadow_depth_pass(engine, scene, view);
     }
-    // The rain's cover, into the punctual array after the lights' layers. Outside the
-    // `enabled` gate on purpose: that switches shadows off, not roofs.
-    if (scene)
+    // The rain's cover, into the punctual array after the lights' layers, once a frame: it is
+    // centred on the focus view and drawn with every node, so each view would draw the same layer,
+    // and its readback ring steps a frame at a time. Outside the `enabled` gate on purpose: that
+    // switches shadows off, not roofs.
+    if (scene && !*settled)
         shadow_render_rain_layer(engine, scene);
 
     glBindFramebuffer(GL_FRAMEBUFFER, vs->framebuffer);
@@ -3623,6 +3640,9 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             if (env_swapped)
                 gi_world_mark_dirty(shadow_scene->gi);
         }
+        // The clouds' drift, once a frame however many views march them.
+        if (shadow_scene && shadow_scene->sky)
+            sky_clouds_advance(shadow_scene->sky, engine->render_delta);
 
         // The app settles its cameras and its graph, then the engine propagates
         // that graph -- once, here, for everything downstream (spec 11.96).
@@ -3707,19 +3727,32 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // Every shown view that can draw, in list order, each from its shadows to its chain into
         // its picture, in the format the window's frame decides.
         engine->window_through_picture = _engine_window_through_picture(engine);
-        engine->window_view = _engine_window_view(engine);
         // Which views draw at all: a still view resting draws nothing, its picture shown as it is.
-        const bool world_moving =
-            _scene_animates(current_scene) || _engine_world_busy(engine, current_scene);
+        // The scene's own motion and the world's work matter only to a view that averages, and the
+        // first is read off this frame's list, built here for it.
+        bool world_moving = false;
+        if (_engine_any_view_averages(engine)) {
+            engine_build_draw_list(engine, current_scene, engine->focus_view);
+            world_moving =
+                _scene_animates(current_scene) || _engine_world_busy(engine, current_scene);
+        }
         for (size_t i = 0; i < engine->view_count; i++)
             _engine_decide_view(engine, current_scene, engine->views[i], world_moving);
+        // The moves the views have now seen; a move after this, a render hook's, is the next
+        // frame's.
+        if (current_scene)
+            current_scene->moved_mask = 0u;
+        engine->decided_changes =
+            engine->change_count + (current_scene ? current_scene->change_count : 0);
         bool settled = false;
+        engine->views_drawing = true;
         for (size_t i = 0; i < engine->view_count; i++) {
             SceneView* view = engine->views[i];
             if (!_view_drawable(view) || !view->state->draws_this_frame)
                 continue;
             _engine_draw_view(engine, current_scene, view, draw, &settled);
         }
+        engine->views_drawing = false;
         if (!settled)
             _engine_settle_world(engine, current_scene);
 
@@ -3776,7 +3809,8 @@ static SceneNode* _engine_pick(Engine* engine, double mouse_fb_x, double mouse_f
     vec3 ray_origin = {0.0f, 0.0f, 0.0f}, ray_dir = {0.0f, 0.0f, 0.0f};
     scene_view_ray(view, point, ray_origin, ray_dir);
 
-    RayPickResult result = pick_scene_node(current_scene->root_node, ray_origin, ray_dir);
+    RayPickResult result =
+        pick_scene_node(current_scene->root_node, ray_origin, ray_dir, _view_mask(view));
 
     if (result.hit) {
         // Store hit information for drag operations

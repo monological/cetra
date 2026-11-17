@@ -705,20 +705,12 @@ typedef struct PostFX {
     // then draws undithered into an RGBA16F picture; otherwise into an RGBA8 one its tone map
     // dithers, the 8-bit write.
     bool window_through_picture;
-    // Published per frame by the engine: this chain's view is the only one shown and fills a
-    // window not drawn through a picture, so it writes the window directly. Rasterizing into the
-    // window and into a texture interpolate a varying differently in its last bits, which a
-    // shader hashing or sampling on an exact texel boundary turns into a different pixel; this
-    // keeps that frame the window's.
-    bool writes_window;
     // Published per frame by the engine: this frame is the average_n-th of a still view's
     // average, from 0, resolved in TAA's place as an equal share; -1 = a TAA frame (spec 14.38).
     int average_n;
     // The finished picture, at output size, which the engine copies into the view's rectangle.
     // Engine-owned, made on first use.
     GLColorTarget picture;
-    bool picture_failed;          // could not be made at this size and format
-    GLenum picture_failed_format; // the format that failed; retried at another, or a new size
 
     // App passes at named points (spec 13.29). Each pass's `enabled` and params are settings.
     PostFXPass passes[POSTFX_PASS_MAX];
@@ -738,7 +730,7 @@ typedef struct PostFX {
     GLuint lut_texture; // 0 = none loaded, which is what disables the branch
     int lut_size;       // LUT_3D_SIZE of the loaded table; the inset divides by it
     char lut_name[64];  // Basename of the loaded file, for the GUI readout
-    int frame_index;    // Copied from engine->total_frames; seeds deterministic grain
+    int frame_index;    // Published per frame: the view's draw_index; seeds deterministic grain
     // Published per frame by the scene pass: the pre-exposure the frame was shaded at, which a
     // history of radiance is read at.
     float pre_exposure;

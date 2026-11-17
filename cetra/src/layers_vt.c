@@ -459,10 +459,13 @@ static void vt_pages_update(Material* m, struct Scene* scene, struct Engine* eng
 
     // The pages are the world's, predicted from the focus view as its scene pass last drew it:
     // that pass's view-projection and its eye, latched together, so the frustum and the
-    // distances ranking pages inside it describe one camera. Before any pass, the eye as posed.
+    // distances ranking pages inside it describe one camera. Before any pass -- or for a focus
+    // that does not draw -- the camera as posed, both of them. The votes come only from a pass.
     const SceneViewState* fs = focus->state;
+    mat4 posed;
+    glm_mat4_mul((vec4*)fs->projection_matrix, (vec4*)fs->view_matrix, posed);
     Frustum fr;
-    frustum_extract_from_vp((vec4*)fs->view_proj, &fr);
+    frustum_extract_from_vp(fs->prev_camera_valid ? (vec4*)fs->view_proj : posed, &fr);
     const float* eye = fs->prev_camera_valid ? fs->prev_camera_position : focus->camera.position;
     const float cam[3] = {eye[0], eye[1], eye[2]};
 
@@ -695,6 +698,7 @@ void material_layers_vt_ensure(struct Scene* scene, struct Engine* engine) {
             if (vt_bake(m, scene, engine, res)) {
                 m->layers_vt->key = key;
                 m->layers_vt->baked = true;
+                m->layers_vt->bakes++;
             }
             // A failed bake keeps baked false and retries next frame; the
             // shading path falls back to the per-texel blend meanwhile, which
@@ -716,6 +720,16 @@ void material_layers_vt_ensure(struct Scene* scene, struct Engine* engine) {
             }
         }
     }
+}
+
+unsigned long long layers_vt_bakes(const struct Scene* scene) {
+    unsigned long long n = 0;
+    for (size_t i = 0; scene && i < scene->material_count; i++) {
+        const Material* m = scene->materials[i];
+        if (m && m->layers_vt)
+            n += m->layers_vt->bakes + m->layers_vt->pages_loaded;
+    }
+    return n;
 }
 
 /*

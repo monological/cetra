@@ -436,9 +436,6 @@ typedef struct ShadowSystem {
     // The indices into tile_mover_list a kept face draws over its copy, ascending, settled once a
     // depth pass after the movers are. NULL outside the pass that listed them.
     const struct DrawList* tile_mover_list;
-    // The view the running depth pass is fitted to, whose eye its casters morph from and whose
-    // frustum its kept faces are culled by; NULL outside the pass and in a capture's bake.
-    const struct SceneView* drawing_view;
     size_t* tile_mover_items;
     size_t tile_mover_item_count;
     size_t tile_mover_item_capacity;
@@ -561,6 +558,12 @@ int shadow_punctual_edge_drawn(const ShadowSystem* system);
 // does for every held block of a light that emits. A capture taken before then photographs light
 // through walls for good, so the GI volumes and reflection probes wait on it.
 bool shadow_tiles_cover(const ShadowSystem* ss, const AABB* box);
+
+// Whether a cached light that emits holds a block not yet drawn whole: work whose landing changes
+// what a view shows.
+bool shadow_tiles_pending(const ShadowSystem* ss);
+// Whether a world-space box lies within reach of a cached light holding a block.
+bool shadow_tiles_reach(const ShadowSystem* ss, const vec3 lo, const vec3 hi);
 
 // The cached lights in this frame's ranking, nearest first, each with its distance and whether it
 // holds a whole block (--stream-probe).

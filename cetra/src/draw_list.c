@@ -556,14 +556,18 @@ bool draw_item_bounds(const DrawItem* item, const CullView* view, AABB* out) {
     return true;
 }
 
+bool draw_item_in_mask(const DrawItem* item, uint32_t mask) {
+    return !mask || (item->view_mask & mask);
+}
+
 bool draw_item_visible(const DrawItem* item, const CullView* view) {
     if (!view)
         return true;
+    if (!draw_item_in_mask(item, view->mask))
+        return false;
     // Settled once per frame by the occlusion pass, read here O(items x
     // passes): one load against the frustum test's arithmetic, and valid
     // independently of it.
-    if (view->mask && !(item->view_mask & view->mask))
-        return false;
     if (view->occlusion && item->occluded)
         return false;
     if (view->capture && (item->flags & DRAW_CAPTURE_HIDDEN))

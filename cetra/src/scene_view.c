@@ -168,8 +168,8 @@ void free_scene_view(SceneView* view) {
     if (!view)
         return;
     SceneViewState* vs = view->state;
-    if (vs->added)
-        engine_remove_view(vs->engine, view);
+    if (vs->added && !engine_remove_view(vs->engine, view))
+        return;
     _free_targets(view);
     cloud_march_release(&vs->clouds);
     free(vs);
@@ -190,18 +190,16 @@ bool engine_add_view(Engine* engine, SceneView* view) {
         log_error("engine_add_view: the view is added already");
         return false;
     }
-    if (engine->view_count == engine->view_capacity) {
-        size_t cap = engine->view_capacity ? engine->view_capacity * 2 : 4;
-        SceneView** grown = realloc(engine->views, cap * sizeof(SceneView*));
-        if (!grown) {
-            log_error("engine_add_view: out of memory");
-            return false;
-        }
-        engine->views = grown;
-        engine->view_capacity = cap;
+    if (!grow_array((void**)&engine->views, &engine->view_capacity, engine->view_count + 1,
+                    sizeof(SceneView*), 4)) {
+        log_error("engine_add_view: out of memory");
+        return false;
     }
     engine->views[engine->view_count++] = view;
     view->state->added = true;
+    // A view added again has missed whatever changed while it was out: its next frame is a cut.
+    view->state->away = view->state->record.valid;
+    view->state->missed = view->state->record.valid;
     if (!engine->focus_view)
         engine->focus_view = view;
     if (view->rig)
@@ -212,6 +210,10 @@ bool engine_add_view(Engine* engine, SceneView* view) {
 SceneView* engine_remove_view(Engine* engine, SceneView* view) {
     if (!engine || !view)
         return NULL;
+    if (engine->views_drawing) {
+        log_error("engine_remove_view: refused while the frame draws its views");
+        return NULL;
+    }
     for (size_t i = 0; i < engine->view_count; i++) {
         if (engine->views[i] != view)
             continue;
@@ -221,8 +223,6 @@ SceneView* engine_remove_view(Engine* engine, SceneView* view) {
         view->state->added = false;
         if (engine->focus_view == view)
             engine->focus_view = engine->view_count > 0 ? engine->views[0] : NULL;
-        if (engine->window_view == view)
-            engine->window_view = NULL;
         return view;
     }
     return NULL;
@@ -585,6 +585,7 @@ bool scene_view_ensure_targets(SceneView* view) {
     Engine* engine = vs->engine;
     if (vs->capturing)
         return false;
+    scene_view_fb_rect(view, vs->picture_rect);
     int ow, oh, pw, ph;
     scene_view_out_size(view, &ow, &oh);
     scene_view_post_size(view, &pw, &ph);
@@ -598,65 +599,32 @@ bool scene_view_ensure_targets(SceneView* view) {
     if (rw < 1 || rh < 1 || pw < 1 || ph < 1)
         return false;
 
-    // First draw: the scene target and the chain, built at the sizes asked.
-    if (!vs->postfx) {
-        if (vs->render_suspended && rw == vs->target_render_w && rh == vs->target_render_h &&
-            pw == vs->target_post_w && ph == vs->target_post_h)
-            return false;
-        vs->target_render_w = rw;
-        vs->target_render_h = rh;
-        vs->target_post_w = pw;
-        vs->target_post_h = ph;
-        vs->target_out_w = ow;
-        vs->target_out_h = oh;
-        vs->msaa_samples_built = _clamp_msaa_samples(view->settings.samples);
-        glGenFramebuffers(1, &vs->framebuffer);
-        if (_create_msaa_attachments(view, rw, rh, vs->msaa_samples_built) != 0) {
-            _destroy_msaa_attachments(view);
-            gl_delete_fbo(&vs->framebuffer);
-            vs->render_suspended = true;
-            return false;
-        }
-        vs->postfx =
-            create_postfx(engine->postfx_programs, &view->settings.post, ow, oh, ss, scale);
-        if (!vs->postfx) {
-            log_error("Failed to initialize a view's post-processing");
-            _destroy_msaa_attachments(view);
-            gl_delete_fbo(&vs->framebuffer);
-            vs->render_suspended = true;
-            return false;
-        }
-        vs->postfx->exposure = &vs->exposure;
-        vs->postfx->profiler = engine->profiler;
-        vs->render_suspended = false;
-        return true;
-    }
-
     // Keyed on the built sizes rather than on an event, so that every trigger -- the GUI slider, a
     // window resize, the diagnostic schedule, a rectangle moved -- works without its own call
-    // site. Already built (or already attempted) at this size: nothing to do, which is also the
-    // retry policy -- a failed attempt is not repeated until a different size is asked for.
+    // site. Already built (or already attempted) at these sizes and this count: nothing to do,
+    // which is also the retry policy -- a failed attempt is not repeated until a different size is
+    // asked for.
     const bool sized = rw == vs->target_render_w && rh == vs->target_render_h &&
                        pw == vs->target_post_w && ph == vs->target_post_h &&
                        ow == vs->target_out_w && oh == vs->target_out_h;
     const int samples = _clamp_msaa_samples(view->settings.samples);
-    if (sized && samples == vs->msaa_samples_built)
+    if (sized && samples == vs->msaa_samples_built && (vs->postfx || vs->render_suspended))
         return !vs->render_suspended;
 
     // The sample count alone: the scene target is rebuilt in place, and the chain's single-sample
     // resolve targets are unaffected by it.
-    if (sized) {
+    if (sized && vs->postfx) {
         vs->msaa_samples_built = samples;
         vs->render_suspended = !_rebuild_msaa_target(view, rw, rh);
         return !vs->render_suspended;
     }
 
-    // Bring the scene target and the whole post chain to the sizes asked. The scene target goes
-    // first and its failure is checked before the chain is touched: every G-buffer resolve is a
-    // multisample blit, which needs identical rects, so a half-applied resize is worse than none.
-    // What this attempt is FOR is recorded before it is made, so a failure latches on its own size
-    // and is retried only when a genuinely different one is asked for: the two failure paths leave
-    // opposite states, so deriving the answer from whatever a failure left behind does not work.
+    // Build, or bring to the sizes asked, the scene target and the whole post chain. The scene
+    // target goes first and its failure is checked before the chain is touched: every G-buffer
+    // resolve is a multisample blit, which needs identical rects, so a half-applied resize is
+    // worse than none. What this attempt is FOR is recorded before it is made, so a failure
+    // latches on its own size and is retried only when a genuinely different one is asked for.
+    const bool rebuild = vs->postfx != NULL;
     vs->target_render_w = rw;
     vs->target_render_h = rh;
     vs->target_post_w = pw;
@@ -664,19 +632,26 @@ bool scene_view_ensure_targets(SceneView* view) {
     vs->target_out_w = ow;
     vs->target_out_h = oh;
     vs->msaa_samples_built = samples;
+    if (!vs->framebuffer)
+        glGenFramebuffers(1, &vs->framebuffer);
     if (!_rebuild_msaa_target(view, rw, rh)) {
         vs->render_suspended = true;
         return false;
     }
-    if (!postfx_resize(vs->postfx, ow, oh, ss, scale)) {
-        log_error("Post chain rebuild failed at %dx%d; rendering suspended", rw, rh);
+    if (rebuild ? !postfx_resize(vs->postfx, ow, oh, ss, scale)
+                : !(vs->postfx = create_postfx(engine->postfx_programs, &view->settings.post, ow,
+                                               oh, ss, scale))) {
+        log_error("A view's post chain could not be made at %dx%d; it draws nothing", rw, rh);
         vs->render_suspended = true;
         return false;
     }
+    vs->postfx->exposure = &vs->exposure;
+    vs->postfx->profiler = engine->profiler;
     vs->render_suspended = false;
     // The lazily-sized targets (opaque color, scene depth, OIT) each compare their stored size and
     // rebuild themselves on next use.
-    log_info("Render targets rebuilt: %dx%d render, scale %.2f", rw, rh, scale);
+    if (rebuild)
+        log_info("Render targets rebuilt: %dx%d render, scale %.2f", rw, rh, scale);
     return true;
 }
 

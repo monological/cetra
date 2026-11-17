@@ -77,6 +77,7 @@ typedef struct SceneNode {
     // a node freed and another created may share one, and anything that remembers a node
     // from frame to frame would take the second for the first.
     uint64_t serial;
+    uint32_t walked_mask; // view_mask ANDed with every ancestor's, as the last walk found it
 
     // BY FUNCTION: node_set_name (owned string), node_add_mesh (uploads what
     // it attaches), node_set_light, node_set_camera, node_set_particle_system,
@@ -236,9 +237,10 @@ typedef struct Scene {
     // each, not where they are -- the transform is read through the node at
     // submit. Owned; the list's type is internal.
     DrawList* draw_list;
-    // What changed under the views this frame (spec 14.38): the view masks of the nodes the walk
-    // found moved since the latch -- every bit for one carrying a light, a camera or particles --
-    // and how many times the scene has been marked changed (scene_mark_changed).
+    // What changed under the views (spec 14.38): the view masks of the nodes a walk found moved or
+    // given another mask since the views were last decided -- every bit for one carrying a light,
+    // a camera or particles -- and how many times the scene has been marked changed
+    // (scene_mark_changed).
     uint32_t moved_mask;
     uint64_t change_count;
     size_t transparent_mesh_count;  // Late-pass meshes seen in this frame's opaque pass
@@ -514,8 +516,10 @@ int scene_add_sss_profile(Scene* scene, const float* color, float radius);
 // and the shadows off. A light the app adds then adds to the flat colour rather than replacing it.
 void scene_set_2d_preset(Scene* scene);
 // Say that something the views show changed by a plain write the engine cannot see -- a material, a
-// light, a scene setting: every view resting on the scene draws again. A node moved, a mesh added
-// or uploaded and a view's own camera or settings are seen without it.
+// light's fields, a scene setting, a node's draw_distance or capture flags: every view resting on
+// the scene draws again. A node moved or given another view_mask, a mesh added or uploaded, a light
+// added, removed or put on a node, and a view's own camera, settings, grade or passes are seen
+// without it. A main-thread call: a worker's result is applied, and said, by the main thread.
 void scene_mark_changed(Scene* scene);
 // Give up a material this scene owns, which then belongs to whichever scene registers it next:
 // how a model loaded into a scene of its own lends its materials to the one that draws it.

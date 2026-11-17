@@ -81,10 +81,12 @@ bool ray_aabb_intersection(vec3 ray_origin, vec3 ray_dir, vec3 bbox_min, vec3 bb
     return (*t_near <= *t_far) && (*t_far >= 0.0f);
 }
 
-static void traverse_and_pick(SceneNode* node, vec3 ray_origin, vec3 ray_dir, float* min_distance,
-                              SceneNode** picked_node) {
+static void traverse_and_pick(SceneNode* node, vec3 ray_origin, vec3 ray_dir, uint32_t mask,
+                              float* min_distance, SceneNode** picked_node) {
     if (!node)
         return;
+    // A node the view does not draw is not under its pointer; its children may be.
+    const bool shown = !mask || (node->walked_mask & mask);
 
     mat4 inv_global_transform;
     glm_mat4_inv(node->global_transform, inv_global_transform);
@@ -94,7 +96,7 @@ static void traverse_and_pick(SceneNode* node, vec3 ray_origin, vec3 ray_dir, fl
     glm_mat4_mulv3(inv_global_transform, ray_dir, 0.0f, local_ray_dir);
     glm_vec3_normalize(local_ray_dir);
 
-    for (size_t i = 0; i < node->mesh_count; i++) {
+    for (size_t i = 0; shown && i < node->mesh_count; i++) {
         Mesh* mesh = node->meshes[i];
         float t_near, t_far;
 
@@ -132,11 +134,11 @@ static void traverse_and_pick(SceneNode* node, vec3 ray_origin, vec3 ray_dir, fl
     }
 
     for (size_t i = 0; i < node->children_count; i++) {
-        traverse_and_pick(node->children[i], ray_origin, ray_dir, min_distance, picked_node);
+        traverse_and_pick(node->children[i], ray_origin, ray_dir, mask, min_distance, picked_node);
     }
 }
 
-RayPickResult pick_scene_node(SceneNode* root_node, vec3 ray_origin, vec3 ray_dir) {
+RayPickResult pick_scene_node(SceneNode* root_node, vec3 ray_origin, vec3 ray_dir, uint32_t mask) {
     RayPickResult result = {0};
     result.node = NULL;
     result.distance = FLT_MAX;
@@ -148,7 +150,7 @@ RayPickResult pick_scene_node(SceneNode* root_node, vec3 ray_origin, vec3 ray_di
     float min_distance = FLT_MAX;
     SceneNode* picked_node = NULL;
 
-    traverse_and_pick(root_node, ray_origin, ray_dir, &min_distance, &picked_node);
+    traverse_and_pick(root_node, ray_origin, ray_dir, mask, &min_distance, &picked_node);
 
     if (picked_node) {
         result.node = picked_node;

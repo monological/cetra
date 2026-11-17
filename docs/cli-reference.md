@@ -119,9 +119,7 @@ row by row from the top left.
   0` adds no view, and the frame draws only the window. `--view-index K` numbers the first view
   K, so `--views 1x1 --view-index 2` is view 2 of a grid alone, at the window's size, which is how
   an arm compares a view with itself alone.
-- `--view-picture` draws a lone view covering the window through its picture rather than straight
-  into the window. `--window-color r,g,b` is the window's own colour, a display colour, where no view
-  covers it.
+- `--window-color r,g,b` is the window's own colour, a display colour, where no view covers it.
 - `--view-mask V:MASK` sets view V's mask and `--node-mask NAME:MASK` the named node's, both as
   integers; a view draws the nodes sharing a bit with it.
 - `--view-hide-at V:F` hides view V from frame F, and `--view-show-at F` shows it again from frame F.
@@ -131,9 +129,10 @@ row by row from the top left.
 - `--accumulate N` gives every view `accumulate_frames` N (16 to 64): still, it averages N frames
   and rests. `--change-at F:KIND[:ARG]` makes one change at frame F: `camera:V` (view V turned a
   little more), `material` and `material-silent` (the first material's albedo, with and without
-  `scene_mark_changed`), `node:NAME` (moved), `light` (the first light's node moved), `settings:V`
-  and `settings-same:V` (view V's vignette, changed or written to the value it has), `engine`
-  (`engine_mark_changed`) and `typical` (`engine_set_typical_size` at the size it has).
+  `scene_mark_changed`), `node:NAME` (moved), `light` (the first light's node moved),
+  `light-bright` (the first light four times brighter, said), `settings:V` (view V's vignette),
+  `engine` (`engine_mark_changed`) and `typical[:SIZE]` (`engine_set_typical_size` at SIZE, or at
+  the size it has). `--view-focus V` makes view V the focus in place of the hidden driver.
   `--view-probe` prints a `view-probe` line per view each frame: drawn, how many frames its average
   holds, finished, its draws so far.
 - `--background-exact r,g,b` gives every view an exact background, the display colour it shows.

@@ -49,6 +49,10 @@ void engine_upload_displacement_uniforms(const Engine* engine, const Scene* scen
 // The swap interval the engine's vsync and headless state ask for, onto the current context.
 void engine_apply_swap_interval(const Engine* engine);
 
+// The focus view's eye, which world work is ranked from. False, `out` untouched, with no view: a
+// ranking then keeps the order it last had.
+bool engine_focus_eye(const Engine* engine, vec3 out);
+
 // The loading screen over the window, when it is shown (spec 13.34): the frame's draw of it, at
 // the end of engine_present_frame, before the GUI; it is freed there once it has switched off.
 // And its free, with the engine.

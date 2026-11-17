@@ -1,5 +1,6 @@
 #include "background.h"
 
+#include <float.h>
 #include <math.h>
 
 // view.glsl's WS_SCENE_MAX, the ceiling sceneLight clamps a texel to before the curve.
@@ -142,14 +143,24 @@ static void _agx_inverse(const float linear[3], float out[3]) {
     glm_mat3_mulv(inset_inv, v, out);
 }
 
-// Newton on the curve: `w` moved until its curve gives `linear`, the Jacobian by differences.
+// Newton on the curve: `w` moved until its curve gives `linear`, the Jacobian by differences. The
+// closed-form inverses above are its start, and this is the answer: every step stays inside the
+// range a cleared texel can hold, and the iterate nearest the colour is kept, so a colour the curve
+// cannot give ends at the nearest it can rather than wherever the last step left it.
 static void _polish(const float linear[3], PostFXTonemapMode mode, float w[3]) {
-    for (int step = 0; step < 12; step++) {
+    float best[3] = {w[0], w[1], w[2]};
+    float best_error = FLT_MAX;
+    for (int step = 0; step < 32; step++) {
         float f[3];
         _curve(w, mode, f);
         vec3 residual = {f[0] - linear[0], f[1] - linear[1], f[2] - linear[2]};
-        if (fabsf(residual[0]) + fabsf(residual[1]) + fabsf(residual[2]) < 1e-7f)
-            return;
+        const float error = fabsf(residual[0]) + fabsf(residual[1]) + fabsf(residual[2]);
+        if (error < best_error) {
+            best_error = error;
+            glm_vec3_copy(w, best);
+        }
+        if (error < 1e-7f)
+            break;
         mat3 jacobian;
         for (int j = 0; j < 3; j++) {
             const float h = fmaxf(fabsf(w[j]) * 1e-3f, 1e-5f);
@@ -160,14 +171,15 @@ static void _polish(const float linear[3], PostFXTonemapMode mode, float w[3]) {
                 jacobian[j][i] = (fp[i] - f[i]) / h;
         }
         if (fabsf(glm_mat3_det(jacobian)) < 1e-12f)
-            return;
+            break;
         mat3 inverse;
         glm_mat3_inv(jacobian, inverse);
         vec3 delta = {0.0f, 0.0f, 0.0f};
         glm_mat3_mulv(inverse, residual, delta);
         for (int i = 0; i < 3; i++)
-            w[i] = fmaxf(w[i] - delta[i], 0.0f);
+            w[i] = glm_clamp(w[i] - delta[i], 0.0f, BACKGROUND_SCENE_MAX);
     }
+    glm_vec3_copy(best, w);
 }
 
 bool background_working(const float display[3], PostFXTonemapMode mode, vec3 working) {

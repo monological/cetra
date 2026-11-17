@@ -263,10 +263,11 @@ it, world work takes the focus view, and a tool takes the view it steers.
   shown view's picture copied into its rectangle in list order, the overlays, the CRT or the
   present pass, the GUI. A view's picture is RGBA8, dithered by its tone map, unless the window is
   drawn through a picture of its own (the CRT, or a view with a pass after its tone map), when
-  every picture is RGBA16F and the window's one last write dithers. **A lone view covering the
-  window writes it directly** (`Engine.window_direct`): rasterising into the window and into a
-  texture interpolate a varying differently in its last bits, which a shader hashing or sampling
-  on an exact boundary turns into a different pixel.
+  every picture is RGBA16F and the window's one last write dithers. **Every view draws into its
+  picture**, a lone one covering the window too, and the copy is exact (a `texelFetch` at the
+  pixel), so a view is the same bytes wherever it is shown. That needs the tone map to take its
+  coordinates from the pixel's position rather than the interpolated varying, whose last bits
+  differ between targets and which the Purkinje grain hashes.
 - **A still view rests** when its settings ask (`accumulate_frames`): see Still views below.
 - **An exact background** (`background_exact`) is the display colour wanted: the engine turns it
   back through the view's tone curve and the display encode on the CPU (`background.c`) to the

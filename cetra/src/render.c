@@ -113,8 +113,9 @@ static void render_occlusion_pass(Engine* engine, Scene* scene, const SceneView*
                           scene->occluders[i].box_max, NULL);
     for (size_t i = 0; i < list->count; ++i) {
         const DrawItem* item = &list->items[i];
-        // An occluder past its draw distance is not drawn, so it hides nothing behind it.
-        if ((item->flags & DRAW_OCCLUDER) && !item->beyond)
+        // An occluder past its draw distance, or one the view's mask leaves out, is not drawn, so
+        // it hides nothing behind it.
+        if ((item->flags & DRAW_OCCLUDER) && !item->beyond && draw_item_in_mask(item, cull->mask))
             occlusion_add_box(engine->occlusion, item->mesh->aabb.min, item->mesh->aabb.max,
                               item->node->global_transform);
     }
@@ -1772,7 +1773,8 @@ void engine_render_scene(Engine* engine, Scene* scene, SceneView* sv) {
         profiler_scope_begin_if(engine->profiler, scene->sky->clouds.enabled, "cloud march");
         int march_w, march_h;
         scene_view_render_size(sv, &march_w, &march_h);
-        sky_clouds_march(scene->sky, engine, &vs->clouds, *view, *projection, march_w, march_h);
+        sky_clouds_march(scene->sky, engine, &vs->clouds, *view, *projection, march_w, march_h,
+                         vs->draw_index);
         profiler_scope_end(engine->profiler);
     }
 
@@ -2736,11 +2738,13 @@ void render_late_items(Engine* engine, const Scene* scene, const SceneView* view
     // which is order-dependent wherever alpha is not zero.
     // A depth that is not a number -- a degenerate transform's -- is taken as the nearest, since
     // one that compares false both ways leaves the comparator no order and the sort none either.
-    // An item past its node's draw distance is drawn by no camera pass, this one included.
+    // An item past its node's draw distance is drawn by no camera pass, this one included; nor is
+    // one the view's mask leaves out.
     size_t count = 0;
     for (size_t i = 0; i < list->count && count < n; ++i) {
         const DrawItem* item = &list->items[i];
-        if (item->lane != DRAW_LANE_LATE_DRAW || item->beyond)
+        if (item->lane != DRAW_LANE_LATE_DRAW || item->beyond ||
+            !draw_item_in_mask(item, view->mask))
             continue;
         const float depth = draw_item_view_depth(item, (vec4*)view->state->view_matrix);
         order[count++] = (LateItem){item, isnan(depth) ? -FLT_MAX : depth, i};

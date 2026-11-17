@@ -559,7 +559,6 @@ typedef struct {
     int views_rows;
     float view_turn_deg; // default 90; 0 = every view the same camera
     int view_index;      // the first grid view's number, which sets its turn
-    int view_picture;    // --view-picture: a lone view covering the window still draws a picture
     float window_color[3];
     int window_color_set;
     // One view's or node's change each, by grid number; -1 = none.
@@ -576,13 +575,15 @@ typedef struct {
     float view_rect[4];
     int view_rect_frame; // --view-rect-at F; 0 = from the start
     int view_lines_view; // --view-lines V: only view V draws the light lines
+    int view_focus_view; // --view-focus V: view V is the focus in place of the hidden driver
     int programs_linked; // --programs-linked: print the programs linked, at exit
     // Still views. --accumulate N: every view averages N frames once still. --change-at
     // F:KIND[:ARG] changes one thing at frame F: camera:V (grid view V turned a little more),
     // material and material-silent (the first material's albedo, said to the scene or not),
-    // node:NAME (moved), light (the first light's node moved), settings:V and settings-same:V (grid
-    // view V's vignette, changed or written to its own value), engine (engine_mark_changed) and
-    // typical (engine_set_typical_size at the size it has). --view-probe prints each view's frame.
+    // node:NAME (moved), light (the first light's node moved), light-bright (the first light four
+    // times brighter, said), settings:V (grid view V's vignette), engine (engine_mark_changed) and
+    // typical[:SIZE] (engine_set_typical_size at SIZE, or the size it has). --view-probe prints
+    // each view's frame.
     int accumulate;
     int change_frame; // 0 = none
     char change_kind[32];

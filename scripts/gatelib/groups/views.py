@@ -10,7 +10,7 @@ import numpy as np
 
 from gatelib.arms import Arms
 from gatelib.harness import RENDER, _run, asset
-from gatelib.images import _ppm_array
+from gatelib.images import _DISPLAY_TO_LINEAR, _ppm_array
 from gatelib.scenes import cscn_copy
 
 # The window every grid arm draws, in window points; its halves and quarters are the views.
@@ -60,30 +60,33 @@ def _draws(rows, view):
 
 def _linear(img):
     """Display codes back to the radiance the linear tone curve encoded, 0..1."""
-    return (img / 255.0) ** 2.2
+    return np.asarray(_DISPLAY_TO_LINEAR)[img.astype(np.intp)]
 
 
 def run_views_gate(workdir):
     """Several views (spec 14.38): apps/render --views CxR tiles its window with views the app's
     own view drives, hidden, each the camera turned --view-turn degrees more about the target. A
-    lone view of the grid (--views 1x1 --view-index K, --view-picture so it goes through a picture
-    as a view among others does) is what each view is held to. The noise floor is 0 px: one
-    configuration rendered twice is identical, which views-same-camera states.
+    lone view of the grid (--views 1x1 --view-index K) is what each view is held to: every view is
+    drawn through its picture, a lone one too. The noise floor is 0 px: one configuration rendered
+    twice is identical, which views-same-camera states.
 
-      views-one         one view filling the window is the window's frame without --views, 0 px:
-                        the lone view writes the window directly, as every app's one view does.
+      views-one         one view filling the window is the window's frame without --views, 0 px.
       views-same-camera two views of one camera side by side are each that view alone at its
                         size, 0 px, and the lone view twice is 0 px.
       views-alone       four cameras, a quarter of the window each, over sky and clouds, over a
                         fogged ground with sun shadows, AO and SSR, and over OIT: each is its view
-                        alone, 0 px. What a view keeps for itself -- its shadows, its clouds'
-                        history, its froxels, its aerial volume -- is its own.
+                        alone, ranking the world from its own eye (--view-focus 0), 0 px. What a
+                        view keeps for itself -- its shadows, its clouds' history, its froxels,
+                        its aerial volume -- is its own, and none of it is the focus's.
       views-zero        --views 0: no scene pass or chain runs (no scene clear or tone map in the
-                        profiler), every pixel is --window-color exactly, and the probe set still
-                        captures its two probes.
+                        profiler, which a view's run shows), every pixel is --window-color exactly,
+                        the probe set still captures its two probes, and the sixteen-texture wall
+                        delivers as many textures as with a view.
       views-hidden      a view hidden from frame 10 leaves its half the window's colour, and the
-                        other half is its view alone, 0 px; hidden at 10 and shown at 20, the frame
-                        is the pair never hidden, 0 px.
+                        other half is its view alone, 0 px. Under --accumulate 16, hidden at 20
+                        and shown at 30, the view draws nothing more and the frame is the pair
+                        never hidden, 0 px; a node moved at 25 while it was hidden, it draws again
+                        when shown, 34.
       views-mask        the QFN package in view 0's bit alone: view 1 is the board without it --
                         its body and its shadow -- 0 px from the board with it removed, and view 0
                         is the board with it, 0 px from its view alone; the two differ by the
@@ -107,21 +110,24 @@ def run_views_gate(workdir):
     rests from its 17th; a change at frame 40 of 60 restarts it for 17 more, 34 in all.
 
       still-converges   --accumulate 32 --idle draws 33 frames and the run ends there, and the
-                        average is nearer a 64-sample supersampled reference, in radiance, than
-                        TAA's frame 200.
+                        average is under half as far from a 64-sample supersampled reference, in
+                        radiance, as TAA's frame 200.
       still-rest        under --idle the view rests at 17 and the run ends there, of 200 asked.
       still-camera      one view's camera moved: it draws 34, the other 17.
       still-material    a material written and said with scene_mark_changed: both draw 34;
                         written unsaid, both 17 -- the contract.
       still-node        a node in one view's bit alone moved: that view 34, the other 17; a light
                         moved, both 34.
-      still-settings    one view's setting changed: it draws 34, the other 17; written to its own
-                        value, both 17.
-      still-engine      engine_mark_changed, and engine_set_typical_size at the size it has: both
-                        34.
-      still-forever     over water a view never rests: 40 of 40 frames drawn.
-      still-unfinished  under an adapting meter the view rests later than the pinned 17, and at
-                        all.
+      still-settings    one view's setting changed: it draws 34, the other, its settings written
+                        every frame by the app to what they were, 17.
+      still-engine      engine_mark_changed, and engine_set_typical_size at twice the size: both
+                        34, and the second's frame differs from the run without it, its lengths
+                        rescaled.
+      still-forever     over water, and over a surface hook marked animated, a view never rests:
+                        40 of 40 frames drawn each.
+      still-unfinished  under auto exposure the still board rests at the pinned 17, the meter held
+                        while it averages; the key light four times brighter at 40, it rests later
+                        than the pinned view does after the same change, the meter adapting.
       still-ui-only     60 frames of a view resting from 17 draw it 17 times, and the last frame
                         is the one it rested on, 0 px: the 43 after it are the window's alone.
       still-first       frames 2 and 4, an average of 1 and of 3, show the TAA frame before them,
@@ -137,21 +143,33 @@ def run_views_gate(workdir):
                         with it on; an exposure six times larger moves it 0 px.
       background-log    an exact background under a vignette is said once; without one, not.
       hdr-memory        an environment loaded from its file's bytes is the same file loaded by its
-                        path, 0 px.
+                        path, 0 px, and both differ from the board with no environment.
     """
     arm = Arms(17)
     board = asset("board_fixture.cscn")
     board_flags = ["--no-auto-exposure", "-E", "0.0088", "--contact-shadows"]
     half_w = VIEWS_W // 2
 
-    def lone(tag, scene, flags, w, h, index=0, frames=30):
+    def lone(tag, scene, flags, w, h, index=0, frames=30, own_focus=False):
         return _views_run(workdir, tag, scene, w, h, flags + [
-            "--views", "1x1", "--view-index", str(index), "--view-picture"], frames=frames)
+            "--views", "1x1", "--view-index", str(index)] + (
+            ["--view-focus", "0"] if own_focus else []), frames=frames)
 
     # The board's view 0 alone at half the window, which four arms hold a half to.
     @functools.cache
     def board_half():
         return lone("board_half", board, board_flags, half_w, VIEWS_H)
+
+    # A grid under --accumulate 16 unless said, with each view's frames from --view-probe.
+    def still(tag, extra, views="1x1", frames=60, scene=board, flags=None, w=400, h=300):
+        img, said = _views_run(workdir, f"still_{tag}", scene, w, h, (
+            board_flags + ["--accumulate", "16"] if flags is None else flags) + [
+            "--views", views, "--view-probe"] + extra, frames=frames)
+        rows, end = _view_probe(said)
+        return img, rows, end, said
+
+    rested = 17               # a TAA frame and 16 averaged
+    restarted = 2 * rested    # and again from a change: its TAA frame and 16 more
 
     @arm("views-one")
     def _():
@@ -193,7 +211,8 @@ def run_views_gate(workdir):
                 return False, f"the {tag} grid failed"
             per = []
             for k, cell in enumerate(_cells(grid, 2, 2)):
-                alone, _ = lone(f"alone_{tag}_{k}", scene, flags, half_w, VIEWS_H // 2, index=k)
+                alone, _ = lone(f"alone_{tag}_{k}", scene, flags, half_w, VIEWS_H // 2, index=k,
+                                own_focus=True)
                 if alone is None:
                     return False, f"the {tag} view {k} alone failed"
                 per.append(_differ(cell, alone))
@@ -204,39 +223,59 @@ def run_views_gate(workdir):
     @arm("views-zero")
     def _():
         color = (0.2, 0.4, 0.6)
-        img, said = _views_run(workdir, "zero", asset("cornell_rooms.cscn"), 400, 300, [
-            "--views", "0", "--window-color", ",".join(str(c) for c in color), "--profiler",
-            "--probe-set-probe", "1", "--no-auto-exposure", "-E", "1.0"], frames=5)
-        if img is None:
-            return False, f"the run failed: {said}"
+        flags = ["--window-color", ",".join(str(c) for c in color), "--profiler",
+                 "--probe-set-probe", "1", "--no-auto-exposure", "-E", "1.0"]
+        rooms = asset("cornell_rooms.cscn")
+        img, said = _views_run(workdir, "zero", rooms, 400, 300, flags + ["--views", "0"],
+                               frames=5)
+        viewed, viewed_said = _views_run(workdir, "zero_view", rooms, 400, 300,
+                                         flags + ["--views", "1x1"], frames=5)
+        wall = asset("textures_in_fixture.cscn")
+        _, wall_zero = _views_run(workdir, "zero_wall", wall, 200, 150,
+                                  ["--views", "0", "--texture-probe"], frames=8)
+        _, wall_view = _views_run(workdir, "zero_wall_view", wall, 200, 150,
+                                  ["--views", "1x1", "--texture-probe"], frames=8)
+        if img is None or viewed is None:
+            return False, f"a run failed: {said}"
         want = np.array([round(c * 255) for c in color], dtype=np.float64)
         off = int(np.any(img != want, axis=2).sum())
-        scopes = len(re.findall(r"^(scene clear|tonemap \+ finishing)\s", said, re.M))
+
+        def scopes(text):
+            return len(re.findall(r"^(scene clear|tonemap \+ finishing)\s", text, re.M))
+
         caps = [int(m) for m in re.findall(r"^probe-set frame=\d+ .*captures=(\d+)", said, re.M)]
         captured = max(caps) if caps else 0
-        ok = off == 0 and scopes == 0 and captured == 2
-        return ok, (f"{off} px off the window's colour (want 0), {scopes} scene or chain scopes "
-                    f"(want 0), {captured} probes captured (want 2)")
+        textures = [len(re.findall(r"^texture-probe tex ", t or "", re.M))
+                    for t in (wall_zero, wall_view)]
+        ok = (off == 0 and scopes(said) == 0 and scopes(viewed_said) > 0 and captured == 2 and
+              textures[0] == textures[1] > 0)
+        return ok, (f"{off} px off the window's colour (want 0), {scopes(said)} scene or chain "
+                    f"scopes (want 0; a view's run {scopes(viewed_said)}, want > 0), {captured} "
+                    f"probes captured (want 2), {textures[0]} textures in with no view against "
+                    f"{textures[1]} with one (want equal, > 0)")
 
     @arm("views-hidden")
     def _():
         pair = ["--views", "2x1", "--view-turn", "0"]
         hidden, _ = _views_run(workdir, "hidden", board, VIEWS_W, VIEWS_H,
                                board_flags + pair + ["--view-hide-at", "1:10"])
-        back, _ = _views_run(workdir, "hidden_back", board, VIEWS_W, VIEWS_H,
-                             board_flags + pair + ["--view-hide-at", "1:10", "--view-show-at",
-                                                   "20"])
-        never, _ = _views_run(workdir, "hidden_never", board, VIEWS_W, VIEWS_H, board_flags + pair)
         alone, _ = board_half()
-        if hidden is None or back is None or never is None or alone is None:
+        hide = ["--view-turn", "0", "--view-hide-at", "1:20", "--view-show-at", "30"]
+        back, back_rows, _, _ = still("hidden_back", hide, views="2x1")
+        never, _, _, _ = still("hidden_never", ["--view-turn", "0"], views="2x1")
+        _, moved_rows, _, _ = still("hidden_moved", hide + ["--change-at", "25:node:qfn_body"],
+                                    views="2x1")
+        if hidden is None or alone is None or back is None or never is None:
             return False, "a run failed"
         left, right = _cells(hidden, 2, 1)
         lit = int(np.any(right != 0, axis=2).sum())
         dl, db = _differ(left, alone), _differ(back, never)
-        ok = lit == 0 and dl == 0 and db == 0
+        unchanged, moved = _draws(back_rows, 1), _draws(moved_rows, 1)
+        ok = lit == 0 and dl == 0 and db == 0 and unchanged == rested and moved == restarted
         return ok, (f"hidden half {lit} px off the window's colour (want 0), the other {dl} px "
-                    f"from its view alone (want 0); shown again, {db} px from never hidden "
-                    f"(want 0)")
+                    f"from its view alone (want 0); shown again unchanged, {unchanged} draws "
+                    f"(want {rested}) and {db} px from never hidden (want 0); a node moved while "
+                    f"it was hidden, {moved} draws (want {restarted})")
 
     @arm("views-mask")
     def _():
@@ -368,16 +407,6 @@ def run_views_gate(workdir):
 
     # ---- still views: --accumulate 16 unless said, so a view rests at its 17th frame -- a TAA
     # frame, then the 16 it averages -- and a change at frame 40 is one it has rested through.
-    def still(tag, extra, views="1x1", frames=60, scene=board, flags=None, w=400, h=300):
-        img, said = _views_run(workdir, f"still_{tag}", scene, w, h, (
-            board_flags + ["--accumulate", "16"] if flags is None else flags) + [
-            "--views", views, "--view-probe"] + extra, frames=frames)
-        rows, end = _view_probe(said)
-        return img, rows, end, said
-
-    rested = 17               # a TAA frame and 16 averaged
-    restarted = 2 * rested    # and again from the change: its TAA frame and 16 more
-
     def two_views(tag, change, extra=()):
         """Each of a pair's draws over 60 frames with `change` at frame 40."""
         img, rows, _, _ = still(tag, ["--change-at", change] + list(extra), views="2x1")
@@ -404,10 +433,10 @@ def run_views_gate(workdir):
         ref = _linear(ref).reshape(fh, 8, fw, 8, 3).mean(axis=(1, 3))
         rms = [float(np.sqrt(np.mean(((_linear(img) - ref) * 255.0) ** 2))) for img in (avg, taa)]
         draws = _draws(rows, 0)
-        ok = draws == 33 and end == 33 and rms[0] < rms[1]
+        ok = draws == 33 and end == 33 and rms[0] < 0.5 * rms[1]
         return ok, (f"{draws} frames drawn, the run ending at {end} (want 33: a TAA frame and 32 "
                     f"averaged); {rms[0]:.3f} RMS from a 64-sample reference against TAA's "
-                    f"{rms[1]:.3f} at frame 200 (want nearer)")
+                    f"{rms[1]:.3f} at frame 200 (want under half)")
 
     @arm("still-rest")
     def _():
@@ -443,41 +472,64 @@ def run_views_gate(workdir):
 
     @arm("still-settings")
     def _():
+        # The app writes every grid view's settings each frame, the unchanged view's to what they
+        # were: that view resting is the write of a setting's own value restarting nothing.
         _, changed = two_views("settings", "40:settings:1")
-        _, same = two_views("settings_same", "40:settings-same:1")
-        ok = changed == (rested, restarted) and same == (rested, rested)
-        return ok, (f"draws {changed} after one view's setting changed (want ({rested}, "
-                    f"{restarted})), {same} after it was written to its own value (want both "
-                    f"{rested})")
+        ok = changed == (rested, restarted)
+        return ok, (f"draws {changed} after one view's setting changed, the other's written to "
+                    f"what they were (want ({rested}, {restarted}))")
 
     @arm("still-engine")
     def _():
         _, marked = two_views("engine", "40:engine")
-        _, typical = two_views("typical", "40:typical")
-        ok = marked == (restarted, restarted) and typical == (restarted, restarted)
+        typical_img, typical = two_views("typical", "40:typical:0.002")
+        plain, _, _, _ = still("engine_plain", [], views="2x1")
+        if typical_img is None or plain is None:
+            return False, "a run failed"
+        rescaled = _differ(typical_img, plain)
+        ok = marked == (restarted, restarted) and typical == (restarted, restarted) and rescaled > 0
         return ok, (f"draws {marked} after engine_mark_changed, {typical} after "
-                    f"engine_set_typical_size (want both {restarted} each)")
+                    f"engine_set_typical_size at twice the size (want both {restarted} each), "
+                    f"which moved {rescaled} px (want > 0)")
 
     @arm("still-forever")
     def _():
-        _, rows, _, _ = still("forever", [], scene=asset("water_fixture.cscn"), frames=40,
-                              flags=["--no-auto-exposure", "-E", "1.0", "--accumulate", "16"])
-        frames = rows.get(0, {})
-        finished = any(f[2] for f in frames.values())
-        draws = _draws(rows, 0)
-        ok = draws == 40 and not finished
-        return ok, f"over water {draws} of 40 frames drawn, ever resting {finished} (want 40, no)"
+        def animated(d):
+            d["shaderHooks"]["stripes"]["animated"] = True
+        hooked = cscn_copy(asset("shader_hooks_fixture.cscn"),
+                           os.path.join(workdir, "views_hooks_animated.cscn"), animated)
+        said = []
+        ok = True
+        for tag, scene in (("water", asset("water_fixture.cscn")), ("hook", hooked)):
+            _, rows, _, _ = still(f"forever_{tag}", [], scene=scene, frames=40,
+                                  flags=["--no-auto-exposure", "-E", "1.0", "--accumulate", "16"])
+            finished = any(f[2] for f in rows.get(0, {}).values())
+            draws = _draws(rows, 0)
+            ok = ok and draws == 40 and not finished
+            said.append(f"{tag} {draws} of 40 drawn, resting {finished}")
+        return ok, f"{'; '.join(said)} (want 40 each, never resting)"
 
     @arm("still-unfinished")
     def _():
         auto = [f for f in board_flags if f not in ("--no-auto-exposure", "-E", "0.0088")]
-        _, rows, _, _ = still("unfinished", [], flags=auto + ["--accumulate", "16"], frames=200)
-        frames = rows.get(0, {})
-        done = [f for f in sorted(frames) if frames[f][2]]
-        first = done[0] if done else None
-        ok = first is not None and first > rested
-        return ok, (f"under an adapting meter the view first rested at frame {first} (want later "
-                    f"than the pinned {rested}, and at all)")
+
+        def first_rest(rows, after):
+            frames = rows.get(0, {})
+            done = [f for f in sorted(frames) if f > after and frames[f][2]]
+            return done[0] if done else None
+
+        _, still_rows, _, _ = still("unfinished", [], flags=auto + ["--accumulate", "16"])
+        brighter = ["--change-at", "40:light-bright"]
+        _, auto_rows, _, _ = still("unfinished_auto", brighter, flags=auto + ["--accumulate", "16"],
+                                   frames=300)
+        _, pinned_rows, _, _ = still("unfinished_pinned", brighter, frames=300)
+        settled = first_rest(still_rows, 0)
+        auto_rest, pinned_rest = first_rest(auto_rows, 40), first_rest(pinned_rows, 40)
+        ok = (settled == rested and pinned_rest is not None and auto_rest is not None and
+              auto_rest > pinned_rest)
+        return ok, (f"under auto exposure the still board rested at {settled} (want {rested}); "
+                    f"after the light brightened at 40 it rested at {auto_rest}, the pinned view "
+                    f"at {pinned_rest} (want later, and at all)")
 
     @arm("still-ui-only")
     def _():
@@ -537,8 +589,9 @@ def run_views_gate(workdir):
         for curve in ("neutral", "aces", "agx", "linear"):
             for colour in colours:
                 want = np.array(colour, dtype=np.float64)
-                off, _ = sky(f"{curve}_off", ["--tonemap", curve, "--no-dither"] + exact(colour))
-                on, _ = sky(f"{curve}_on", ["--tonemap", curve] + exact(colour))
+                tag = f"{curve}_{'_'.join(str(c) for c in colour)}"
+                off, _ = sky(f"{tag}_off", ["--tonemap", curve, "--no-dither"] + exact(colour))
+                on, _ = sky(f"{tag}_on", ["--tonemap", curve] + exact(colour))
                 if off is None or on is None:
                     return False, f"a {curve} run failed"
                 worst_off = max(worst_off, int(np.abs(off - want).max()))
@@ -572,11 +625,14 @@ def run_views_gate(workdir):
         flags = board_flags + ["-e", env]
         path, _ = _views_run(workdir, "hdr_path", board, 400, 300, flags)
         memory, said = _views_run(workdir, "hdr_memory", board, 400, 300, flags + ["--hdr-memory"])
-        if path is None or memory is None:
+        bare, _ = _views_run(workdir, "hdr_none", board, 400, 300, board_flags)
+        if path is None or memory is None or bare is None:
             return False, "a run failed"
         loaded = "Loaded HDR from memory" in said
-        d = _differ(path, memory)
-        return loaded and d == 0, (f"the environment from its bytes {d} px from the same file by "
-                                   f"its path (want 0), loaded from memory {loaded}")
+        d, lit = _differ(path, memory), _differ(path, bare)
+        ok = loaded and d == 0 and lit > 0
+        return ok, (f"the environment from its bytes {d} px from the same file by its path (want "
+                    f"0), loaded from memory {loaded}; {lit} px from the board without it (want > "
+                    f"0)")
 
     return arm.failed

@@ -2,6 +2,7 @@
 #define INTERSECT_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <cglm/cglm.h>
 
 // Forward declarations to avoid header dependency issues
@@ -43,8 +44,10 @@ void compute_ortho_ray_from_screen(float screen_x, float screen_y, int fb_width,
 bool ray_aabb_intersection(vec3 ray_origin, vec3 ray_dir, vec3 bbox_min, vec3 bbox_max,
                            float* t_near, float* t_far);
 
-// Pick scene node under ray (traverses scene graph, tests AABB then triangles)
-RayPickResult pick_scene_node(struct SceneNode* root_node, vec3 ray_origin, vec3 ray_dir);
+// Pick scene node under ray (traverses scene graph, tests AABB then triangles), among the nodes a
+// view drawing by `mask` shows as the last walk left their masks; 0 = every node.
+RayPickResult pick_scene_node(struct SceneNode* root_node, vec3 ray_origin, vec3 ray_dir,
+                              uint32_t mask);
 
 // Project ray to plane at given distance (for drag operations)
 void ray_point_at_distance(vec3 ray_origin, vec3 ray_dir, float distance, vec3 out_point);

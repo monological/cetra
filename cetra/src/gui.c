@@ -1441,6 +1441,10 @@ void gui_render_frame(Engine* engine) {
         _engine_gui_panel(engine);
     if (engine->show_fps || engine->show_camera_hud)
         _engine_gui_fps_overlay(engine);
+    // A control held this frame -- the engine's panels or an app's window -- may have written
+    // anything a view shows, by a plain write that says nothing: said here, for every view.
+    if (igIsAnyItemActive())
+        engine_mark_changed(engine);
 
     igRender();
     ImGui_ImplOpenGL3_RenderDrawData(igGetDrawData());

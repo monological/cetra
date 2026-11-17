@@ -80,17 +80,22 @@ void engine_init_view_settings(const struct Engine* engine, SceneViewSettings* s
 // is built at once, its buffers and its post chain included, so it needs the engine's context and
 // is freed before the engine. NULL, logged, when its buffers cannot be made.
 SceneView* create_scene_view(struct Engine* engine, const SceneViewDesc* desc);
+// Removes an added view first; refused, logged and kept, as engine_remove_view refuses.
 void free_scene_view(SceneView* view);
 
 // The engine takes the view and draws it every frame, after the views already added; the first
 // added is the focus until another is named. False, logged, for a view of another engine or one
-// already added.
+// already added. A view added again has missed what changed while it was out: its first frame is a
+// cut.
 bool engine_add_view(struct Engine* engine, SceneView* view);
 // Hands an added view back, still built, for the caller to free or add again. Removing the focus
-// passes it to the first view left. NULL when the view was not added.
+// passes it to the first view left. NULL when the view was not added, and, logged, while the frame
+// draws its views (from a render hook), which would pull a view out from under the loop.
 SceneView* engine_remove_view(struct Engine* engine, SceneView* view);
 // The view whose eye ranks and centres the world's work: the lighting caches, the terrain pages,
 // the rain's cover and the water's windows, the origin shift, the listener. One of the added views.
+// A hidden focus ranks the world from its camera as posed, but the terrain pages' votes come from
+// its draw, so it casts none.
 void engine_set_focus_view(struct Engine* engine, SceneView* view);
 
 // The rig that poses the view's camera each frame, or NULL for none: the engine applies it after

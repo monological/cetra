@@ -349,6 +349,7 @@ bool scene_add_light(Scene* scene, Light* light) {
     scene->lights = new_lights;
     scene->lights[scene->light_count] = light;
     scene->light_count = new_count;
+    scene_mark_changed(scene);
     return true;
 }
 
@@ -364,6 +365,7 @@ bool scene_remove_light(Scene* scene, Light* light) {
                 (scene->light_count - i - 1) * sizeof(Light*));
         scene->light_count--;
         free_light(light);
+        scene_mark_changed(scene);
         return true;
     }
     return false;
@@ -870,6 +872,7 @@ SceneNode* create_node() {
     static uint64_t next_serial = 1;
     node->serial = next_serial++;
     node->view_mask = ~0u;
+    node->walked_mask = ~0u;
 
     glm_mat4_identity(node->original_transform);
     glm_mat4_identity(node->global_transform);
@@ -1019,16 +1022,19 @@ void node_set_name(SceneNode* node, const char* name) {
     node->name = safe_strdup(name);
 }
 
+// A light or a camera put on a node, or taken off, changes the graph a view shows.
 void node_set_light(SceneNode* node, Light* light) {
     if (!node)
         return;
     node->light = light;
+    scene_graph_touched();
 }
 
 void node_set_camera(SceneNode* node, Camera* camera) {
     if (!node)
         return;
     node->camera = camera;
+    scene_graph_touched();
 }
 
 void node_set_particle_system(SceneNode* node, struct ParticleSystem* sys) {
@@ -1180,6 +1186,11 @@ static void apply_transform_to_nodes(SceneNode* root, mat4 transform, uint32_t* 
         stack_size--;
         SceneNode* node = stack[stack_size].node;
         const uint32_t mask = stack[stack_size].mask & node->view_mask;
+        // A mask written since the last walk takes the meshes out of the views that showed them
+        // and into the views that now do: both sets have moved.
+        if (mask != node->walked_mask && node->mesh_count > 0)
+            *moved |= mask | node->walked_mask;
+        node->walked_mask = mask;
 
         // Straight off the popped slot. The child pushes below overwrite it, but
         // strictly after this is the only thing that reads it -- and the
@@ -1278,7 +1289,6 @@ static void _latch_prev_transform(SceneNode* node) {
 void scene_latch_prev_transforms(Scene* scene) {
     if (!scene || !scene->root_node)
         return;
-    scene->moved_mask = 0u;
     _latch_prev_transform(scene->root_node);
 }
 

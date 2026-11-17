@@ -87,14 +87,18 @@ bool gl_color_fbo_create(int width, int height, GLenum internal_format, GLuint* 
 typedef struct GLColorTarget {
     GLuint fbo, tex;
     int w, h;
-    GLenum format; // the internal format it was made with
+    GLenum format; // the internal format it was made with, or last asked for
+    bool failed;   // could not be made at w, h and format; not tried again at them
 } GLColorTarget;
-// `t` at `w` by `h`, RGBA16F. False, reported by `what`, when it cannot be made, and `t` is then
-// empty.
+// `t` at `w` by `h`, RGBA16F. False, reported by `what` the first time, when it cannot be made: `t`
+// is then empty, and asked again at the same size and format it fails without trying.
 bool gl_color_target_ensure(GLColorTarget* t, int w, int h, const char* what);
 // The same in `format`.
 bool gl_color_target_ensure_format(GLColorTarget* t, int w, int h, GLenum format, const char* what);
 void gl_color_target_free(GLColorTarget* t);
+// `src` whole into the framebuffer `dst_fbo` at its origin, texel for texel. Leaves both bound as
+// the read and draw framebuffers.
+void gl_color_target_copy(const GLColorTarget* src, GLuint dst_fbo);
 
 /*
  * String

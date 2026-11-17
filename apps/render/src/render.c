@@ -113,7 +113,6 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --views CxR        Tile the window with CxR views, or 0 for none\n");
     fprintf(stderr, "      --view-turn DEG    Each view's camera turned DEG more than the last\n");
     fprintf(stderr, "      --view-index K     Number the views from K (a lone view K)\n");
-    fprintf(stderr, "      --view-picture     A lone view covering the window draws a picture\n");
     fprintf(stderr, "      --window-color r,g,b  The window where no view covers it\n");
     fprintf(stderr, "      --view-mask V:MASK    View V's mask\n");
     fprintf(stderr, "      --node-mask NAME:MASK The named node's view mask\n");
@@ -123,11 +122,12 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --view-rect V:x,y,w,h View V's rectangle, window points\n");
     fprintf(stderr, "      --view-rect-at F      The rectangle from frame F on\n");
     fprintf(stderr, "      --view-lines V        Only view V draws the light lines\n");
+    fprintf(stderr, "      --view-focus V        View V is the focus, not the hidden driver\n");
     fprintf(stderr, "      --programs-linked     Print the programs linked, at exit\n");
     fprintf(stderr, "      --accumulate N        Each view averages N frames once still\n");
     fprintf(stderr, "      --change-at F:KIND[:ARG]  One change at frame F (camera:V, material,\n"
-                    "                            material-silent, node:NAME, light, settings:V,\n"
-                    "                            settings-same:V, engine, typical)\n");
+                    "                            material-silent, node:NAME, light, light-bright,\n"
+                    "                            settings:V, engine, typical[:SIZE])\n");
     fprintf(stderr, "      --view-probe          Print each view's frame: drawn, averaged, done\n");
     fprintf(stderr, "      --background-exact r,g,b  The background, a display colour, exactly\n");
     fprintf(stderr, "      --hdr-memory          Load -e's environment from its bytes in memory\n");
@@ -721,7 +721,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->point_light_grid = 0; // off
     args->view_turn_deg = 90.0f;
     args->view_mask_view = args->view_hide_view = args->view_samples_view = -1;
-    args->view_rect_view = args->view_lines_view = -1;
+    args->view_rect_view = args->view_lines_view = args->view_focus_view = -1;
     args->view_hide_frame = args->view_show_frame = -1;
     args->plg_radius = 10.0f;
     args->plg_intensity = 5.0f;
@@ -2169,8 +2169,6 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->view_turn_deg = (float)atof(argv[++i]);
         } else if (strcmp(argv[i], "--view-index") == 0 && i + 1 < argc) {
             args->view_index = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--view-picture") == 0) {
-            args->view_picture = 1;
         } else if (strcmp(argv[i], "--window-color") == 0 && i + 1 < argc) {
             if (sscanf(argv[++i], "%f,%f,%f", &args->window_color[0], &args->window_color[1],
                        &args->window_color[2]) != 3) {
@@ -2216,6 +2214,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->view_rect_frame = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--view-lines") == 0 && i + 1 < argc) {
             args->view_lines_view = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--view-focus") == 0 && i + 1 < argc) {
+            args->view_focus_view = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--programs-linked") == 0) {
             args->programs_linked = 1;
         } else if (strcmp(argv[i], "--accumulate") == 0 && i + 1 < argc) {
@@ -2745,7 +2745,6 @@ static void grid_make(Engine* engine, const RenderArgs* args) {
         return;
     if (args->window_color_set)
         glm_vec3_copy((float*)args->window_color, engine->window_color);
-    engine->window_direct = !args->view_picture;
     const int count = args->views_cols * args->views_rows;
     if (count == 0) {
         engine_remove_view(engine, g_view);
@@ -2771,7 +2770,26 @@ static void grid_make(Engine* engine, const RenderArgs* args) {
             return;
         }
         g_grid_count = i + 1;
+        // What the driver's chain holds by function, which its settings do not carry: the grade
+        // and the scene file's passes, each program shared.
+        if (args->lut_path && !args->no_lut)
+            scene_view_load_lut(g_grid[i], args->lut_path);
+        const PostFX* driver = g_view->state->postfx;
+        for (int p = 0; driver && p < driver->pass_count; p++) {
+            PostFXPass* pass =
+                scene_view_add_pass(g_grid[i], driver->passes[p].at, driver->passes[p].program);
+            if (pass) {
+                pass->enabled = driver->passes[p].enabled;
+                pass->params = driver->passes[p].params;
+            }
+        }
     }
+    if (args->view_focus_view >= 0 && args->view_focus_view < g_grid_count)
+        engine_set_focus_view(engine, g_grid[args->view_focus_view]);
+    // The driver draws nothing, so it holds next to nothing: a point of the window.
+    g_view->fills_window = false;
+    g_view->width = 1.0f;
+    g_view->height = 1.0f;
 }
 
 // --change-at's one change, made at its frame.
@@ -2795,15 +2813,15 @@ static void change_at(Engine* engine, Scene* scene, const RenderArgs* args) {
             node->original_transform[3][1] += 2.0f * engine->typical_size;
         else
             fprintf(stderr, "--change-at: no node named '%s'\n", name ? name : "");
+    } else if (strcmp(kind, "light-bright") == 0 && scene->light_count > 0) {
+        scene->lights[0]->intensity *= 4.0f;
+        scene_mark_changed(scene);
     } else if (strcmp(kind, "settings") == 0 && in_grid) {
         g_grid_vignette[v] = true;
-    } else if (strcmp(kind, "settings-same") == 0 && in_grid) {
-        const float strength = g_grid[v]->settings.post.vignette_strength;
-        g_grid[v]->settings.post.vignette_strength = strength;
     } else if (strcmp(kind, "engine") == 0) {
         engine_mark_changed(engine);
     } else if (strcmp(kind, "typical") == 0) {
-        engine_set_typical_size(engine, engine->typical_size);
+        engine_set_typical_size(engine, arg[0] ? (float)atof(arg) : engine->typical_size);
     } else {
         fprintf(stderr, "--change-at: '%s:%s' changes nothing here\n", kind, arg);
         return;
@@ -2883,18 +2901,14 @@ static void grid_frame(Engine* engine, const RenderArgs* args, int frame) {
 // --hdr-memory: the file's bytes read whole and the environment loaded from them, as a program
 // with the file built in would. -1 when the file cannot be read or decoded.
 static int load_hdr_from_file_bytes(IBLResources* ibl, const char* path) {
-    FILE* f = fopen(path, "rb");
-    if (!f) {
-        fprintf(stderr, "Error: --hdr-memory: cannot open %s\n", path);
+    long size = 0;
+    char* bytes = read_entire_file(path, &size);
+    if (!bytes || size <= 0) {
+        fprintf(stderr, "Error: --hdr-memory: cannot read %s\n", path);
+        free(bytes);
         return -1;
     }
-    fseek(f, 0, SEEK_END);
-    const long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    unsigned char* bytes = size > 0 ? malloc((size_t)size) : NULL;
-    const bool read = bytes && fread(bytes, 1, (size_t)size, f) == (size_t)size;
-    fclose(f);
-    const int result = read ? load_hdr_environment_memory(ibl, bytes, (size_t)size) : -1;
+    const int result = load_hdr_environment_memory(ibl, bytes, (size_t)size);
     free(bytes);
     return result;
 }

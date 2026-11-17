@@ -332,10 +332,22 @@ static void build_cloud_shadow(SkyAtmosphere* sky, struct Engine* engine, CloudL
     draw_fullscreen_quad(sky->quad_vao);
 }
 
+// The march's own gate, which the drift shares: a deck that cannot be marched does not move.
+static bool clouds_marchable(const SkyAtmosphere* sky) {
+    return sky && sky->enabled && sky->clouds.enabled && sky->clouds.noise_baked &&
+           sky->luts_baked && sky->sky_view_lut;
+}
+
+// Drift rides the frame clock: fixed-step headless via the producer, real delta live, and honestly
+// frozen when an embedder's clock is paused.
+void sky_clouds_advance(SkyAtmosphere* sky, double dt) {
+    if (clouds_marchable(sky))
+        sky->clouds.scroll += dt;
+}
+
 void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, CloudMarch* march, mat4 view,
-                      mat4 projection, int rw, int rh) {
-    if (!sky || !engine || !march || !sky->enabled || !sky->clouds.enabled ||
-        !sky->clouds.noise_baked || !sky->luts_baked || !sky->sky_view_lut)
+                      mat4 projection, int rw, int rh, long long view_frame) {
+    if (!engine || !march || !clouds_marchable(sky))
         return;
     CloudLayer* c = &sky->clouds;
 
@@ -352,9 +364,10 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, CloudMarch* mar
         return;
 
     // Parity ping-pong + adjacency stamp: history is only trusted when the
-    // view's previous march was exactly last frame (a skipped frame resets
-    // rather than blending stale sky).
-    int frame = (int)(engine->total_frames);
+    // view's previous march was exactly its last frame (a skipped frame resets
+    // rather than blending stale sky). The view's own count, so one that rested
+    // reads the side it last wrote.
+    int frame = (int)view_frame;
     int write = frame & 1;
     int temporal = (march->prev_frame >= 0 && march->prev_frame == frame - 1) ? 1 : 0;
 
@@ -408,14 +421,6 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, CloudMarch* mar
     uniform_set_mat4(um, "prevView", (float*)march->prev_view);
     uniform_set_vec2(um, "prevFocal", march->prev_focal);
 
-    // Drift rides the frame clock: fixed-step headless via the producer, real
-    // delta live, and honestly frozen when an embedder's clock is paused. Once
-    // a frame, at its first march: a second view marching the same deck would
-    // otherwise blow it twice as fast.
-    if (c->scroll_frame != frame) {
-        c->scroll += engine->render_delta;
-        c->scroll_frame = frame;
-    }
     float wind_kms = c->wind_speed_kmh / 3600.0f;
     float wind_rad = c->wind_dir_deg * 0.01745329f;
     vec3 wind_off = {sinf(wind_rad) * wind_kms * (float)c->scroll, 0.0f,

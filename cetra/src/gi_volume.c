@@ -8,6 +8,7 @@
 #include "cook.h"
 #include "draw_list.h"
 #include "engine.h"
+#include "engine_internal.h"
 #include "ibl.h"
 #include "intersect.h"
 #include "lighting_atlas.h"
@@ -566,9 +567,8 @@ static void gi_volume_store(const GIWorld* world, size_t index, struct Engine* e
 // admitted.
 static void gi_world_rank(GIWorld* world, const struct Engine* engine, const LightingAtlas* atlas) {
     vec3 eye = {0.0f, 0.0f, 0.0f};
-    if (engine->focus_view)
-        glm_vec3_copy(engine->focus_view->camera.position, eye);
-    for (size_t i = 0; i < world->residency.count; ++i) {
+    // With no view the distances stay as they were, and so does the order.
+    for (size_t i = 0; engine_focus_eye(engine, eye) && i < world->residency.count; ++i) {
         const GIVolume* gi = world->volumes[i];
         const AABB box = gi_volume_box(gi);
         world->residency.items[i].distance = gi->failed ? -1.0f : sqrtf(aabb_dist_sq(&box, eye));

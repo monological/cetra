@@ -380,6 +380,8 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_VIEW, CFG_FLOAT, "engine", "render_scale", render_scale),
     CFG_ROW(CFG_VIEW, CFG_INT, "engine", "ss_scale", ss_scale),
     CFG_ROW(CFG_VIEW, CFG_VEC3, "engine", "clear_color", background),
+    CFG_ROW(CFG_VIEW, CFG_BOOL, "engine", "background_exact", background_exact),
+    CFG_ROW(CFG_VIEW, CFG_INT, "engine", "accumulate_frames", accumulate_frames),
 
     CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "gui", show_gui),
     CFG_ROW(CFG_VIEW, CFG_BOOL, "engine.overlays", "wireframe", show_wireframe),
@@ -1803,6 +1805,9 @@ int config_snapshot_apply_file(Engine* engine, Scene* scene, const char* path) {
     SceneView* focus = engine ? engine->focus_view : NULL;
     if (focus && focus->rig)
         camera_rig_set_pose(focus->rig, focus->camera.position, focus->camera.look_at);
+    // Every row is a plain write the views cannot see.
+    engine_mark_changed(engine);
+    scene_mark_changed(scene);
 
     printf("config snapshot applied: %s (%d fields)\n", path, written);
     fflush(stdout);

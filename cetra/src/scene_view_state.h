@@ -32,10 +32,11 @@ typedef struct SceneViewState {
     int target_render_w, target_render_h;
     int target_post_w, target_post_h;
     int target_out_w, target_out_h; // the view's size in framebuffer pixels
-    int target_ss_scale;            // the supersampling the chain was built at
-    float target_render_scale;      // the render scale the chain was built at
-    bool render_suspended;          // a target rebuild failed; the view draws nothing until one
-                                    // at a size that allocates succeeds
+    // The rectangle in framebuffer pixels, GL's origin, as the targets were last fitted to it:
+    // where the picture is shown, whatever the rectangle became after the view drew.
+    int picture_rect[4];
+    bool render_suspended; // a target rebuild failed; the view draws nothing until one
+                           // at a size that allocates succeeds
     // What the driver returned for the sample count asked, read back from the scene FBO at every
     // build. Equal to the request at 1 by construction; above 1 it is the driver's answer.
     int msaa_samples_actual;
@@ -125,6 +126,7 @@ typedef struct SceneViewState {
     // anything different, or anything that animates forever, is a change (spec 14.38).
     struct {
         bool valid;
+        const struct Scene* scene; // the scene shown
         SceneViewSettings settings;
         mat4 view;
         mat4 projection;
@@ -132,14 +134,21 @@ typedef struct SceneViewState {
         uint32_t mask;
         uint64_t changes; // the scene's and the engine's change counts, summed
         uint64_t epoch;   // the graph's
+        uint64_t chain;   // the chain's passes and grade, digested
+        bool covered;     // a loading screen covered the frame
         bool through;     // the window drawn through its picture, which sets the picture's format
     } record;
-    // This frame, as engine_decide_views settled it: whether the view draws, and when it draws an
+    // This frame, as _engine_decide_view settled it: whether the view draws, and when it draws an
     // averaged frame, which (average_n, from 0; -1 = a TAA frame).
     bool draws_this_frame;
     int average_n;
-    bool was_hidden; // hidden last frame: a change on showing it again is a cut
-    bool taau_said;  // accumulation below render scale 1 was said once
+    // The view could not draw on a frame since it last drew -- hidden, sized to nothing, its
+    // targets refused -- and whether a change it shows has not been drawn by it: what changed while
+    // it was away, or what the world's settle delivered on a frame it drew no TAA frame. Its next
+    // frame draws it, a cut if it was away.
+    bool away;
+    bool missed;
+    bool taau_said; // accumulation below render scale 1 was said once
     // The last TAA picture, shown while the average holds fewer than VIEW_AVERAGE_SHOWN frames.
     GLColorTarget held;
     bool held_valid;

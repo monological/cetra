@@ -2238,6 +2238,13 @@ static void lay_out_views(const Engine* engine) {
     }
 }
 
+// The panes laid out before the frame draws, so the 3D pane is drawn at the window's size the frame
+// it changes, and the canvas's views are where the overlay will draw them.
+static void on_pre_render(Engine* engine, Scene* scene) {
+    (void)scene;
+    lay_out_views(engine);
+}
+
 static int view_at(float x) {
     for (int i = g_view_count - 1; i > 0; i--)
         if (x >= g_views[i].x)
@@ -2247,7 +2254,6 @@ static int view_at(float x) {
 
 static void draw_view(Engine* engine, void* user) {
     (void)user;
-    lay_out_views(engine);
     if (g_probe_target) {
         printf("canvas frame target %s\n", engine->window_through_picture ? "picture" : "window");
         fflush(stdout);
@@ -4777,7 +4783,7 @@ int main(int argc, char** argv) {
     if (g_refuse_close)
         engine_set_close_hook(engine, canvas_close, NULL);
 
-    engine_run(engine, on_update, NULL, NULL);
+    engine_run(engine, on_update, on_pre_render, NULL);
     // How often the window was asked to close and refused it, and the frames the run drew.
     if (probe)
         printf("canvas close asked %d refused %d frames %zu\n", g_close_asked, g_close_asked > 0,
