@@ -1455,14 +1455,6 @@ static void _draw_shadow_catcher(Engine* engine, Scene* scene, const SceneView* 
     profiler_scope_end(engine->profiler);
 }
 
-// The settings a view's debug overlays are read from: its own, and for a capture's view the focus
-// view's, whose light lines and gizmos a capture has always drawn.
-static const SceneViewSettings* _overlay_settings(const Engine* engine, const SceneView* sv) {
-    if (sv->state->capturing && engine->focus_view)
-        return &engine->focus_view->settings;
-    return &sv->settings;
-}
-
 // What a pass over the scene from a view's view and projection matrices starts from: the
 // view-projection, its frustum, the cull view over it, and the frame's draw list.
 static CullView _scene_pass_prepare(Engine* engine, Scene* scene, SceneView* sv, Frustum* frustum) {
@@ -1530,7 +1522,7 @@ static void _render_capture_depth(Engine* engine, Scene* scene, SceneView* sv) {
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     _submit_lanes(engine, scene, scene->draw_list, sv, *view, *projection, render_mode,
                   &submit_state, &cull, 1u << DRAW_LANE_OPAQUE, SUBMIT_PASS_DEPTH_ONLY);
-    if (_overlay_settings(engine, sv)->show_xyz)
+    if (sv->settings.show_xyz)
         _submit_gizmos(engine->xyz_vao, scene->xyz_shader_program, scene->draw_list, *view,
                        *projection, &submit_state);
     _draw_shadow_catcher(engine, scene, sv, *view, *projection);
@@ -1875,7 +1867,7 @@ void engine_render_scene(Engine* engine, Scene* scene, SceneView* sv) {
     if (prepassed)
         glDepthFunc(GL_LESS);
     // The list carries the gizmos when any view shows them; this view draws them when it does.
-    if (_overlay_settings(engine, sv)->show_xyz)
+    if (sv->settings.show_xyz)
         _submit_gizmos(engine->xyz_vao, scene->xyz_shader_program, scene->draw_list, *view,
                        draw_projection, &submit_state);
     profiler_scope_end(engine->profiler);
@@ -2068,7 +2060,7 @@ void engine_render_scene(Engine* engine, Scene* scene, SceneView* sv) {
     }
 
     // Light overlay last, so the X-ray lines sit on top of the finished scene
-    if (_overlay_settings(engine, sv)->show_lights)
+    if (sv->settings.show_lights)
         render_light_overlay(engine, sv, scene);
 
     // Reset program state at end of frame
