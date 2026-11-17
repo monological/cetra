@@ -27,6 +27,17 @@
 
 #define RENDER_TAGS_MAX 32
 
+typedef struct RenderTagClass {
+    int frame, view; // view -1 = every view
+    int klass;
+    SceneTagClass row;
+} RenderTagClass;
+
+typedef struct RenderTagFade {
+    int frame, view;
+    float fade;
+} RenderTagFade;
+
 typedef struct RenderTags {
     struct {
         int frame;
@@ -46,13 +57,11 @@ typedef struct RenderTags {
         SceneTagState state;
     } rows[RENDER_TAGS_MAX];
     int row_count;
-    struct {
-        int frame, view; // view -1 = every view
-        int klass;       // -1 = the fade, not a class
-        SceneTagClass row;
-        float fade;
-    } classes[RENDER_TAGS_MAX];
+    // In the order they fall due, so the latest due for a view is the one it carries.
+    RenderTagClass classes[RENDER_TAGS_MAX];
     int class_count;
+    RenderTagFade fades[RENDER_TAGS_MAX];
+    int fade_count;
     bool table;
     unsigned table_views;
     bool table_views_set;
@@ -65,7 +74,6 @@ int render_tags_parse(RenderTags* tags, int argc, char** argv, int* i);
 // borrows. After the grid's views have taken the driver's settings for the frame.
 void render_tags_frame(const RenderTags* tags, Engine* engine, SceneView* driver, SceneView** grid,
                        int grid_count, int frame);
-// The flags' usage lines.
 void render_tags_usage(void);
 
 #endif // RENDER_TAGS_H

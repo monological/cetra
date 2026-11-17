@@ -49,11 +49,8 @@ uniform float uDeltaTime; // render clock advance, for the previous-frame positi
 #define FUR_VERTEX
 #include "fur.glsl"
 #if CETRA_HAS(PBR_FEAT_TAGS)
+#define CETRA_TAG_VARYINGS
 #include "tags.glsl"
-// As pbr_vert's; a skinned draw carries one object, so its tag is the node's.
-flat out vec4 TagPaint;
-flat out vec3 TagMisc;
-flat out uint TagObject;
 #endif
 
 // See pbr_vert: the depth prepass must reach the same clip position from a
@@ -153,12 +150,8 @@ void main() {
     TangentW = aTangent.w;
 
 #if CETRA_HAS(PBR_FEAT_TAGS)
-    CetraTag tag = cetraTag(uNodeTag);
-    TagPaint = tag.paint;
-    TagMisc = vec3(tag.opacity, tag.flatShare, tag.dim);
-    TagObject = tag.object;
-    if (tag.drop)
-        clipPos = CETRA_TAG_DROPPED;
+    // A skinned draw carries one object and has no instance block, so its tag is the node's.
+    clipPos = cetraTagShade(uNodeTag, clipPos);
 #endif
 
     gl_Position = clipPos;

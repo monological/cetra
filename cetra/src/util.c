@@ -112,6 +112,8 @@ GLPassState gl_pass_begin(void) {
     GLint modes[2] = {GL_FILL, GL_FILL}; // front and back, which the engine never sets apart
     glGetIntegerv(GL_POLYGON_MODE, modes);
     s.polygon_mode = modes[0];
+    glGetIntegerv(GL_DEPTH_FUNC, &s.depth_func);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &s.depth_mask);
     s.depth = glIsEnabled(GL_DEPTH_TEST);
     s.blend = glIsEnabled(GL_BLEND);
     s.cull = glIsEnabled(GL_CULL_FACE);
@@ -143,6 +145,8 @@ void gl_pass_end(const GLPassState* s) {
     glClearColor(s->clear_colour[0], s->clear_colour[1], s->clear_colour[2], s->clear_colour[3]);
     glCullFace((GLenum)s->cull_face);
     glPolygonMode(GL_FRONT_AND_BACK, (GLenum)s->polygon_mode);
+    glDepthFunc((GLenum)s->depth_func);
+    glDepthMask(s->depth_mask);
     _gl_set(GL_DEPTH_TEST, s->depth);
     _gl_set(GL_BLEND, s->blend);
     _gl_set(GL_CULL_FACE, s->cull);
@@ -205,9 +209,38 @@ bool gl_color_fbo_create(int width, int height, GLenum internal_format, GLuint* 
 
 void gl_color_target_free(GLColorTarget* t) {
     gl_delete_texture(&t->tex);
+    gl_delete_texture(&t->depth);
     gl_delete_fbo(&t->fbo);
     t->w = t->h = 0;
     t->failed = false;
+}
+
+bool gl_color_target_ensure_depth(GLColorTarget* t, int w, int h, GLenum format, const char* what) {
+    // Remade with its colour, which frees the depth, so a target holding one is whole.
+    if (!gl_color_target_ensure_format(t, w, h, format, what))
+        return false;
+    if (t->depth)
+        return true;
+    glGenTextures(1, &t->depth);
+    glBindTexture(GL_TEXTURE_2D, t->depth);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, w, h, 0, GL_DEPTH_COMPONENT, GL_FLOAT,
+                 NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, t->depth, 0);
+    const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (status == GL_FRAMEBUFFER_COMPLETE)
+        return true;
+    log_error("the %dx%d %s target's depth could not be made (0x%x)", w, h, what, status);
+    gl_color_target_free(t);
+    t->w = w;
+    t->h = h;
+    t->format = format;
+    t->failed = true;
+    return false;
 }
 
 bool gl_color_target_ensure_format(GLColorTarget* t, int w, int h, GLenum format,

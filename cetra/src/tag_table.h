@@ -24,6 +24,10 @@ typedef struct TagTable {
     uint32_t dirty_from, dirty_to; // the tags written since the last upload, [from, to)
 } TagTable;
 
+// A tag's three texels, as both tables' shaders read them: its colour, its outline, then its dim,
+// whether it is hidden, raised and lit.
+void tag_table_pack(uint32_t colour, uint32_t outline, float dim, bool hidden, bool raised,
+                    bool lit, uint8_t out[4 * TAG_TABLE_TEXELS]);
 // An empty table, every tag's texels zero: the count is 1, since tag 0 is never written.
 void tag_table_init(TagTable* table);
 // Frees the GL objects and the texels, and leaves the table empty.
@@ -31,9 +35,7 @@ void tag_table_release(TagTable* table);
 // A tag's texels, written; tag 0 and past the limit are the caller's to refuse. False, logged,
 // when the table cannot grow to hold it, and nothing changed.
 bool tag_table_write(TagTable* table, uint32_t tag, const uint8_t texels[4 * TAG_TABLE_TEXELS]);
-// Brings the GPU's copy up to date: the written range alone, or, when the table has outgrown its
-// buffer, a buffer twice the size and every tag in it. The shader reads no tag past the count, so
-// the rest of a new buffer is left.
+// Brings the GPU's copy up to date with every write since the last.
 void tag_table_upload(TagTable* table);
 
 #endif // _TAG_TABLE_H_

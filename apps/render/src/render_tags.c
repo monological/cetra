@@ -95,51 +95,85 @@ static bool _class(const char* spec, SceneTagClass* k) {
     return true;
 }
 
+// The flag's argument, consumed; NULL, said, when there is none.
+static const char* _arg(int argc, char** argv, int* i) {
+    if (*i + 1 >= argc) {
+        fprintf(stderr, "Error: %s requires an argument\n", argv[*i]);
+        return NULL;
+    }
+    return argv[++*i];
+}
+
+// The '=' in "WHAT=...", or NULL, said, when there is none or nothing before it.
+static const char* _named(const char* flag, const char* spec, const char* what) {
+    const char* eq = strchr(spec, '=');
+    if (!eq || eq == spec) {
+        fprintf(stderr, "Error: %s wants %s=...\n", flag, what);
+        return NULL;
+    }
+    return eq;
+}
+
+// Whether a list already holds `count` entries, said when it does.
+static bool _full(const char* flag, int count) {
+    if (count < RENDER_TAGS_MAX)
+        return false;
+    fprintf(stderr, "Error: %s given more than %d times\n", flag, RENDER_TAGS_MAX);
+    return true;
+}
+
+// The entry just added at `k` moved back past those due later, so a list stays in the order its
+// entries fall due, those due together in the order given.
+static void _settle_class(RenderTagClass* list, int k) {
+    for (; k > 0 && list[k - 1].frame > list[k].frame; k--) {
+        const RenderTagClass later = list[k - 1];
+        list[k - 1] = list[k];
+        list[k] = later;
+    }
+}
+
+static void _settle_fade(RenderTagFade* list, int k) {
+    for (; k > 0 && list[k - 1].frame > list[k].frame; k--) {
+        const RenderTagFade later = list[k - 1];
+        list[k - 1] = list[k];
+        list[k] = later;
+    }
+}
+
 int render_tags_parse(RenderTags* t, int argc, char** argv, int* i) {
     const char* flag = argv[*i];
-    const bool takes = strcmp(flag, "--node-tag") == 0 || strcmp(flag, "--piece-tags") == 0 ||
-                       strcmp(flag, "--tag") == 0 || strcmp(flag, "--tag-class") == 0 ||
-                       strcmp(flag, "--tag-fade") == 0 || strcmp(flag, "--tag-views") == 0;
+    int frame = 0, view = -1;
     if (strcmp(flag, "--tag-table") == 0) {
         t->table = true;
         return 1;
     }
-    if (!takes)
-        return 0;
-    if (*i + 1 >= argc) {
-        fprintf(stderr, "Error: %s requires an argument\n", flag);
-        return -1;
-    }
-    const char* spec = argv[++*i];
-    int frame = 0, view = -1;
     if (strcmp(flag, "--tag-views") == 0) {
+        const char* spec = _arg(argc, argv, i);
+        if (!spec)
+            return -1;
         t->table_views = (unsigned)strtoul(spec, NULL, 0);
         t->table_views_set = true;
         return 1;
     }
     if (strcmp(flag, "--tag-fade") == 0) {
+        const char* spec = _arg(argc, argv, i);
+        if (!spec || _full(flag, t->fade_count))
+            return -1;
         spec = _prefix(spec, &frame, &view);
-        if (t->class_count >= RENDER_TAGS_MAX)
-            goto full;
-        t->classes[t->class_count].frame = frame;
-        t->classes[t->class_count].view = view;
-        t->classes[t->class_count].klass = -1;
-        t->classes[t->class_count++].fade = (float)atof(spec);
+        t->fades[t->fade_count].frame = frame;
+        t->fades[t->fade_count].view = view;
+        t->fades[t->fade_count].fade = (float)atof(spec);
+        _settle_fade(t->fades, t->fade_count++);
         return 1;
     }
-    const bool class_flag = strcmp(flag, "--tag-class") == 0;
-    spec = _prefix(spec, &frame, class_flag ? &view : NULL);
-    const char* eq = strchr(spec, '=');
-    if (!eq || eq == spec) {
-        fprintf(stderr, "Error: %s wants %s=...\n", flag,
-                strcmp(flag, "--tag") == 0 ? "TAG"
-                : class_flag               ? "CLASS"
-                                           : "NAME");
-        return -1;
-    }
     if (strcmp(flag, "--node-tag") == 0) {
-        if (t->node_count >= RENDER_TAGS_MAX)
-            goto full;
+        const char* spec = _arg(argc, argv, i);
+        if (!spec || _full(flag, t->node_count))
+            return -1;
+        spec = _prefix(spec, &frame, NULL);
+        const char* eq = _named(flag, spec, "NAME");
+        if (!eq)
+            return -1;
         snprintf(t->nodes[t->node_count].name, sizeof(t->nodes[0].name), "%.*s", (int)(eq - spec),
                  spec);
         char* end = NULL;
@@ -149,16 +183,25 @@ int render_tags_parse(RenderTags* t, int argc, char** argv, int* i) {
         return 1;
     }
     if (strcmp(flag, "--piece-tags") == 0) {
-        if (t->piece_count >= RENDER_TAGS_MAX)
-            goto full;
+        const char* spec = _arg(argc, argv, i);
+        if (!spec || _full(flag, t->piece_count))
+            return -1;
+        const char* eq = _named(flag, spec, "NAME");
+        if (!eq)
+            return -1;
         snprintf(t->pieces[t->piece_count].name, sizeof(t->pieces[0].name), "%.*s",
                  (int)(eq - spec), spec);
         t->pieces[t->piece_count++].first = (uint32_t)strtoul(eq + 1, NULL, 0);
         return 1;
     }
     if (strcmp(flag, "--tag") == 0) {
-        if (t->row_count >= RENDER_TAGS_MAX)
-            goto full;
+        const char* spec = _arg(argc, argv, i);
+        if (!spec || _full(flag, t->row_count))
+            return -1;
+        spec = _prefix(spec, &frame, NULL);
+        const char* eq = _named(flag, spec, "TAG");
+        if (!eq)
+            return -1;
         t->rows[t->row_count].frame = frame;
         t->rows[t->row_count].tag = (uint32_t)strtoul(spec, NULL, 0);
         if (!_state(eq + 1, &t->rows[t->row_count].state)) {
@@ -169,23 +212,27 @@ int render_tags_parse(RenderTags* t, int argc, char** argv, int* i) {
         t->table = true;
         return 1;
     }
-    // --tag-class
-    if (t->class_count >= RENDER_TAGS_MAX)
-        goto full;
-    t->classes[t->class_count].frame = frame;
-    t->classes[t->class_count].view = view;
-    t->classes[t->class_count].klass = atoi(spec);
-    if (t->classes[t->class_count].klass < 1 ||
-        t->classes[t->class_count].klass >= SCENE_TAG_CLASSES ||
-        !_class(eq + 1, &t->classes[t->class_count].row)) {
-        fprintf(stderr, "Error: --tag-class: cannot read '%s'\n", spec);
-        return -1;
+    if (strcmp(flag, "--tag-class") == 0) {
+        const char* spec = _arg(argc, argv, i);
+        if (!spec || _full(flag, t->class_count))
+            return -1;
+        spec = _prefix(spec, &frame, &view);
+        const char* eq = _named(flag, spec, "CLASS");
+        if (!eq)
+            return -1;
+        t->classes[t->class_count].frame = frame;
+        t->classes[t->class_count].view = view;
+        t->classes[t->class_count].klass = atoi(spec);
+        if (t->classes[t->class_count].klass < 1 ||
+            t->classes[t->class_count].klass >= SCENE_TAG_CLASSES ||
+            !_class(eq + 1, &t->classes[t->class_count].row)) {
+            fprintf(stderr, "Error: --tag-class: cannot read '%s'\n", spec);
+            return -1;
+        }
+        _settle_class(t->classes, t->class_count++);
+        return 1;
     }
-    t->class_count++;
-    return 1;
-full:
-    fprintf(stderr, "Error: %s given more than %d times\n", flag, RENDER_TAGS_MAX);
-    return -1;
+    return 0;
 }
 
 // The root of vertex v's piece, by union-find with path halving.
@@ -199,6 +246,16 @@ static void _join(uint32_t* parent, uint32_t a, uint32_t b) {
     a = _find(parent, a), b = _find(parent, b);
     if (a != b)
         parent[a < b ? b : a] = a < b ? a : b;
+}
+
+// A vertex's place, compared by its bytes, as two corners at one place are written alike.
+typedef struct Corner {
+    float at[3];
+    uint32_t vertex;
+} Corner;
+
+static int _corner_order(const void* a, const void* b) {
+    return memcmp(((const Corner*)a)->at, ((const Corner*)b)->at, sizeof(((Corner*)0)->at));
 }
 
 // Vertices joined by a triangle or by standing at the same place are one piece: a box is six
@@ -218,11 +275,19 @@ static void _tag_pieces(Mesh* mesh, uint32_t first, const char* name) {
         _join(parent, mesh->indices[k], mesh->indices[k + 1]);
         _join(parent, mesh->indices[k], mesh->indices[k + 2]);
     }
-    // Coincident corners: a quadratic scan, which the small meshes this is for can afford.
-    for (size_t a = 0; a < n; a++)
-        for (size_t b = a + 1; b < n; b++)
-            if (memcmp(&mesh->vertices[3 * a], &mesh->vertices[3 * b], 3 * sizeof(float)) == 0)
-                _join(parent, (uint32_t)a, (uint32_t)b);
+    // Coincident corners, found as neighbours once the corners are sorted by their places' bytes.
+    Corner* corners = malloc(n * sizeof(Corner));
+    if (corners) {
+        for (size_t v = 0; v < n; v++) {
+            memcpy(corners[v].at, &mesh->vertices[3 * v], sizeof(corners[v].at));
+            corners[v].vertex = (uint32_t)v;
+        }
+        qsort(corners, n, sizeof(Corner), _corner_order);
+        for (size_t v = 1; v < n; v++)
+            if (_corner_order(&corners[v - 1], &corners[v]) == 0)
+                _join(parent, corners[v - 1].vertex, corners[v].vertex);
+        free(corners);
+    }
     uint32_t pieces = 0;
     for (size_t v = 0; v < n; v++) {
         const uint32_t root = _find(parent, (uint32_t)v);
@@ -265,14 +330,20 @@ static int _tag_nodes(SceneNode* node, const char* pattern, uint32_t tag, uint8_
 
 static SceneTags* g_table = NULL;
 
+// Whether a write given at frame `at` is made this frame: at its frame, or at the first for one
+// given at 1 or none.
+static bool _due(int at, int frame) {
+    return at == frame || (at <= 1 && frame <= 1);
+}
+
 void render_tags_frame(const RenderTags* t, Engine* engine, SceneView* driver, SceneView** grid,
                        int grid_count, int frame) {
     Scene* scene = engine_get_scene(engine);
     if (!scene)
         return;
-    const int first = frame <= 1;
+    const bool first = frame <= 1;
     for (int k = 0; k < t->node_count; k++) {
-        if (!(t->nodes[k].frame == frame || (t->nodes[k].frame <= 1 && first)))
+        if (!_due(t->nodes[k].frame, frame))
             continue;
         const int tagged =
             _tag_nodes(scene->root_node, t->nodes[k].name, t->nodes[k].tag, t->nodes[k].klass);
@@ -290,31 +361,22 @@ void render_tags_frame(const RenderTags* t, Engine* engine, SceneView* driver, S
     if (t->table && !g_table)
         g_table = create_scene_tags();
     for (int k = 0; g_table && k < t->row_count; k++)
-        if (t->rows[k].frame == frame || (t->rows[k].frame <= 1 && first))
+        if (_due(t->rows[k].frame, frame))
             scene_tags_set(g_table, t->rows[k].tag, t->rows[k].state);
 
-    // Each view's classes and fade, every frame from the one each was given at: the grid takes the
-    // driver's settings afresh each frame, so a row written once would last a frame.
-    SceneView* views[1 + 64];
-    int count = 0;
-    views[count++] = driver;
-    for (int i = 0; i < grid_count && count < (int)(sizeof(views) / sizeof(views[0])); i++)
-        views[count++] = grid[i];
-    for (int v = 0; v < count; v++) {
-        SceneView* view = views[v];
+    // Each view's classes and fade, every frame from the one each was given at, in the order they
+    // fell due: the grid takes the driver's settings afresh each frame, so a row written once
+    // would last a frame. `index` is the grid's number, -1 the driver.
+    for (int index = -1; index < grid_count; index++) {
+        SceneView* view = index < 0 ? driver : grid[index];
         if (!view)
             continue;
-        const int index = v - 1; // the grid's number; -1 the driver
-        for (int k = 0; k < t->class_count; k++) {
-            if (t->classes[k].frame > frame)
-                continue;
-            if (t->classes[k].view >= 0 && t->classes[k].view != index)
-                continue;
-            if (t->classes[k].klass < 0)
-                view->settings.tag_fade = t->classes[k].fade;
-            else
+        for (int k = 0; k < t->class_count && t->classes[k].frame <= frame; k++)
+            if (t->classes[k].view < 0 || t->classes[k].view == index)
                 view->settings.tag_classes[t->classes[k].klass] = t->classes[k].row;
-        }
+        for (int k = 0; k < t->fade_count && t->fades[k].frame <= frame; k++)
+            if (t->fades[k].view < 0 || t->fades[k].view == index)
+                view->settings.tag_fade = t->fades[k].fade;
         const bool borrows =
             index < 0 || !t->table_views_set || ((t->table_views >> index) & 1u) != 0;
         view->tags = borrows ? g_table : NULL;

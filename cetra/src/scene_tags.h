@@ -34,16 +34,4 @@ void free_scene_tags(SceneTags* tags);
 bool scene_tags_set(SceneTags* tags, uint32_t tag, SceneTagState state);
 SceneTagState scene_tags_get(const SceneTags* tags, uint32_t tag);
 
-// The engine's side, read through a view. Writes that changed how a tag is drawn, counted apart
-// from those that changed only its outline, which restart nothing.
-uint64_t scene_tags_generation(const SceneTags* tags);
-uint64_t scene_tags_outline_generation(const SceneTags* tags);
-// Whether any tag has an outline: a view's outline pass runs only then.
-bool scene_tags_outlined(const SceneTags* tags);
-// Whether any tag is hidden.
-bool scene_tags_hides(const SceneTags* tags);
-// The table brought up to date on the GPU and bound to `unit`; its count, one past the largest tag
-// set, which the shader reads no tag past. 0 for NULL tags, with nothing bound.
-uint32_t scene_tags_bind(SceneTags* tags, int unit);
-
 #endif // _SCENE_TAGS_H_

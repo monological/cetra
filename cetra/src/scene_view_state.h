@@ -11,6 +11,7 @@
 #include "postfx.h"
 #include "scene_view.h"
 #include "sky.h"
+#include "ubo.h"
 
 struct Engine;
 struct SceneView;
@@ -140,18 +141,18 @@ typedef struct SceneViewState {
         const struct SceneTags* tags; // the table borrowed, and its generation
         uint64_t tag_generation;
     } record;
-    // The block the view's class rows, fade and table count go up in (spec 14.39): made the first
-    // frame the view draws with tags, uploaded each frame it does.
+    // The block the view's class rows, fade and table count go up in (spec 14.39), and what it
+    // holds (`tag_block_held` once it holds anything).
     struct Ubo* tag_block;
+    uint32_t tag_block_data[UBO_TAG_VIEW_BLOCK_SIZE / 4];
+    bool tag_block_held;
     // This frame draws its see-through surfaces through the OIT passes: it ghosts, and OIT can
-    // run. Set where its scene pass starts; otherwise those surfaces stay in the opaque passes.
+    // run. Otherwise those surfaces stay in the opaque passes.
     bool ghosts_this_frame;
-    // Its outlines (spec 14.39): the mask of outlined surfaces and the depth of its solid ones,
-    // at its picture's size, and the ring drawn from them, which the copy into the window lays
-    // over the picture. Valid while the view outlines something; drawn again when the view
-    // draws, or the table's outlines changed since `outline_generation`.
-    GLuint outline_fbo, outline_mask_tex, outline_depth_tex;
-    int outline_w, outline_h;
+    // Its outlines (spec 14.39): the mask of outlined surfaces, with the depth of its solid ones,
+    // and the ring drawn from it, which the copy into the window lays over the picture; the
+    // table's outline writes the ring was drawn under.
+    GLColorTarget outline_mask;
     GLColorTarget overlay;
     bool overlay_valid;
     uint64_t outline_generation;
@@ -195,16 +196,13 @@ bool scene_view_ghosts(const struct SceneView* view);
 // Whether it draws any surface otherwise than as it is solid: hidden by a tag or a class, or
 // see-through.
 bool scene_view_hides_by_tags(const struct SceneView* view);
-// The view's tags bound for its passes, its shadows' included: its block on UBO_BINDING_TAG_VIEW
-// and its table on TEXUNIT_TAGS. A view without tags, or a capture, binds the engine's block of
-// zeros, which draws every surface as it is.
-void scene_view_bind_tags(struct SceneView* view);
-// For a pass every view shares -- a kept shadow face, the rain's cover -- that must draw every
-// surface as it is: the block of zeros bound; then the view's own bound again, as it was uploaded
-// (NULL = the block of zeros).
-void engine_bind_no_tags(const struct Engine* engine);
-void scene_view_rebind_tags(const struct Engine* engine, const struct SceneView* view);
+// `view`'s tags bound for a pass drawing the scene: its block on UBO_BINDING_TAG_VIEW, up to date,
+// and its table on TEXUNIT_TAGS. NULL, a view drawing no tags or a capture's binds the engine's
+// block of zeros, which draws every surface as it is.
+void engine_bind_tags(const struct Engine* engine, const struct SceneView* view);
 
+// The window's framebuffer pixels to a point, across and down: 1 where the window has no size.
+void engine_fb_per_point(const struct Engine* engine, float* sx, float* sy);
 // The view's rectangle in framebuffer pixels, GL's origin (bottom-left): x, y, width, height. Each
 // edge rounds to the nearest pixel, so two views sharing an edge share a pixel boundary.
 void scene_view_fb_rect(const struct SceneView* view, int rect[4]);
@@ -231,6 +229,9 @@ bool scene_view_resolve_opaque_color(struct SceneView* view);
 GLuint scene_view_resolve_scene_depth(struct SceneView* view);
 bool scene_view_begin_oit_pass(struct SceneView* view);
 void scene_view_end_oit_pass(struct SceneView* view);
+// Whether the accumulate's targets are made at the view's render size, made if not; the
+// framebuffer bound is left as it was.
+bool scene_view_oit_ready(struct SceneView* view);
 bool scene_view_begin_moment_pass(struct SceneView* view);
 void scene_view_end_moment_pass(struct SceneView* view);
 

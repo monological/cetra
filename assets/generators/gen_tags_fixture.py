@@ -62,34 +62,42 @@ pieces += [(f"part{k}", "cube", "tags_part", (x, 0.1 + PART_SIZE / 2, PART_Z),
 CAP_CENTRE, CAP_SIZE = (PART_XS[0], 0.1 + PART_SIZE + 0.02, PART_Z), (0.06, 0.04, 0.06)
 pieces.append(("cap", "cube", "tags_cap", CAP_CENTRE, CAP_SIZE))
 
-gltf = gltf_of("gen_tags_fixture.py", SHAPES, MATERIALS, pieces)
-# The cap under part0, its transform put in its parent's frame: the parent's scale divided out of
-# both its offset and its size.
-names = [n["name"] for n in gltf["nodes"]]
-parent, child = names.index("part0"), names.index("cap")
-p = gltf["nodes"][parent]
-c = gltf["nodes"][child]
-c["translation"] = [(c["translation"][i] - p["translation"][i]) / p["scale"][i] for i in range(3)]
-c["scale"] = [c["scale"][i] / p["scale"][i] for i in range(3)]
-p["children"] = [child]
-gltf["scenes"][0]["nodes"] = [i for i in range(len(names)) if i != child]
 
-scene_desc = {
-    "version": 1,
-    "_comment": [
-        "Surfaces to tag (spec 14.39): one mesh of four strips, one mesh placed four times, a",
-        "child under a placed one, on a slab over a floor, under a casting sun.",
-        "",
-        "Regenerate with: python3 assets/generators/gen_tags_fixture.py",
-    ],
-    "models": [{"path": asset_ref("tags_fixture.gltf")}],
-    "environment": {"ambient": [0.25, 0.25, 0.25]},
-    "lights": [{"name": "key", "type": "directional", "direction": [0.45, -0.8, -0.4],
-                "color": [1.0, 1.0, 1.0], "intensity": 2.5, "cast_shadows": True}],
-    "camera": {"eye": [0.0, 1.3, 1.25], "target": [0.0, 0.05, 0.05], "fov": 40.0},
-    "post": {"tonemap": "neutral", "exposure": 1.0, "auto_exposure": False},
-}
+def main():
+    gltf = gltf_of("gen_tags_fixture.py", SHAPES, MATERIALS, pieces)
+    # The cap under part0, its transform put in its parent's frame: the parent's scale divided out
+    # of both its offset and its size.
+    names = [n["name"] for n in gltf["nodes"]]
+    parent, child = names.index("part0"), names.index("cap")
+    p = gltf["nodes"][parent]
+    c = gltf["nodes"][child]
+    c["translation"] = [(c["translation"][i] - p["translation"][i]) / p["scale"][i]
+                        for i in range(3)]
+    c["scale"] = [c["scale"][i] / p["scale"][i] for i in range(3)]
+    p["children"] = [child]
+    gltf["scenes"][0]["nodes"] = [i for i in range(len(names)) if i != child]
 
-write_json("tags_fixture.gltf", gltf)
-write_json("tags_fixture.cscn", scene_desc)
-print(f"wrote tags_fixture (.gltf + .cscn), {len(pieces)} pieces")
+    scene_desc = {
+        "version": 1,
+        "_comment": [
+            "Surfaces to tag (spec 14.39): one mesh of four strips, one mesh placed four times, a",
+            "child under a placed one, on a slab over a floor, under a casting sun.",
+            "",
+            "Regenerate with: python3 assets/generators/gen_tags_fixture.py",
+        ],
+        "models": [{"path": asset_ref("tags_fixture.gltf")}],
+        "environment": {"ambient": [0.25, 0.25, 0.25]},
+        "lights": [{"name": "key", "type": "directional", "direction": [0.45, -0.8, -0.4],
+                    "color": [1.0, 1.0, 1.0], "intensity": 2.5, "cast_shadows": True}],
+        "camera": {"eye": [0.0, 1.3, 1.25], "target": [0.0, 0.05, 0.05], "fov": 40.0},
+        "post": {"tonemap": "neutral", "exposure": 1.0, "auto_exposure": False},
+    }
+
+    write_json("tags_fixture.gltf", gltf)
+    write_json("tags_fixture.cscn", scene_desc)
+    print(f"wrote tags_fixture (.gltf + .cscn), {len(pieces)} pieces")
+
+
+# The gate imports this for its constants, so the files are written only when it is run.
+if __name__ == "__main__":
+    main()

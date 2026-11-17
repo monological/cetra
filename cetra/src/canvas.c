@@ -70,8 +70,6 @@ void free_canvas_tags(CanvasTags* tags) {
     free(tags);
 }
 
-static void _tag_texels(CanvasTagState s, uint8_t out[12]);
-
 bool canvas_tags_set(CanvasTags* tags, uint32_t tag, CanvasTagState state) {
     if (!tags)
         return false;
@@ -85,7 +83,8 @@ bool canvas_tags_set(CanvasTags* tags, uint32_t tag, CanvasTagState state) {
         return false;
     memset(tags->states + had, 0, (tags->cap - had) * sizeof(CanvasTagState));
     uint8_t texels[4 * TAG_TABLE_TEXELS];
-    _tag_texels(state, texels);
+    tag_table_pack(state.colour, state.outline, state.dim, state.hidden, state.raised, state.lit,
+                   texels);
     if (!tag_table_write(&tags->table, tag, texels))
         return false;
     const CanvasTagState was = tags->states[tag];
@@ -102,26 +101,11 @@ CanvasTagState canvas_tags_get(const CanvasTags* tags, uint32_t tag) {
     return tags->states[tag];
 }
 
-static void _rgba_bytes(uint32_t rgba, uint8_t out[4]) {
-    out[0] = (uint8_t)(rgba >> 24), out[1] = (uint8_t)(rgba >> 16);
-    out[2] = (uint8_t)(rgba >> 8), out[3] = (uint8_t)rgba;
-}
-
 static void _rgba_floats(uint32_t rgba, float out[4]) {
     uint8_t bytes[4];
-    _rgba_bytes(rgba, bytes);
+    rgba_bytes(rgba, bytes);
     for (int k = 0; k < 4; k++)
         out[k] = bytes[k] / 255.0f;
-}
-
-// A tag's three texels: colour, outline, then dim, hidden, raised and lit.
-static void _tag_texels(CanvasTagState s, uint8_t out[12]) {
-    _rgba_bytes(s.colour, out);
-    _rgba_bytes(s.outline, out + 4);
-    out[8] = (uint8_t)lroundf(glm_clamp(s.dim, 0.0f, 1.0f) * 255.0f);
-    out[9] = s.hidden ? 255 : 0;
-    out[10] = s.raised ? 255 : 0;
-    out[11] = s.lit ? 255 : 0;
 }
 
 /*
@@ -860,7 +844,7 @@ static void _styles_upload(CanvasData* d) {
     if (!texels)
         return;
     for (uint32_t s = 0; s < d->style_count; s++)
-        _rgba_bytes(d->styles[s], texels + (size_t)s * 4);
+        rgba_bytes(d->styles[s], texels + (size_t)s * 4);
     glBindBuffer(GL_TEXTURE_BUFFER, d->style_buffer);
     glBufferData(GL_TEXTURE_BUFFER, (GLsizeiptr)d->style_count * 4, texels, GL_DYNAMIC_DRAW);
     glBindTexture(GL_TEXTURE_BUFFER, d->style_texture);

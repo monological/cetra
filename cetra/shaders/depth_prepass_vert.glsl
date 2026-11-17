@@ -35,5 +35,5 @@ void main()
     vec4 localPos = cetra_local_position(aPos, skinMatrixOrIdentity(aBoneIds, aBoneWeights),
                                          skinned, aTexCoords, aTexCoords2, time, mModel, uMorphEye);
     vec4 clip = cetra_object_position(mModel, view, projection, localPos).clip;
-    gl_Position = cetraTag(cetra_instance_tag(uNodeTag)).drop ? CETRA_TAG_DROPPED : clip;
+    gl_Position = cetraTagPosition(cetra_instance_tag(uNodeTag), clip);
 }

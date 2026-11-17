@@ -67,12 +67,8 @@ uniform float uDeltaTime; // render clock advance, for the previous-frame positi
 #define FUR_VERTEX
 #include "fur.glsl"
 #if CETRA_HAS(PBR_FEAT_TAGS)
+#define CETRA_TAG_VARYINGS
 #include "tags.glsl"
-// What the view says of the surface's tag (spec 14.39), constant across it: the paint, display sRGB
-// with its share in alpha; its opacity, flat share and dim; its object, for the tags render mode.
-flat out vec4 TagPaint;
-flat out vec3 TagMisc;
-flat out uint TagObject;
 #endif
 
 // The depth prepass rasterizes these same triangles and this pass then tests
@@ -141,12 +137,7 @@ void main() {
 #endif
 
 #if CETRA_HAS(PBR_FEAT_TAGS)
-    CetraTag tag = cetraTag(cetra_instance_tag(uNodeTag));
-    TagPaint = tag.paint;
-    TagMisc = vec3(tag.opacity, tag.flatShare, tag.dim);
-    TagObject = tag.object;
-    if (tag.drop)
-        clipPos = CETRA_TAG_DROPPED;
+    clipPos = cetraTagShade(cetra_instance_tag(uNodeTag), clipPos);
 #endif
 
     gl_Position = clipPos;

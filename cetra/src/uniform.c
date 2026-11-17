@@ -266,9 +266,11 @@ void uniform_set_ivec4(UniformManager* mgr, const char* name, const int* value) 
 }
 
 void uniform_set_uvec2(UniformManager* mgr, const char* name, const uint32_t* value) {
-    const float as_float[2] = {(float)value[0], (float)value[1]};
+    // Kept by its bits: as a float, two values past 2^24 one apart would read as one.
+    float bits[2];
+    memcpy(bits, value, sizeof(bits));
     GLint loc;
-    if (uniform_write_wanted(mgr, name, as_float, 2, &loc))
+    if (uniform_write_wanted(mgr, name, bits, 2, &loc))
         glUniform2uiv(loc, 1, value);
 }
 

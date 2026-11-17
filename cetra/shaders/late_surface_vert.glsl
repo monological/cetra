@@ -35,5 +35,5 @@ void main()
     vUv = aTexCoords;
     vColor = vertexColorExists ? aColor : vec4(1.0);
     vViewDepth = -eye.z;
-    gl_Position = cetraTag(uNodeTag).drop ? CETRA_TAG_DROPPED : projection * eye;
+    gl_Position = cetraTagPosition(uNodeTag, projection * eye);
 }

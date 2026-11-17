@@ -1,11 +1,22 @@
 #include "tag_table.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "util.h"
 
 #define TAG_TABLE_BYTES (4 * TAG_TABLE_TEXELS)
+
+void tag_table_pack(uint32_t colour, uint32_t outline, float dim, bool hidden, bool raised,
+                    bool lit, uint8_t out[TAG_TABLE_BYTES]) {
+    rgba_bytes(colour, out);
+    rgba_bytes(outline, out + 4);
+    out[8] = (uint8_t)lroundf(glm_clamp(dim, 0.0f, 1.0f) * 255.0f);
+    out[9] = hidden ? 255 : 0;
+    out[10] = raised ? 255 : 0;
+    out[11] = lit ? 255 : 0;
+}
 
 void tag_table_init(TagTable* table) {
     memset(table, 0, sizeof(*table));
@@ -37,6 +48,8 @@ bool tag_table_write(TagTable* table, uint32_t tag, const uint8_t texels[TAG_TAB
     return true;
 }
 
+// The written range alone, or, when the table has outgrown its buffer, a buffer twice the size and
+// every tag in it. The shader reads no tag past the count, so the rest of a new buffer is left.
 void tag_table_upload(TagTable* table) {
     if (!table->buffer) {
         glGenBuffers(1, &table->buffer);

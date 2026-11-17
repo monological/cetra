@@ -68,6 +68,8 @@ typedef struct Mesh {
     GLuint morph_vbo;   // CDLOD morph target; generated only when `morph` exists
     GLuint morph_normal_vbo;
     GLuint tag_vbo; // generated only when `tags` exists
+    // The least and greatest object `tags` holds past 0, measured by mesh_upload; 0, 0 = none.
+    uint32_t tag_min, tag_max;
 
     AABB aabb; // Of the vertex array, measured by mesh_upload (a stored bound, never empty)
 

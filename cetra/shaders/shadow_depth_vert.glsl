@@ -46,5 +46,5 @@ void main()
     HookWorldPos = (mModel * localPos).xyz;
 #endif
     vec4 clip = lightSpaceMatrix * mModel * localPos;
-    gl_Position = cetraTag(cetra_instance_tag(uNodeTag)).drop ? CETRA_TAG_DROPPED : clip;
+    gl_Position = cetraTagPosition(cetra_instance_tag(uNodeTag), clip);
 }

@@ -1169,7 +1169,7 @@ static void _prime_caster_program(ShaderProgram* program, const Engine* engine, 
     engine_upload_displacement_uniforms(engine, scene, view ? view : engine->focus_view, u);
     // Only what a view draws solid casts (spec 14.39): a surface it fades or draws see-through,
     // whatever pass draws it, casts nothing, so what is lit inside it is lit.
-    uniform_set_int(u, "uTagLane", 1);
+    uniform_set_int(u, "uTagLane", TAG_LANE_SOLID);
 }
 
 // One layer's casters, through `matrix`, with the depth program or with `absorb` the translucent
@@ -1558,10 +1558,12 @@ static uint32_t view_cast_mask(const SceneView* view) {
 
 // The body both depth-pass loops share, once a layer is bound: walk the scene into it through
 // one light-space matrix, drawing the casters that share a bit with `mask` (0 = all), for `view`
-// (NULL outside a view's pass).
+// (NULL outside a view's pass). A layer for every view (mask 0) -- a kept face, the rain's cover --
+// takes no view's tags, as it takes no view's mask; a view's own takes its tags (spec 14.39).
 static void draw_shadow_layer(ShadowSystem* ss, const Scene* scene, const DrawList* list,
                               mat4 matrix, SubmitState* state, ShadowCasterSet set,
                               const Engine* engine, const SceneView* view, uint32_t mask) {
+    engine_bind_tags(engine, mask ? view : NULL);
     // The matrix IS the layer's coverage volume, and Gribb-Hartmann does not
     // care whether it is ortho or perspective -- so cascades and punctual faces
     // cull through the same six planes.
@@ -2708,11 +2710,7 @@ static bool draw_tile_cell(ShadowSystem* ss, const Engine* engine, const Scene* 
     tile_cell_at(cell, ss->punctual_map_size, &layer, &x, &y);
     if (!begin_depth_tile(ss->punctual_fbo, ss->punctual_map_array, layer, x, y, clear))
         return false;
-    // A kept face is every view's, so it takes every node as it is, whatever the view drawing
-    // this frame hides by its tags (spec 14.39), as it takes every node whatever the view's mask.
-    engine_bind_no_tags(engine);
     draw_shadow_layer(ss, scene, scene->draw_list, matrix, state, set, engine, view, 0u);
-    scene_view_rebind_tags(engine, view);
     end_depth_tile();
     loading_screen_tick(engine);
     return true;
@@ -3787,8 +3785,6 @@ void shadow_render_rain_layer(Engine* engine, Scene* scene) {
     }
     // A stamp compare when the shadow pass built it; the build when shadows are off.
     engine_build_draw_list(engine, scene, engine->focus_view);
-    // The cover is every view's, so a roof one view hides by its tags still keeps the rain off.
-    engine_bind_no_tags(engine);
 
     /*
      * Looking along the rain, from the origin, so the camera's position in that view

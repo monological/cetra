@@ -51,7 +51,7 @@
 #include "wind.h"
 #include "profiler.h"
 #include "postfx_programs.h"
-#include "scene_tags.h"
+#include "scene_tags_internal.h"
 #include "scene_view_state.h"
 #include "crt.h"
 #include "uniform.h"
@@ -3390,9 +3390,6 @@ static void _engine_draw_view(Engine* engine, Scene* scene, SceneView* view, Eng
         glDisable(GL_CULL_FACE);
     }
 
-    // The view's tags, for its shadows and its passes alike (spec 14.39).
-    scene_view_bind_tags(view);
-
     // Shadow depth pass, fitted to this view's camera.
     if (scene && scene->shadow_system && scene->shadow_system->enabled) {
         // Unscoped here on purpose: render_shadow_depth_pass opens its own
@@ -3404,10 +3401,8 @@ static void _engine_draw_view(Engine* engine, Scene* scene, SceneView* view, Eng
     // centred on the focus view and drawn with every node, so each view would draw the same layer,
     // and its readback ring steps a frame at a time. Outside the `enabled` gate on purpose: that
     // switches shadows off, not roofs.
-    if (scene && !*settled) {
+    if (scene && !*settled)
         shadow_render_rain_layer(engine, scene);
-        scene_view_rebind_tags(engine, view);
-    }
 
     glBindFramebuffer(GL_FRAMEBUFFER, vs->framebuffer);
     // The scene target is supersampled; the present pass left the viewport

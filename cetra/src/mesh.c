@@ -383,31 +383,32 @@ static void _float_streams(Mesh* mesh, MeshFloatStream out[MESH_FLOAT_STREAMS]) 
     memcpy(out, streams, sizeof(streams));
 }
 
-static void _upload_int_stream(const Mesh* mesh, const int* data, GLuint* vbo, GLuint attr,
-                               GLint components) {
+// `type` GL_INT or GL_UNSIGNED_INT, four bytes a component either way.
+static void _upload_int_stream(const Mesh* mesh, const void* data, GLuint* vbo, GLuint attr,
+                               GLint components, GLenum type) {
     if (!data)
         return;
     if (*vbo == 0)
         glGenBuffers(1, vbo);
-    const size_t stride = (size_t)components * sizeof(int);
+    const size_t stride = (size_t)components * sizeof(int32_t);
     glBindBuffer(GL_ARRAY_BUFFER, *vbo);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(mesh->vertex_count * stride), data, GL_STATIC_DRAW);
-    glVertexAttribIPointer(attr, components, GL_INT, (GLsizei)stride, (void*)0);
+    glVertexAttribIPointer(attr, components, type, (GLsizei)stride, (void*)0);
     glEnableVertexAttribArray(attr);
 }
 
-// The tag stream, one uint a vertex: the integer path, unsigned, since a tag is past int's range
-// long before the table's limit is.
-static void _upload_tag_stream(Mesh* mesh) {
-    if (!mesh->tags)
-        return;
-    if (mesh->tag_vbo == 0)
-        glGenBuffers(1, &mesh->tag_vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, mesh->tag_vbo);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(mesh->vertex_count * sizeof(uint32_t)), mesh->tags,
-                 GL_STATIC_DRAW);
-    glVertexAttribIPointer(GL_ATTR_TAG, 1, GL_UNSIGNED_INT, (GLsizei)sizeof(uint32_t), (void*)0);
-    glEnableVertexAttribArray(GL_ATTR_TAG);
+// The least and greatest object the mesh's vertices carry past 0.
+static void _measure_tags(Mesh* mesh) {
+    mesh->tag_min = mesh->tag_max = 0;
+    for (size_t v = 0; mesh->tags && v < mesh->vertex_count; v++) {
+        const uint32_t t = mesh->tags[v];
+        if (t == 0)
+            continue;
+        if (mesh->tag_max == 0 || t < mesh->tag_min)
+            mesh->tag_min = t;
+        if (t > mesh->tag_max)
+            mesh->tag_max = t;
+    }
 }
 
 void mesh_upload(Mesh* mesh) {
@@ -449,14 +450,15 @@ void mesh_upload(Mesh* mesh) {
     for (int s = 0; s < MESH_FLOAT_STREAMS; s++)
         _upload_float_stream(mesh, streams[s].data, streams[s].vbo, streams[s].attr,
                              streams[s].components);
-    _upload_tag_stream(mesh);
+    _upload_int_stream(mesh, mesh->tags, &mesh->tag_vbo, GL_ATTR_TAG, 1, GL_UNSIGNED_INT);
+    _measure_tags(mesh);
 
     // The skinning pair is gated on is_skinned as well as on the array, because a
     // mesh can carry weights it does not use and binding them would put a
     // skinned program's attributes on an unskinned draw.
     if (mesh->is_skinned) {
         _upload_int_stream(mesh, mesh->bone_ids, &mesh->bone_id_vbo, GL_ATTR_BONE_IDS,
-                           BONES_PER_VERTEX);
+                           BONES_PER_VERTEX, GL_INT);
         _upload_float_stream(mesh, mesh->bone_weights, &mesh->bone_weight_vbo, GL_ATTR_BONE_WEIGHTS,
                              BONES_PER_VERTEX);
     }

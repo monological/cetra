@@ -7,7 +7,7 @@
 #include "camera_rig.h"
 #include "engine.h"
 #include "intersect.h"
-#include "scene_tags.h"
+#include "scene_tags_internal.h"
 #include "ubo.h"
 #include "util.h"
 
@@ -204,32 +204,22 @@ bool scene_view_hides_by_tags(const SceneView* view) {
     return false;
 }
 
+_Static_assert(UBO_TAG_VIEW_CLASSES == SCENE_TAG_CLASSES,
+               "the view's tag block holds a row for each of its classes");
+
 static uint32_t _unorm16(float v) {
-    v = v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v;
-    return (uint32_t)lroundf(v * 65535.0f);
+    return (uint32_t)lroundf(glm_clamp(v, 0.0f, 1.0f) * 65535.0f);
 }
 
-void scene_view_bind_tags(SceneView* view) {
-    SceneViewState* vs = view->state;
-    Engine* engine = vs->engine;
-    if (!scene_view_draws_tags(view)) {
-        glBindBufferBase(GL_UNIFORM_BUFFER, UBO_BINDING_TAG_VIEW, engine->tag_block_none->id);
-        return;
-    }
-    if (!vs->tag_block)
-        vs->tag_block = create_ubo(UBO_TAG_VIEW_BLOCK_SIZE, UBO_BINDING_TAG_VIEW);
-    if (!vs->tag_block) {
-        glBindBufferBase(GL_UNIFORM_BUFFER, UBO_BINDING_TAG_VIEW, engine->tag_block_none->id);
-        return;
-    }
-    // The block: its head, then a row a class -- the colour, see-through and flat in 16 bits each,
-    // whether it is hidden. Class 0 is none and its row left zero.
-    uint32_t block[UBO_TAG_VIEW_BLOCK_SIZE / 4] = {0};
-    const float fade = view->settings.tag_fade < 0.0f   ? 0.0f
-                       : view->settings.tag_fade > 1.0f ? 1.0f
-                                                        : view->settings.tag_fade;
-    block[0] = UBO_TAG_VIEW_ON | (scene_view_ghosts(view) ? UBO_TAG_VIEW_GHOSTS : 0u);
-    block[1] = scene_tags_bind(view->tags, TEXUNIT_TAGS);
+// The view's block as tags.glsl reads it: its head -- flags, the table's `count`, the fade -- then
+// a row a class, the colour, see-through and flat in 16 bits each, and whether it is hidden. Class
+// 0 is none and its row left zero.
+static void _tag_block_fill(const SceneView* view, uint32_t count,
+                            uint32_t block[UBO_TAG_VIEW_BLOCK_SIZE / 4]) {
+    memset(block, 0, UBO_TAG_VIEW_BLOCK_SIZE);
+    const float fade = glm_clamp(view->settings.tag_fade, 0.0f, 1.0f);
+    block[0] = UBO_TAG_VIEW_ON | (scene_view_hides_by_tags(view) ? UBO_TAG_VIEW_DROPS : 0u);
+    block[1] = count;
     memcpy(&block[2], &fade, sizeof(fade));
     for (int c = 1; c < SCENE_TAG_CLASSES; c++) {
         const SceneTagClass* k = &view->settings.tag_classes[c];
@@ -238,18 +228,31 @@ void scene_view_bind_tags(SceneView* view) {
         row[1] = _unorm16(k->see_through) | (_unorm16(k->flat) << 16);
         row[2] = k->hidden ? 1u : 0u;
     }
-    ubo_upload(vs->tag_block, block, sizeof(block));
-    glBindBufferBase(GL_UNIFORM_BUFFER, UBO_BINDING_TAG_VIEW, vs->tag_block->id);
 }
 
-void engine_bind_no_tags(const Engine* engine) {
-    glBindBufferBase(GL_UNIFORM_BUFFER, UBO_BINDING_TAG_VIEW, engine->tag_block_none->id);
-}
-
-void scene_view_rebind_tags(const Engine* engine, const SceneView* view) {
-    const bool own = view && scene_view_draws_tags(view) && view->state->tag_block;
-    glBindBufferBase(GL_UNIFORM_BUFFER, UBO_BINDING_TAG_VIEW,
-                     own ? view->state->tag_block->id : engine->tag_block_none->id);
+void engine_bind_tags(const Engine* engine, const SceneView* view) {
+    GLuint bound = engine->tag_block_none->id;
+    if (view && scene_view_draws_tags(view)) {
+        SceneViewState* vs = view->state;
+        // The table first: its writes go up and it takes its unit, and its count goes in the block.
+        const uint32_t count = scene_tags_bind(view->tags, TEXUNIT_TAGS);
+        if (!vs->tag_block)
+            vs->tag_block = create_ubo(UBO_TAG_VIEW_BLOCK_SIZE, UBO_BINDING_TAG_VIEW);
+        if (vs->tag_block) {
+            // Built every bind and uploaded only when it differs from what the block holds, so a
+            // write to a class row, the fade or the table's length is in the next pass that binds,
+            // and the passes of a frame that changed none of them upload nothing.
+            uint32_t block[UBO_TAG_VIEW_BLOCK_SIZE / 4];
+            _tag_block_fill(view, count, block);
+            if (!vs->tag_block_held || memcmp(block, vs->tag_block_data, sizeof(block)) != 0) {
+                ubo_upload(vs->tag_block, block, sizeof(block));
+                memcpy(vs->tag_block_data, block, sizeof(block));
+                vs->tag_block_held = true;
+            }
+            bound = vs->tag_block->id;
+        }
+    }
+    glBindBufferBase(GL_UNIFORM_BUFFER, UBO_BINDING_TAG_VIEW, bound);
 }
 
 void free_scene_view(SceneView* view) {
@@ -261,10 +264,7 @@ void free_scene_view(SceneView* view) {
     _free_targets(view);
     cloud_march_release(&vs->clouds);
     free_ubo(vs->tag_block);
-    if (vs->outline_fbo)
-        glDeleteFramebuffers(1, &vs->outline_fbo);
-    gl_delete_texture(&vs->outline_mask_tex);
-    gl_delete_texture(&vs->outline_depth_tex);
+    gl_color_target_free(&vs->outline_mask);
     gl_color_target_free(&vs->overlay);
     free(vs);
     camera_release(&view->camera);
@@ -386,7 +386,7 @@ PostFXPass* scene_view_add_pass(SceneView* view, PostFXLocation at, ShaderProgra
  */
 
 // Framebuffer pixels per window point, along each axis.
-static void _fb_per_point(const Engine* engine, float* sx, float* sy) {
+void engine_fb_per_point(const Engine* engine, float* sx, float* sy) {
     *sx = engine->win_width > 0 ? (float)engine->fb_width / (float)engine->win_width : 1.0f;
     *sy = engine->win_height > 0 ? (float)engine->fb_height / (float)engine->win_height : 1.0f;
 }
@@ -401,7 +401,7 @@ void scene_view_fb_rect(const SceneView* view, int rect[4]) {
         return;
     }
     float sx, sy;
-    _fb_per_point(engine, &sx, &sy);
+    engine_fb_per_point(engine, &sx, &sy);
     const int left = (int)lroundf(view->x * sx);
     const int right = (int)lroundf((view->x + view->width) * sx);
     const int top = (int)lroundf(view->y * sy);
@@ -415,7 +415,7 @@ void scene_view_fb_rect(const SceneView* view, int rect[4]) {
 void scene_view_point_from_fb(const SceneView* view, double fb_x, double fb_y, float out[2]) {
     const Engine* engine = view->state->engine;
     float sx, sy;
-    _fb_per_point(engine, &sx, &sy);
+    engine_fb_per_point(engine, &sx, &sy);
     int rect[4];
     scene_view_fb_rect(view, rect);
     // fb_y counts up from the window's bottom edge, as the rect's origin does; the point counts
@@ -427,7 +427,7 @@ void scene_view_point_from_fb(const SceneView* view, double fb_x, double fb_y, f
 bool scene_view_contains(const SceneView* view, const float point[2]) {
     const Engine* engine = view->state->engine;
     float sx, sy;
-    _fb_per_point(engine, &sx, &sy);
+    engine_fb_per_point(engine, &sx, &sy);
     int rect[4];
     scene_view_fb_rect(view, rect);
     return point[0] >= 0.0f && point[1] >= 0.0f && point[0] * sx < (float)rect[2] &&
@@ -441,7 +441,7 @@ void scene_view_ray(const SceneView* view, const float point[2], vec3 origin, ve
         return;
     const Engine* engine = view->state->engine;
     float sx, sy;
-    _fb_per_point(engine, &sx, &sy);
+    engine_fb_per_point(engine, &sx, &sy);
     int rect[4];
     scene_view_fb_rect(view, rect);
     const Camera* camera = &view->camera;
@@ -999,6 +999,19 @@ static bool _ensure_oit_targets(SceneViewState* vs, int rw, int rh) {
 // the independent per-target blend (accum sums, revealage multiplies 1-alpha).
 // Returns false if the targets couldn't be allocated (caller falls back to the
 // classic unsorted late pass). Leaves depth-write to the caller (off).
+bool scene_view_oit_ready(SceneView* view) {
+    SceneViewState* vs = view->state;
+    int rw, rh;
+    scene_view_render_size(view, &rw, &rh);
+    if (vs->oit_fbo != 0 && vs->oit_w == rw && vs->oit_h == rh)
+        return true;
+    GLint bound = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &bound);
+    const bool ready = _ensure_oit_targets(vs, rw, rh);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)bound);
+    return ready;
+}
+
 bool scene_view_begin_oit_pass(SceneView* view) {
     SceneViewState* vs = view->state;
     int rw, rh;

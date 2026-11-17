@@ -1,7 +1,6 @@
-#include "scene_tags.h"
+#include "scene_tags_internal.h"
 
 #include <GL/glew.h>
-#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -14,7 +13,10 @@ struct SceneTags {
     size_t cap;
     uint64_t generation, outline_generation;
     uint32_t outlined; // tags whose outline is set
-    uint32_t hidden;   // tags hidden
+    // The least and greatest tag whose outline has been set since none was: every outlined tag
+    // lies within, and one cleared inside leaves it as it was.
+    uint32_t outlined_lo, outlined_hi;
+    uint32_t hidden; // tags hidden
     TagTable table;
 };
 
@@ -36,21 +38,9 @@ void free_scene_tags(SceneTags* tags) {
     free(tags);
 }
 
-static void _rgba_bytes(uint32_t rgba, uint8_t out[4]) {
-    out[0] = (uint8_t)(rgba >> 24), out[1] = (uint8_t)(rgba >> 16);
-    out[2] = (uint8_t)(rgba >> 8), out[3] = (uint8_t)rgba;
-}
-
-// The canvas's layout, so the two tables read alike: colour, outline, then dim, hidden, a byte
-// the canvas raises with and lit.
+// The canvas's layout, nothing raised in 3D.
 static void _tag_texels(SceneTagState s, uint8_t out[4 * TAG_TABLE_TEXELS]) {
-    _rgba_bytes(s.colour, out);
-    _rgba_bytes(s.outline, out + 4);
-    const float dim = s.dim < 0.0f ? 0.0f : s.dim > 1.0f ? 1.0f : s.dim;
-    out[8] = (uint8_t)lroundf(dim * 255.0f);
-    out[9] = s.hidden ? 255 : 0;
-    out[10] = 0;
-    out[11] = s.lit ? 255 : 0;
+    tag_table_pack(s.colour, s.outline, s.dim, s.hidden, false, s.lit, out);
 }
 
 bool scene_tags_set(SceneTags* tags, uint32_t tag, SceneTagState state) {
@@ -75,6 +65,13 @@ bool scene_tags_set(SceneTags* tags, uint32_t tag, SceneTagState state) {
     if ((drawn || ringed) && !tag_table_write(&tags->table, tag, texels))
         return false;
     tags->outlined += (state.outline != 0) - (was.outline != 0);
+    if (tags->outlined == 0) {
+        tags->outlined_lo = tags->outlined_hi = 0;
+    } else if (state.outline != 0) {
+        const bool first = tags->outlined_hi == 0;
+        tags->outlined_lo = first || tag < tags->outlined_lo ? tag : tags->outlined_lo;
+        tags->outlined_hi = tag > tags->outlined_hi ? tag : tags->outlined_hi;
+    }
     tags->hidden += (uint32_t)state.hidden - (uint32_t)was.hidden;
     tags->states[tag] = state;
     tags->generation += drawn;
@@ -98,6 +95,10 @@ uint64_t scene_tags_outline_generation(const SceneTags* tags) {
 
 bool scene_tags_outlined(const SceneTags* tags) {
     return tags && tags->outlined > 0;
+}
+
+bool scene_tags_outlined_within(const SceneTags* tags, uint32_t lo, uint32_t hi) {
+    return scene_tags_outlined(tags) && lo <= tags->outlined_hi && hi >= tags->outlined_lo;
 }
 
 bool scene_tags_hides(const SceneTags* tags) {

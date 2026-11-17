@@ -26,8 +26,8 @@ layout(std140) uniform InstanceBlock {
     // pads a mat3 to 48 bytes anyway, so this costs 16 bytes an instance and
     // removes a class of column-packing bugs.
     mat4 uInstNormal[CETRA_INSTANCE_MAX];
-    // Each instance's object and class (spec 14.39), x and y; read by tags.glsl, and declared
-    // whether a program reads it or not, since the block's size is checked against the C side's.
+    // Each instance's object and class (spec 14.39), x and y; declared whether a program reads it
+    // or not, since the block's size is checked against the C side's.
     uvec4 uInstTag[CETRA_INSTANCE_MAX];
 };
 

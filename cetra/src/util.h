@@ -48,6 +48,8 @@ typedef struct GLPassState {
     GLfloat clear_colour[4];
     GLint cull_face;    // GL_BACK, GL_FRONT or both
     GLint polygon_mode; // GL_FILL or GL_LINE, front and back alike
+    GLint depth_func;
+    GLboolean depth_mask;
     GLboolean depth;
     GLboolean blend;
     GLboolean cull;
@@ -86,6 +88,7 @@ bool gl_color_fbo_create(int width, int height, GLenum internal_format, GLuint* 
 // picture, the window's, the scratch a pass draws into before copying it back, or the CRT's signal.
 typedef struct GLColorTarget {
     GLuint fbo, tex;
+    GLuint depth; // a 24-bit depth texture beside the colour, 0 = none
     int w, h;
     GLenum format; // the internal format it was made with, or last asked for
     bool failed;   // could not be made at w, h and format; not tried again at them
@@ -95,6 +98,8 @@ typedef struct GLColorTarget {
 bool gl_color_target_ensure(GLColorTarget* t, int w, int h, const char* what);
 // The same in `format`.
 bool gl_color_target_ensure_format(GLColorTarget* t, int w, int h, GLenum format, const char* what);
+// The same with a depth texture attached, for a pass that depth-tests into its own colour.
+bool gl_color_target_ensure_depth(GLColorTarget* t, int w, int h, GLenum format, const char* what);
 void gl_color_target_free(GLColorTarget* t);
 // `src` whole into the framebuffer `dst_fbo` at its origin, texel for texel. Leaves both bound as
 // the read and draw framebuffers.
@@ -105,6 +110,12 @@ void gl_color_target_copy(const GLColorTarget* src, GLuint dst_fbo);
  */
 void print_indentation(int depth);
 char* safe_strdup(const char* s);
+
+// 0xRRGGBBAA as its four bytes, red first.
+static inline void rgba_bytes(uint32_t rgba, uint8_t out[4]) {
+    out[0] = (uint8_t)(rgba >> 24), out[1] = (uint8_t)(rgba >> 16);
+    out[2] = (uint8_t)(rgba >> 8), out[3] = (uint8_t)rgba;
+}
 
 // The description-struct convention for a vec3 (CameraDesc, LightDesc): left
 // zero, it takes the default named beside it in the header.

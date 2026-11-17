@@ -2770,7 +2770,7 @@ void main() {
     // whatever lights it here: a class drawn mostly flat reads in shadow. Then the tag's dim,
     // toward black. The two outputs the chain adds back into this pixel below -- its ambient
     // specular and its skin's diffuse -- are lit, so they lose the flat share and the dim alike.
-    float tagFlat = TagPaint.a > 0.0 ? TagMisc.y * TagPaint.a : 0.0;
+    float tagFlat = TagMisc.y * TagPaint.a;
     float tagKeep = 1.0 - TagMisc.z;
     if (tagFlat > 0.0)
         color = mix(color, sRGBToLinear(TagPaint.rgb), tagFlat);

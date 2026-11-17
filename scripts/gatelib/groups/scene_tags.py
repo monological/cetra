@@ -9,17 +9,12 @@ import numpy as np
 
 from gatelib.arms import Arms
 from gatelib.groups.views import _differ, _draws, _linear, _view_probe, _views_run
-from gatelib.harness import asset
-from gatelib.scenes import _projector
+from gatelib.harness import _import_fixture_gen, asset
+from gatelib.scenes import _cscn_camera, _projector
 
-# The fixture's camera, as its scene file has it, and where its pieces stand (gen_tags_fixture.py).
-TAGS_CAM = {"eye": (0.0, 1.3, 1.25), "target": (0.0, 0.05, 0.05), "fovy_deg": 40.0}
-TAGS_STRIP_XS = (-0.3, -0.1, 0.1, 0.3)
-TAGS_STRIP_TOP, TAGS_STRIP_Z = 0.12, -0.15
-TAGS_PART_XS = (-0.36, -0.12, 0.12, 0.36)
-TAGS_PART_TOP, TAGS_PART_Z = 0.22, 0.3
-TAGS_CAP_TOP = 0.26
 TAGS_W, TAGS_H = 400, 300
+# The fixture's top, on which the strips and parts stand.
+TAGS_SLAB_TOP = 0.1
 
 # The tags every arm gives the fixture: the strips 1 to 4 by piece, the parts 10 to 13 of class 3
 # by node, the slab 20 of class 1. The cap, part0's child, takes part0's.
@@ -39,6 +34,17 @@ def _tag_colour(tag):
 def _code_at(img, project, point):
     x, y = project(point)
     return tuple(int(c) for c in img[int(round(y)), int(round(x))])
+
+
+def _radiance_at(img, project, point):
+    """The pixel at `point` under the linear curve: its radiance at the pinned exposure."""
+    return _linear(np.array([[_code_at(img, project, point)]]))[0, 0]
+
+
+def _drawn_from(said, view, frame):
+    """The frames from `frame` on that `view` drew, off --view-probe."""
+    rows, _ = _view_probe(said)
+    return sorted(f for f, row in rows.get(view, {}).items() if row[0] and f >= frame)
 
 
 def run_scene_tags_gate(workdir):
@@ -101,26 +107,44 @@ def run_scene_tags_gate(workdir):
     again after frame 40; the paint's metal and gloss left on, the strip reads (139, 3, 3), red
     metal, against the slab's (225, 10, 10).
 
-    scene-tag-capture holds the outcome, not one guard: with the capture's bind of no tags removed,
-    and with its programs resolved with the tags bit as well, it still passes. The reflection
-    probes are captured at the first frame, before any view binds its tags, and the GI captured
-    again from frame 10 reaches the other view too little to move a code.
+    scene-tag-capture holds the outcome, not one guard. A capture binds no tags as every pass binds
+    its view's, where the pass begins, a capture's view having none: there is no one line to take
+    out. Its programs resolved with the tags bit as well, it still passes, since its view's block
+    hides nothing; and the GI captured again from frame 10 reaches the other view too little to
+    move a code even where a hidden wall would cast no shadow in it.
     """
     arm = Arms(23)
     scene = asset("tags_fixture.cscn")
-    have = os.path.exists(scene)
+    gen = _import_fixture_gen("gen_tags_fixture.py", "scene-tags") if os.path.exists(scene) \
+        else None
+    if gen is not None:
+        # Where the fixture's pieces stand, read off its generator and its scene file.
+        cam = _cscn_camera("tags_fixture.cscn")
+        strip_xs, part_xs = gen.STRIP_XS, gen.PART_XS
+        strip_top, strip_z = gen.STRIP_Y + gen.STRIP_HALF[1], gen.STRIP_Z
+        part_top, part_z = TAGS_SLAB_TOP + gen.PART_SIZE, gen.PART_Z
+        cap_top = gen.CAP_CENTRE[1] + gen.CAP_SIZE[1] / 2.0
+
+    def needs_fixture(body):
+        """An arm on tags_fixture, skipped when the fixture or its generator is not there."""
+        @functools.wraps(body)
+        def guarded():
+            return body() if gen is not None else (None, "no tags_fixture or its generator")
+        return guarded
 
     def run(tag, extra, frames=10):
         return _views_run(workdir, f"tags_{tag}", scene, TAGS_W, TAGS_H, extra, frames)
+
+    still = ["--views", "1x1", "--view-turn", "0", "--accumulate", "16", "--view-probe"]
+    still2 = ["--views", "2x1", "--view-turn", "0", "--accumulate", "16", "--view-probe"]
 
     @functools.cache
     def reach():
         return run("reach", TAGS_FLAGS + ["--render-mode", "15"], 3)
 
     @arm("scene-tag-off")
+    @needs_fixture
     def _():
-        if not have:
-            return None, "no tags_fixture.cscn"
         plain, said = run("plain", [])
         inert, said2 = run("inert", ["--tag-table", "--tag-class", "2=none"] + TAGS_FLAGS)
         if plain is None or inert is None:
@@ -129,18 +153,17 @@ def run_scene_tags_gate(workdir):
         return diff == 0, f"{diff} px between the fixture and its tags that change nothing (want 0)"
 
     @arm("scene-tag-reach")
+    @needs_fixture
     def _():
-        if not have:
-            return None, "no tags_fixture.cscn"
         img, said = reach()
         if img is None:
             return False, f"the run failed: {said}"
-        project = _projector(TAGS_CAM, img.shape[1], img.shape[0])
-        checks = [(f"strip{k + 1}", (x, TAGS_STRIP_TOP, TAGS_STRIP_Z), k + 1)
-                  for k, x in enumerate(TAGS_STRIP_XS)]
-        checks += [(f"part{k}", (x, TAGS_PART_TOP, TAGS_PART_Z + 0.04), 10 + k)
-                   for k, x in enumerate(TAGS_PART_XS)]
-        checks += [("cap", (TAGS_PART_XS[0], TAGS_CAP_TOP, TAGS_PART_Z), 10),
+        project = _projector(cam, img.shape[1], img.shape[0])
+        checks = [(f"strip{k + 1}", (x, strip_top, strip_z), k + 1)
+                  for k, x in enumerate(strip_xs)]
+        checks += [(f"part{k}", (x, part_top, part_z + 0.04), 10 + k)
+                   for k, x in enumerate(part_xs)]
+        checks += [("cap", (part_xs[0], cap_top, part_z), 10),
                    ("slab", (0.5, 0.1, -0.4), 20), ("floor", (0.75, 0.0, 0.0), 0)]
         # Within one code: a quarter plus three quarters of a byte lands on a half for one byte in
         # four, which the GPU's conversion and Python's round settle apart.
@@ -153,9 +176,8 @@ def run_scene_tags_gate(workdir):
                            if not wrong else "; ".join(wrong))
 
     @arm("scene-tag-instanced")
+    @needs_fixture
     def _():
-        if not have:
-            return None, "no tags_fixture.cscn"
         img, said = reach()
         single, said2 = run("single", TAGS_FLAGS + ["--render-mode", "15", "--no-instancing"], 3)
         if img is None or single is None:
@@ -164,17 +186,12 @@ def run_scene_tags_gate(workdir):
         return diff == 0, f"{diff} px between instanced and one draw an object (want 0)"
 
     @arm("scene-tag-node")
+    @needs_fixture
     def _():
-        if not have:
-            return None, "no tags_fixture.cscn"
-        still = ["--views", "1x1", "--view-turn", "0", "--accumulate", "16", "--view-probe"]
         _, moved = run("node_moved", TAGS_FLAGS + still + ["--node-tag", "40:part1=55:3"], 60)
         _, same = run("node_same", TAGS_FLAGS + still + ["--node-tag", "40:part1=11:3"], 60)
-        rows_moved, _ = _view_probe(moved)
-        rows_same, _ = _view_probe(same)
-        drawn_moved = sorted(f for f, row in rows_moved.get(0, {}).items() if row[0] and f >= 40)
-        drawn_same = sorted(f for f, row in rows_same.get(0, {}).items() if row[0] and f >= 40)
-        rested = _draws(rows_same, 0)
+        drawn_moved, drawn_same = _drawn_from(moved, 0, 40), _drawn_from(same, 0, 40)
+        rested = _draws(_view_probe(same)[0], 0)
         ok = bool(drawn_moved) and drawn_moved[0] <= 41 and not drawn_same and rested is not None
         return ok, (f"a new tag at frame 40 draws the rested view again from frame "
                     f"{drawn_moved[0] if drawn_moved else None} (want 40 or 41); the same tag "
@@ -185,9 +202,8 @@ def run_scene_tags_gate(workdir):
         return run(f"without_{name}", ["--remove-node", name])
 
     @arm("scene-tag-hidden")
+    @needs_fixture
     def _():
-        if not have:
-            return None, "no tags_fixture.cscn"
         tag_hidden, said = run("hidden_tag", TAGS_FLAGS + ["--tag", "11=hidden"])
         class_hidden, said2 = run("hidden_class", TAGS_FLAGS + ["--tag-class", "1=hidden"])
         no_part, _ = without("part1")
@@ -200,9 +216,8 @@ def run_scene_tags_gate(workdir):
             f"px from the slab removed (want 0, 0)")
 
     @arm("scene-tag-paint")
+    @needs_fixture
     def _():
-        if not have:
-            return None, "no tags_fixture.cscn"
         plain, _ = run("paint_plain", TAGS_FLAGS + ["--node-tag", "strips=0:2"])
         # The strips and the slab in one paint: a matte coat reads alike on the metal and the
         # dielectric, which unpainted look nothing alike. This and the flat run with ambient
@@ -217,19 +232,19 @@ def run_scene_tags_gate(workdir):
         dim, _ = run("paint_dim", TAGS_FLAGS + ["--tag", "12=dim=1"])
         if any(x is None for x in (plain, red, lit, flat, dim)):
             return False, "a run failed"
-        project = _projector(TAGS_CAM, plain.shape[1], plain.shape[0])
-        strip = (TAGS_STRIP_XS[1], TAGS_STRIP_TOP, TAGS_STRIP_Z)
+        project = _projector(cam, plain.shape[1], plain.shape[0])
+        strip = (strip_xs[1], strip_top, strip_z)
         slab_top = (0.0, 0.1, -0.4)
         copper, painted = _code_at(plain, project, strip), _code_at(red, project, strip)
         slab_painted = _code_at(red, project, slab_top)
         reds = max(abs(a - b) for a, b in zip(painted, slab_painted)) <= 3
-        top = (TAGS_PART_XS[3], TAGS_PART_TOP, TAGS_PART_Z)
-        front = (TAGS_PART_XS[3], 0.16, TAGS_PART_Z + 0.06)
+        top = (part_xs[3], part_top, part_z)
+        front = (part_xs[3], 0.16, part_z + 0.06)
         lit_top, lit_front = _code_at(lit, project, top), _code_at(lit, project, front)
         flat_top, flat_front = _code_at(flat, project, top), _code_at(flat, project, front)
         shaded = max(abs(a - b) for a, b in zip(lit_top, lit_front))
         evened = max(abs(a - b) for a, b in zip(flat_top, flat_front))
-        black = _code_at(dim, project, (TAGS_PART_XS[2], TAGS_PART_TOP, TAGS_PART_Z))
+        black = _code_at(dim, project, (part_xs[2], part_top, part_z))
         ok = reds and shaded > 20 and evened <= 1 and max(black) <= 2
         return ok, (f"the strip {copper} unpainted, {painted} under red, the slab in the same red "
                     f"{slab_painted} (want within 3 codes); part3's top "
@@ -237,18 +252,17 @@ def run_scene_tags_gate(workdir):
                     f"(want <= 1); part2 dimmed all the way {black} (want black)")
 
     @arm("scene-tag-order")
+    @needs_fixture
     def _():
-        if not have:
-            return None, "no tags_fixture.cscn"
         img, _ = run("order", TAGS_FLAGS + ["--node-tag", "strips=0:2", "--tag-class",
                                             "2=colour=FF2020FF", "--tag", "3=colour=20C040FF",
                                             "--tag-class", "1=hidden", "--tag", "20=colour=FFFFFFFF"])
         no_slab, _ = without("slab")
         if img is None or no_slab is None:
             return False, "a run failed"
-        project = _projector(TAGS_CAM, img.shape[1], img.shape[0])
-        own = _code_at(img, project, (TAGS_STRIP_XS[2], TAGS_STRIP_TOP, TAGS_STRIP_Z))
-        beside = _code_at(img, project, (TAGS_STRIP_XS[1], TAGS_STRIP_TOP, TAGS_STRIP_Z))
+        project = _projector(cam, img.shape[1], img.shape[0])
+        own = _code_at(img, project, (strip_xs[2], strip_top, strip_z))
+        beside = _code_at(img, project, (strip_xs[1], strip_top, strip_z))
         slab_at = (0.5, 0.1, -0.4)
         slab, bare = _code_at(img, project, slab_at), _code_at(no_slab, project, slab_at)
         ok = own[1] > 2 * max(own[0], own[2]) and beside[0] > 3 * max(beside[1], beside[2]) and \
@@ -257,9 +271,8 @@ def run_scene_tags_gate(workdir):
                     f"white in a hidden class, {slab} where the floor shows {bare} (want equal)")
 
     @arm("scene-tag-limit")
+    @needs_fixture
     def _():
-        if not have:
-            return None, "no tags_fixture.cscn"
         far = TAGS_FLAGS + ["--node-tag", "part1=300:3", "--tag", "300=hidden", "--tag",
                             "0=hidden", "--tag", f"{1 << 22}=hidden"]
         img, said = run("limit", far)
@@ -273,9 +286,8 @@ def run_scene_tags_gate(workdir):
             f"part1 removed (want 0)")
 
     @arm("scene-tag-fade")
+    @needs_fixture
     def _():
-        if not have:
-            return None, "no tags_fixture.cscn"
         gone, said = run("fade_gone", TAGS_FLAGS + ["--tag", "12=lit", "--tag-fade", "1"])
         # The reference hides every other object by its tags: the floor, untagged in the fading
         # run, given one here.
@@ -296,11 +308,10 @@ def run_scene_tags_gate(workdir):
         behind, _ = run("fade_behind", lit + ["--remove-node", "part3"])
         if half is None or solid is None or behind is None:
             return False, "a run failed"
-        project = _projector(TAGS_CAM, half.shape[1], half.shape[0])
-        top = (TAGS_PART_XS[3], TAGS_PART_TOP, TAGS_PART_Z)
-        ghost = _linear(np.array([[_code_at(half, project, top)]]))[0, 0]
-        want = 0.5 * (_linear(np.array([[_code_at(solid, project, top)]]))[0, 0] +
-                      _linear(np.array([[_code_at(behind, project, top)]]))[0, 0])
+        project = _projector(cam, half.shape[1], half.shape[0])
+        top = (part_xs[3], part_top, part_z)
+        ghost = _radiance_at(half, project, top)
+        want = 0.5 * (_radiance_at(solid, project, top) + _radiance_at(behind, project, top))
         off = float(np.max(np.abs(ghost - want) / np.maximum(want, 1e-4)))
         aside = (0.5, 0.1, -0.4)
         spared = _code_at(half, project, aside) == _code_at(solid, project, aside)
@@ -310,9 +321,8 @@ def run_scene_tags_gate(workdir):
                     f"slab beside it {'as' if spared else 'NOT as'} unfaded")
 
     @arm("scene-tag-ghost-off")
+    @needs_fixture
     def _():
-        if not have:
-            return None, "no tags_fixture.cscn"
         _, painted = run("ghost_off", TAGS_FLAGS + ["--profiler", "--tag-class",
                                                      "3=colour=4080C0FF"])
         _, fading = run("ghost_on", TAGS_FLAGS + ["--profiler", "--tag-fade", "0.5"])
@@ -321,15 +331,14 @@ def run_scene_tags_gate(workdir):
                                 f"(want True)")
 
     @arm("scene-tag-shadow")
+    @needs_fixture
     def _():
-        if not have:
-            return None, "no tags_fixture.cscn"
         ghost, _ = run("shadow_ghost", TAGS_FLAGS + ["--node-tag", "part3=13:4", "--tag-class",
                                                      "4=see=0.5"])
         bare, _ = run("shadow_bare", TAGS_FLAGS + ["--remove-node", "part3"])
         if ghost is None or bare is None:
             return False, "a run failed"
-        project = _projector(TAGS_CAM, ghost.shape[1], ghost.shape[0])
+        project = _projector(cam, ghost.shape[1], ghost.shape[0])
         # Where part3's shadow fell on the slab: off its far side, along the sun.
         points = [(0.46, 0.1, 0.30), (0.49, 0.1, 0.24), (0.47, 0.1, 0.22), (0.48, 0.1, 0.28)]
         unequal = [p for p in points if _code_at(ghost, project, p) != _code_at(bare, project, p)]
@@ -340,16 +349,14 @@ def run_scene_tags_gate(workdir):
     def _():
         rooms = asset("cornell_rooms.cscn")
         # A GI volume, converged at load before any view draws, dirtied at frame 10 so it captures
-        # again inside the views' frames, 64 probes a frame.
+        # again once the views have drawn with their tags, 64 probes a frame, at each frame's start.
         flags = ["--no-auto-exposure", "-E", "1.0", "--gi-volume", "--gi-rate", "64",
                  "--change-at", "10:gi"]
         # The red wall, which bounces into the GI the captures gather, and a ceiling panel the
         # right view shows, so that view differs; the panel's own light no capture of irradiance
-        # takes, its derived area light carrying it.
-        # The LEFT view hides, the first drawn: the world's lighting work runs inside the first
-        # view's draw, after it has bound its tags, so that is where a capture would take them.
-        # Both views draw with tags, borrowing one empty table, so the programs a capture draws
-        # with carry them whichever view resolved them last; the left's class row alone hides.
+        # takes, its derived area light carrying it. Both views draw with tags, borrowing one
+        # empty table, so the programs a capture draws with carry them whichever view resolved
+        # them last; the left's class row alone hides.
         hide = ["--tag-table", "--node-tag", "rooms_left_red=0:7", "--node-tag",
                 "rooms_light_a=0:7", "--tag-class", "0/7=hidden"]
         pair, said = _views_run(workdir, "tags_capture_pair", rooms, 800, 600,
@@ -369,17 +376,16 @@ def run_scene_tags_gate(workdir):
     ring_flag = "outline=B388FFFF"
 
     @arm("scene-tag-outline")
+    @needs_fixture
     def _():
-        if not have:
-            return None, "no tags_fixture.cscn"
         plain, _ = run("outline_plain", TAGS_FLAGS)
         ringed, _ = run("outline_ringed", TAGS_FLAGS + ["--tag", f"10={ring_flag}"])
         if plain is None or ringed is None:
             return False, "a run failed"
-        project = _projector(TAGS_CAM, plain.shape[1], plain.shape[0])
+        project = _projector(cam, plain.shape[1], plain.shape[0])
         # Leftward from inside part0's left face at its middle: the run of changed pixels just past
         # its silhouette is the ring.
-        x0, y0 = project((TAGS_PART_XS[0] - 0.04, 0.16, TAGS_PART_Z + 0.06))
+        x0, y0 = project((part_xs[0] - 0.04, 0.16, part_z + 0.06))
         row, x = int(round(y0)), int(round(x0))
         changed = np.any(ringed[row] != plain[row], axis=1)
         while x > 0 and not changed[x]:
@@ -415,47 +421,36 @@ def run_scene_tags_gate(workdir):
                     f"behind part3 at {a_hid:.2f} (want 0.35), in front at {a_seen:.2f} (want 1)")
 
     @arm("scene-tag-outline-still")
+    @needs_fixture
     def _():
-        if not have:
-            return None, "no tags_fixture.cscn"
-        still = ["--views", "1x1", "--view-turn", "0", "--accumulate", "16", "--view-probe"]
         late, said = run("outline_late", TAGS_FLAGS + still + ["--tag", f"40:10={ring_flag}"], 60)
         early, _ = run("outline_early", TAGS_FLAGS + still + ["--tag", f"10={ring_flag}"], 60)
         if late is None or early is None:
             return False, "a run failed"
-        rows, _ = _view_probe(said)
-        after = [f for f, row in rows.get(0, {}).items() if row[0] and f >= 40]
+        after = _drawn_from(said, 0, 40)
         diff = _differ(late, early)
         return not after and diff == 0, (
             f"{len(after)} scene frames drawn after the outline at 40 (want 0); the last frame "
             f"{diff} px from the outline there from the start (want 0)")
 
-    still2 = ["--views", "2x1", "--view-turn", "0", "--accumulate", "16", "--view-probe"]
-
-    def drawn_from(said, view, frame):
-        rows, _ = _view_probe(said)
-        return sorted(f for f, row in rows.get(view, {}).items() if row[0] and f >= frame)
-
     @arm("scene-tag-restart")
+    @needs_fixture
     def _():
-        if not have:
-            return None, "no tags_fixture.cscn"
         _, said = run("restart", TAGS_FLAGS + still2 + ["--tag-table", "--tag-views", "1",
                                                         "--tag", "40:11=colour=FF2020FF"], 60)
-        left, right = drawn_from(said, 0, 40), drawn_from(said, 1, 40)
+        left, right = _drawn_from(said, 0, 40), _drawn_from(said, 1, 40)
         ok = bool(left) and left[0] <= 41 and not right
         return ok, (f"the borrowing view draws again from {left[0] if left else None} (want 40 "
                     f"or 41), the other {len(right)} frames after 40 (want 0)")
 
     @arm("scene-tag-shared")
+    @needs_fixture
     def _():
-        if not have:
-            return None, "no tags_fixture.cscn"
         img, said = run("shared", TAGS_FLAGS + still2 + ["--tag", "40:11=colour=FF2020FF"], 60)
         before, _ = run("shared_before", TAGS_FLAGS + still2 + ["--tag-table"], 60)
         if img is None or before is None:
             return False, "a run failed"
-        left, right = drawn_from(said, 0, 40), drawn_from(said, 1, 40)
+        left, right = _drawn_from(said, 0, 40), _drawn_from(said, 1, 40)
         half = img.shape[1] // 2
         changed = [_differ(img[:, :half], before[:, :half]),
                    _differ(img[:, half:], before[:, half:])]

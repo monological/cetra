@@ -226,9 +226,10 @@ _Static_assert(UBO_DECALS_BLOCK_SIZE <= UBO_GUARANTEED_BLOCK_SIZE,
  */
 #define UBO_TAG_VIEW_CLASSES    256
 #define UBO_TAG_VIEW_BLOCK_SIZE (16 + 16 * UBO_TAG_VIEW_CLASSES)
-// The head's flags: the view draws with tags; it draws some surface see-through.
-#define UBO_TAG_VIEW_ON     1u
-#define UBO_TAG_VIEW_GHOSTS 2u
+// The head's flags: the view draws with tags; some surface of it drops in some pass, hidden or
+// see-through, which a depth-only program reads the table to find.
+#define UBO_TAG_VIEW_ON    1u
+#define UBO_TAG_VIEW_DROPS 2u
 
 typedef struct Ubo {
     GLuint id;

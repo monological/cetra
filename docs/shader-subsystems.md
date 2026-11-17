@@ -929,8 +929,15 @@ vertex does, in every program that draws a scene's meshes.
 - **A surface a pass does not draw is collapsed in the vertex stage**, to a point outside every
   side of the clip volume: no fragment, and nothing under depth clamp either. One function decides
   for every program, the depth-only ones included, because a drop the prepass made and the shading
-  pass did not leaves a depth with nothing shaded on it. A triangle's corners carry one object, or a
-  dropped corner stretches it.
+  pass did not leaves a depth with nothing shaded on it: `cetraTagShade` for the lit stages, which
+  fills their varyings too, and `cetraTagPosition` for the rest. A view that drops nothing in any
+  pass -- hiding nothing, nothing see-through -- says so in its block's head, and the depth-only
+  programs then skip the table. A triangle's corners carry one object, or a dropped corner
+  stretches it.
+- **Every pass binds the tags it draws with** where it begins: a scene pass its view's, as it sets
+  its view's mask on the cull view (a capture's view has none), and a shadow layer its view's, or
+  none for a layer every view takes -- a kept face, the rain's cover -- as it takes no view's mask.
+  Nothing inherits the block bound by the pass before it.
 - **The lane** (`uTagLane`): a view that ghosts -- a fade, or a class below solid -- and can run OIT
   draws an opaque item twice, its solid surfaces in the opaque pass and the prepass (1) and its
   see-through ones in the OIT moments and accumulate (2). Every other item keeps both (0). The
@@ -954,8 +961,12 @@ vertex does, in every program that draws a scene's meshes.
   outer edge antialiased by distance, the nearest covered pixel deciding colour and strength, the
   stronger among equals so a seen silhouette rings over a hidden one. The ring is an overlay the
   view's copy into the window lays over the picture (`present_frag`), so an outline changes no
-  frame a still view averaged. The mask is one sample a pixel: the ring's inner edge is stepped
-  where the picture under it is smooth.
+  frame a still view averaged. It is drawn again on a frame that is not a later frame of an
+  average, or after an outline write. The mask takes a mesh tagged by vertex only where its tags
+  span an outlined one. The mask is one sample a pixel: the ring's inner edge is stepped where the
+  picture under it is smooth. The depth is the prepass's, so a surface that sits the prepass out
+  hides no outline, and the mask program has no offset hook, so a surface a hook moves is ringed
+  where it was.
 
 ## Shader hooks
 

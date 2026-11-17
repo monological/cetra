@@ -32,7 +32,7 @@
 #include "engine.h"
 #include "engine_internal.h"
 #include "scene_view_state.h"
-#include "scene_tags.h"
+#include "scene_tags_internal.h"
 #include "postfx_programs.h"
 #include "ltc.h"
 #include "render.h"
@@ -453,6 +453,17 @@ static SubmitStats* _submit_stats(const Engine* engine) {
     return engine->capture_submit ? engine->capture_submit : profiler_submit(engine->profiler);
 }
 
+// The surfaces an item of `lane` keeps by their tags in a pass of the view. In a view ghosting this
+// frame an opaque item is drawn twice: its solid surfaces in the opaque passes, its see-through
+// ones in the OIT passes. Any other item, and every item of a view not ghosting, keeps all, so a
+// see-through surface with no OIT pass to go to is drawn solid. The prepass asks this too, so the
+// two opaque passes agree on which surfaces have a depth.
+static int _tag_lane(const SceneViewState* vs, DrawLane lane, bool oit_pass) {
+    if (lane != DRAW_LANE_OPAQUE || !vs->ghosts_this_frame)
+        return TAG_LANE_ALL;
+    return oit_pass ? TAG_LANE_GHOSTS : TAG_LANE_SOLID;
+}
+
 // Draws one item, carrying `instances` objects. Visibility is the caller's:
 // once a run is formed the chunk holds exactly these objects, so nothing here
 // may decline to draw.
@@ -470,10 +481,10 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
     const Camera* camera = &sv->camera;
     const SceneNode* node = item->node;
     Mesh* mesh = item->mesh;
+    const bool oit_pass = pass == SUBMIT_PASS_OIT_ACCUMULATE || pass == SUBMIT_PASS_OIT_MOMENTS;
     // A pass past the opaque one: any lane but the opaque, or the OIT passes, which a view that
     // ghosts by its tags sends its opaque items through too (spec 14.39).
-    bool alpha_pass = item->lane != DRAW_LANE_OPAQUE || pass == SUBMIT_PASS_OIT_ACCUMULATE ||
-                      pass == SUBMIT_PASS_OIT_MOMENTS;
+    bool alpha_pass = item->lane != DRAW_LANE_OPAQUE || oit_pass;
 
     if (!node->meshes || node->mesh_count == 0)
         return;
@@ -506,7 +517,10 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
     // edges under TAA are what hashed alpha testing is for -- spec 11.31 defers
     // to it and 11.87 chose sharpening instead, with the paper on hand at
     // docs/papers/ so the comparison is a decision rather than a preference.
-    bool a2c_capable = vs->msaa_samples_built > 1 && !vs->capturing;
+    //
+    // Nor in the OIT passes, which a masked item reaches only as a view's ghost: their alpha is a
+    // weight in the accumulation, and as coverage it would dither the ghost and weight it twice.
+    bool a2c_capable = vs->msaa_samples_built > 1 && !vs->capturing && !oit_pass;
     SubmitStats* stats = _submit_stats(engine);
 
     {
@@ -733,15 +747,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             submit_item_tag(u, item);
         }
         uniform_set_float(u, "lineWidth", mesh->line_width);
-        // Which of its surfaces this draw keeps (tags.glsl's uTagLane). In a view that ghosts this
-        // frame an opaque item is drawn twice: its solid surfaces in the opaque passes, its
-        // see-through ones in the OIT passes. Any other item, and every item of a view that cannot
-        // ghost, keeps both, so a see-through surface with no OIT to go to is drawn solid.
-        const bool oit_pass = pass == SUBMIT_PASS_OIT_ACCUMULATE || pass == SUBMIT_PASS_OIT_MOMENTS;
-        uniform_set_int(u, "uTagLane",
-                        item->lane != DRAW_LANE_OPAQUE || !vs->ghosts_this_frame ? 0
-                        : oit_pass                                               ? 2
-                                                                                 : 1);
+        uniform_set_int(u, "uTagLane", _tag_lane(vs, (DrawLane)item->lane, oit_pass));
         // Wind mask bounds: per-mesh geometry (its wind range). The shader
         // uses them only when this mesh's material opted in (uWindResponse > 0).
         wind_upload_mesh(mesh, u);
@@ -1090,6 +1096,84 @@ static bool item_is_prepassable(const DrawItem* item) {
            item->mesh->material->shader_program->depth_prepass_safe;
 }
 
+// Which items a depth sweep draws, asked of each with the sweep's own `ctx`.
+typedef bool (*DepthSweepKeep)(const DrawItem* item, const void* ctx);
+
+// One sweep of a lean depth program over `list`: the items `keep` admits and `cull` lets through,
+// batched where the program reads the instance block, through `state`. The caller binds the
+// program and its pass's uniforms. Counts into `stats` when given; true when it drew anything.
+static bool _submit_depth_sweep(const Engine* engine, const DrawList* list, const SceneView* sv,
+                                ShaderProgram* program, SubmitState* state, const CullView* cull,
+                                DepthSweepKeep keep, const void* ctx, SubmitStats* stats) {
+    UniformManager* u = program->uniforms;
+    InstanceChunk chunk;
+    bool drew = false;
+    for (size_t i = 0; i < list->count; ++i) {
+        const DrawItem* item = &list->items[i];
+        if (!keep(item, ctx))
+            continue;
+        if (stats)
+            stats->meshes_seen++;
+        if (!draw_item_visible(item, cull)) {
+            if (stats)
+                stats->meshes_culled++;
+            continue;
+        }
+
+        size_t run = 1;
+        if (engine->instancing_enabled && engine->instance_ubo && program->instanced)
+            run = _visible_run(list, i, 1u << item->lane, cull);
+        if (stats)
+            stats->meshes_seen += run - 1;
+        if (run > 1)
+            instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, false);
+
+        Mesh* mesh = item->mesh;
+        // Only for a draw that carries one object, for the reason
+        // _submit_item's own guard records: a batched draw reads the transform
+        // from the instance block, and writing `model` anyway dirties the
+        // program's whole uniform block and costs a copy of it at submission.
+        // This pass exists to be cheap; it should not re-buy that.
+        if (run == 1) {
+            uniform_set_mat4(u, "model", (const float*)item->node->global_transform);
+            submit_item_tag(u, item);
+        }
+        wind_upload_mesh(mesh, u);
+        if (submit_take_material(state, mesh->material)) {
+            uniform_set_float(u, "uWindResponse", mesh->material->wind_response);
+            uniform_set_float(u, "uWindFlutter", mesh->material->wind_flutter);
+            uniform_set_int(u, "uWindMode", mesh->material->wind_mode);
+            if (stats)
+                stats->material_switches++;
+        }
+        render_update_skinning_uniforms(program, mesh, item->pose);
+
+        bool two_sided = (item->flags & DRAW_DOUBLE_SIDED) && !sv->settings.show_wireframe;
+        submit_draw_run(state, u, item, run, two_sided, stats);
+        drew = true;
+        i += run - 1;
+    }
+    return drew;
+}
+
+static bool _keep_lean_prepass(const DrawItem* item, const void* ctx) {
+    (void)ctx;
+    return item_is_prepassable(item) && !(item->flags & DRAW_ALPHA_MASKED);
+}
+
+// The lean depth program, made the first time a pass asks for it rather than at init, so a run
+// that never asks compiles nothing; registered, so the engine frees it with every other program.
+// NULL when it cannot be made, latched so a compile error is not compiled and logged every frame.
+static ShaderProgram* _depth_prepass_program(Engine* engine) {
+    if (!engine->depth_prepass_program && !engine->depth_prepass_failed) {
+        engine->depth_prepass_program = create_depth_prepass_program();
+        engine->depth_prepass_failed = engine->depth_prepass_program == NULL;
+        if (engine->depth_prepass_program)
+            engine_add_program(engine, engine->depth_prepass_program);
+    }
+    return engine->depth_prepass_program;
+}
+
 // Depth for the whole opaque lane, so the shading pass rejects hidden fragments
 // before the uber-shader runs. Returns whether it actually drew: the caller may
 // only switch the shading pass to GL_LEQUAL when there is prepass depth behind
@@ -1150,60 +1234,13 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
     // value whichever wins, and _visible_run reads the ORIGINAL list, breaking
     // on mesh inequality -- a run is homogeneous in maskedness by construction,
     // so no run straddles the partition and none is formed differently.
-    bool drew = false;
-
     submit_use_program(&state, program->id);
     uniform_set_mat4(u, "view", (const float*)view);
     uniform_set_mat4(u, "projection", (const float*)projection);
     engine_upload_displacement_uniforms(engine, scene, sv, u);
-    // The opaque pass's lane (_submit_item), so the two agree on which surfaces have a depth.
-    uniform_set_int(u, "uTagLane", sv->state->ghosts_this_frame ? 1 : 0);
-
-    for (size_t i = 0; i < list->count; ++i) {
-        const DrawItem* item = &list->items[i];
-        if (!item_is_prepassable(item) || (item->flags & DRAW_ALPHA_MASKED))
-            continue;
-        if (stats)
-            stats->meshes_seen++;
-        if (!draw_item_visible(item, cull)) {
-            if (stats)
-                stats->meshes_culled++;
-            continue;
-        }
-
-        size_t run = 1;
-        if (engine->instancing_enabled && engine->instance_ubo && program->instanced)
-            run = _visible_run(list, i, 1u << DRAW_LANE_OPAQUE, cull);
-        if (stats)
-            stats->meshes_seen += run - 1;
-        if (run > 1)
-            instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, false);
-
-        Mesh* mesh = item->mesh;
-        // Only for a draw that carries one object, for the reason
-        // _submit_item's own guard records: a batched draw reads the transform
-        // from the instance block, and writing `model` anyway dirties the
-        // program's whole uniform block and costs a copy of it at submission.
-        // This pass exists to be cheap; it should not re-buy that.
-        if (run == 1) {
-            uniform_set_mat4(u, "model", (const float*)item->node->global_transform);
-            submit_item_tag(u, item);
-        }
-        wind_upload_mesh(mesh, u);
-        if (submit_take_material(&state, mesh->material)) {
-            uniform_set_float(u, "uWindResponse", mesh->material->wind_response);
-            uniform_set_float(u, "uWindFlutter", mesh->material->wind_flutter);
-            uniform_set_int(u, "uWindMode", mesh->material->wind_mode);
-            if (stats)
-                stats->material_switches++;
-        }
-        render_update_skinning_uniforms(program, mesh, item->pose);
-
-        bool two_sided = (item->flags & DRAW_DOUBLE_SIDED) && !sv->settings.show_wireframe;
-        submit_draw_run(&state, u, item, run, two_sided, stats);
-        drew = true;
-        i += run - 1;
-    }
+    uniform_set_int(u, "uTagLane", _tag_lane(sv->state, DRAW_LANE_OPAQUE, false));
+    bool drew = _submit_depth_sweep(engine, list, sv, program, &state, cull, _keep_lean_prepass,
+                                    NULL, stats);
 
     // Masked geometry, through its OWN program in depth-only mode. That is what
     // lets it be prepassed at all: the coverage decision is then the same code
@@ -1479,9 +1516,11 @@ static void _draw_shadow_catcher(Engine* engine, Scene* scene, const SceneView* 
 }
 
 // What a pass over the scene from a view's view and projection matrices starts from: the
-// view-projection, its frustum, the cull view over it, and the frame's draw list.
+// view-projection, its frustum, the cull view over it, the frame's draw list, and the view's tags
+// bound, as its mask is set on the cull view -- a capture's none.
 static CullView _scene_pass_prepare(Engine* engine, Scene* scene, SceneView* sv, Frustum* frustum) {
     SceneViewState* vs = sv->state;
+    engine_bind_tags(engine, sv);
     // Un-jittered view-projection, computed once per frame for frustum culling
     // and motion vectors (and stashed as next frame's prev at the end). Held on
     // the view so _render_node uploads it without recomputing per program.
@@ -1586,9 +1625,11 @@ void engine_render_scene(Engine* engine, Scene* scene, SceneView* sv) {
     RenderMode render_mode = vs->render_mode;
 
     // The view's see-through surfaces go to the OIT passes this frame if there are OIT passes
-    // for them (spec 14.39): otherwise the opaque passes keep them, drawn solid.
+    // for them, their targets made before the opaque passes give the surfaces up (spec 14.39):
+    // otherwise the opaque passes keep them, drawn solid.
     vs->ghosts_this_frame = scene_view_ghosts(sv) && engine->oit_enabled &&
-                            render_mode == RENDER_MODE_PBR && !vs->capturing;
+                            render_mode == RENDER_MODE_PBR && !vs->capturing &&
+                            scene_view_oit_ready(sv);
 
     // Whatever below writes depth in a capture, _render_capture_depth must draw as well: a GI
     // probe's wall test is that depth, without the rest of this pass.
@@ -1873,17 +1914,7 @@ void engine_render_scene(Engine* engine, Scene* scene, SceneView* sv) {
     glDisable(GL_BLEND);
     bool prepassed = false;
     if (engine->depth_prepass_enabled && !vs->capturing && render_mode == RENDER_MODE_PBR) {
-        if (!engine->depth_prepass_program && !engine->depth_prepass_failed) {
-            engine->depth_prepass_program = create_depth_prepass_program();
-            // Latched on failure: without it a compile error re-runs two shader
-            // compiles and two log lines every frame, forever.
-            engine->depth_prepass_failed = engine->depth_prepass_program == NULL;
-            // Registered so the engine owns and frees it with every other
-            // program; built here rather than at init so a run that never turns
-            // the pass on compiles nothing.
-            if (engine->depth_prepass_program)
-                engine_add_program(engine, engine->depth_prepass_program);
-        }
+        _depth_prepass_program(engine);
         prepassed =
             _submit_depth_prepass(engine, scene, opaque_list, sv, *view, draw_projection, &cull);
     }
@@ -2203,8 +2234,6 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
     // says why both halves of that order matter), once for every face.
     scene_build_emissive_lights(scene, engine->emissive_lights_enabled);
     engine_resolve_material_variants(engine, scene, NULL);
-    // A capture sees no view's tags: its shadow pass and its faces draw every surface as it is.
-    glBindBufferBase(GL_UNIFORM_BUFFER, UBO_BINDING_TAG_VIEW, engine->tag_block_none->id);
 
     saved->cascade_count = scene->shadow_system ? scene->shadow_system->cascade_count : 1;
     saved->msm_enabled = scene->shadow_system ? scene->shadow_system->msm_enabled : false;
@@ -2848,89 +2877,39 @@ void render_late_items(Engine* engine, const Scene* scene, const SceneView* view
  *   - the outlined surfaces into the mask, everywhere at the view's hidden strength, then again
  *     where that depth lets them through at full strength;
  *   - the ring, outside each silhouette in the mask, into the overlay.
+ * Its depth is the prepass's, so what sits the prepass out -- a program not depth_prepass_safe, a
+ * fur coat's shells -- hides no outline; and the mask program has no offset hook, so an outlined
+ * surface a hook moves is ringed where it was.
  */
 
-// The outlined surfaces of the view: every item that can carry an outline -- a node tagged with
-// one, or a mesh tagged by vertex -- through the mask program, which drops what has none.
-static void _submit_outline_items(Engine* engine, const Scene* scene, const SceneView* sv,
-                                  ShaderProgram* program, mat4 view, mat4 projection,
-                                  const CullView* cull, float strength) {
-    const DrawList* list = scene->draw_list;
-    UniformManager* u = program->uniforms;
-    SubmitState state = {0};
-    InstanceChunk chunk;
-    submit_use_program(&state, program->id);
-    uniform_set_mat4(u, "view", (const float*)view);
-    uniform_set_mat4(u, "projection", (const float*)projection);
-    engine_upload_displacement_uniforms(engine, scene, sv, u);
-    uniform_set_int(u, "uTagLane", 0);
-    uniform_set_float(u, "uStrength", strength);
+// Whether an item may carry an outline: its node's tag has one, or its mesh, tagged by vertex,
+// holds a tag in the range of those outlined. The mask program drops each surface that has none.
+static bool _keep_outlined(const DrawItem* item, const void* ctx) {
+    const SceneTags* tags = ctx;
+    const Mesh* mesh = item->mesh;
     const unsigned lanes =
         (1u << DRAW_LANE_OPAQUE) | (1u << DRAW_LANE_BLEND) | (1u << DRAW_LANE_TRANSMISSIVE);
-    for (size_t i = 0; i < list->count; ++i) {
-        const DrawItem* item = &list->items[i];
-        if (!(lanes & (1u << item->lane)) || !draw_item_visible(item, cull))
-            continue;
-        if (!item->mesh->tags && scene_tags_get(sv->tags, item->tag).outline == 0)
-            continue;
-        size_t run = 1;
-        if (engine->instancing_enabled && engine->instance_ubo && program->instanced)
-            run = _visible_run(list, i, 1u << item->lane, cull);
-        if (run > 1)
-            instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, false);
-        Mesh* mesh = item->mesh;
-        if (run == 1) {
-            uniform_set_mat4(u, "model", (const float*)item->node->global_transform);
-            submit_item_tag(u, item);
-        }
-        wind_upload_mesh(mesh, u);
-        if (submit_take_material(&state, mesh->material)) {
-            uniform_set_float(u, "uWindResponse", mesh->material->wind_response);
-            uniform_set_float(u, "uWindFlutter", mesh->material->wind_flutter);
-            uniform_set_int(u, "uWindMode", mesh->material->wind_mode);
-        }
-        render_update_skinning_uniforms(program, mesh, item->pose);
-        submit_draw_run(&state, u, item, run, (item->flags & DRAW_DOUBLE_SIDED) != 0, NULL);
-        i += run - 1;
-    }
-    submit_state_reset(&state);
-    glBindVertexArray(0);
+    if (!(lanes & (1u << item->lane)))
+        return false;
+    return scene_tags_get(tags, item->tag).outline != 0 ||
+           (mesh->tags && scene_tags_outlined_within(tags, mesh->tag_min, mesh->tag_max));
 }
 
-// The mask and its depth at w x h, made or remade; false, logged, when they cannot be.
-static bool _outline_targets(SceneViewState* vs, int w, int h) {
-    if (vs->outline_fbo && vs->outline_w == w && vs->outline_h == h)
-        return true;
-    if (!vs->outline_fbo)
-        glGenFramebuffers(1, &vs->outline_fbo);
-    gl_delete_texture(&vs->outline_mask_tex);
-    gl_delete_texture(&vs->outline_depth_tex);
-    glGenTextures(1, &vs->outline_mask_tex);
-    glBindTexture(GL_TEXTURE_2D, vs->outline_mask_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glGenTextures(1, &vs->outline_depth_tex);
-    glBindTexture(GL_TEXTURE_2D, vs->outline_depth_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, w, h, 0, GL_DEPTH_COMPONENT, GL_FLOAT,
-                 NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glBindFramebuffer(GL_FRAMEBUFFER, vs->outline_fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                           vs->outline_mask_tex, 0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
-                           vs->outline_depth_tex, 0);
-    const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    if (status != GL_FRAMEBUFFER_COMPLETE) {
-        log_error("A view's outline mask cannot be made at %dx%d (0x%x)", w, h, status);
-        return false;
-    }
-    vs->outline_w = w;
-    vs->outline_h = h;
-    return true;
+// The view's outlined surfaces into the mask at `strength`.
+static void _submit_outline_items(const Engine* engine, const Scene* scene, const SceneView* sv,
+                                  ShaderProgram* program, const CullView* cull, float strength) {
+    UniformManager* u = program->uniforms;
+    SubmitState state = {0};
+    submit_use_program(&state, program->id);
+    uniform_set_mat4(u, "view", (const float*)sv->state->view_matrix);
+    uniform_set_mat4(u, "projection", (const float*)sv->state->projection_matrix);
+    engine_upload_displacement_uniforms(engine, scene, sv, u);
+    uniform_set_int(u, "uTagLane", TAG_LANE_ALL);
+    uniform_set_float(u, "uStrength", strength);
+    _submit_depth_sweep(engine, scene->draw_list, sv, program, &state, cull, _keep_outlined,
+                        sv->tags, NULL);
+    submit_state_reset(&state);
+    glBindVertexArray(0);
 }
 
 void render_view_outline(Engine* engine, Scene* scene, SceneView* sv) {
@@ -2944,8 +2923,13 @@ void render_view_outline(Engine* engine, Scene* scene, SceneView* sv) {
     }
     const int w = fx->picture.w, h = fx->picture.h;
     const uint64_t generation = scene_tags_outline_generation(sv->tags);
-    if (vs->overlay_valid && !vs->draws_this_frame && vs->outline_generation == generation &&
-        vs->overlay.w == w && vs->overlay.h == h)
+    // Drawn again where what the ring is drawn from can have moved: a frame the view drew that is
+    // not a later frame of an average -- a TAA frame, or an average's first -- or a write to the
+    // table's outlines. A later frame of an average draws the scene its first did, and the ring
+    // is drawn from the unjittered camera, so it would be drawn the same.
+    const bool moved = vs->draws_this_frame && vs->average_n <= 0;
+    if (vs->overlay_valid && !moved && vs->outline_generation == generation && vs->overlay.w == w &&
+        vs->overlay.h == h)
         return;
     if (!engine->outline_mask_program) {
         engine->outline_mask_program = create_outline_mask_program();
@@ -2958,24 +2942,25 @@ void render_view_outline(Engine* engine, Scene* scene, SceneView* sv) {
         if (engine->outline_failed)
             return;
     }
-    if (!engine->depth_prepass_program && !engine->depth_prepass_failed) {
-        engine->depth_prepass_program = create_depth_prepass_program();
-        engine->depth_prepass_failed = engine->depth_prepass_program == NULL;
-        if (engine->depth_prepass_program)
-            engine_add_program(engine, engine->depth_prepass_program);
-    }
-    if (!_outline_targets(vs, w, h) ||
+    _depth_prepass_program(engine);
+    if (!gl_color_target_ensure_depth(&vs->outline_mask, w, h, GL_RGBA8, "outline mask") ||
         !gl_color_target_ensure_format(&vs->overlay, w, h, GL_RGBA8, "outline overlay")) {
         vs->overlay_valid = false;
         return;
     }
     profiler_scope_begin(engine->profiler, "outline");
     const GLPassState pass = gl_pass_begin();
-    scene_view_bind_tags(sv);
+    // Back faces culled as the view's own passes cull them, which the bracket switched off: a
+    // surface the picture does not show neither hides an outline nor is ringed.
+    if (!sv->settings.show_wireframe)
+        glEnable(GL_CULL_FACE);
     Frustum frustum;
     const CullView cull = _scene_pass_prepare(engine, scene, sv, &frustum);
+    // The view's own variants: a masked surface reaches the depth through its material's program,
+    // which holds whatever the last view or capture to draw resolved.
+    engine_resolve_material_variants(engine, scene, sv);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, vs->outline_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, vs->outline_mask.fbo);
     glViewport(0, 0, w, h);
     glDisable(GL_BLEND);
     glDisable(GL_SCISSOR_TEST);
@@ -2993,25 +2978,22 @@ void render_view_outline(Engine* engine, Scene* scene, SceneView* sv) {
     // through, at full: what is left at the hidden strength is what something hides.
     glDepthMask(GL_FALSE);
     glDisable(GL_DEPTH_TEST);
-    _submit_outline_items(engine, scene, sv, engine->outline_mask_program, vs->view_matrix,
-                          vs->projection_matrix, &cull, sv->settings.outline_hidden);
+    _submit_outline_items(engine, scene, sv, engine->outline_mask_program, &cull,
+                          sv->settings.outline_hidden);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
-    _submit_outline_items(engine, scene, sv, engine->outline_mask_program, vs->view_matrix,
-                          vs->projection_matrix, &cull, 1.0f);
-    glDepthFunc(GL_LESS);
-    glDepthMask(GL_TRUE);
+    _submit_outline_items(engine, scene, sv, engine->outline_mask_program, &cull, 1.0f);
     glDisable(GL_DEPTH_TEST);
 
     // The ring, from the mask into the overlay.
     ShaderProgram* ring = engine->outline_ring_program;
-    const float per_point =
-        engine->win_width > 0 ? (float)engine->fb_width / (float)engine->win_width : 1.0f;
+    float per_point, per_point_down;
+    engine_fb_per_point(engine, &per_point, &per_point_down);
     glBindFramebuffer(GL_FRAMEBUFFER, vs->overlay.fbo);
     glViewport(0, 0, w, h);
     glUseProgram(ring->id);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, vs->outline_mask_tex);
+    glBindTexture(GL_TEXTURE_2D, vs->outline_mask.tex);
     uniform_set_int(ring->uniforms, "maskTex", 0);
     uniform_set_float(ring->uniforms, "uRadius", sv->settings.outline_points * per_point);
     draw_fullscreen_quad(engine->postfx_programs->quad_vao);
