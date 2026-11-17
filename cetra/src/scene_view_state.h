@@ -137,7 +137,12 @@ typedef struct SceneViewState {
         uint64_t chain;   // the chain's passes and grade, digested
         bool covered;     // a loading screen covered the frame
         bool through;     // the window drawn through its picture, which sets the picture's format
+        const struct SceneTags* tags; // the table borrowed, and its generation
+        uint64_t tag_generation;
     } record;
+    // The block the view's class rows, fade and table count go up in (spec 14.39): made the first
+    // frame the view draws with tags, uploaded each frame it does.
+    struct Ubo* tag_block;
     // This frame, as _engine_decide_view settled it: whether the view draws, and when it draws an
     // averaged frame, which (average_n, from 0; -1 = a TAA frame).
     bool draws_this_frame;
@@ -168,6 +173,17 @@ typedef struct SceneViewState {
 
 // A view for the captures: no target or chain, its camera placed by each face.
 struct SceneView* create_capture_view(struct Engine* engine);
+
+// Whether the view draws with tags (spec 14.39): a table, a class row, a fade or the tags render
+// mode. A capture never does.
+bool scene_view_draws_tags(const struct SceneView* view);
+// Whether it draws a surface see-through: a fade, or a class row less than solid. Its opaque items
+// are then drawn through the transparent passes too.
+bool scene_view_ghosts(const struct SceneView* view);
+// The view's tags bound for its passes, its shadows' included: its block on UBO_BINDING_TAG_VIEW
+// and its table on TEXUNIT_TAGS. A view without tags, or a capture, binds the engine's block of
+// zeros, which draws every surface as it is.
+void scene_view_bind_tags(struct SceneView* view);
 
 // The view's rectangle in framebuffer pixels, GL's origin (bottom-left): x, y, width, height. Each
 // edge rounds to the nearest pixel, so two views sharing an edge share a pixel boundary.

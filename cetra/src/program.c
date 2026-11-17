@@ -560,6 +560,19 @@ void setup_program_uniforms(ShaderProgram* program) {
     // submitter has to know about, so its answer is kept on the program.
     program->instanced = ubo_wire_blocks(program->id);
 
+    // The tag table's unit (spec 14.39), once, at link: a sampler is program state, and one left
+    // on unit 0 puts a buffer sampler beside the albedo's 2D one there, which fails at draw in any
+    // pass that forgot to move it. The program bound around this is put back, since a variant can
+    // be linked mid-frame under a submitter that tracks what is bound.
+    const GLint tag_table = glGetUniformLocation(program->id, "uTagTable");
+    if (tag_table >= 0) {
+        GLint bound = 0;
+        glGetIntegerv(GL_CURRENT_PROGRAM, &bound);
+        glUseProgram(program->id);
+        glUniform1i(tag_table, TEXUNIT_TAGS);
+        glUseProgram((GLuint)bound);
+    }
+
     // Beside it for the same reason: a fact about the linked program that every
     // reader wants the answer to rather than the derivation.
     program->sampler_count = _count_program_samplers(program->id);

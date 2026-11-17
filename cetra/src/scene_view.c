@@ -7,6 +7,8 @@
 #include "camera_rig.h"
 #include "engine.h"
 #include "intersect.h"
+#include "scene_tags.h"
+#include "ubo.h"
 #include "util.h"
 
 #include "ext/log.h"
@@ -97,6 +99,9 @@ void engine_init_view_settings(const Engine* engine, SceneViewSettings* s) {
     s->render_scale = 1.0f;
     glm_vec3_copy((vec3){0.1f, 0.1f, 0.1f}, s->background);
     s->render_mode = RENDER_MODE_PBR;
+    // The canvas's ring width; fainter by about a third where what it rings is hidden.
+    s->outline_points = 1.5f;
+    s->outline_hidden = 0.35f;
 }
 
 // The view and its state, nothing built.
@@ -164,6 +169,68 @@ SceneView* create_capture_view(Engine* engine) {
     return view;
 }
 
+static bool _view_has_class_rows(const SceneView* view) {
+    static const SceneTagClass none[SCENE_TAG_CLASSES];
+    return memcmp(view->settings.tag_classes, none, sizeof(none)) != 0;
+}
+
+bool scene_view_draws_tags(const SceneView* view) {
+    if (!view || view->state->capturing || !view->state->engine->tags_supported)
+        return false;
+    return view->tags || view->settings.tag_fade > 0.0f ||
+           view->settings.render_mode == RENDER_MODE_TAGS || _view_has_class_rows(view);
+}
+
+bool scene_view_ghosts(const SceneView* view) {
+    if (!scene_view_draws_tags(view))
+        return false;
+    if (view->settings.tag_fade > 0.0f)
+        return true;
+    for (int c = 1; c < SCENE_TAG_CLASSES; c++)
+        if (view->settings.tag_classes[c].see_through > 0.0f &&
+            !view->settings.tag_classes[c].hidden)
+            return true;
+    return false;
+}
+
+static uint32_t _unorm16(float v) {
+    v = v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v;
+    return (uint32_t)lroundf(v * 65535.0f);
+}
+
+void scene_view_bind_tags(SceneView* view) {
+    SceneViewState* vs = view->state;
+    Engine* engine = vs->engine;
+    if (!scene_view_draws_tags(view)) {
+        glBindBufferBase(GL_UNIFORM_BUFFER, UBO_BINDING_TAG_VIEW, engine->tag_block_none->id);
+        return;
+    }
+    if (!vs->tag_block)
+        vs->tag_block = create_ubo(UBO_TAG_VIEW_BLOCK_SIZE, UBO_BINDING_TAG_VIEW);
+    if (!vs->tag_block) {
+        glBindBufferBase(GL_UNIFORM_BUFFER, UBO_BINDING_TAG_VIEW, engine->tag_block_none->id);
+        return;
+    }
+    // The block: its head, then a row a class -- the colour, see-through and flat in 16 bits each,
+    // whether it is hidden. Class 0 is none and its row left zero.
+    uint32_t block[UBO_TAG_VIEW_BLOCK_SIZE / 4] = {0};
+    const float fade = view->settings.tag_fade < 0.0f   ? 0.0f
+                       : view->settings.tag_fade > 1.0f ? 1.0f
+                                                        : view->settings.tag_fade;
+    block[0] = UBO_TAG_VIEW_ON | (scene_view_ghosts(view) ? UBO_TAG_VIEW_GHOSTS : 0u);
+    block[1] = scene_tags_bind(view->tags, TEXUNIT_TAGS);
+    memcpy(&block[2], &fade, sizeof(fade));
+    for (int c = 1; c < SCENE_TAG_CLASSES; c++) {
+        const SceneTagClass* k = &view->settings.tag_classes[c];
+        uint32_t* row = &block[4 + 4 * c];
+        row[0] = k->colour;
+        row[1] = _unorm16(k->see_through) | (_unorm16(k->flat) << 16);
+        row[2] = k->hidden ? 1u : 0u;
+    }
+    ubo_upload(vs->tag_block, block, sizeof(block));
+    glBindBufferBase(GL_UNIFORM_BUFFER, UBO_BINDING_TAG_VIEW, vs->tag_block->id);
+}
+
 void free_scene_view(SceneView* view) {
     if (!view)
         return;
@@ -172,6 +239,7 @@ void free_scene_view(SceneView* view) {
         return;
     _free_targets(view);
     cloud_march_release(&vs->clouds);
+    free_ubo(vs->tag_block);
     free(vs);
     camera_release(&view->camera);
     free(view);

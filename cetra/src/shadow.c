@@ -1236,8 +1236,10 @@ static void _draw_shadow_items(ShadowSystem* ss, const DrawList* list, bool abso
             // node order, so a node holding several meshes no longer uploads
             // this once -- the value cache absorbs the repeat, and the meshes
             // are in different spans by then anyway.
-            if (run == 1)
+            if (run == 1) {
                 uniform_set_mat4(u, "model", (const float*)node->global_transform);
+                submit_item_tag(u, item);
+            }
 
             // Everything the material decides, uploaded once per material
             // rather than once per mesh -- a canopy of leaf cards is hundreds

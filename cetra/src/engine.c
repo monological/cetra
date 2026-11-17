@@ -364,6 +364,7 @@ void free_engine(Engine* engine) {
         free_ubo(engine->instance_ubo);
         free_ubo(engine->vt_pages_ubo);
         free_ubo(engine->roads_ubo);
+        free_ubo(engine->tag_block_none);
         free_layers_vt_feedback(engine->vt_feedback);
 
         if (engine->catcher_vao)
@@ -1058,6 +1059,18 @@ static int _engine_init(Engine* engine, const EngineConfig* cfg) {
     // Same zero-filled contract: a shader reading roads before the first upload
     // sees a road count of 0, which is the off state.
     engine->roads_ubo = create_ubo(UBO_ROADS_BLOCK_SIZE, UBO_BINDING_ROADS);
+    // A view without tags binds this, zero-filled: no tags, nothing see-through (spec 14.39).
+    engine->tag_block_none = create_ubo(UBO_TAG_VIEW_BLOCK_SIZE, UBO_BINDING_TAG_VIEW);
+    // The tag a vertex of an untagged mesh reads, whose array is off: the generic value, which is
+    // context state, set once as an integer so the shader's uint input is defined.
+    glVertexAttribI4ui(GL_ATTR_TAG, 0, 0, 0, 0);
+    GLint combined_units = 0;
+    glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &combined_units);
+    engine->tags_supported = combined_units > TEXUNIT_TAGS;
+    if (!engine->tags_supported)
+        log_warn("The driver offers %d texture units, none past %d for the tag table: views draw "
+                 "no tags",
+                 combined_units, TEXUNIT_TAGS - 1);
     if (!engine->light_cluster) {
         log_error("Failed to create light cluster context");
         return -1;
@@ -3347,6 +3360,9 @@ static void _engine_draw_view(Engine* engine, Scene* scene, SceneView* view, Eng
         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
         glDisable(GL_CULL_FACE);
     }
+
+    // The view's tags, for its shadows and its passes alike (spec 14.39).
+    scene_view_bind_tags(view);
 
     // Shadow depth pass, fitted to this view's camera.
     if (scene && scene->shadow_system && scene->shadow_system->enabled) {

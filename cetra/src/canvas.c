@@ -7,13 +7,11 @@
 #include "ext/log.h"
 #include "ext/uthash.h"
 #include "program.h"
+#include "tag_table.h"
 #include "text.h"
 #include "uniform.h"
 #include "util.h"
 
-// The most tags a table holds, three texels each in a buffer texture.
-#define CANVAS_TAG_LIMIT  (1u << 22)
-#define CANVAS_TAG_TEXELS 3
 // The most styles a canvas holds: a record carries its style in 16 bits.
 #define CANVAS_STYLE_LIMIT 65536u
 // The smallest range a tile is given, so one growing a few shapes at a time is
@@ -46,15 +44,12 @@ enum {
 
 struct CanvasTags {
     CanvasTagState* states;
-    uint32_t count; // one past the largest tag set, at least 1
     size_t cap;
     // Tags whose state draws a ring, and that raise: a layer's pass for either
     // is drawn only while some tag asks for it.
     uint32_t outlined, raised;
     uint64_t generation;
-    GLuint buffer, texture;
-    uint32_t capacity;             // tags the GPU buffer holds
-    uint32_t dirty_from, dirty_to; // the tags written since the last upload, [from, to)
+    TagTable table;
 };
 
 CanvasTags* create_canvas_tags(void) {
@@ -63,25 +58,25 @@ CanvasTags* create_canvas_tags(void) {
         log_error("canvas: out of memory making a tag table");
         return NULL;
     }
-    tags->count = 1;
+    tag_table_init(&tags->table);
     return tags;
 }
 
 void free_canvas_tags(CanvasTags* tags) {
     if (!tags)
         return;
-    gl_delete_texture(&tags->texture);
-    if (tags->buffer)
-        glDeleteBuffers(1, &tags->buffer);
+    tag_table_release(&tags->table);
     free(tags->states);
     free(tags);
 }
 
+static void _tag_texels(CanvasTagState s, uint8_t out[12]);
+
 bool canvas_tags_set(CanvasTags* tags, uint32_t tag, CanvasTagState state) {
     if (!tags)
         return false;
-    if (tag == 0 || tag >= CANVAS_TAG_LIMIT) {
-        log_error("canvas: tag %u is refused (1 to %u)", tag, CANVAS_TAG_LIMIT - 1);
+    if (tag == 0 || tag >= TAG_TABLE_LIMIT) {
+        log_error("canvas: tag %u is refused (1 to %u)", tag, TAG_TABLE_LIMIT - 1);
         return false;
     }
     const size_t had = tags->cap;
@@ -89,18 +84,14 @@ bool canvas_tags_set(CanvasTags* tags, uint32_t tag, CanvasTagState state) {
                     256))
         return false;
     memset(tags->states + had, 0, (tags->cap - had) * sizeof(CanvasTagState));
+    uint8_t texels[4 * TAG_TABLE_TEXELS];
+    _tag_texels(state, texels);
+    if (!tag_table_write(&tags->table, tag, texels))
+        return false;
     const CanvasTagState was = tags->states[tag];
     tags->outlined += (state.outline != 0) - (was.outline != 0);
     tags->raised += state.raised - was.raised;
     tags->states[tag] = state;
-    if (tag + 1 > tags->count)
-        tags->count = tag + 1;
-    if (tags->dirty_from == tags->dirty_to) {
-        tags->dirty_from = tag, tags->dirty_to = tag + 1;
-    } else {
-        tags->dirty_from = tag < tags->dirty_from ? tag : tags->dirty_from;
-        tags->dirty_to = tag + 1 > tags->dirty_to ? tag + 1 : tags->dirty_to;
-    }
     tags->generation++;
     return true;
 }
@@ -123,52 +114,14 @@ static void _rgba_floats(uint32_t rgba, float out[4]) {
         out[k] = bytes[k] / 255.0f;
 }
 
-// A tag's three texels; tag 0, never set, reads as none, as does a table
-// with nothing set at all.
-static void _tag_texels(const CanvasTags* tags, uint32_t tag, uint8_t out[12]) {
-    const CanvasTagState s = tag < tags->cap ? tags->states[tag] : (CanvasTagState){0};
+// A tag's three texels: colour, outline, then dim, hidden, raised and lit.
+static void _tag_texels(CanvasTagState s, uint8_t out[12]) {
     _rgba_bytes(s.colour, out);
     _rgba_bytes(s.outline, out + 4);
     out[8] = (uint8_t)lroundf(glm_clamp(s.dim, 0.0f, 1.0f) * 255.0f);
     out[9] = s.hidden ? 255 : 0;
     out[10] = s.raised ? 255 : 0;
     out[11] = s.lit ? 255 : 0;
-}
-
-// Brings the GPU's copy up to date: the written range alone, or, when the
-// table has outgrown its buffer, a buffer twice the size and every tag in it.
-// The shader reads no tag past the count, so the rest of a new buffer is left.
-static void _tags_upload(CanvasTags* tags) {
-    if (!tags->buffer) {
-        glGenBuffers(1, &tags->buffer);
-        glGenTextures(1, &tags->texture);
-    }
-    glBindBuffer(GL_TEXTURE_BUFFER, tags->buffer);
-    if (tags->count > tags->capacity) {
-        uint32_t capacity = tags->capacity ? tags->capacity : 256;
-        while (capacity < tags->count)
-            capacity *= 2;
-        glBufferData(GL_TEXTURE_BUFFER, (GLsizeiptr)capacity * 4 * CANVAS_TAG_TEXELS, NULL,
-                     GL_DYNAMIC_DRAW);
-        glBindTexture(GL_TEXTURE_BUFFER, tags->texture);
-        glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA8, tags->buffer);
-        tags->capacity = capacity;
-        tags->dirty_from = 0, tags->dirty_to = tags->count;
-    }
-    if (tags->dirty_from < tags->dirty_to) {
-        const uint32_t n = tags->dirty_to - tags->dirty_from;
-        uint8_t* texels = malloc((size_t)n * 4 * CANVAS_TAG_TEXELS);
-        if (!texels) {
-            log_error("canvas: out of memory uploading a tag table");
-            return;
-        }
-        for (uint32_t i = 0; i < n; i++)
-            _tag_texels(tags, tags->dirty_from + i, texels + (size_t)i * 4 * CANVAS_TAG_TEXELS);
-        glBufferSubData(GL_TEXTURE_BUFFER, (GLintptr)tags->dirty_from * 4 * CANVAS_TAG_TEXELS,
-                        (GLsizeiptr)n * 4 * CANVAS_TAG_TEXELS, texels);
-        free(texels);
-    }
-    tags->dirty_from = tags->dirty_to = 0;
 }
 
 /*
@@ -1169,7 +1122,7 @@ static void _view_uniforms(const ShaderProgram* program, const Canvas* canvas,
     uniform_set_float(u, "uShapeMinPx", canvas->shape_min_px);
     uniform_set_float(u, "uTextMinPx", canvas->text_min_px);
     uniform_set_float(u, "uDashMinPx", canvas->dash_min_px);
-    uniform_set_int(u, "uTagCount", (int)canvas->data->tags->count);
+    uniform_set_int(u, "uTagCount", (int)canvas->data->tags->table.count);
 }
 
 void canvas_draw(Canvas* canvas, const CanvasView* view) {
@@ -1201,7 +1154,7 @@ void canvas_draw(Canvas* canvas, const CanvasView* view) {
             for (int s = 0; s < CANVAS_STORES; s++)
                 _store_upload(canvas, d->layers[i]->data, s);
         _styles_upload(d);
-        _tags_upload(d->tags);
+        tag_table_upload(&d->tags->table);
         _glyphs_upload(d);
         // A tile is drawn when anything in it reaches the view, a ring and
         // its ramp included.
@@ -1226,7 +1179,7 @@ void canvas_draw(Canvas* canvas, const CanvasView* view) {
         glActiveTexture(GL_TEXTURE0 + CANVAS_UNIT_STYLES);
         glBindTexture(GL_TEXTURE_BUFFER, d->style_texture);
         glActiveTexture(GL_TEXTURE0 + CANVAS_UNIT_TAGS);
-        glBindTexture(GL_TEXTURE_BUFFER, d->tags->texture);
+        glBindTexture(GL_TEXTURE_BUFFER, d->tags->table.texture);
         glActiveTexture(GL_TEXTURE0 + CANVAS_UNIT_GLYPHS);
         glBindTexture(GL_TEXTURE_BUFFER, d->glyph_texture);
         for (uint32_t slot = 0; slot < d->font_count; slot++) {

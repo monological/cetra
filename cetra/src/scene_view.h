@@ -11,7 +11,21 @@
 
 struct CameraRig;
 struct Engine;
+struct SceneTags;
 struct ShaderProgram;
+
+// The classes a view draws apart (SceneNode.tag_class); class 0 is none, and its row unread.
+#define SCENE_TAG_CLASSES 256
+
+// How a view draws one class of surface (spec 14.39). All zeros = as the material.
+typedef struct SceneTagClass {
+    // A matte paint in place of the material's colour, 0xRRGGBBAA in the display's sRGB, the alpha
+    // its share; 0 = the material's. A tag's own colour is drawn over it.
+    uint32_t colour;
+    float see_through; // 0 = solid, 1 = gone; what is not solid casts no shadow
+    float flat;  // the paint's share drawn unlit at the view's exposure, so it reads in shadow
+    bool hidden; // drawn in no pass of this view, shadows included
+} SceneTagClass;
 
 /*
  * A scene view: one camera onto the engine's current scene, drawn into its own buffers and shown in
@@ -44,6 +58,12 @@ typedef struct SceneViewSettings {
     // frame it averages this many jittered frames, equally weighted, then rests until something
     // does; render scale 1 only.
     int accumulate_frames;
+    // Tags (spec 14.39). How far a surface not lit fades: 0 = none, 1 = gone. It turns see-through
+    // as it fades, untagged surfaces with the rest, and casts no shadow.
+    float tag_fade;
+    float outline_points; // an outline's width, window points
+    float outline_hidden; // an outline's strength where what it rings is hidden, 0..1
+    SceneTagClass tag_classes[SCENE_TAG_CLASSES];
 } SceneViewSettings;
 
 typedef struct SceneViewDesc {
@@ -61,6 +81,7 @@ typedef struct SceneView {
     float x, y, width, height; // window points, top-left, +Y down, as the UI
     uint32_t mask;             // draws the nodes it shares a bit with
     bool hidden;               // kept, neither drawn nor shown
+    struct SceneTags* tags;    // borrowed, and shared by any view; NULL = every tag as drawn
     SceneViewSettings settings;
 
     // BY FUNCTION: the camera rig (scene_view_set_rig), borrowed.

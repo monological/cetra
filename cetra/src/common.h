@@ -7,12 +7,12 @@
 #define GL_ATTR_NORMAL   1
 #define GL_ATTR_TEXCOORD 2
 #define GL_ATTR_TANGENT  3 // vec4 - xyz tangent, w bitangent handedness
-// Slot 4 is free FOR MESH VAOs. It held a bitangent stream until that turned
-// out to be dead weight: the fragment shader reconstructs B = cross(N, T)
-// regardless and only ever read the stored one for its sign, which now rides in
-// tangent.w. It is not unclaimed, though -- particle_sim_vert.glsl binds
-// location 4 as iLife on the GPU-sim VAO, exactly as the billboard renderer
-// holds 9-11 below. Separate VAOs, so no runtime conflict either way.
+// uint - the object a vertex is of (spec 14.39), 0 = its node's. The GPU-sim VAO binds location 4
+// as iLife too (particle_sim_vert.glsl), as the billboard renderer holds 9-11 below: separate
+// VAOs, so no runtime conflict. A mesh with no tags leaves the array off and reads the generic
+// value, which the engine sets to 0 once: a disabled integer attribute otherwise reads a float
+// default, which an integer input cannot be given.
+#define GL_ATTR_TAG          4
 #define GL_ATTR_COLOR        5
 #define GL_ATTR_BONE_IDS     6 // ivec4 - bone indices per vertex
 #define GL_ATTR_BONE_WEIGHTS 7 // vec4  - bone weights per vertex
@@ -60,6 +60,13 @@
 #define TEXUNIT_LTC              7 // LTC tables, 2-layer array (engine-bound, §9.2)
 #define TEXUNIT_SHEEN            8 // KHR_materials_sheen color texture (§4.10.1)
 #define TEXUNIT_MATERIAL_MAX     TEXUNIT_SHEEN
+
+// The tag table (spec 14.39), read by the VERTEX stage of every program that draws a scene's
+// meshes. Outside the 0-15 ledger on purpose: pbr_frag's full variant declares a sampler on each
+// of those, and two sampler types on one unit in one program fail at draw. A unit's number is
+// bounded by GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, not by a stage's sixteen; the engine checks it
+// at init and draws no tags where it is short.
+#define TEXUNIT_TAGS 16
 
 // (Light data moved off the default uniform block entirely: analytic lights
 // live in the clustered-forward std140 UBOs -- see light_cluster.h / ubo.h --
@@ -118,7 +125,10 @@ typedef enum {
      * cannot see it: a surface outside every probe box looks only slightly off in the shaded
      * frame, a grey sheen on a door, and is obvious here.
      */
-    RENDER_MODE_PROBE_COVERAGE
+    RENDER_MODE_PROBE_COVERAGE,
+    // Each object a colour of its own, from its tag's number (spec 14.39), unlit: what reached a
+    // surface, the node's tag or its vertices', whatever the table says of it. Black for none.
+    RENDER_MODE_TAGS
 } RenderMode;
 
 // Which pass is rasterizing this mesh, and therefore where the uber-shader

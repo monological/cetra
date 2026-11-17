@@ -26,6 +26,7 @@ uniform float time;
 #include "wind.glsl" // must match the shading passes exactly -- see the chunk
 #include "instancing.glsl"
 #include "object_position.glsl"
+#include "tags.glsl"
 
 void main()
 {
@@ -44,5 +45,6 @@ void main()
 #ifdef CETRA_SURFACE_HOOK
     HookWorldPos = (mModel * localPos).xyz;
 #endif
-    gl_Position = lightSpaceMatrix * mModel * localPos;
+    vec4 clip = lightSpaceMatrix * mModel * localPos;
+    gl_Position = cetraTag(cetra_instance_tag(uNodeTag)).drop ? CETRA_TAG_DROPPED : clip;
 }

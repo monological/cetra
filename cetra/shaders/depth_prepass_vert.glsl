@@ -21,6 +21,7 @@ uniform float time;
 #include "wind.glsl"
 #include "instancing.glsl"
 #include "object_position.glsl"
+#include "tags.glsl"
 
 // Load-bearing, not decoration. The shading pass tests against this depth with
 // GL_LEQUAL, and a driver free to schedule the same arithmetic differently in
@@ -33,5 +34,6 @@ void main()
     mat4 mModel = cetra_instance_model(model);
     vec4 localPos = cetra_local_position(aPos, skinMatrixOrIdentity(aBoneIds, aBoneWeights),
                                          skinned, aTexCoords, aTexCoords2, time, mModel, uMorphEye);
-    gl_Position = cetra_object_position(mModel, view, projection, localPos).clip;
+    vec4 clip = cetra_object_position(mModel, view, projection, localPos).clip;
+    gl_Position = cetraTag(cetra_instance_tag(uNodeTag)).drop ? CETRA_TAG_DROPPED : clip;
 }

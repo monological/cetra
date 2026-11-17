@@ -53,6 +53,7 @@ Mesh* create_mesh() {
     mesh->tex_coords = NULL;
     mesh->tex_coords2 = NULL;
     mesh->colors = NULL;
+    mesh->tags = NULL;
     mesh->morph = NULL;
     mesh->morph_normals = NULL;
     mesh->indices = NULL;
@@ -146,6 +147,8 @@ void free_mesh(Mesh* mesh) {
         glDeleteBuffers(1, &mesh->morph_vbo);
     if (mesh->morph_normal_vbo)
         glDeleteBuffers(1, &mesh->morph_normal_vbo);
+    if (mesh->tag_vbo)
+        glDeleteBuffers(1, &mesh->tag_vbo);
 
     // Free the allocated memory
     if (mesh->vertices)
@@ -160,6 +163,7 @@ void free_mesh(Mesh* mesh) {
         free(mesh->tex_coords2);
     if (mesh->colors)
         free(mesh->colors);
+    free(mesh->tags);
     if (mesh->morph)
         free(mesh->morph);
     if (mesh->morph_normals)
@@ -392,6 +396,20 @@ static void _upload_int_stream(const Mesh* mesh, const int* data, GLuint* vbo, G
     glEnableVertexAttribArray(attr);
 }
 
+// The tag stream, one uint a vertex: the integer path, unsigned, since a tag is past int's range
+// long before the table's limit is.
+static void _upload_tag_stream(Mesh* mesh) {
+    if (!mesh->tags)
+        return;
+    if (mesh->tag_vbo == 0)
+        glGenBuffers(1, &mesh->tag_vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, mesh->tag_vbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(mesh->vertex_count * sizeof(uint32_t)), mesh->tags,
+                 GL_STATIC_DRAW);
+    glVertexAttribIPointer(GL_ATTR_TAG, 1, GL_UNSIGNED_INT, (GLsizei)sizeof(uint32_t), (void*)0);
+    glEnableVertexAttribArray(GL_ATTR_TAG);
+}
+
 void mesh_upload(Mesh* mesh) {
     if (!mesh)
         return;
@@ -431,6 +449,7 @@ void mesh_upload(Mesh* mesh) {
     for (int s = 0; s < MESH_FLOAT_STREAMS; s++)
         _upload_float_stream(mesh, streams[s].data, streams[s].vbo, streams[s].attr,
                              streams[s].components);
+    _upload_tag_stream(mesh);
 
     // The skinning pair is gated on is_skinned as well as on the array, because a
     // mesh can carry weights it does not use and binding them would put a

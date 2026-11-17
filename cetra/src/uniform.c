@@ -265,6 +265,13 @@ void uniform_set_ivec4(UniformManager* mgr, const char* name, const int* value) 
         glUniform4iv(loc, 1, value);
 }
 
+void uniform_set_uvec2(UniformManager* mgr, const char* name, const uint32_t* value) {
+    const float as_float[2] = {(float)value[0], (float)value[1]};
+    GLint loc;
+    if (uniform_write_wanted(mgr, name, as_float, 2, &loc))
+        glUniform2uiv(loc, 1, value);
+}
+
 void uniform_set_vec4(UniformManager* mgr, const char* name, const float* value) {
     GLint loc;
     if (uniform_write_wanted(mgr, name, value, 4, &loc))

@@ -19,6 +19,12 @@ in mat3 TBN;
 flat in float TangentW;
 in vec4 CurrClip;     // Un-jittered current clip position (motion vectors)
 in vec4 PrevClip;     // Previous-frame clip position
+#if CETRA_HAS(PBR_FEAT_TAGS)
+// What the view says of this surface's tag (spec 14.39), from the vertex stage's tags.glsl.
+flat in vec4 TagPaint; // display sRGB, alpha its share; 0 = the material's colour
+flat in vec3 TagMisc;  // opacity, flat share, dim
+flat in uint TagObject;
+#endif
 layout(location = 0) out vec4 FragColor;
 // G-buffer for screen-space passes: view-space normal (xyz) + roughness (a).
 // Only lands when the engine enables color attachment 1; otherwise discarded.
@@ -1031,6 +1037,17 @@ void main() {
         discard;
 #endif
     // Early-out for simple render modes that don't need texture sampling
+#if CETRA_HAS(PBR_FEAT_TAGS)
+    if (renderMode == 15) {
+        // Each object a colour of its own from its number (Knuth's multiplicative hash, its top
+        // three bytes), kept above a quarter so none reads as black, which is no object.
+        uint h = TagObject * 2654435761u;
+        vec3 colour = vec3(float((h >> 24) & 255u), float((h >> 16) & 255u),
+                           float((h >> 8) & 255u)) / 255.0 * 0.75 + 0.25;
+        FragColor = vec4(TagObject == 0u ? vec3(0.0) : colour, 1.0);
+        return;
+    }
+#endif
     if (renderMode == 5) {
         // Flat Color - no textures needed
         FragColor = vec4(1.0, 0.5, 0.2, 1.0);

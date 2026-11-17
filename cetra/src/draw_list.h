@@ -114,6 +114,10 @@ typedef struct DrawItem {
     // The node's view_mask ANDed with every ancestor's: the views that draw this item share a
     // bit with it.
     uint32_t view_mask;
+    // The node's tag and class, else the nearest ancestor's: per instance in a run, so a run of one
+    // mesh is several tagged objects.
+    uint32_t tag;
+    uint8_t tag_class;
 } DrawItem;
 
 typedef struct DrawList {

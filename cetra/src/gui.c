@@ -315,7 +315,10 @@ static void _engine_gui_panel(Engine* engine) {
     static const char* const render_modes[] = {
         "PBR",          "Normals",      "World Pos",       "Tex Coords",         "Tangent Space",
         "Flat Color",   "Albedo",       "Simple Lighting", "Metallic/Roughness", "Velocity",
-        "HDR Hotspots", "SSS Hotspots", "Extrapolation",   "Clearcoat Normal",   "Probe Coverage"};
+        "HDR Hotspots", "SSS Hotspots", "Extrapolation",   "Clearcoat Normal",   "Probe Coverage",
+        "Tags"};
+    _Static_assert(sizeof(render_modes) / sizeof(render_modes[0]) == RENDER_MODE_TAGS + 1,
+                   "render_modes must name every RenderMode");
     if (view) {
         SceneViewSettings* vs = &view->settings;
         int rm = vs->render_mode;

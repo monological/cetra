@@ -727,6 +727,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // computed where the transform it derives from is. Location-guarded,
             // so programs without the uniform (particles) no-op.
             uniform_set_mat3(u, "uNormalMatrix", (const float*)node->normal_matrix);
+            submit_item_tag(u, item);
         }
         uniform_set_float(u, "lineWidth", mesh->line_width);
         // Wind mask bounds: per-mesh geometry (its wind range). The shader
@@ -899,11 +900,13 @@ static unsigned _scene_pbr_features(const Scene* scene) {
     return mask;
 }
 
-void engine_resolve_material_variants(Engine* engine, Scene* scene) {
+void engine_resolve_material_variants(Engine* engine, Scene* scene, const SceneView* view) {
     if (!engine || !scene || !scene->materials)
         return;
 
-    const unsigned scene_mask = _scene_pbr_features(scene);
+    // Tags are the view's (spec 14.39): one drawing none keeps the program it had before them.
+    const unsigned scene_mask =
+        _scene_pbr_features(scene) | (scene_view_draws_tags(view) ? PBR_FEAT_TAGS : 0u);
     for (size_t i = 0; i < scene->material_count; ++i) {
         Material* mat = scene->materials[i];
         // pbr_features is -1 on every program that is not a lit-surface variant,
@@ -986,6 +989,9 @@ static void _instance_chunk_fill(Ubo* ubo, InstanceChunk* chunk, const DrawList*
         // matrices and declares them non-const anyway, so a const node cannot be
         // handed over without one. Keeping the node const is the point.
         glm_mat4_copy((vec4*)node->global_transform, chunk->model[k]);
+        // Both passes read the tag: a depth pass drops what its view hides.
+        chunk->tag[k][0] = list->items[idx].tag;
+        chunk->tag[k][1] = list->items[idx].tag_class;
         if (!shading)
             continue;
         glm_mat4_copy((vec4*)node->prev_global_transform, chunk->prev_model[k]);
@@ -1165,8 +1171,10 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
         // from the instance block, and writing `model` anyway dirties the
         // program's whole uniform block and costs a copy of it at submission.
         // This pass exists to be cheap; it should not re-buy that.
-        if (run == 1)
+        if (run == 1) {
             uniform_set_mat4(u, "model", (const float*)item->node->global_transform);
+            submit_item_tag(u, item);
+        }
         wind_upload_mesh(mesh, u);
         if (submit_take_material(&state, mesh->material)) {
             uniform_set_float(u, "uWindResponse", mesh->material->wind_response);
@@ -1621,7 +1629,7 @@ void engine_render_scene(Engine* engine, Scene* scene, SceneView* sv) {
     // swapped after it changes nothing it built. The submit-time reads --
     // prepass safety, the instanced test -- are live and see this.
     if (!vs->capturing)
-        engine_resolve_material_variants(engine, scene);
+        engine_resolve_material_variants(engine, scene, sv);
 
     // Under a loading screen that hides the whole frame (spec 13.34) the camera's passes are not
     // drawn. What runs above is the scene's per-frame settling -- its derived panels, its
@@ -2171,7 +2179,9 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
     // the pass gives a shadow. Then the variants, which read the panels (engine_render_scene
     // says why both halves of that order matter), once for every face.
     scene_build_emissive_lights(scene, engine->emissive_lights_enabled);
-    engine_resolve_material_variants(engine, scene);
+    engine_resolve_material_variants(engine, scene, NULL);
+    // A capture sees no view's tags: its shadow pass and its faces draw every surface as it is.
+    glBindBufferBase(GL_UNIFORM_BUFFER, UBO_BINDING_TAG_VIEW, engine->tag_block_none->id);
 
     saved->cascade_count = scene->shadow_system ? scene->shadow_system->cascade_count : 1;
     saved->msm_enabled = scene->shadow_system ? scene->shadow_system->msm_enabled : false;

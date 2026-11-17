@@ -4,6 +4,7 @@
 
 #include <GL/glew.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "ext/uthash.h"
 
@@ -82,5 +83,7 @@ void uniform_set_vec4_array(UniformManager* mgr, const char* name, const float* 
 // Four ints from a tightly packed array. CACHED, unlike the vec3 array above -- four
 // values fit the cache slot, so a repeated upload of an unchanged set costs no GL call.
 void uniform_set_ivec4(UniformManager* mgr, const char* name, const int* value);
+// Two unsigned ints, CACHED as floats: exact below 2^24, which a tag and a class are.
+void uniform_set_uvec2(UniformManager* mgr, const char* name, const uint32_t* value);
 
 #endif // _UNIFORM_H_

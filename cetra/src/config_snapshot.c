@@ -184,7 +184,8 @@ typedef struct ConfigField {
 static const char* const CFG_RENDER_MODES[] = {
     "pbr",          "normals",      "world_pos",       "tex_coords",       "tangent_space",
     "flat",         "albedo",       "simple_lighting", "metallic_rough",   "velocity",
-    "hdr_hotspots", "sss_hotspots", "extrapolation",   "clearcoat_normal", "probe_coverage"};
+    "hdr_hotspots", "sss_hotspots", "extrapolation",   "clearcoat_normal", "probe_coverage",
+    "tags"};
 static const char* const CFG_TONEMAPS[] = {"passthrough", "aces", "neutral", "agx", "linear"};
 // 6 is a hole: the half-res fog buffer retired with the screen-space march,
 // and the values are the shader's own debugView dispatch, so it cannot be closed.
@@ -208,8 +209,7 @@ static const char* const CFG_LIGHT_UNITS[] = {"default", "candela", "lumens", "l
  * in the middle is caught by these only once the label count also moves, which
  * is why the label array is the thing to edit first.
  */
-_Static_assert(sizeof(CFG_RENDER_MODES) / sizeof(*CFG_RENDER_MODES) ==
-                   RENDER_MODE_PROBE_COVERAGE + 1,
+_Static_assert(sizeof(CFG_RENDER_MODES) / sizeof(*CFG_RENDER_MODES) == RENDER_MODE_TAGS + 1,
                "CFG_RENDER_MODES must name every RenderMode");
 _Static_assert(sizeof(CFG_TONEMAPS) / sizeof(*CFG_TONEMAPS) == POSTFX_TONEMAP_LINEAR + 1,
                "CFG_TONEMAPS must name every PostFXTonemapMode");

@@ -36,6 +36,7 @@
 #define UBO_BINDING_ROADS           8
 #define UBO_BINDING_PROBES          9
 #define UBO_BINDING_DECALS          10
+#define UBO_BINDING_TAG_VIEW        11
 
 // GL 4.1's guaranteed GL_MAX_UNIFORM_BLOCK_SIZE, which every block but the light index pool fits.
 #define UBO_GUARANTEED_BLOCK_SIZE 16384
@@ -53,16 +54,15 @@
 #define UBO_VIEW_BLOCK_SIZE 16
 
 // Per-instance transforms: model, prevModel and the normal matrix, the three
-// values a draw needs per object. 64 instances x 3 mat4 x 64 B = 12288, which
-// is the same size the cluster grid block uses and comfortably inside the
-// 16 KB floor -- so a chunk is 64 instances and a longer run submits in
-// several draws.
+// values a draw needs per object, and its tag (spec 14.39). 64 instances x
+// (3 mat4 x 64 B + a uvec4 x 16 B) = 13312, inside the 16 KB floor -- so a
+// chunk is 64 instances and a longer run submits in several draws.
 //
 // The normal matrix is stored as a mat4 rather than std140's padded mat3. It
 // costs 16 bytes an instance and removes the whole class of hand-packed-column
 // bugs that ubo_validate_program_block exists to catch.
 #define UBO_INSTANCE_MAX         64
-#define UBO_INSTANCES_BLOCK_SIZE 12288
+#define UBO_INSTANCES_BLOCK_SIZE 13312
 
 /*
  * The swash film's tips (spec 11.45), and the reason this feature costs no sampler.
@@ -217,6 +217,18 @@ _Static_assert(UBO_PROBES_BLOCK_SIZE <= UBO_GUARANTEED_BLOCK_SIZE,
 #define UBO_DECALS_BLOCK_SIZE 7440
 _Static_assert(UBO_DECALS_BLOCK_SIZE <= UBO_GUARANTEED_BLOCK_SIZE,
                "the decals block must fit GL 4.1's guaranteed GL_MAX_UNIFORM_BLOCK_SIZE");
+
+/*
+ * A view's tags (spec 14.39): a head -- flags, the table's count, the fade -- and a row for each of
+ * its classes. A block rather than a texture because the vertex stages that read it are the same
+ * programs whose fragment stage has no unit to spare, and it is bytes: 256 classes is 4 KB, a
+ * view's own, bound with the view.
+ */
+#define UBO_TAG_VIEW_CLASSES    256
+#define UBO_TAG_VIEW_BLOCK_SIZE (16 + 16 * UBO_TAG_VIEW_CLASSES)
+// The head's flags: the view draws with tags; it draws some surface see-through.
+#define UBO_TAG_VIEW_ON     1u
+#define UBO_TAG_VIEW_GHOSTS 2u
 
 typedef struct Ubo {
     GLuint id;

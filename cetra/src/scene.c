@@ -1142,6 +1142,8 @@ typedef struct {
     SceneNode* node;
     mat4 parent_transform;
     uint32_t mask; // the ancestors' view masks, ANDed
+    uint32_t tag;  // the nearest ancestor's tag and class, 0 for none
+    uint8_t tag_class;
 } TransformStackEntry;
 
 // Rotate an authored light axis into world space (w=0: rotation only, no
@@ -1179,6 +1181,8 @@ static void apply_transform_to_nodes(SceneNode* root, mat4 transform, uint32_t* 
     stack[stack_size].node = root;
     glm_mat4_copy(transform, stack[stack_size].parent_transform);
     stack[stack_size].mask = ~0u;
+    stack[stack_size].tag = 0;
+    stack[stack_size].tag_class = 0;
     stack_size++;
 
     while (stack_size > 0) {
@@ -1191,6 +1195,15 @@ static void apply_transform_to_nodes(SceneNode* root, mat4 transform, uint32_t* 
         if (mask != node->walked_mask && node->mesh_count > 0)
             *moved |= mask | node->walked_mask;
         node->walked_mask = mask;
+        // A tag or class written since the last walk draws the meshes otherwise in the views that
+        // show them.
+        const uint32_t tag = node->tag ? node->tag : stack[stack_size].tag;
+        const uint8_t tag_class = node->tag_class ? node->tag_class : stack[stack_size].tag_class;
+        if ((tag != node->walked_tag || tag_class != node->walked_tag_class) &&
+            node->mesh_count > 0)
+            *moved |= mask;
+        node->walked_tag = tag;
+        node->walked_tag_class = tag_class;
 
         // Straight off the popped slot. The child pushes below overwrite it, but
         // strictly after this is the only thing that reads it -- and the
@@ -1270,6 +1283,8 @@ static void apply_transform_to_nodes(SceneNode* root, mat4 transform, uint32_t* 
                 stack[stack_size].node = node->children[i - 1];
                 glm_mat4_copy(node->global_transform, stack[stack_size].parent_transform);
                 stack[stack_size].mask = mask;
+                stack[stack_size].tag = tag;
+                stack[stack_size].tag_class = tag_class;
                 stack_size++;
             }
         }

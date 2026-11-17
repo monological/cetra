@@ -156,8 +156,10 @@ void engine_build_draw_list(Engine* engine, struct Scene* scene, const struct Sc
 // Membership is `ShaderProgram.pbr_features >= 0`, set by the variant builder.
 // BOTH families are members since 11.95, and a material is swapped within its
 // own -- a skinned mesh onto a skinned vertex stage. The mask means the same
-// thing in either, because they share pbr_frag exactly.
-void engine_resolve_material_variants(Engine* engine, struct Scene* scene);
+// thing in either, because they share pbr_frag exactly. `view` is the view about to draw, whose
+// tags are a bit of the mask; NULL for a capture, which draws none.
+void engine_resolve_material_variants(Engine* engine, struct Scene* scene,
+                                      const struct SceneView* view);
 
 // Upload skinning state ("skinned" flag + bone matrices) for a mesh from the
 // pose its draw item carries (NULL = at bind); shared by the scene, prepass and
@@ -228,7 +230,8 @@ static inline bool submit_take_material(SubmitState* state, Material* material) 
 typedef struct InstanceChunk {
     mat4 model[UBO_INSTANCE_MAX];
     mat4 prev_model[UBO_INSTANCE_MAX];
-    mat4 normal[UBO_INSTANCE_MAX]; // upper 3x3 read as mat3; see instancing.glsl
+    mat4 normal[UBO_INSTANCE_MAX];     // upper 3x3 read as mat3; see instancing.glsl
+    uint32_t tag[UBO_INSTANCE_MAX][4]; // the item's tag and class, then two unused
 } InstanceChunk;
 
 _Static_assert(sizeof(InstanceChunk) == UBO_INSTANCES_BLOCK_SIZE,
@@ -273,6 +276,13 @@ void instance_chunk_upload_ordered(Ubo* ubo, InstanceChunk* chunk, const DrawLis
 // two-sided caster.
 void submit_draw_run(SubmitState* state, UniformManager* u, const DrawItem* item, size_t instances,
                      bool two_sided, SubmitStats* stats);
+
+// The tag and class of a draw that carries one object; a batched draw reads its instances' from
+// the instance block.
+static inline void submit_item_tag(UniformManager* u, const DrawItem* item) {
+    const uint32_t tag[2] = {item->tag, item->tag_class};
+    uniform_set_uvec2(u, "uNodeTag", tag);
+}
 
 static inline void submit_bind_vao(SubmitState* state, GLuint vao) {
     if (state->vao != vao) {

@@ -26,6 +26,9 @@ layout(std140) uniform InstanceBlock {
     // pads a mat3 to 48 bytes anyway, so this costs 16 bytes an instance and
     // removes a class of column-packing bugs.
     mat4 uInstNormal[CETRA_INSTANCE_MAX];
+    // Each instance's object and class (spec 14.39), x and y; read by tags.glsl, and declared
+    // whether a program reads it or not, since the block's size is checked against the C side's.
+    uvec4 uInstTag[CETRA_INSTANCE_MAX];
 };
 
 uniform bool uInstanced;
@@ -43,4 +46,8 @@ mat4 cetra_instance_prev_model(mat4 fallback) {
 
 mat3 cetra_instance_normal_matrix(mat3 fallback) {
     return uInstanced ? mat3(uInstNormal[gl_InstanceID]) : fallback;
+}
+
+uvec2 cetra_instance_tag(uvec2 fallback) {
+    return uInstanced ? uInstTag[gl_InstanceID].xy : fallback;
 }

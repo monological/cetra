@@ -78,6 +78,7 @@ from gatelib.groups.region import run_region_gate
 from gatelib.groups.save import run_save_gate
 from gatelib.groups.scale import run_scale_gates
 from gatelib.groups.scale_twin import run_scale_twin_gate
+from gatelib.groups.scene_tags import run_scene_tags_gate
 from gatelib.groups.shader_hooks import run_shader_hooks_gate
 from gatelib.groups.shadow_lag import run_shadow_lag_gate
 from gatelib.groups.shadows import run_panel_fit_gate, run_penumbra_gate, run_shadow_tiles_gate
@@ -267,6 +268,8 @@ GATE_GROUPS = [
      run_idle_gate),
     ("views", "several views in one window (cameras, rectangles, masks, hidden; spec 14.38):",
      run_views_gate),
+    ("scene-tags", "tags in 3D (a surface's object and class, drawn by a table; spec 14.39):",
+     run_scene_tags_gate),
     ("gait", "a walker's gait (stride, footfalls, the eye's lag and bob, a climb; spec 13.47):",
      run_gait_gate),
     ("character", "a character's capsule changed while it stands (crouch, stand, feet; spec 13.48):",

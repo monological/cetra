@@ -48,6 +48,13 @@ uniform float uDeltaTime; // render clock advance, for the previous-frame positi
 // since a skinned draw carries one object and no instance block.
 #define FUR_VERTEX
 #include "fur.glsl"
+#if CETRA_HAS(PBR_FEAT_TAGS)
+#include "tags.glsl"
+// As pbr_vert's; a skinned draw carries one object, so its tag is the node's.
+flat out vec4 TagPaint;
+flat out vec3 TagMisc;
+flat out uint TagObject;
+#endif
 
 // See pbr_vert: the depth prepass must reach the same clip position from a
 // different program, and GL_LEQUAL rejects anything that lands behind it.
@@ -144,6 +151,15 @@ void main() {
     // one the fragment stage orthogonalizes against.
     TBN = buildTBN(Normal, mat3(model) * localTangent, aTangent.w);
     TangentW = aTangent.w;
+
+#if CETRA_HAS(PBR_FEAT_TAGS)
+    CetraTag tag = cetraTag(uNodeTag);
+    TagPaint = tag.paint;
+    TagMisc = vec3(tag.opacity, tag.flatShare, tag.dim);
+    TagObject = tag.object;
+    if (tag.drop)
+        clipPos = CETRA_TAG_DROPPED;
+#endif
 
     gl_Position = clipPos;
 }

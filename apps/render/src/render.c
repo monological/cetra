@@ -116,6 +116,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --window-color r,g,b  The window where no view covers it\n");
     fprintf(stderr, "      --view-mask V:MASK    View V's mask\n");
     fprintf(stderr, "      --node-mask NAME:MASK The named node's view mask\n");
+    render_tags_usage();
     fprintf(stderr, "      --view-hide-at V:F    Hide view V from frame F\n");
     fprintf(stderr, "      --view-show-at F      Show it again from frame F\n");
     fprintf(stderr, "      --view-samples V:N    View V's sample count\n");
@@ -808,6 +809,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->anim_fade = 0.25f;
 
     for (int i = 1; i < argc; i++) {
+        // The tag flags first, from their own file (render_tags.h).
+        const int tags_read = render_tags_parse(&args->tags, argc, argv, &i);
+        if (tags_read < 0)
+            return -1;
+        if (tags_read > 0)
+            continue;
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             args->show_help = 1;
             return 0;
@@ -3711,6 +3718,9 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
         if (frame_schedule->change_frame == frames_rendered)
             change_at(engine, current_scene, frame_schedule);
         grid_frame(engine, frame_schedule, frames_rendered);
+        // After the grid has taken the driver's settings, which carry no view's own classes.
+        render_tags_frame(&frame_schedule->tags, engine, g_view, g_grid, g_grid_count,
+                          frames_rendered);
     }
 }
 

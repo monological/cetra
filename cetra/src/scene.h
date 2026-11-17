@@ -78,6 +78,8 @@ typedef struct SceneNode {
     // from frame to frame would take the second for the first.
     uint64_t serial;
     uint32_t walked_mask; // view_mask ANDed with every ancestor's, as the last walk found it
+    uint32_t walked_tag;  // tag, else the nearest ancestor's, as the last walk found it
+    uint8_t walked_tag_class;
 
     // BY FUNCTION: node_set_name (owned string), node_add_mesh (uploads what
     // it attaches), node_set_light, node_set_camera, node_set_particle_system,
@@ -114,6 +116,11 @@ typedef struct SceneNode {
     // with it, ANDed with every ancestor's. All bits. Lights, particles, decals and the rest are
     // drawn in every view, and kept lamp shadows take every node.
     uint32_t view_mask;
+    // The object this node's meshes are of, under any vertex's own (scene_tags.h), and the kind
+    // of surface they are, which a view's class rows draw; 0 = the nearest ancestor's, so one write
+    // on a part's root tags every mesh under it.
+    uint32_t tag;
+    uint8_t tag_class;
 } SceneNode;
 
 // A node at the origin, with no parent, no meshes and a serial of its own.

@@ -51,11 +51,15 @@
 // is why the mask is spliced into both: compiled in unconditionally it would re-lower the position
 // of every skinned program, and the depth prepass deletes what lands a bit behind it.
 #define PBR_FEAT_FUR      512
+// Whether the VIEW draws with tags (spec 14.39): a table, a class row, a fade or the tags render
+// mode. A view bit, which no scene or material can answer, and the second to reach the vertex
+// stage: there it reads the tag and drops what the view does not draw.
+#define PBR_FEAT_TAGS     1024
 
 // The union, written out rather than OR-ed together, because an expression here
 // would have to parse identically in C, GLSL and the Python that reads this file
 // for scripts/gates.py. A literal is the only form all three agree on.
-#define PBR_FEAT_ALL 1023
+#define PBR_FEAT_ALL 2047
 
 // The mask this compilation carries, and the test for a bit in it.
 //

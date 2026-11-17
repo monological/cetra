@@ -364,15 +364,20 @@ static void settle(DrawItem* item, const LodSelect* lod) {
 // the order the two recursive walks produced between them. `inherited` is the
 // nearest ancestor's pose, which a node without one takes, `hidden` whether
 // an ancestor is left out of captures, `always` whether one is drawn into every
-// GI capture, `reach` the nearest draw distance and `mask` the ancestors' view masks ANDed.
+// GI capture, `reach` the nearest draw distance, `mask` the ancestors' view masks ANDed and
+// `tag` and `tag_class` the nearest ancestor's.
 static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const LodSelect* lod,
                         bool gizmos, const AnimationState* inherited, bool hidden, bool always,
-                        float reach, uint32_t mask) {
+                        float reach, uint32_t mask, uint32_t tag, uint8_t tag_class) {
     if (!node)
         return true;
 
     const AnimationState* pose = node->pose ? node->pose : inherited;
     mask &= node->view_mask;
+    if (node->tag)
+        tag = node->tag;
+    if (node->tag_class)
+        tag_class = node->tag_class;
     hidden = hidden || node->capture_hidden;
     always = always || node->capture_always;
     if (node->draw_distance > 0.0f)
@@ -409,7 +414,9 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
                          .beyond = past_reach(mesh, node, lod, reach),
                          .capture_always = always,
                          .reach = reach,
-                         .view_mask = mask};
+                         .view_mask = mask,
+                         .tag = tag,
+                         .tag_class = tag_class};
         settle(&item, lod);
         classify(mesh, scene->wind, &item.lane, &item.flags);
         // A pose, or a node said to move: either way a capture would freeze it into a
@@ -431,7 +438,7 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
 
     for (size_t i = 0; i < node->children_count; ++i) {
         if (!append_node(list, scene, node->children[i], lod, gizmos, pose, hidden, always, reach,
-                         mask))
+                         mask, tag, tag_class))
             return false;
     }
     return true;
@@ -449,7 +456,8 @@ bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp, const LodSele
     memset(list->lane_count, 0, sizeof(list->lane_count));
     list->occluder_flag_count = 0;
     list->valid = false;
-    if (!append_node(list, scene, scene->root_node, lod, gizmos, NULL, false, false, 0.0f, ~0u))
+    if (!append_node(list, scene, scene->root_node, lod, gizmos, NULL, false, false, 0.0f, ~0u, 0,
+                     0))
         return false;
 
     list->stamp = stamp;

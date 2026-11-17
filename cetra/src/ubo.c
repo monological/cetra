@@ -107,6 +107,10 @@ bool ubo_wire_blocks(GLuint program_id) {
     // Clustered decals (spec 11.73). Declared by anything including
     // decals_ubo.glsl, which today is the lit surface alone.
     ubo_wire_program_block(program_id, "DecalBlock", UBO_BINDING_DECALS, UBO_DECALS_BLOCK_SIZE);
+    // A view's tags (spec 14.39). Declared by anything including tags.glsl: every program that
+    // draws a scene's meshes, whose vertex stages read it.
+    ubo_wire_program_block(program_id, "TagViewBlock", UBO_BINDING_TAG_VIEW,
+                           UBO_TAG_VIEW_BLOCK_SIZE);
     return ubo_wire_program_block(program_id, "InstanceBlock", UBO_BINDING_INSTANCES,
                                   UBO_INSTANCES_BLOCK_SIZE);
 }

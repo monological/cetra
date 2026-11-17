@@ -38,7 +38,8 @@ set(CETRA_PUBLIC_HEADERS
     ik.h import.h input.h light.h loading_screen.h lod.h look_at.h material.h mesh.h
     mesh_builder.h nav_graph.h noise.h
     particle_emitter.h particle_module.h particle_renderer.h particle_sim.h
-    particle_system.h postfx.h probe.h probe_set.h program.h rain.h scene.h scene_view.h shader.h
+    particle_system.h postfx.h probe.h probe_set.h program.h rain.h scene.h scene_tags.h scene_view.h
+    shader.h
     shader_hook.h shader_params.h shadow.h sky.h springbone.h text.h text_doc.h texture.h
     transform.h
     triangulate.h ui.h ui_editor.h ui_editor_vim.h ui_table.h

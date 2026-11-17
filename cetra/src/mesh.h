@@ -12,6 +12,7 @@
 #include <GL/glew.h>
 #include <cglm/cglm.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "aabb.h"
 #include "material.h"
@@ -66,6 +67,7 @@ typedef struct Mesh {
     GLuint tangent_vbo; // Tangent Buffer Object (vec4: xyz tangent, w handedness)
     GLuint morph_vbo;   // CDLOD morph target; generated only when `morph` exists
     GLuint morph_normal_vbo;
+    GLuint tag_vbo; // generated only when `tags` exists
 
     AABB aabb; // Of the vertex array, measured by mesh_upload (a stored bound, never empty)
 
@@ -193,6 +195,9 @@ typedef struct Mesh {
     float* tex_coords;  // Array of texture coordinates (UV0)
     float* tex_coords2; // Array of texture coordinates (UV1) for lightmaps/AO
     float* colors;      // Array of vertex colors (RGBA)
+    // The object each vertex is of (spec 14.39), one a vertex; 0 = its node's, NULL = all 0. A
+    // triangle's three corners carry one object: a surface a view drops is collapsed per vertex.
+    uint32_t* tags;
 
     // CDLOD morph targets, 3 floats per vertex each, NULL on almost every mesh
     // (spec 11.63). `morph` is (parent Y, window start, 1/(end - start)) and

@@ -227,6 +227,10 @@ typedef struct Engine {
     // by-value -- roads have three writers and no dirty flag.
     struct Ubo* roads_ubo;
     GpuRoadsBlock roads_shadow;
+    // The tags block a view without tags binds (spec 14.39), zeros; and whether the driver has the
+    // unit the tag table is read on.
+    struct Ubo* tag_block_none;
+    bool tags_supported;
     bool instancing_enabled; // false = every run submits one draw per mesh
     bool lod_enabled;        // false = every draw takes LOD level 0
     float lod_bias;          // > 1 holds detail longer, < 1 drops it sooner

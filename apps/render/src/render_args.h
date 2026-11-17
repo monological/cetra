@@ -7,6 +7,8 @@
  * cscene_apply.c); the application blocks in main read only this struct.
  */
 
+#include "render_tags.h"
+
 #define MAX_ANIM_FILES 32
 
 // The most views --views makes.
@@ -594,6 +596,8 @@ typedef struct {
     float background_exact[3];
     int background_exact_set;
     int hdr_memory;
+    // Tags (spec 14.39): render_tags.h's flags.
+    RenderTags tags;
     int show_help;
 } RenderArgs;
 
