@@ -62,9 +62,9 @@ def run_views_gate(workdir):
                         other half is its view alone, 0 px; hidden at 10 and shown at 20, the frame
                         is the pair never hidden, 0 px.
       views-mask        the QFN package in view 0's bit alone: view 1 is the board without it --
-                        its body and its shadow -- 0 px from a lone view whose package is in no
-                        view, and view 0 is the board with it, 0 px from its view alone; the two
-                        differ by the package.
+                        its body and its shadow -- 0 px from the board with it removed, and view 0
+                        is the board with it, 0 px from its view alone; the two differ by the
+                        package.
       views-samples     a 1-sample view beside a 4-sample one: each is its view alone at its count,
                         0 px, and the two differ.
       views-resize      one view's rectangle changed at frame 10: one rebuild of render targets
@@ -184,7 +184,9 @@ def run_views_gate(workdir):
         masked, _ = _views_run(workdir, "mask", board, VIEWS_W, VIEWS_H, board_flags + [
             "--views", "2x1", "--view-turn", "0", "--view-mask", "1:2",
             "--node-mask", "qfn_body:1"])
-        without, _ = lone("mask_without", board, board_flags + ["--node-mask", "qfn_body:0"],
+        # Removed, not masked: a reference masked out would cast the shadow the arm asks after
+        # exactly as wrongly as the view under test.
+        without, _ = lone("mask_without", board, board_flags + ["--remove-node", "qfn_body"],
                           half_w, VIEWS_H)
         alone, _ = board_half()
         if masked is None or without is None or alone is None:
