@@ -457,12 +457,14 @@ static void vt_pages_update(Material* m, struct Scene* scene, struct Engine* eng
     if (budget > VT_PAGE_BAKE_MAX)
         budget = VT_PAGE_BAKE_MAX;
 
-    // The pages are the world's, predicted from the focus view: the view-projection its scene
-    // pass last computed, and its eye as this frame's hook left it.
+    // The pages are the world's, predicted from the focus view as its scene pass last drew it:
+    // that pass's view-projection and its eye, latched together, so the frustum and the
+    // distances ranking pages inside it describe one camera. Before any pass, the eye as posed.
+    const SceneViewState* fs = focus->state;
     Frustum fr;
-    frustum_extract_from_vp((vec4*)focus->state->view_proj, &fr);
-    const float cam[3] = {focus->camera.position[0], focus->camera.position[1],
-                          focus->camera.position[2]};
+    frustum_extract_from_vp((vec4*)fs->view_proj, &fr);
+    const float* eye = fs->prev_camera_valid ? fs->prev_camera_position : focus->camera.position;
+    const float cam[3] = {eye[0], eye[1], eye[2]};
 
     VtPageCand cands[VT_PAGE_TABLE_MAX] = {{0.0f, 0}};
     int nc = 0;
