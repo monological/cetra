@@ -259,6 +259,8 @@ static Material* g_mat_rock;
 // does -- one rig either way, since a first-person camera is the same camera
 // with the arm taken away.
 static CameraRig* g_cam_rig = NULL;
+// The one view, filling the window.
+static SceneView* g_view = NULL;
 static bool g_orbit_camera = false;
 static const float CAM_DISTANCE = 14.0f;
 // The old floor clamp's +1: how far above the ground the eye may come.
@@ -2355,7 +2357,8 @@ static void forest_on_origin_shift(const vec3 delta, void* ctx) {
     // HERE rather than at the next descent, because this runs before the shadow
     // pass and the GI captures.
     Game* game = ctx;
-    Camera* camera = game && game->engine ? game->engine->camera : NULL;
+    (void)game;
+    Camera* camera = g_view ? &g_view->camera : NULL;
     vec3 eye = {0.0f, 0.0f, 0.0f};
     if (camera)
         glm_vec3_copy(camera->position, eye);
@@ -2658,13 +2661,46 @@ static void on_init(Game* game) {
     // 0.5 / 2000 rather than the 0.1 / 1000 default: a kilometre of terrain
     // needs the far plane, and 0.1 near against it is a 20000:1 depth ratio that
     // z-fights across the whole distance.
-    CameraDesc camera_desc = {.position = {spawn_x, spawn_y + 6.0f, spawn_z + 16.0f},
-                              .look_at = {spawn_x, spawn_y, spawn_z},
-                              .fov = glm_rad(58.0f),
-                              .near = 0.5f,
-                              .far = 2000.0f};
-    Camera* camera = create_camera(&camera_desc);
-    engine_set_camera(engine, camera);
+    //
+    // TAA replaces MSAA rather than joining it: this app shipped 4x MSAA with no
+    // temporal filter at all, so masked foliage got raw coverage dither and the
+    // dark A2C fringe spec 11.19 measured, with nothing to resolve either. One
+    // sample is also the affordable count here and not only the tidy one --
+    // spec 11.102 measured the opaque row at 26.6 ms against 55.3 at four, on a
+    // canopy dense enough that alpha-to-coverage doubles the whole frame.
+    //
+    // Headless keeps MSAA and skips TAA unless asked, because jitter plus a
+    // history makes the frame sensitive to async load timing -- the same
+    // diagnostic-only escape the render app carries.
+    SceneViewSettings view_settings;
+    engine_init_view_settings(engine, &view_settings);
+    if (!g_args.headless || g_args.force_taa) {
+        view_settings.samples = 1;
+        view_settings.post.taa_enabled = true;
+    }
+    // After the policy, so --taa --msaa 4 is expressible -- the lever that
+    // prices a sample (spec 11.34); nothing else varies the count with TAA held.
+    if (g_args.msaa > 0)
+        view_settings.samples = g_args.msaa;
+    view_settings.headless_jitter = g_args.headless_jitter != 0;
+    view_settings.post.glare_enabled = g_args.glare != 0;
+    const SceneViewDesc view_desc = {
+        .camera = {.position = {spawn_x, spawn_y + 6.0f, spawn_z + 16.0f},
+                   .look_at = {spawn_x, spawn_y, spawn_z},
+                   .fov = glm_rad(58.0f),
+                   .near = 0.5f,
+                   .far = 2000.0f},
+        .settings = &view_settings,
+        .fills_window = true};
+    g_view = create_scene_view(engine, &view_desc);
+    if (!g_view || !engine_add_view(engine, g_view)) {
+        fprintf(stderr, "forest: failed to make the view\n");
+        free_scene_view(g_view);
+        g_view = NULL;
+        game_quit(game);
+        return;
+    }
+    Camera* camera = &g_view->camera;
 
     // One rig for both modes: a distance of zero is first person and CAM_DISTANCE
     // is the orbit behind. The pitch band changes with the mode, which is the
@@ -2684,16 +2720,16 @@ static void on_init(Game* game) {
     glm_vec3_copy(camera->look_at, g_cam_rig->anchor);
     camera_rig_set_distance(g_cam_rig, glm_vec3_distance(camera->position, camera->look_at));
     camera_rig_aim(g_cam_rig, 0.6f, 0.0f);
-    engine_set_camera_rig(engine, g_cam_rig);
+    scene_view_set_rig(g_view, g_cam_rig);
 
     // Pinned rather than adaptive: auto-exposure is the top determinism hazard
     // for anything compared across builds, and every arm here reads a frame or a
     // counter from this app.
-    engine->exposure.settings->automatic = false;
-    engine->exposure.settings->multiplier = 1.8f;
+    g_view->settings.exposure.automatic = false;
+    g_view->settings.exposure.multiplier = 1.8f;
 
     if (g_args.render_mode > 0)
-        engine->current_render_mode = (RenderMode)g_args.render_mode;
+        g_view->settings.render_mode = (RenderMode)g_args.render_mode;
 
     if (g_args.no_lod)
         engine->lod_enabled = false;
@@ -2729,23 +2765,23 @@ static void on_init(Game* game) {
     //
     // Scale matters more than density here: one unit is one metre, so the
     // extinction is per metre and the numbers are small.
-    if (engine->postfx && !g_args.no_fog) {
-        PostFX* fx = engine->postfx;
-        fx->settings->fog_enabled = true;
-        fx->settings->fog_density = 0.0022f;
-        fx->settings->fog_height_falloff = 42.0f; // thick in the valleys, thin off the ridges
-        fx->settings->fog_floor_y = -30.0f;
-        fx->settings->fog_near = 0.0f; // derive from fog_far
-        fx->settings->fog_far = 1400.0f;
+    if (!g_args.no_fog) {
+        PostFXSettings* fx = &g_view->settings.post;
+        fx->fog_enabled = true;
+        fx->fog_density = 0.0022f;
+        fx->fog_height_falloff = 42.0f; // thick in the valleys, thin off the ridges
+        fx->fog_floor_y = -30.0f;
+        fx->fog_near = 0.0f; // derive from fog_far
+        fx->fog_far = 1400.0f;
         // Forward-scattering, so looking toward the sun lights the medium up and
         // looking away leaves it flat -- most of what reads as "moody".
-        fx->settings->fog_anisotropy = 0.72f;
-        fx->settings->fog_sun_boost = 2.2f;
+        fx->fog_anisotropy = 0.72f;
+        fx->fog_sun_boost = 2.2f;
         // With the sky, the fog's ambient follows the sun; this dusk blue is
         // the fallback sun's, which has no zenith radiance to publish.
         if (g_args.no_sky) {
-            glm_vec3_copy((vec3){0.030f, 0.038f, 0.055f}, fx->settings->fog_ambient);
-            fx->settings->fog_ambient_from_sky = false;
+            glm_vec3_copy((vec3){0.030f, 0.038f, 0.055f}, fx->fog_ambient);
+            fx->fog_ambient_from_sky = false;
         }
     }
 
@@ -2908,7 +2944,7 @@ static void on_pre_render(Game* game, double alpha) {
     if (!g_scene || !g_scene->root_node)
         return;
 
-    Camera* camera = engine->camera;
+    Camera* camera = g_view ? &g_view->camera : NULL;
     if (camera) {
         if (g_args.cam_set) {
             // Re-pinned every frame, so it has to be expressed in the frame the
@@ -3004,7 +3040,7 @@ static void on_pre_render(Game* game, double alpha) {
 
 static void on_shutdown(Game* game) {
     if (game && game->engine)
-        engine_set_camera_rig(game->engine, NULL);
+        scene_view_set_rig(g_view, NULL);
     free_camera_rig(g_cam_rig);
     g_cam_rig = NULL;
     // game_run does not report; the render app does this at its own exit. Here
@@ -3320,29 +3356,9 @@ int main(int argc, char** argv) {
                                     .width = g_args.width > 0 ? g_args.width : 1600,
                                     .height = g_args.height > 0 ? g_args.height : 900,
                                     .headless = g_args.headless != 0,
-                                    .headless_jitter = g_args.headless_jitter != 0,
                                     .profiler = g_args.profiler != 0},
                          .cook_dir = g_args.cook_dir,
                          .no_cook = g_args.no_cook != 0};
-
-    // TAA replaces MSAA rather than joining it: this app shipped 4x MSAA with no
-    // temporal filter at all, so masked foliage got raw coverage dither and the
-    // dark A2C fringe spec 11.19 measured, with nothing to resolve either. One
-    // sample is also the affordable count here and not only the tidy one --
-    // spec 11.102 measured the opaque row at 26.6 ms against 55.3 at four, on a
-    // canopy dense enough that alpha-to-coverage doubles the whole frame.
-    //
-    // Headless keeps MSAA and skips TAA unless asked, because jitter plus a
-    // history makes the frame sensitive to async load timing -- the same
-    // diagnostic-only escape the render app carries.
-    if (!g_args.headless || g_args.force_taa) {
-        config.engine.msaa_samples = 1;
-        config.engine.taa = true;
-    }
-    // After the policy, so --taa --msaa 4 is expressible -- the lever that
-    // prices a sample (spec 11.34); nothing else varies the count with TAA held.
-    if (g_args.msaa > 0)
-        config.engine.msaa_samples = g_args.msaa;
 
     Game* game = create_game(&config);
     if (!game) {
@@ -3350,8 +3366,6 @@ int main(int argc, char** argv) {
         return 1;
     }
     game->engine->exit_after_frames = g_args.frames;
-    if (game->engine->postfx)
-        game->engine->postfx->settings->glare_enabled = g_args.glare != 0;
     engine_set_screenshot_path(game->engine, g_args.screenshot);
     game->engine->screenshot_every = g_args.screenshot_every;
     input_bind(&game->input, g_actions, sizeof(g_actions) / sizeof(g_actions[0]));

@@ -109,9 +109,10 @@ void fire_simulate(FireRenderer* renderer, struct Engine* engine, struct Scene* 
 // A grid's textures, released.
 void fire_grid_gpu_free(FireGridGPU* grid);
 
-// Draw the scene's fires onto the bound canvas, from the late draw.
+// Draw the scene's fires onto the bound canvas from `view`'s camera, from its late draw.
+struct SceneView;
 void fire_render_draw(FireRenderer* renderer, struct Engine* engine, const struct Scene* scene,
-                      const struct PostFXLateDraw* late);
+                      const struct SceneView* view, const struct PostFXLateDraw* late);
 
 // --fire-slice (FireSystem.debug_field): the slice, opaque, into the lower-left corner of a
 // finished frame `height` pixels tall -- after the tone map, so its ramp is the colour shown.

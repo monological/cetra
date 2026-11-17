@@ -23,6 +23,7 @@
 typedef struct Engine Engine;
 typedef struct Scene Scene;
 typedef struct Camera Camera;
+struct SceneView;
 
 /*
  * A POINTER driving a camera rig, for a 3D viewer (spec 12.19).
@@ -38,7 +39,8 @@ typedef struct Camera Camera;
 typedef struct CameraDrag {
     // ENGINE-OWNED (by the adapter): the rig as the drag started.
     Engine* engine;
-    struct CameraRig* rig; // borrowed; the app owns it
+    struct SceneView* view; // the view whose camera the rig poses; borrowed
+    struct CameraRig* rig;  // borrowed; the app owns it
     float start_yaw;
     float start_pitch;
     vec3 start_anchor;
@@ -55,9 +57,9 @@ typedef struct CameraDrag {
 } CameraDrag;
 
 // Created with a windowed viewer's defaults: sensitivity 0.002, pan 0.0005 per
-// unit of distance, a zoom step of 0.9, auto-orbit off. The rig is borrowed and
-// must outlive this.
-CameraDrag* create_camera_drag(Engine* engine, struct CameraRig* rig);
+// unit of distance, a zoom step of 0.9, auto-orbit off. The view and the rig are
+// borrowed and must outlive this; the rig is the one posing the view's camera.
+CameraDrag* create_camera_drag(Engine* engine, struct SceneView* view, struct CameraRig* rig);
 void free_camera_drag(CameraDrag* drag);
 
 // Forwarded from the app's mouse-button callback: latches the aim a drag starts
@@ -88,12 +90,13 @@ bool camera_drag_on_key(CameraDrag* drag, int key, int action, int mods);
  * the cursor. An app with gestures of its own (handles, corners) runs them
  * first and hands this what is left; the drag itself lives in engine->input.
  *
- * It moves a scene's camera. The 2D canvas (canvas.h) is not a scene and pans
- * its own views.
+ * It moves a scene view's camera. The 2D canvas (canvas.h) is not a scene and
+ * pans its own views.
  */
 typedef struct PlaneDrag {
     // ENGINE-OWNED (by the adapter): the pan in flight.
     Engine* engine;
+    struct SceneView* view; // the view it steers; borrowed
     // The rig it writes its pose through; owned. Its ARITHMETIC is this file's
     // and always was -- a 2D camera pans and zooms an ortho height and never
     // rotates, which a 3D rig has nothing to say about. What it shares is who is
@@ -108,11 +111,12 @@ typedef struct PlaneDrag {
     float zoom_step; // ortho_height factor per wheel notch, default 0.9
 } PlaneDrag;
 
-PlaneDrag* create_plane_drag(Engine* engine);
+// Steers `view`, borrowed, and installs its own rig on it.
+PlaneDrag* create_plane_drag(Engine* engine, struct SceneView* view);
 void free_plane_drag(PlaneDrag* drag);
 
-// The world point under a framebuffer position on the engine's square-on
-// orthographic camera: look_at + (fb - fb_centre) * (ortho_height / fb_height),
+// The world point under a framebuffer position on the view's square-on
+// orthographic camera: look_at + (fb - view_centre) * (ortho_height / view_height),
 // both axes.
 void plane_drag_point_under(const PlaneDrag* drag, double fb_x, double fb_y, vec3 out);
 
@@ -137,7 +141,7 @@ void plane_drag_on_scroll(PlaneDrag* drag, double xoffset, double yoffset);
 // matching. Call it from the RENDER callback, not the pre-render hook -- the
 // engine applies the camera rig after that hook returns, so a trace taken there
 // reports last frame's camera.
-void app_trace_camera(const Engine* engine);
+void app_trace_camera(const Engine* engine, const struct SceneView* view);
 
 /*
  * Light Rigs

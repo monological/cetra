@@ -13,8 +13,10 @@
 // axis and the look-at matrix stays defined.
 #define PLAYER_PITCH_LIMIT 1.5533f // 89 degrees
 
-void player_init(Player* p, struct Engine* engine, float x, float z, float yaw) {
+void player_init(Player* p, struct Engine* engine, struct SceneView* view, float x, float z,
+                 float yaw) {
     (void)engine; // no cursor to capture and no input mode to set: see player.h
+    p->view = view;
     p->feet[0] = x;
     p->feet[1] = ground_height_at(x, z);
     p->feet[2] = z;
@@ -38,7 +40,7 @@ static float axis(GLFWwindow* win, int positive, int negative) {
 }
 
 void player_update(Player* p, struct Engine* engine, float dt) {
-    if (!p || !engine || !engine->window || !engine->camera)
+    if (!p || !engine || !engine->window || !p->view)
         return;
     GLFWwindow* win = engine->window;
 
@@ -141,5 +143,5 @@ void player_update(Player* p, struct Engine* engine, float dt) {
         camera_rig_aim(p->rig, p->yaw + GLM_PIf, p->pitch);
         camera_rig_update(p->rig, 0.0f, 0.0f, 0.0f);
     }
-    glm_vec3_copy((vec3){0.0f, 1.0f, 0.0f}, engine->camera->up_vector);
+    glm_vec3_copy((vec3){0.0f, 1.0f, 0.0f}, p->view->camera.up_vector);
 }

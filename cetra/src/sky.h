@@ -68,6 +68,29 @@
 // which would overflow the column it shares with the noise fields.
 #define CLOUD_SHADOW_DEBUG_W 192
 
+// One camera's march of the cloud shell, kept by each scene view: half-render-res targets the
+// clouds background variant samples, and the history the march reprojects. A parity ping-pong
+// (frame & 1): the march blends last frame's result in place by ray-direction reprojection, so
+// there is no separate accumulation pass. Lazily allocated by the first march.
+//
+// The march keeps its OWN previous camera and adjacency stamp (the froxel-fog 9.5.1 shape): sky
+// pixels carry zero velocity, so the shared velocity-reprojecting accumulators cannot serve.
+// Rotation-only view (clouds reproject by ray direction -- translation parallax is accepted,
+// bounded by the blend). prev_frame is the SINGLE march-history record: -1 = no march yet (gates
+// the composite), otherwise the frame of the last march, whose parity is the texture it wrote.
+typedef struct CloudMarch {
+    GLuint fbo[2];
+    GLuint tex[2];
+    int w, h;
+    mat4 prev_view; // rotation-only world->view of the previous march
+    float prev_focal[2];
+    int prev_frame;
+} CloudMarch;
+
+// No targets and no history; the release frees the targets and leaves it so.
+void cloud_march_init(CloudMarch* march);
+void cloud_march_release(CloudMarch* march);
+
 typedef struct CloudLayer {
     // BY FUNCTION: these four are baked into the env cube, so a write is
     // followed by scene_environment_changed(scene, engine). Switching on needs
@@ -81,40 +104,20 @@ typedef struct CloudLayer {
     // SETTINGS: wind_speed_kmh, wind_dir_deg, shadows_enabled. ENGINE-OWNED:
     // the rest, in feature order.
 
-    // Drift. The scroll accumulator advances by render_delta once per march;
-    // the engine's frame clock makes that a fixed step headless (goldens stay
+    // Drift. The scroll accumulator advances by render_delta at the frame's first march, however
+    // many views march; the engine's frame clock makes that a fixed step headless (goldens stay
     // byte-deterministic) and honestly frozen under a paused embedder clock.
     // Default speed 0 = still air.
     float wind_speed_kmh;
     float wind_dir_deg; // 0 = +Z, matching the sun azimuth convention
     double scroll;      // accumulated drift time, seconds
+    int scroll_frame;   // the frame the drift last advanced in; -1 = never
 
     GLuint shape_tex;  // 128^3 RGBA8 tiling volume
     GLuint detail_tex; // 32^3  RGBA8 tiling volume
     bool noise_baked;
 
-    // Half-internal-res march targets, written each frame and sampled by
-    // the clouds background variant. A parity ping-pong (frame & 1): the
-    // march blends last frame's result in-place via ray-direction
-    // reprojection, so there is no separate accumulation pass. Lazily
-    // allocated.
-    GLuint march_fbo[2];
-    GLuint march_tex[2];
-    int march_w, march_h;
-    ShaderProgram* march_program;
-
-    // The march's OWN previous camera + adjacency stamp (the froxel-fog
-    // 9.5.1 shape): sky pixels carry zero velocity, so the shared
-    // velocity-reprojecting accumulators cannot serve, and by the time any
-    // postfx state is written engine->prev_view_proj already holds THIS
-    // frame. Rotation-only view (clouds reproject by ray direction --
-    // translation parallax is accepted, bounded by the blend). prev_frame
-    // is the SINGLE march-history record: -1 = no march yet (gates the
-    // composite), otherwise the frame of the last march, whose parity is
-    // the texture index it wrote.
-    mat4 prev_view; // rotation-only world->view of the previous march
-    float prev_focal[2];
-    int prev_frame;
+    ShaderProgram* march_program; // the march; its targets and history are each view's
 
     /*
      * Sun transmittance through the deck, as a 2D map the froxel fog reads (spec 11.39).
@@ -414,13 +417,13 @@ int sky_bake_static_luts(SkyAtmosphere* sky, struct Engine* engine);
 // Sun- and coverage-independent: never re-baked after this.
 int sky_bake_cloud_noise(SkyAtmosphere* sky);
 
-// March the cloud shell into the half-res target (sky_clouds.c). Call once
-// per frame with the SAME view/projection the sky background will
-// composite with -- a camera latched anywhere earlier in the frame is one
-// app-update stale, which turns the temporal reprojection into an identity
-// map. Binds its own FBO and restores the caller's GL state; no-op unless
-// clouds are enabled and the noise is baked.
-void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4 projection);
+// March the cloud shell into one view's half-res target (sky_clouds.c), at render size rw x rh.
+// Call once per frame per view with the SAME view/projection the sky background will composite
+// with -- a camera latched anywhere earlier in the frame is one app-update stale, which turns the
+// temporal reprojection into an identity map. Binds its own FBO and restores the caller's GL
+// state; no-op unless clouds are enabled and the noise is baked.
+void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, CloudMarch* march, mat4 view,
+                      mat4 projection, int rw, int rh);
 
 // Re-bake everything the sun drives: sky-view LUT -> environment cubemap
 // (+ mips) -> ibl_bake_from_cubemap (irradiance + GGX and Charlie
@@ -546,12 +549,11 @@ void sky_bind_cloud_shadow(const SkyAtmosphere* sky, ShaderProgram* program, int
 // Draw the procedural sky as the frame background (sky-view LUT + analytic
 // sun disc), replacing render_skybox in sky mode. Strips translation from
 // view like the skybox path. Borrows the unit cube from ibl (populated during
-// sky_bake). main_camera = this draw is not a capture: the cloud composite
-// (when the layer is enabled and has marched) samples a screen-space
-// texture that only the main camera's rays match, so capture passes pass
-// false and get the plain sky.
+// sky_bake). `clouds` is the drawing view's march: the cloud composite (when the layer is enabled
+// and that view has marched) samples a screen-space texture that only that view's rays match, so a
+// capture passes NULL and gets the plain sky.
 void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 view, mat4 projection,
-                           bool main_camera);
+                           const CloudMarch* clouds);
 
 // Debug: blit the LUTs into the bottom-left corner of the default
 // framebuffer (transmittance above multiscatter), scaled up for

@@ -12,6 +12,7 @@
 #include "camera_rig.h"
 #include "cook.h"
 #include "engine.h"
+#include "scene_view_state.h"
 #include "exposure.h"
 #include "gi_volume.h"
 #include "ibl.h"
@@ -37,6 +38,9 @@
  */
 typedef enum ConfigOwner {
     CFG_ENGINE = 0,
+    // The focus view's settings (SceneViewSettings): a session file describes the one view the
+    // panel steers, so the post chain, the exposure and the camera below are the focus view's too.
+    CFG_VIEW,
     CFG_POSTFX,
     CFG_EXPOSURE,
     CFG_EXPOSURE_METER,
@@ -141,6 +145,7 @@ typedef struct ConfigField {
  * JSON object and is cosmetic. Corruption to misfiling is the trade.
  */
 #define CFG_STRUCT_CFG_ENGINE         Engine
+#define CFG_STRUCT_CFG_VIEW           SceneViewSettings
 #define CFG_STRUCT_CFG_POSTFX         PostFXSettings
 #define CFG_STRUCT_CFG_EXPOSURE       ExposureSettings
 #define CFG_STRUCT_CFG_EXPOSURE_METER Exposure
@@ -253,42 +258,12 @@ static void _store_value(const ConfigField* f, void* base, const double* v, int 
 /*
  * The rows that are not a store, and the rule for when a new one belongs here:
  * THE FIELD HAS AN ENTRY POINT THAT VALIDATES OR ALLOCATES, AND THE TABLE MUST
- * NOT GO ROUND IT.
- *
- * Stating it as "needs a target rebuild" would be wrong for two of the four
- * below and would mislead the next person adding a row. `render_scale` and
- * `ss_scale` do NOT need one -- `_engine_sync_render_targets` runs at every
- * frame top and rebuilds whenever the derived size disagrees, so a plain store
- * would be picked up anyway. What their setters buy is the CLAMP: a hand-edited
- * 0.2 would otherwise sail into a field no other entry point can reach, and the
- * frame-top sync would happily build it.
+ * NOT GO ROUND IT. A view's samples and scales are plain stores: the view clamps
+ * them where it builds its targets, at the next frame top.
  */
-static void _apply_render_scale(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
-                                const double* v, int n) {
-    (void)base;
-    (void)f;
-    (void)n;
-    engine_set_render_scale(ctx->engine, (float)v[0]);
-}
 
-static void _apply_msaa(ConfigApplyCtx* ctx, void* base, const ConfigField* f, const double* v,
-                        int n) {
-    (void)base;
-    (void)f;
-    (void)n;
-    engine_set_msaa_samples(ctx->engine, (int)v[0]);
-}
-
-static void _apply_ss_scale(ConfigApplyCtx* ctx, void* base, const ConfigField* f, const double* v,
-                            int n) {
-    (void)base;
-    (void)f;
-    (void)n;
-    engine_set_ss_scale(ctx->engine, (int)v[0]);
-}
-
-// It writes PostFX's lengths, so its row restores before theirs and they then restore over the
-// defaults it wrote. Only on a change, as the sun's angles: restored
+// It writes every view's post lengths, so its row restores before theirs and they then restore
+// over the defaults it wrote. Only on a change, as the sun's angles: restored
 // onto the session it came from, it has nothing to write.
 static void _apply_typical_size(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
                                 const double* v, int n) {
@@ -396,23 +371,23 @@ static const ConfigField CFG_FIELDS[] = {
     // --- engine
     // First: it writes defaults that rows below restore over.
     CFG_ROW_FN(CFG_ENGINE, CFG_FLOAT, "engine", "typical_size", typical_size, _apply_typical_size),
-    CFG_ROW_ENUM(CFG_ENGINE, "engine", "render_mode", current_render_mode, CFG_RENDER_MODES),
-    CFG_ROW_FN(CFG_ENGINE, CFG_INT, "engine", "msaa_samples", msaa_samples, _apply_msaa),
+    CFG_ROW_ENUM(CFG_VIEW, "engine", "render_mode", render_mode, CFG_RENDER_MODES),
+    CFG_ROW(CFG_VIEW, CFG_INT, "engine", "msaa_samples", samples),
     // A bool that changes frames only on the live TAA path at one sample, but
     // it is a GUI control, and a session that turned it off is a session this
     // snapshot claims to reproduce.
     CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine", "alpha_jitter", alpha_jitter_enabled),
-    CFG_ROW_FN(CFG_ENGINE, CFG_FLOAT, "engine", "render_scale", render_scale, _apply_render_scale),
-    CFG_ROW_FN(CFG_ENGINE, CFG_INT, "engine", "ss_scale", ss_scale, _apply_ss_scale),
-    CFG_ROW(CFG_ENGINE, CFG_VEC3, "engine", "clear_color", clear_color),
+    CFG_ROW(CFG_VIEW, CFG_FLOAT, "engine", "render_scale", render_scale),
+    CFG_ROW(CFG_VIEW, CFG_INT, "engine", "ss_scale", ss_scale),
+    CFG_ROW(CFG_VIEW, CFG_VEC3, "engine", "clear_color", background),
 
     CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "gui", show_gui),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "wireframe", show_wireframe),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "xyz", show_xyz),
+    CFG_ROW(CFG_VIEW, CFG_BOOL, "engine.overlays", "wireframe", show_wireframe),
+    CFG_ROW(CFG_VIEW, CFG_BOOL, "engine.overlays", "xyz", show_xyz),
     CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "fps", show_fps),
     CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "camera_hud", show_camera_hud),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "bones", show_bones),
-    CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "lights", show_lights),
+    CFG_ROW(CFG_VIEW, CFG_BOOL, "engine.overlays", "bones", show_bones),
+    CFG_ROW(CFG_VIEW, CFG_BOOL, "engine.overlays", "lights", show_lights),
     CFG_ROW(CFG_ENGINE, CFG_BOOL, "engine.overlays", "cluster_heatmap", cluster_debug),
 
     CFG_ROW(CFG_ENGINE, CFG_FLOAT, "engine.material", "specular_aa", specular_aa_strength),
@@ -992,19 +967,22 @@ void config_snapshot_set_source(const ConfigSnapshotSource* src) {
 }
 
 static void* _owner_base(ConfigOwner owner, Engine* engine, Scene* scene) {
+    SceneView* focus = engine ? engine->focus_view : NULL;
     switch (owner) {
         case CFG_ENGINE:
             return engine;
+        case CFG_VIEW:
+            return focus ? &focus->settings : NULL;
         case CFG_POSTFX:
-            return engine && engine->postfx ? engine->postfx->settings : NULL;
+            return focus ? &focus->settings.post : NULL;
         case CFG_EXPOSURE:
-            return engine ? engine->exposure.settings : NULL;
+            return focus ? &focus->settings.exposure : NULL;
         case CFG_EXPOSURE_METER:
-            return engine ? &engine->exposure : NULL;
+            return focus ? &focus->state->exposure : NULL;
         case CFG_SCENE:
             return scene;
         case CFG_CAMERA:
-            return engine ? engine->camera : NULL;
+            return focus ? &focus->camera : NULL;
         case CFG_SHADOW:
             return scene ? scene->shadow_system : NULL;
         case CFG_SKY:
@@ -1371,6 +1349,7 @@ static bool _row_captured(const ConfigField* f) {
             if (strcmp(f->key, "typical_size") == 0)
                 return true;
             return strcmp(f->section, "engine") != 0 && strcmp(f->section, "engine.overlays") != 0;
+        case CFG_VIEW:
         case CFG_POSTFX:
         case CFG_EXPOSURE:
         case CFG_EXPOSURE_METER:
@@ -1821,8 +1800,9 @@ int config_snapshot_apply_file(Engine* engine, Scene* scene, const char* path) {
      * --config` rendered a different frame from the one its JSON described with
      * nothing saying so.
      */
-    if (engine && engine->camera && engine->camera_rig)
-        camera_rig_set_pose(engine->camera_rig, engine->camera->position, engine->camera->look_at);
+    SceneView* focus = engine ? engine->focus_view : NULL;
+    if (focus && focus->rig)
+        camera_rig_set_pose(focus->rig, focus->camera.position, focus->camera.look_at);
 
     printf("config snapshot applied: %s (%d fields)\n", path, written);
     fflush(stdout);

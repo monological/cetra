@@ -6,6 +6,7 @@
 
 #include "engine.h"
 #include "postfx.h"
+#include "scene_view_state.h"
 #include "profiler.h"
 #include "program.h"
 #include "rain.h"
@@ -103,9 +104,9 @@ static void _upload_drips(const Rain* rain, UniformManager* u, const RainDripSch
     uniform_set_float(u, "dripBrightness", fmaxf(rain->drip_brightness, 0.0f));
 }
 
-void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
+void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene, const SceneView* view,
                        const PostFXLateDraw* late) {
-    if (!rr || !engine || !scene || !late || !engine->camera)
+    if (!rr || !engine || !scene || !view || !late)
         return;
     const Rain* rain = scene->rain;
     // Streaks and splashes while rain falls; the drips for as long as there is water to drip.
@@ -118,8 +119,7 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
     const int droplets = splash_side * splash_side * RAIN_SPLASH_DROPLETS;
     // The map does not hold water, so a surface that draws this frame is handed over as its
     // still plane, which splashes and drips land on before the bed under it.
-    const Water* sea =
-        water_will_draw(scene->water, engine, engine->current_render_mode) ? scene->water : NULL;
+    const Water* sea = water_will_draw(scene->water, view) ? scene->water : NULL;
     const float water_level = sea ? sea->level : -FLT_MAX;
     const WaterDomain* water = sea ? &sea->domain : NULL;
     RainDripSchedule sched = {0};
@@ -136,7 +136,7 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
     vec3 cam_vel = GLM_VEC3_ZERO_INIT;
     const float dt = (float)engine->render_delta;
     if (dt > 0.0f) {
-        glm_vec3_scale(engine->camera_travel, 1.0f / dt, cam_vel);
+        glm_vec3_scale((float*)view->state->camera_travel, 1.0f / dt, cam_vel);
         if (glm_vec3_norm(cam_vel) > RAIN_MAX_CAMERA_SPEED)
             glm_vec3_zero(cam_vel);
     }
@@ -160,9 +160,9 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)canvas);
     glUseProgram(program->id);
     UniformManager* u = program->uniforms;
-    uniform_set_mat4(u, "view", (const float*)engine->view_matrix);
-    uniform_set_mat4(u, "projection", (const float*)engine->projection_matrix);
-    uniform_set_vec3(u, "cameraPos", engine->camera->position);
+    uniform_set_mat4(u, "view", (const float*)view->state->view_matrix);
+    uniform_set_mat4(u, "projection", (const float*)view->state->projection_matrix);
+    uniform_set_vec3(u, "cameraPos", (const float*)view->camera.position);
     uniform_set_vec3(u, "cameraVelocity", cam_vel);
     uniform_set_float(u, "time", (float)engine->render_time);
     uniform_set_vec3(u, "rainWind", rain->wind_now);

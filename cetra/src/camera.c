@@ -26,13 +26,20 @@ static void _camera_sync_orbit(Camera* camera) {
 }
 
 Camera* create_camera(const CameraDesc* desc) {
-    static const CameraDesc none = {0};
-    if (!desc)
-        desc = &none;
-
     Camera* camera = calloc(1, sizeof(Camera));
     if (!camera)
         return NULL;
+    camera_init(camera, desc);
+    return camera;
+}
+
+void camera_init(Camera* camera, const CameraDesc* desc) {
+    static const CameraDesc none = {0};
+    if (!camera)
+        return;
+    if (!desc)
+        desc = &none;
+    memset(camera, 0, sizeof(*camera));
 
     camera->name = safe_strdup(desc->name);
 
@@ -52,15 +59,19 @@ Camera* create_camera(const CameraDesc* desc) {
     // The orbit parameters describe the pose just set, not a fixed 2000 units
     // that every orbiting app then had to overwrite by hand.
     _camera_sync_orbit(camera);
-    return camera;
+}
+
+void camera_release(Camera* camera) {
+    if (!camera)
+        return;
+    free(camera->name);
+    camera->name = NULL;
 }
 
 void free_camera(Camera* camera) {
     if (!camera)
         return;
-    if (camera->name) {
-        free(camera->name);
-    }
+    camera_release(camera);
     free(camera);
 }
 

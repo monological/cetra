@@ -39,6 +39,7 @@
 typedef struct Player {
     Entity* entity;
     CameraRig* rig;
+    SceneView* scene_view; // the view the rig is installed on; borrowed
     bool cursor_wanted;    // in a window, the player's own choice: a click takes the cursor
     int cursor_mode;       // the window's GLFW_CURSOR_* mode; 0 until the first frame sets one
     bool cursor_captured;  // the mode is GLFW_CURSOR_DISABLED: the mouse looks
@@ -66,11 +67,12 @@ typedef struct Player {
 } Player;
 
 // Stands the capsule on the floor at `feet`, looking along `yaw` and `pitch` (radians, the rig's
-// convention: pitch up positive), and installs the rig on the engine.
-void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em, const vec3 feet,
-                 float yaw, float pitch);
+// convention: pitch up positive), and installs the rig on `view`.
+void player_init(Player* p, Game* game, SceneView* view, PhysicsWorld* physics, EntityManager* em,
+                 const vec3 feet, float yaw, float pitch);
 
-// Frees what player_init made; the entity and the rig are the game's and the engine's.
+// Frees what player_init made, but the entity, which is the game's, and the rig, which the view
+// goes on borrowing.
 void player_free(Player* p);
 
 // The body where its controller now stands, looking along its rig's yaw and pitch as just written

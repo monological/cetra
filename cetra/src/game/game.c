@@ -285,19 +285,20 @@ static void game_frame_update(Engine* engine, float dt) {
     game->frame_clock.time = game->time + game->accumulator;
 }
 
-// Point the listener along the camera, push the frame's positions into the sources, and ease
-// the zones over `dt`. The camera is heard as the frame will draw it: the engine puts the camera
-// rig's pose on it only after the pre-render hook, so it goes on here too, which is idempotent, and
-// a NULL rig writes nothing.
+// Point the listener along the focus view's camera, push the frame's positions into the sources,
+// and ease the zones over `dt`. The camera is heard as the frame will draw it: the engine puts the
+// view's rig pose on it only after the pre-render hook, so it goes on here too, which is
+// idempotent, and a NULL rig writes nothing. With no view the listener stays where it was.
 static void game_listen(Game* game, float dt) {
     if (!game->audio)
         return;
-    Camera* cam = game->engine->camera;
+    SceneView* view = game->engine->focus_view;
+    Camera* cam = view ? &view->camera : NULL;
     vec3 pos = {0.0f, 0.0f, 0.0f};
     vec3 fwd = {0.0f, 0.0f, -1.0f};
     vec3 up = {0.0f, 1.0f, 0.0f};
     if (cam) {
-        camera_rig_apply(game->engine->camera_rig, cam);
+        camera_rig_apply(view->rig, cam);
         glm_vec3_copy(cam->position, pos);
         camera_forward(cam, fwd);
         glm_vec3_copy(cam->up_vector, up);
@@ -330,11 +331,11 @@ static void game_pre_render(Engine* engine, Scene* scene) {
 
 // engine_run's render hook: hand the app its on_render with the interpolation
 // alpha. The engine owns the framebuffer / G-buffer / present around it.
-static void game_scene_render(Engine* engine, Scene* scene) {
+static void game_scene_render(Engine* engine, Scene* scene, SceneView* view) {
     (void)scene;
     Game* game = engine_get_user_data(engine);
     // Interpolation alpha, derived rather than stored, so nothing can leave it stale.
-    game->on_render(game, game->accumulator / game->fixed_timestep);
+    game->on_render(game, view, game->accumulator / game->fixed_timestep);
 }
 
 void game_run(Game* game) {

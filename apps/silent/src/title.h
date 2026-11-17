@@ -42,10 +42,10 @@ typedef struct Title {
 } Title;
 
 // Its screens in `ui`, which may be NULL for none, opening `settings` and quitting `game`, and its
-// view on the game's engine, so the view loads round the title's eye; nothing shown yet.
-void title_start(Title* t, UISystem* ui, Game* game, SettingsMenu* settings);
-// Its view, over the street, installed on `engine` in place of the player's (spec 13.50).
-void title_view(const Title* t, Engine* engine);
+// rig on `view`, so the world loads round the title's eye; nothing shown yet.
+void title_start(Title* t, UISystem* ui, Game* game, SceneView* view, SettingsMenu* settings);
+// Its rig, over the street, installed on `view` in place of the player's (spec 13.50).
+void title_view(const Title* t, SceneView* view);
 // Up over the street, the games kept read again, on its first item: false with no UI to show.
 bool title_show(Title* t);
 // Over it, the screen called `name` -- "games", or "delete" asking about the newest game -- as

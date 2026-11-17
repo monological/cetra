@@ -310,6 +310,8 @@ static bool starts_elsewhere(const SilentArgs* a) {
 }
 static Scene* g_scene;
 static Player g_player;
+// The one view, filling the window: the player's eye, the title's and the inspection's.
+static SceneView* g_view;
 static KitSurfaces g_surfaces; // what the kits' bodies are made of, for the footsteps
 static Footsteps g_footsteps;
 static Lights g_lights;
@@ -820,24 +822,22 @@ static void build_probes(void) {
         free_reflection_probe_set(set);
 }
 
-static void build_post(Engine* engine, bool night, bool grade) {
-    PostFX* fx = engine->postfx;
-    if (!fx)
-        return;
-    postfx_settings_apply_film_look(fx->settings);
+static void build_post(Engine* engine, SceneView* view, bool night, bool grade) {
+    PostFXSettings* fx = &view->settings.post;
+    postfx_settings_apply_film_look(fx);
     // No film grain; on request, a console's picture on a living-room television (spec 13.28).
-    fx->settings->grain_enabled = false;
+    fx->grain_enabled = false;
     engine->crt_enabled = g_args.crt;
-    fx->settings->contact_shadows_enabled = true;
+    fx->contact_shadows_enabled = true;
     // A puddle in the road mirrors a lamp head or a window across the street,
     // ten to twenty metres up its reflected ray. The default reach of eight fades
     // those out and leaves wet ground reflecting nothing.
-    fx->settings->ssr_max_distance = 40.0f;
+    fx->ssr_max_distance = 40.0f;
     // The film look warms the highlights; this place is green-grey, and the
     // grade that makes it so is the LUT (tools/make_grade.py).
-    glm_vec3_one(fx->settings->grade_gain);
-    if (grade && postfx_load_lut(fx, "assets/lut/silent_grade.cube"))
-        fx->settings->lut_strength = 1.0f;
+    glm_vec3_one(fx->grade_gain);
+    if (grade && scene_view_load_lut(view, "assets/lut/silent_grade.cube"))
+        fx->lut_strength = 1.0f;
 
     // A thin haze everywhere at night -- enough to put a beam in the flashlight
     // -- and the street's fog volumes on top of it. None by day: the ambient
@@ -847,43 +847,41 @@ static void build_post(Engine* engine, bool night, bool grade) {
     // down the cellar stair or inside the cabin stops dead at the yard's level; its density at
     // the floor is raised by what the falloff takes off over that depth, so every height is as it
     // was.
-    fx->settings->fog_enabled = !g_args.no_fog;
-    fx->settings->fog_height_falloff = 60.0f;
-    fx->settings->fog_floor_y = LAKE_Y;
-    fx->settings->fog_density =
-        night ? 0.02f * expf(-LAKE_Y / fx->settings->fog_height_falloff) : 0.0f;
-    fx->settings->fog_far = 60.0f;
-    fx->settings->fog_anisotropy = 0.7f;
+    fx->fog_enabled = !g_args.no_fog;
+    fx->fog_height_falloff = 60.0f;
+    fx->fog_floor_y = LAKE_Y;
+    fx->fog_density = night ? 0.02f * expf(-LAKE_Y / fx->fog_height_falloff) : 0.0f;
+    fx->fog_far = 60.0f;
+    fx->fog_anisotropy = 0.7f;
     // At night the fog's own glow, and not the sky's: the night sky's radiance
     // is a deep navy, and fog lit by it swallows the street into black. A dim
     // grey-green veil is what the houses fade INTO, which is what reads as fog.
     // By day the overcast dome lights it, which is the sky the fog fades into.
     if (night) {
-        glm_vec3_copy((vec3){5.0f, 5.6f, 5.2f}, fx->settings->fog_ambient);
-        fx->settings->fog_ambient_from_sky = false;
+        glm_vec3_copy((vec3){5.0f, 5.6f, 5.2f}, fx->fog_ambient);
+        fx->fog_ambient_from_sky = false;
     }
 
     // An exposure per pixel on top of the camera's (spec 13.19), which is what lets a window onto
     // the day come down without the kitchen around it going dark. By day only: the night's
     // exposure is pinned, and its look with it.
-    fx->settings->local_exposure_enabled =
-        g_args.local_exposure < 0 ? !night : g_args.local_exposure == 1;
+    fx->local_exposure_enabled = g_args.local_exposure < 0 ? !night : g_args.local_exposure == 1;
     if (!night) {
-        fx->settings->local_exposure_highlights = DAY_LE_HIGHLIGHTS;
-        fx->settings->local_exposure_shadows = DAY_LE_SHADOWS;
-        fx->settings->local_exposure_blend = DAY_LE_BLEND;
+        fx->local_exposure_highlights = DAY_LE_HIGHLIGHTS;
+        fx->local_exposure_shadows = DAY_LE_SHADOWS;
+        fx->local_exposure_blend = DAY_LE_BLEND;
     }
     if (g_args.le_highlights >= 0.0f)
-        fx->settings->local_exposure_highlights = g_args.le_highlights;
+        fx->local_exposure_highlights = g_args.le_highlights;
     if (g_args.le_shadows >= 0.0f)
-        fx->settings->local_exposure_shadows = g_args.le_shadows;
+        fx->local_exposure_shadows = g_args.le_shadows;
     if (g_args.le_blend >= 0.0f)
-        fx->settings->local_exposure_blend = g_args.le_blend;
-    fx->settings->local_exposure_probe = g_args.le_probe;
-    fx->settings->negative_probe = g_args.negative_probe;
-    fx->settings->rescale_histories = !g_args.no_history_rescale;
+        fx->local_exposure_blend = g_args.le_blend;
+    fx->local_exposure_probe = g_args.le_probe;
+    fx->negative_probe = g_args.negative_probe;
+    fx->rescale_histories = !g_args.no_history_rescale;
     if (g_args.fog_miss_samples > 0)
-        fx->settings->fog_history_miss_samples = g_args.fog_miss_samples;
+        fx->fog_history_miss_samples = g_args.fog_miss_samples;
 }
 
 // Door `i`, or NULL when it was not hung.
@@ -955,11 +953,11 @@ static void capture_budget(Engine* engine) {
 // Into a game (spec 13.49): the save in `load` put over the world as it was built, or the world as
 // built for a new game when it is NULL; then the player's own camera, and from now on the game
 // saves itself into `slot`, or nowhere for NULL. False when the save could not be read.
-static bool enter_game(Engine* engine, const char* load, const char* slot) {
+static bool enter_game(const char* load, const char* slot) {
     if (load && !save_game_load(load))
         return false;
     save_game_begin(g_args.no_autosave ? NULL : slot);
-    engine_set_camera_rig(engine, g_player.rig);
+    scene_view_set_rig(g_view, g_player.rig);
     settings_menu_apply(&g_settings);
     return true;
 }
@@ -1271,8 +1269,60 @@ static void on_init(Game* game) {
     audio_sound_set_volume(sounds_loop(audio, "assets/audio/silent/undertow.flac", AUDIO_BUS_MUSIC),
                            MUSIC_VOLUME);
 
+    // In the kitchen's back corner looking across it to the hall door, or wherever --player-at
+    // put the player, on whatever stands under them there -- the ground, a floor, the dock --
+    // looking along its yaw.
+    vec3 feet, look;
+    glm_vec3_copy((float*)SPAWN_FEET, feet);
+    glm_vec3_copy((float*)SPAWN_LOOK_AT, look);
+    if (g_args.player_at_set) {
+        const float x = g_args.player_at[0], z = g_args.player_at[1];
+        // From two metres over the ground or the lake's water, under any roof over them.
+        vec3 from = {x, fmaxf(land_height(x, z), LAKE_Y) + 2.0f, z};
+        RaycastHit hit;
+        const bool stood = physics_world_raycast_filtered(physics, from, (vec3){0.0f, -1.0f, 0.0f},
+                                                          30.0f, 1u << OBJ_LAYER_STATIC, &hit);
+        glm_vec3_copy((vec3){x, (stood ? hit.position[1] : land_height(x, z)) + 0.05f, z}, feet);
+        const float yaw = glm_rad(g_args.player_at[2]);
+        glm_vec3_copy((vec3){x + sinf(yaw), feet[1] + PLAYER_EYE_HEIGHT, z + cosf(yaw)}, look);
+    }
+    const float eye_y = feet[1] + PLAYER_EYE_HEIGHT;
+
+    // The one view, filling the window, made before the post settings it carries. One sample
+    // under TAA, headless as in the window, so a screenshot is what a player sees. Not MSAA: in
+    // fog this dense the fog composite takes ONE depth for a multisampled edge pixel, and where
+    // half its samples are sky that depth is too near -- every silhouette in the street comes out
+    // traced in a dark, unfogged line.
+    SceneViewSettings view_settings;
+    engine_init_view_settings(engine, &view_settings);
+    view_settings.samples = g_args.msaa > 0 ? g_args.msaa : 1;
+    view_settings.post.taa_enabled = !g_args.no_taa;
+    // And jittered, or headless TAA integrates one sample position forever: no antialiasing, and
+    // an upscale the engine refuses. The jitter follows the frame index, so a headless run still
+    // repeats itself exactly.
+    view_settings.headless_jitter = !g_args.no_taa;
+    // The upscale rides on TAA, so a scale without it is refused by the engine.
+    if (g_args.render_scale > 0.0f && !g_args.no_taa)
+        view_settings.render_scale = g_args.render_scale;
+    // Its field of view is the settings' own, which they put on it once they are applied.
+    const SceneViewDesc view_desc = {.camera = {.position = {feet[0], eye_y, feet[2]},
+                                                .look_at = {look[0], look[1], look[2]},
+                                                .fov = glm_rad(SETTINGS_FOV),
+                                                .near = 0.05f,
+                                                .far = 250.0f},
+                                     .settings = &view_settings,
+                                     .fills_window = true};
+    g_view = create_scene_view(engine, &view_desc);
+    if (!g_view || !engine_add_view(engine, g_view)) {
+        fprintf(stderr, "silent: failed to make the view\n");
+        free_scene_view(g_view);
+        g_view = NULL;
+        game_quit(game);
+        return;
+    }
+
     // Before the sky: its reflections are baked through the fog set here.
-    build_post(engine, !g_args.day, !g_args.no_grade);
+    build_post(engine, g_view, !g_args.day, !g_args.no_grade);
     load_seam(engine, "post");
     build_sky(engine);
     load_seam(engine, "sky");
@@ -1331,38 +1381,13 @@ static void on_init(Game* game) {
         engine->capture_budget_ms = g_args.capture_budget_ms;
     g_play_capture_ms = engine->capture_budget_ms;
 
-    // In the kitchen's back corner looking across it to the hall door, or wherever --player-at
-    // put the player, on whatever stands under them there -- the ground, a floor, the dock --
-    // looking along its yaw.
-    vec3 feet, look;
-    glm_vec3_copy((float*)SPAWN_FEET, feet);
-    glm_vec3_copy((float*)SPAWN_LOOK_AT, look);
-    if (g_args.player_at_set) {
-        const float x = g_args.player_at[0], z = g_args.player_at[1];
-        // From two metres over the ground or the lake's water, under any roof over them.
-        vec3 from = {x, fmaxf(land_height(x, z), LAKE_Y) + 2.0f, z};
-        RaycastHit hit;
-        const bool stood = physics_world_raycast_filtered(physics, from, (vec3){0.0f, -1.0f, 0.0f},
-                                                          30.0f, 1u << OBJ_LAYER_STATIC, &hit);
-        glm_vec3_copy((vec3){x, (stood ? hit.position[1] : land_height(x, z)) + 0.05f, z}, feet);
-        const float yaw = glm_rad(g_args.player_at[2]);
-        glm_vec3_copy((vec3){x + sinf(yaw), feet[1] + PLAYER_EYE_HEIGHT, z + cosf(yaw)}, look);
-    }
-    const float eye_y = feet[1] + PLAYER_EYE_HEIGHT;
-    // Its field of view is the settings' own, which they put on it once they are applied.
-    CameraDesc cam = {.position = {feet[0], eye_y, feet[2]},
-                      .look_at = {look[0], look[1], look[2]},
-                      .fov = glm_rad(SETTINGS_FOV),
-                      .near = 0.05f,
-                      .far = 250.0f};
-    engine_set_camera(engine, create_camera(&cam));
-
     scene_set_capture_rest(g_scene, rest_lights, NULL);
     // What the doors sound like, which every slam is heard by.
     door_sounds_load(&g_door_sounds, audio);
     // The haunting takes hold of the house now, and begins only when it is played.
     haunt_start(&g_haunt,
                 &(HauntHouse){.engine = engine,
+                              .view = g_view,
                               .scene = g_scene,
                               .audio = audio,
                               .sounds = &g_door_sounds,
@@ -1394,7 +1419,7 @@ static void on_init(Game* game) {
     story_settle(&g_story, feet);
 
     const vec3 dir = {look[0] - feet[0], look[1] - eye_y, look[2] - feet[2]};
-    player_init(&g_player, game, physics, em, feet, atan2f(dir[0], dir[2]),
+    player_init(&g_player, game, g_view, physics, em, feet, atan2f(dir[0], dir[2]),
                 atan2f(dir[1], sqrtf(dir[0] * dir[0] + dir[2] * dir[2])));
     g_player.trace = g_args.trace_gait;
     g_player.interpolate = !g_args.no_interp;
@@ -1440,9 +1465,9 @@ static void on_init(Game* game) {
     const bool titled =
         (!engine->headless || g_args.title) && !starts_elsewhere(&g_args) && g_hud.ui;
     if (titled)
-        title_start(&g_title, g_hud.ui, game, &g_settings);
+        title_start(&g_title, g_hud.ui, game, g_view, &g_settings);
     else
-        enter_game(engine, g_args.load, g_args.slot);
+        enter_game(g_args.load, g_args.slot);
     const bool can_return = titled && save_game_keep_start();
     pause_menu_start(&g_pause, g_hud.ui, game, &g_settings, can_return);
     // Before the first frame mixes anything, from black.
@@ -1452,15 +1477,15 @@ static void on_init(Game* game) {
     // thing this place must not do. By day the meter maps what it reads to
     // the key on its own, so the camera is 1, and it is floored where that
     // key lands on the night's pin -- a dim room never opens past the night.
-    Exposure* ex = &engine->exposure;
+    ExposureSettings* ex = &g_view->settings.exposure;
     if (g_args.day) {
-        ex->settings->key = DAY_METER_KEY;
-        ex->settings->meter_min_log2 = log2f(ex->settings->key / EXPOSURE_NIGHT);
+        ex->key = DAY_METER_KEY;
+        ex->meter_min_log2 = log2f(ex->key / EXPOSURE_NIGHT);
     } else {
-        ex->settings->automatic = false;
-        ex->settings->multiplier = EXPOSURE_NIGHT;
+        ex->automatic = false;
+        ex->multiplier = EXPOSURE_NIGHT;
     }
-    ex->settings->probe = g_args.exposure_probe;
+    ex->probe = g_args.exposure_probe;
     load_seam(engine, "mind-exposure");
     g_settle_start = g_load_mark;
 }
@@ -1509,8 +1534,8 @@ static void on_update(Game* game, double dt) {
     // After the doors: the haunting moves the cellar door's leaf in its frame, which the step's end
     // carries to its body and node with the rest. Its slam waits for where the player looks.
     vec3 forward = {0.0f, 0.0f, -1.0f};
-    if (game->engine->camera_rig)
-        camera_rig_direction(game->engine->camera_rig, forward);
+    if (g_view && g_view->rig)
+        camera_rig_direction(g_view->rig, forward);
     haunt_step(&g_haunt, game->time, feet, forward);
     // The player's try at a door the story keeps shut (spec 13.53).
     story_step(&g_story, game->time);
@@ -1688,7 +1713,7 @@ static void on_pre_render(Game* game, double alpha) {
     // moves, so nothing else that sets the exposure is overruled the rest of the time.
     inspect_frame(&g_inspect);
     if (!g_args.day && g_lights.hold != g_exposure_hold) {
-        engine->exposure.settings->multiplier =
+        g_view->settings.exposure.multiplier =
             EXPOSURE_NIGHT * glm_lerp(1.0f, EXPOSURE_HELD, g_lights.hold);
         g_exposure_hold = g_lights.hold;
     }
@@ -1703,9 +1728,9 @@ static void on_pre_render(Game* game, double alpha) {
     // Where the view is: the installed rig's, the title's over the street while it is up and the
     // player's after. Its pose is this frame's, before the engine applies it.
     vec3 eye = {0.0f, 0.0f, 0.0f}, forward = {0.0f, 0.0f, -1.0f};
-    if (engine->camera_rig) {
-        glm_vec3_copy(engine->camera_rig->pose.eye, eye);
-        camera_rig_direction(engine->camera_rig, forward);
+    if (g_view && g_view->rig) {
+        glm_vec3_copy(g_view->rig->pose.eye, eye);
+        camera_rig_direction(g_view->rig, forward);
     }
     // The lake's water while the eye is near it, and a wake where the player wades (spec 13.41).
     vec3 feet = {0.0f, 0.0f, 0.0f};
@@ -1772,7 +1797,7 @@ static void on_pre_render(Game* game, double alpha) {
         failing_lamp_update(&g_failing[i], looks_at);
     tv_update(&g_tv, looks_at);
     cat_mind_frame(&g_mind, game->time);
-    cat_debug_draw(&g_cat, &g_mind, engine);
+    cat_debug_draw(&g_cat, &g_mind, engine, g_view);
     cat_update(&g_cat, game, g_scene, &g_lights, eye, (float)game->sim_clock.delta);
     cat_voice_update(&g_voice, eye, cat_mind_at_ease(&g_mind), (float)game->sim_clock.delta);
     clock_update(&g_clock, game->time);
@@ -1837,7 +1862,7 @@ static void on_pre_render(Game* game, double alpha) {
         case RUN_LEAVING:
             if (g_fade > 0.0f)
                 break;
-            if (enter_game(engine, g_title.choice == TITLE_LOAD ? g_title.chosen.name : NULL,
+            if (enter_game(g_title.choice == TITLE_LOAD ? g_title.chosen.name : NULL,
                            g_title.chosen.name)) {
                 g_run = RUN_ENTERING;
             } else {
@@ -1874,7 +1899,7 @@ static void on_pre_render(Game* game, double alpha) {
                 break;
             }
             hud_clear(&g_hud);
-            title_view(&g_title, engine);
+            title_view(&g_title, g_view);
             g_run = RUN_LOADING;
             break;
     }
@@ -1902,8 +1927,8 @@ static void on_pre_render(Game* game, double alpha) {
     g_fade = up ? fminf(g_fade + step / FADE_IN_SECONDS, 1.0f)
                 : fmaxf(g_fade - step / FADE_OUT_SECONDS, 0.0f);
     const float shown = glm_smoothstep(0.0f, 1.0f, g_fade);
-    if (engine->postfx)
-        glm_vec3_fill(engine->postfx->settings->grade_gain, shown);
+    if (g_view)
+        glm_vec3_fill(g_view->settings.post.grade_gain, shown);
     world_heard(game, shown);
     if (g_args.startup_ms)
         trace_settling(engine, lit, up);
@@ -2544,22 +2569,6 @@ int main(int argc, char** argv) {
         config.engine.monitor = chosen->monitor[0] ? chosen->monitor : NULL;
         config.engine.no_vsync = !chosen->vsync;
     }
-    // One sample under TAA, headless as in the window, so a screenshot is what
-    // a player sees. Not MSAA: in fog this dense the fog composite takes ONE
-    // depth for a multisampled edge pixel, and where half its samples are sky
-    // that depth is too near -- every silhouette in the street comes out
-    // traced in a dark, unfogged line.
-    config.engine.msaa_samples = 1;
-    config.engine.taa = !g_args.no_taa;
-    // And jittered, or headless TAA integrates one sample position forever:
-    // no antialiasing, and an upscale the engine refuses. The jitter follows
-    // the frame index, so a headless run still repeats itself exactly.
-    config.engine.headless_jitter = config.engine.taa;
-    // The upscale rides on TAA, so a scale without it is refused by the engine.
-    if (g_args.render_scale > 0.0f && !g_args.no_taa)
-        config.engine.render_scale = g_args.render_scale;
-    if (g_args.msaa > 0)
-        config.engine.msaa_samples = g_args.msaa;
 
     Game* game = create_game(&config);
     if (!game) {

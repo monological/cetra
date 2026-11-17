@@ -9,6 +9,7 @@
 
 #include "engine.h"
 #include "engine_internal.h"
+#include "scene_view_state.h"
 #include "procedural/foam_pattern.h"
 #include "shore_chain.h"
 #include "ubo.h"
@@ -545,6 +546,7 @@ Water* create_water(void) {
     }
 
     water->enabled = true;
+    water->passes_frame = -1;
     water->level = 0.0f;
     water->extent = 60.0f;
     // Not a look control at the scale of a pond -- over the couple of metres a lake
@@ -663,10 +665,11 @@ static bool _water_covers_eye(const Water* water, const Camera* cam) {
                               cam->position[2]);
 }
 
-void water_publish_to_postfx(const Water* water, const struct Scene* scene, struct Engine* engine) {
-    if (!engine || !engine->postfx)
+void water_publish_to_postfx(const Water* water, const struct Scene* scene,
+                             const struct SceneView* view) {
+    if (!view || !view->state->postfx)
         return;
-    PostFX* fx = engine->postfx;
+    PostFX* fx = view->state->postfx;
 
     if (!water_active(water)) {
         fx->water_medium = 0;
@@ -690,7 +693,7 @@ void water_publish_to_postfx(const Water* water, const struct Scene* scene, stru
      * submerged frame; aerial_volume belongs to the sky, which republishes every frame,
      * so clearing it here would make publish call order load-bearing.
      */
-    const bool submerged = _water_covers_eye(water, engine->camera);
+    const bool submerged = _water_covers_eye(water, &view->camera);
     fx->water_medium = submerged ? 1 : 0;
     fx->water_suppress_aerial = submerged ? 1 : 0;
     fx->water_level_y = water->level;
@@ -1042,12 +1045,13 @@ float water_effective_steepness(const Water* water) {
     return water ? glm_clamp(water->steepness, 0.0f, 1.0f) : 0.0f;
 }
 
-bool water_will_draw(const Water* water, const struct Engine* engine, RenderMode render_mode) {
+bool water_will_draw(const Water* water, const struct SceneView* view) {
     // Debug modes take a passthrough blit and skip the whole surface; a cube capture
-    // must not run the depth resolve, which blits at the main render size and re-binds
-    // the scene framebuffer. Both were previously terms at the DRAW site only, so the
-    // catcher and the fog medium disagreed with the draw about whether water existed.
-    return water_active(water) && engine && render_mode == RENDER_MODE_PBR && !engine->capturing;
+    // must not run the depth resolve, which reads a view's own scene target. Both were
+    // previously terms at the DRAW site only, so the catcher and the fog medium
+    // disagreed with the draw about whether water existed.
+    return water_active(water) && view && view->state->render_mode == RENDER_MODE_PBR &&
+           !view->state->capturing;
 }
 
 bool water_surface_box(const Water* water, AABB* out) {
@@ -1969,13 +1973,20 @@ static void _water_bind_cascades(const Water* water, UniformManager* u, bool fft
  * All three samplers the chunk declares are pointed at their own units whatever is bound,
  * since one left at the default 0 is a type mismatch against the cascade array there.
  */
-static void _water_bind_ocean(const Water* water, const struct Scene* scene,
-                              const struct Engine* engine, UniformManager* u, bool fft) {
+// The eye the world's water passes are taken from: the focus view's, the origin with none.
+static const float* _water_focus_eye(const struct Engine* engine) {
+    static const vec3 origin = {0.0f, 0.0f, 0.0f};
+    return engine->focus_view ? (const float*)engine->focus_view->camera.position : origin;
+}
+
+static void _water_bind_ocean(const Water* water, const struct Scene* scene, const float* eye,
+                              UniformManager* u, bool fft) {
     // shore.glsl's scalars, through the one publisher. Ungated: the surface itself is drawn
     // whatever the wetness switch says, which is the only thing the two callers differ on.
     _water_publish_sea(water, scene, u, false);
-    // The projector's origin, and the origin every cascade lookup is taken relative to.
-    uniform_set_vec3(u, "waterCamPos", (const float*)&engine->camera->position);
+    // The projector's origin, and the origin every cascade lookup is taken relative to: the
+    // drawing view's eye for the surface, the focus view's for the world's passes.
+    uniform_set_vec3(u, "waterCamPos", eye);
     // The cascades' resolution, which is how a cell size becomes a mip level.
     uniform_set_float(u, "cascadeRes", (float)WATER_SPECTRUM_RES);
     uniform_set_float(u, "waterAmplitude", water->amplitude);
@@ -2360,7 +2371,7 @@ static void _water_probe_pass(Water* water, const struct Scene* scene, const str
     glViewport(0, 0, WATER_PROBE_MAX, 1);
     glUseProgram(prog->id);
     UniformManager* u = prog->uniforms;
-    _water_bind_ocean(water, scene, engine, u, fft);
+    _water_bind_ocean(water, scene, _water_focus_eye(engine), u, fft);
     uniform_set_float(u, "time", t);
     for (int i = 0; i < water->probe_count; i++) {
         char name[32];
@@ -2522,16 +2533,21 @@ static float _water_caustic_floor(const Water* water, float x, float z, float pl
 }
 
 /*
- * Where a window over the water should centre, in world xz: along the camera's forward ray to
+ * Where a window over the water should centre, in world xz: along the focus view's forward ray to
  * where it meets the still plane, with the horizontal reach clamped to [near, far]. Looking level,
  * up, or from below the surface there is no meeting point, and the window sits `near` ahead.
- * The caustics and the touch ripples both place their windows by it, each with its own reach.
+ * The caustics and the touch ripples both place their windows by it, each with its own reach; the
+ * windows are the world's, so every view draws the one the focus centres.
  */
 static void _water_view_window(const Water* water, const struct Engine* engine, float near,
                                float far, float centre_xz[2]) {
-    const float* eye = engine->camera->position;
-    const float fwd[3] = {-engine->view_matrix[0][2], -engine->view_matrix[1][2],
-                          -engine->view_matrix[2][2]};
+    const struct SceneView* focus = engine->focus_view;
+    centre_xz[0] = centre_xz[1] = 0.0f;
+    if (!focus)
+        return;
+    const float* eye = focus->camera.position;
+    const float fwd[3] = {-focus->state->view_matrix[0][2], -focus->state->view_matrix[1][2],
+                          -focus->state->view_matrix[2][2]};
     const float flat_len = sqrtf(fwd[0] * fwd[0] + fwd[2] * fwd[2]);
     float reach = near;
     if (fwd[1] < -1.0e-4f && eye[1] > water->level) {
@@ -2694,7 +2710,7 @@ static void _water_run_caustics(Water* water, const struct Scene* scene,
     const float floor_y = water->level - WATER_CAUSTIC_PLANE_M * _water_units_per_metre(scene);
     glUseProgram(land->id);
     UniformManager* lu = land->uniforms;
-    _water_bind_ocean(water, scene, engine, lu, fft);
+    _water_bind_ocean(water, scene, _water_focus_eye(engine), lu, fft);
     uniform_set_float(lu, "time", (float)engine->render_time);
     uniform_set_vec3(lu, "causticKeyDir", travel);
     uniform_set_float(lu, "causticFloorY", floor_y);
@@ -2947,12 +2963,15 @@ void water_update(Water* water, const struct Scene* scene, float t, float dt) {
     _water_step_film(water, scene, t, dt);
 }
 
-void water_render(Water* water, struct Scene* scene, struct Engine* engine, const mat4 view,
-                  const mat4 draw_projection) {
-    if (!water_active(water) || !scene || !engine)
+void water_render(Water* water, struct Scene* scene, struct Engine* engine,
+                  struct SceneView* scene_view) {
+    if (!water_active(water) || !scene || !engine || !scene_view)
         return;
     if (!water_ensure_grid(water))
         return;
+    SceneViewState* vs = scene_view->state;
+    const float* view = (const float*)vs->view_matrix;
+    const float* draw_projection = (const float*)vs->draw_projection;
 
     // The bed, again: water_update bakes it at frame top, but water_render is reachable
     // without it on the first frame a surface appears, and the bake self-guards on having run.
@@ -2966,27 +2985,32 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         return;
     // Then the surface query and the caustics, which read those bands complete, on either
     // model. One bracket for all three, since they run back to back and change the same state.
-    const GLPassState pass = gl_pass_begin();
-    if (fft)
-        _water_run_spectral(water, scene, engine, (float)engine->render_time);
-    // The touch ripples on either model, before the probe and the caustics read the normal.
-    ShaderProgram *touch_step = NULL, *touch_slope = NULL;
-    if (_water_touch_ready(water, engine, &touch_step, &touch_slope)) {
-        _water_run_touch(water, scene, engine, touch_step, touch_slope);
-        check_gl_error("water touch");
+    // The world's, so once a frame, at the first view to draw the surface: every view after it
+    // draws the same sea.
+    if (water->passes_frame != (long long)engine->total_frames) {
+        water->passes_frame = (long long)engine->total_frames;
+        const GLPassState pass = gl_pass_begin();
+        if (fft)
+            _water_run_spectral(water, scene, engine, (float)engine->render_time);
+        // The touch ripples on either model, before the probe and the caustics read the normal.
+        ShaderProgram *touch_step = NULL, *touch_slope = NULL;
+        if (_water_touch_ready(water, engine, &touch_step, &touch_slope)) {
+            _water_run_touch(water, scene, engine, touch_step, touch_slope);
+            check_gl_error("water touch");
+        }
+        ShaderProgram* probe_prog = _water_probe_ready(water, engine);
+        if (probe_prog) {
+            _water_probe_pass(water, scene, engine, probe_prog, fft, (float)engine->render_time);
+            check_gl_error("water probe");
+        }
+        ShaderProgram *caustic_land = NULL, *caustic_draw = NULL;
+        water->caustic_ready = false;
+        if (_water_caustic_ready(water, engine, &caustic_land, &caustic_draw)) {
+            _water_run_caustics(water, scene, engine, caustic_land, caustic_draw, fft);
+            check_gl_error("water caustics");
+        }
+        gl_pass_end(&pass);
     }
-    ShaderProgram* probe_prog = _water_probe_ready(water, engine);
-    if (probe_prog) {
-        _water_probe_pass(water, scene, engine, probe_prog, fft, (float)engine->render_time);
-        check_gl_error("water probe");
-    }
-    ShaderProgram *caustic_land = NULL, *caustic_draw = NULL;
-    water->caustic_ready = false;
-    if (_water_caustic_ready(water, engine, &caustic_land, &caustic_draw)) {
-        _water_run_caustics(water, scene, engine, caustic_land, caustic_draw, fft);
-        check_gl_error("water caustics");
-    }
-    gl_pass_end(&pass);
 
     ShaderProgram* program = engine_get_program(engine, "water");
     if (!program) {
@@ -2995,31 +3019,31 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         return;
     }
 
-    // The surface's own transmission source. Both resolves re-bind the scene
+    // The surface's own transmission source. Both resolves re-bind the view's scene
     // framebuffer on the way out, so this is safe here and the pass below draws
     // into the scene target as usual.
     //
-    // Held LOCAL, never published to engine->scene_color_this_frame. That flag is
+    // Held LOCAL, never published to the view's scene_color_this_frame. That flag is
     // the one place engine->refraction_enabled is enforced, and the transmissive
     // lane reads it downstream -- setting it here would refract glass that
     // --no-refraction had switched off, silently.
-    bool scene_color = engine->scene_color_this_frame;
+    bool scene_color = vs->scene_color_this_frame;
     if (!scene_color)
-        scene_color = engine_resolve_opaque_color(engine);
-    const GLuint scene_depth = engine_resolve_scene_depth(engine);
+        scene_color = scene_view_resolve_opaque_color(scene_view);
+    const GLuint scene_depth = scene_view_resolve_scene_depth(scene_view);
 
     glUseProgram(program->id);
     UniformManager* u = program->uniforms;
 
-    uniform_set_mat4(u, "view", (const float*)view);
-    uniform_set_mat4(u, "projection", (const float*)draw_projection);
+    uniform_set_mat4(u, "view", view);
+    uniform_set_mat4(u, "projection", draw_projection);
     // Motion vectors come from the UN-JITTERED pair while the raster above uses
     // the jittered projection: the jitter is a sub-pixel sampling offset, and
     // letting it into the velocity would report it as scene motion.
-    uniform_set_mat4(u, "uCurrViewProjNoJitter", (const float*)engine->view_proj);
-    uniform_set_mat4(u, "uPrevViewProj", (const float*)engine->prev_view_proj);
+    uniform_set_mat4(u, "uCurrViewProjNoJitter", (const float*)vs->view_proj);
+    uniform_set_mat4(u, "uPrevViewProj", (const float*)vs->prev_view_proj);
 
-    _water_bind_ocean(water, scene, engine, u, fft);
+    _water_bind_ocean(water, scene, scene_view->camera.position, u, fft);
     // The lattice's own resolution, which is how the vertex stage sizes a cell.
     uniform_set_int(u, "waterGridRes", WATER_GRID_RES);
     uniform_set_int(u, "waterFarLod", water->far_lod ? 1 : 0);
@@ -3040,7 +3064,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     shadow_bind_rain_cover(scene ? scene->shadow_system : NULL, program, WATER_RAIN_COVER_UNIT);
 
     int rw, rh;
-    engine_render_size(engine, &rw, &rh);
+    scene_view_render_size(scene_view, &rw, &rh);
     uniform_set_vec2(u, "screenSize", (vec2){(float)rw, (float)rh});
 
     // The key directional, for caustics and the sun lobe: light focusing is a property of
@@ -3128,21 +3152,21 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     sky_bind_cloud_shadow(scene->sky, program, SKY_CLOUD_SHADOW_UNIT);
 
     // Which side of the surface the eye is on.
-    uniform_set_int(u, "cameraSubmerged", _water_covers_eye(water, engine->camera) ? 1 : 0);
+    uniform_set_int(u, "cameraSubmerged", _water_covers_eye(water, &scene_view->camera) ? 1 : 0);
 
     // The shoreline's coverage needs samples to be dithered into, and the same
     // two conditions the opaque lane's masked materials read decide whether
-    // there are any: the sample count the APP asked for -- the right question
-    // even now that a 1-sample request is honoured (spec 11.34), since this asks
-    // which AA mode was chosen -- and whether a capture is bound. Capture
-    // targets are always single-sample, so reading the scene target's count
-    // alone would spend coverage against no coverage hardware and write the
-    // shoreline sliver at full strength into the capture.
-    const bool a2c = water->shore_coverage && engine->msaa_samples > 1 && !engine->capturing;
+    // there are any: the sample count the view's targets were built at -- the
+    // right question even now that a 1-sample request is honoured (spec 11.34),
+    // since this asks which AA mode was chosen -- and whether a capture is bound.
+    // Capture targets are always single-sample, so reading the scene target's
+    // count alone would spend coverage against no coverage hardware and write
+    // the shoreline sliver at full strength into the capture.
+    const bool a2c = water->shore_coverage && vs->msaa_samples_built > 1 && !vs->capturing;
     uniform_set_int(u, "alphaToCoverage", a2c ? 1 : 0);
 
     glActiveTexture(GL_TEXTURE0 + TEXUNIT_SCENE_COLOR);
-    glBindTexture(GL_TEXTURE_2D, engine->opaque_color_texture);
+    glBindTexture(GL_TEXTURE_2D, vs->opaque_color_texture);
     uniform_set_int(u, "sceneColorTex", TEXUNIT_SCENE_COLOR);
     uniform_set_int(u, "sceneColorAvailable", scene_color ? 1 : 0);
 
@@ -3195,7 +3219,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     glDisable(GL_BLEND);
     if (a2c)
         glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
-    engine_set_scene_draw_buffers(engine, true);
+    scene_view_set_draw_buffers(scene_view, true);
 
     glBindVertexArray(water->grid_vao);
     glDrawElements(GL_TRIANGLES, water->grid_index_count, GL_UNSIGNED_INT, 0);
@@ -3212,7 +3236,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         submit->triangles += (size_t)water->grid_index_count / 3;
     }
 
-    engine_set_scene_draw_buffers(engine, false);
+    scene_view_set_draw_buffers(scene_view, false);
     if (a2c)
         glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     if (blend_was_enabled)

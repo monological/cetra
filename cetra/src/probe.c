@@ -38,7 +38,7 @@ void free_reflection_probe(ReflectionProbe* probe) {
 
 static bool probe_capture_valid(const ReflectionProbe* probe, const struct Engine* engine,
                                 const Scene* scene) {
-    if (!probe || !engine || !scene || !engine->camera) {
+    if (!probe || !engine || !scene) {
         log_error("Invalid state for probe capture");
         return false;
     }

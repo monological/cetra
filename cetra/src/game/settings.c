@@ -336,13 +336,14 @@ void settings_apply(const GameSettings* settings, AudioSystem* audio, Engine* en
         // can here rather than being filtered by every caller in turn.
         engine_set_window_mode(engine, settings->window_mode, settings->monitor);
 
-        // The FOV is the camera's; the rest is whatever rig is live. Nothing
-        // here reaches for a rig the app did not install -- an app that poses
+        // The FOV is the focus view's camera's; the rest is whatever rig is live on it.
+        // Nothing here reaches for a rig the app did not install -- an app that poses
         // its own camera keeps every one of these as its own business.
-        if (engine->camera && settings->fov_degrees > 0.0f)
-            engine->camera->fov_radians = glm_rad(settings->fov_degrees);
+        SceneView* view = engine->focus_view;
+        if (view && settings->fov_degrees > 0.0f)
+            view->camera.fov_radians = glm_rad(settings->fov_degrees);
 
-        CameraRig* rig = engine->camera_rig;
+        CameraRig* rig = view ? view->rig : NULL;
         if (rig) {
             // Stored beside the authored rates, never onto them. This runs on
             // every settings edit -- once a frame while a slider is held -- so

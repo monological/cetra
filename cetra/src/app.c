@@ -1,6 +1,7 @@
 
 #include "app.h"
 #include "engine.h"
+#include "scene_view_state.h"
 #include "scene.h"
 #include "camera.h"
 #include "camera_rig.h"
@@ -15,9 +16,9 @@
  * Camera Drag Adapter Implementation
  */
 
-CameraDrag* create_camera_drag(Engine* engine, CameraRig* rig) {
-    if (!engine || !rig) {
-        log_error("create_camera_drag: NULL engine or rig");
+CameraDrag* create_camera_drag(Engine* engine, SceneView* view, CameraRig* rig) {
+    if (!engine || !view || !rig) {
+        log_error("create_camera_drag: NULL engine, view or rig");
         return NULL;
     }
     CameraDrag* drag = calloc(1, sizeof(CameraDrag));
@@ -26,6 +27,7 @@ CameraDrag* create_camera_drag(Engine* engine, CameraRig* rig) {
         return NULL;
     }
     drag->engine = engine;
+    drag->view = view;
     drag->rig = rig;
     drag->sensitivity = 0.002f;
     drag->pan_per_unit = 0.0005f;
@@ -99,8 +101,7 @@ void camera_drag_update(CameraDrag* drag, float time) {
         // returning to its start returns the camera to its start.
         vec3 forward, right_vec, up_vec;
         glm_vec3_sub(rig->pose.look, rig->pose.eye, forward);
-        glm_vec3_crossn(drag->engine->camera ? drag->engine->camera->up_vector : (float*)GLM_YUP,
-                        forward, right_vec);
+        glm_vec3_crossn(drag->view->camera.up_vector, forward, right_vec);
         glm_vec3_normalize(right_vec);
         glm_vec3_cross(forward, right_vec, up_vec);
         glm_vec3_normalize(up_vec);
@@ -210,10 +211,10 @@ bool camera_drag_on_key(CameraDrag* drag, int key, int action, int mods) {
     }
 }
 
-void app_trace_camera(const Engine* engine) {
-    if (!engine || !engine->camera)
+void app_trace_camera(const Engine* engine, const SceneView* view) {
+    if (!engine || !view)
         return;
-    const Camera* c = engine->camera;
+    const Camera* c = &view->camera;
     printf("cam %zu eye %.9g %.9g %.9g target %.9g %.9g %.9g dist %.9g theta %.9g phi %.9g "
            "ortho %.9g near %.9g far %.9g\n",
            engine->total_frames, (double)c->position[0], (double)c->position[1],
@@ -226,8 +227,8 @@ void app_trace_camera(const Engine* engine) {
  * PlaneDrag Implementation
  */
 
-PlaneDrag* create_plane_drag(Engine* engine) {
-    if (!engine) {
+PlaneDrag* create_plane_drag(Engine* engine, SceneView* view) {
+    if (!engine || !view) {
         return NULL;
     }
     PlaneDrag* ctrl = calloc(1, sizeof(PlaneDrag));
@@ -235,6 +236,7 @@ PlaneDrag* create_plane_drag(Engine* engine) {
         return NULL;
     }
     ctrl->engine = engine;
+    ctrl->view = view;
     ctrl->zoom_step = 0.9f;
     /*
      * A rig of its own, and the arithmetic above it is UNCHANGED (spec 12.19).
@@ -250,9 +252,9 @@ PlaneDrag* create_plane_drag(Engine* engine) {
      * which" has no exception on the day it ships.
      */
     ctrl->rig = create_camera_rig();
-    if (ctrl->rig && engine->camera)
-        camera_rig_set_pose(ctrl->rig, engine->camera->position, engine->camera->look_at);
-    engine_set_camera_rig(engine, ctrl->rig);
+    if (ctrl->rig)
+        camera_rig_set_pose(ctrl->rig, view->camera.position, view->camera.look_at);
+    scene_view_set_rig(view, ctrl->rig);
     return ctrl;
 }
 
@@ -262,20 +264,23 @@ void free_plane_drag(PlaneDrag* ctrl) {
     free(ctrl);
 }
 
-static void _plane_point_under(const Engine* engine, double fb_x, double fb_y, vec3 out) {
+static void _plane_point_under(const SceneView* view, double fb_x, double fb_y, vec3 out) {
     glm_vec3_zero(out);
-    if (!engine || !engine->camera || engine->fb_height <= 0) {
+    if (!view)
         return;
-    }
-    const Camera* camera = engine->camera;
-    float units_per_pixel = camera->ortho_height / (float)engine->fb_height;
-    out[0] = camera->look_at[0] + (float)(fb_x - engine->fb_width * 0.5) * units_per_pixel;
-    out[1] = camera->look_at[1] + (float)(fb_y - engine->fb_height * 0.5) * units_per_pixel;
+    int rect[4];
+    scene_view_fb_rect(view, rect);
+    if (rect[3] <= 0)
+        return;
+    const Camera* camera = &view->camera;
+    float units_per_pixel = camera->ortho_height / (float)rect[3];
+    out[0] = camera->look_at[0] + (float)(fb_x - rect[0] - rect[2] * 0.5) * units_per_pixel;
+    out[1] = camera->look_at[1] + (float)(fb_y - rect[1] - rect[3] * 0.5) * units_per_pixel;
     out[2] = camera->look_at[2];
 }
 
 void plane_drag_point_under(const PlaneDrag* drag, double fb_x, double fb_y, vec3 out) {
-    _plane_point_under(drag ? drag->engine : NULL, fb_x, fb_y, out);
+    _plane_point_under(drag ? drag->view : NULL, fb_x, fb_y, out);
 }
 
 void plane_drag_on_button(PlaneDrag* ctrl, int button, int action, int mods) {
@@ -289,9 +294,9 @@ void plane_drag_on_button(PlaneDrag* ctrl, int button, int action, int mods) {
         return;
     }
     // The engine has already picked the node under the press, if any.
-    ctrl->panning = engine->input.selected_node == NULL && engine->camera != NULL;
+    ctrl->panning = engine->input.selected_node == NULL;
     if (ctrl->panning) {
-        glm_vec3_copy(engine->camera->look_at, ctrl->pan_start_look_at);
+        glm_vec3_copy(ctrl->view->camera.look_at, ctrl->pan_start_look_at);
     }
 }
 
@@ -299,14 +304,11 @@ void plane_drag_on_button(PlaneDrag* ctrl, int button, int action, int mods) {
 // press stays under it. The eye and the target move together, so the view
 // direction never changes.
 static void _plane_pan(PlaneDrag* ctrl) {
-    Engine* engine = ctrl->engine;
-    Camera* camera = engine->camera;
-    if (!camera) {
-        return;
-    }
+    const Engine* engine = ctrl->engine;
+    Camera* camera = &ctrl->view->camera;
     vec3 press = GLM_VEC3_ZERO_INIT, now = GLM_VEC3_ZERO_INIT, offset, delta;
-    _plane_point_under(engine, engine->input.center_fb_x, engine->input.center_fb_y, press);
-    _plane_point_under(engine, engine->input.center_fb_x + engine->input.drag_fb_x,
+    _plane_point_under(ctrl->view, engine->input.center_fb_x, engine->input.center_fb_y, press);
+    _plane_point_under(ctrl->view, engine->input.center_fb_x + engine->input.drag_fb_x,
                        engine->input.center_fb_y + engine->input.drag_fb_y, now);
     glm_vec3_sub(press, now, offset);
     // As a delta from the latched target rather than from the current one,
@@ -332,7 +334,9 @@ void plane_drag_on_cursor(PlaneDrag* ctrl, double fb_x, double fb_y) {
         // plane is the board and the node's depth is its own. on_plane is
         // seeded because the unproject leaves it alone with no camera.
         vec3 on_plane = GLM_VEC3_ZERO_INIT, delta, target;
-        engine_mouse_to_drag_plane(engine, fb_x, fb_y, on_plane);
+        float point[2];
+        scene_view_point_from_fb(ctrl->view, fb_x, fb_y, point);
+        scene_view_drag_point(ctrl->view, point, on_plane);
         glm_vec3_sub(on_plane, engine->input.drag_start_world_pos, delta);
         glm_vec3_add(engine->input.drag_object_start_pos, delta, target);
         target[2] = node->original_transform[3][2];
@@ -345,18 +349,18 @@ void plane_drag_on_cursor(PlaneDrag* ctrl, double fb_x, double fb_y) {
 // Zoom about the cursor: the world point under it stays under it.
 void plane_drag_on_scroll(PlaneDrag* ctrl, double xoffset, double yoffset) {
     (void)xoffset;
-    if (!ctrl || !ctrl->engine || !ctrl->engine->camera) {
+    if (!ctrl || !ctrl->engine || !ctrl->view) {
         return;
     }
-    Engine* engine = ctrl->engine;
-    Camera* camera = engine->camera;
+    const Engine* engine = ctrl->engine;
+    Camera* camera = &ctrl->view->camera;
     float h = camera->ortho_height;
     double fb_x = 0.0, fb_y = 0.0;
     if (h <= 0.0f || !engine_cursor_fb(engine, &fb_x, &fb_y)) {
         return;
     }
     vec3 anchor = GLM_VEC3_ZERO_INIT;
-    _plane_point_under(engine, fb_x, fb_y, anchor);
+    _plane_point_under(ctrl->view, fb_x, fb_y, anchor);
 
     // Each bound applies on its own, so a range with one end set is one-sided.
     float h_new = h * powf(ctrl->zoom_step, (float)yoffset);

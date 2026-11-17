@@ -11,6 +11,7 @@
 
 #include "config_snapshot.h"
 #include "engine.h"
+#include "scene_view_state.h"
 #include "profiler.h"
 #include "ext/log.h"
 #include "gi_volume.h"
@@ -297,7 +298,9 @@ static void _engine_gui_material_window(Material* material, int index, bool* ope
 // effect on/off states are checkboxes and their parameters appear indented
 // beneath them. Bound directly to the same engine/scene/postfx fields.
 static void _engine_gui_panel(Engine* engine) {
-    Camera* camera = engine->camera;
+    // The view the panel steers: the focus, whose camera, modes and post settings these are.
+    SceneView* view = engine->focus_view;
+    Camera* camera = view ? &view->camera : NULL;
     const float size = engine->typical_size; // what every length control's range follows
     igSetNextWindowPos((ImVec2){15, 15}, ImGuiCond_FirstUseEver, (ImVec2){0, 0});
     igSetNextWindowSize((ImVec2){320, 660}, ImGuiCond_FirstUseEver);
@@ -313,18 +316,21 @@ static void _engine_gui_panel(Engine* engine) {
         "PBR",          "Normals",      "World Pos",       "Tex Coords",         "Tangent Space",
         "Flat Color",   "Albedo",       "Simple Lighting", "Metallic/Roughness", "Velocity",
         "HDR Hotspots", "SSS Hotspots", "Extrapolation",   "Clearcoat Normal",   "Probe Coverage"};
-    int rm = engine->current_render_mode;
-    int render_mode_count = (int)(sizeof(render_modes) / sizeof(render_modes[0]));
-    if (igCombo_Str_arr("Render Mode", &rm, render_modes, render_mode_count, -1))
-        engine->current_render_mode = (RenderMode)rm;
+    if (view) {
+        SceneViewSettings* vs = &view->settings;
+        int rm = vs->render_mode;
+        int render_mode_count = (int)(sizeof(render_modes) / sizeof(render_modes[0]));
+        if (igCombo_Str_arr("Render Mode", &rm, render_modes, render_mode_count, -1))
+            vs->render_mode = (RenderMode)rm;
 
-    igCheckbox("XYZ", &engine->show_xyz);
-    igSameLine(0, -1);
-    igCheckbox("Wireframe", &engine->show_wireframe);
-    igSameLine(0, -1);
-    igCheckbox("Bones", &engine->show_bones);
-    igSameLine(0, -1);
-    igCheckbox("Lights", &engine->show_lights);
+        igCheckbox("XYZ", &vs->show_xyz);
+        igSameLine(0, -1);
+        igCheckbox("Wireframe", &vs->show_wireframe);
+        igSameLine(0, -1);
+        igCheckbox("Bones", &vs->show_bones);
+        igSameLine(0, -1);
+        igCheckbox("Lights", &vs->show_lights);
+    }
 
     // Animation has no section here: the pose is the app's, on the node it
     // chose (node_set_pose), and the app that owns the clock draws its own
@@ -822,9 +828,12 @@ static void _engine_gui_panel(Engine* engine) {
         }
     }
 
-    if (engine->postfx &&
+    // The focus view's post chain and settings: the panel steers one view, the one the world's
+    // work follows.
+    if (view && view->state->postfx &&
         igCollapsingHeader_TreeNodeFlags("Post", ImGuiTreeNodeFlags_DefaultOpen)) {
-        PostFX* fx = engine->postfx;
+        PostFX* fx = view->state->postfx;
+        ExposureSettings* exs = &view->settings.exposure;
 
         // Applied on release, as the render scale below: it rewrites every length's default, so
         // a value typed a digit at a time would write each digit's defaults in turn.
@@ -839,9 +848,9 @@ static void _engine_gui_panel(Engine* engine) {
                          "board. Writes the engine's own length defaults from it.");
 
         igSeparatorText("Anti-aliasing");
-        bool msaa = engine->msaa_samples > 1;
+        bool msaa = view->settings.samples > 1;
         if (igCheckbox("MSAA 4x", &msaa))
-            engine_set_msaa_samples(engine, msaa ? 4 : 1);
+            view->settings.samples = msaa ? 4 : 1;
         igSameLine(0, -1);
         igCheckbox("TAA", &fx->settings->taa_enabled);
         igSameLine(0, -1);
@@ -857,12 +866,12 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("Render Scale", &pending_scale, 0.5f, 1.0f, "%.2f",
                       ImGuiSliderFlags_AlwaysClamp);
         if (igIsItemDeactivatedAfterEdit())
-            engine_set_render_scale(engine, pending_scale);
+            view->settings.render_scale = pending_scale;
         else if (!igIsItemActive())
-            // Not being dragged: track the live value, so a scale the setter
-            // clamped or refused shows here rather than the stale request.
-            pending_scale = engine->render_scale;
-        if (!fx->settings->taa_enabled && engine->render_scale < 1.0f) {
+            // Not being dragged: track the live value, so a scale the chain
+            // runs at shows here rather than the stale request.
+            pending_scale = fx->render_scale;
+        if (!fx->settings->taa_enabled && fx->render_scale < 1.0f) {
             // Without the resolve there is nothing to reconstruct with, so the
             // frame is magnified rather than upscaled: softer, not faster.
             igTextDisabled("(needs TAA to reconstruct; magnifying)");
@@ -875,19 +884,17 @@ static void _engine_gui_panel(Engine* engine) {
         if (igCombo_Str_arr("Tonemap", &tm, tonemap_names,
                             (int)(sizeof(tonemap_names) / sizeof(tonemap_names[0])), -1))
             fx->settings->tonemap_mode = (PostFXTonemapMode)(tm + 1);
-        igCheckbox("Auto Exposure", &engine->exposure.settings->automatic);
+        igCheckbox("Auto Exposure", &exs->automatic);
         // Two controls because they are two quantities, shown one at a time.
         // One slider over one range could not serve both: under a physical
         // camera the value is stops, where the linear range 0.05..8 cannot
         // reach 0 (neutral) and cannot stop down at all.
-        if (engine->exposure.settings->physical) {
-            igSliderFloat("EV Bias", &engine->exposure.settings->bias_stops, -6.0f, 6.0f,
-                          "%+.2f EV", 0);
+        if (exs->physical) {
+            igSliderFloat("EV Bias", &exs->bias_stops, -6.0f, 6.0f, "%+.2f EV", 0);
             if (igIsItemHovered(0))
                 igSetTooltip("Exposure compensation on the physical camera. Positive opens up.");
         } else {
-            igSliderFloat("Exposure", &engine->exposure.settings->multiplier, 0.05f, 8.0f, "%.2f",
-                          0);
+            igSliderFloat("Exposure", &exs->multiplier, 0.05f, 8.0f, "%.2f", 0);
             if (igIsItemHovered(0))
                 igSetTooltip("Linear multiplier. Authoring a post.camera in a .cscn switches "
                              "this to an EV bias instead.");
@@ -899,7 +906,7 @@ static void _engine_gui_panel(Engine* engine) {
         // with it off this reads the camera alone, which is the answer to "why
         // is the frame this bright" either way.
         {
-            Exposure* ex = &engine->exposure;
+            Exposure* ex = &view->state->exposure;
             float gain = exposure_auto_gain(ex);
             // `--` rather than 0 when nothing has been metered. Printing the
             // uninitialised luminance shows "Metered 0 cd/m2", which is a real
@@ -919,13 +926,13 @@ static void _engine_gui_panel(Engine* engine) {
 
         if (igTreeNode_Str("Metering")) {
             static const char* const meter_names[] = {"Uniform", "Centre-weighted", "Spot"};
-            int mode = (int)engine->exposure.settings->meter_mode;
+            int mode = (int)exs->meter_mode;
             if (igCombo_Str_arr("Mode", &mode, meter_names,
                                 (int)(sizeof(meter_names) / sizeof(meter_names[0])), -1))
-                engine->exposure.settings->meter_mode = (MeteringMode)mode;
-            if (engine->exposure.settings->meter_mode != METERING_UNIFORM) {
-                igSliderFloat("Radius", &engine->exposure.settings->meter_radius, 0.05f, 1.0f,
-                              "%.2f", ImGuiSliderFlags_AlwaysClamp);
+                exs->meter_mode = (MeteringMode)mode;
+            if (exs->meter_mode != METERING_UNIFORM) {
+                igSliderFloat("Radius", &exs->meter_radius, 0.05f, 1.0f, "%.2f",
+                              ImGuiSliderFlags_AlwaysClamp);
                 if (igIsItemHovered(0))
                     igSetTooltip("Fraction of the frame's half-diagonal, in UV -- an ellipse in "
                                  "pixels on a non-square frame.");
@@ -934,12 +941,12 @@ static void _engine_gui_panel(Engine* engine) {
             // shader falls back to the whole population if they cross, so a
             // slider drag through the middle degrades to a plain mean instead of
             // to a black frame.
-            igSliderFloat("Low %", &engine->exposure.settings->meter_low, 0.0f, 0.95f, "%.2f",
+            igSliderFloat("Low %", &exs->meter_low, 0.0f, 0.95f, "%.2f",
                           ImGuiSliderFlags_AlwaysClamp);
             if (igIsItemHovered(0))
                 igSetTooltip("Fraction of the DARKEST pixels ignored. High by default: a meter "
                              "that includes the black background is measuring the background.");
-            igSliderFloat("High %", &engine->exposure.settings->meter_high, 0.05f, 1.0f, "%.2f",
+            igSliderFloat("High %", &exs->meter_high, 0.05f, 1.0f, "%.2f",
                           ImGuiSliderFlags_AlwaysClamp);
             if (igIsItemHovered(0))
                 igSetTooltip("Everything above this fraction is ignored -- the highlight tail.");
@@ -947,10 +954,10 @@ static void _engine_gui_panel(Engine* engine) {
             // tooltip -- igIsItemHovered refers to the LAST item, so a single
             // tooltip after two sliders describes only the second.
             igTextDisabled("Adaptation rate, per frame");
-            igSliderFloat("Adapt Up", &engine->exposure.settings->adapt_rate_up, 0.001f, 1.0f,
-                          "%.3f", ImGuiSliderFlags_AlwaysClamp);
-            igSliderFloat("Adapt Down", &engine->exposure.settings->adapt_rate_down, 0.001f, 1.0f,
-                          "%.3f", ImGuiSliderFlags_AlwaysClamp);
+            igSliderFloat("Adapt Up", &exs->adapt_rate_up, 0.001f, 1.0f, "%.3f",
+                          ImGuiSliderFlags_AlwaysClamp);
+            igSliderFloat("Adapt Down", &exs->adapt_rate_down, 0.001f, 1.0f, "%.3f",
+                          ImGuiSliderFlags_AlwaysClamp);
             igTreePop();
         }
 
@@ -1136,9 +1143,9 @@ static void _engine_gui_panel(Engine* engine) {
         _end_effect_group();
     }
 
-    if (engine->postfx &&
+    if (view && view->state->postfx &&
         igCollapsingHeader_TreeNodeFlags("Finishing", ImGuiTreeNodeFlags_DefaultOpen)) {
-        PostFX* fx = engine->postfx;
+        PostFX* fx = view->state->postfx;
 
         _begin_effect_group("Vignette", &fx->settings->vignette_enabled);
         igSliderFloat("Vig Strength", &fx->settings->vignette_strength, 0.0f, 1.0f, "%.2f", 0);
@@ -1241,7 +1248,7 @@ static void _engine_gui_panel(Engine* engine) {
          * the camera's own orbit triple is derived from the rig now, and offering
          * it would be offering a value nothing reads.
          */
-        CameraRig* rig = engine->camera_rig;
+        CameraRig* rig = view ? view->rig : NULL;
         if (rig) {
             _length_drag3("Anchor", rig->anchor, 0.1f, -1000.0f, 1000.0f, size, "%.2f");
             float dist = rig->dist, yaw = rig->yaw, pitch = rig->pitch;
@@ -1398,7 +1405,7 @@ static void _engine_gui_panel(Engine* engine) {
 // camera-pose block (show_camera_hud) beneath it. FPS-only keeps the original
 // 90px/transparent placement byte-for-byte; idle mode widens it for its count.
 static void _engine_gui_fps_overlay(Engine* engine) {
-    bool cam = engine->show_camera_hud && engine->camera;
+    bool cam = engine->show_camera_hud && engine->focus_view;
     float width = cam ? 300.0f : engine->idle ? 160.0f : 90.0f;
     igSetNextWindowPos((ImVec2){(float)engine->win_width - width, 10.0f}, ImGuiCond_Always,
                        (ImVec2){0, 0});
@@ -1413,7 +1420,7 @@ static void _engine_gui_fps_overlay(Engine* engine) {
         if (engine->show_fps && engine->idle)
             igText("idle, %zu drawn", engine->total_frames);
         if (cam) {
-            Camera* c = engine->camera;
+            Camera* c = &engine->focus_view->camera;
             igText("eye    %.1f %.1f %.1f", c->position[0], c->position[1], c->position[2]);
             igText("target %.1f %.1f %.1f", c->look_at[0], c->look_at[1], c->look_at[2]);
             igText("fov %.1f  dist %.1f  %dx%d", glm_deg(c->fov_radians),
@@ -1430,7 +1437,7 @@ void gui_render_frame(Engine* engine) {
     if (!engine || !engine->gui_frame_active)
         return;
 
-    if (engine->show_gui && engine->camera)
+    if (engine->show_gui && engine->focus_view)
         _engine_gui_panel(engine);
     if (engine->show_fps || engine->show_camera_hud)
         _engine_gui_fps_overlay(engine);

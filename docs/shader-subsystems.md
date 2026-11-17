@@ -899,9 +899,10 @@ the program is one file:
 
 ### Post passes
 
-`postfx_add_pass(fx, at, program)`, over a program from `create_post_pass_program`, at
-`POSTFX_AT_BEFORE_DOF`, `POSTFX_AT_BEFORE_BLOOM` or `POSTFX_AT_AFTER_TONEMAP`. The pass borrows its
-program, which its owner registers with `engine_add_program`.
+`scene_view_add_pass(view, at, program)`, over a program from `create_post_pass_program`, at
+`POSTFX_AT_BEFORE_DOF`, `POSTFX_AT_BEFORE_BLOOM` or `POSTFX_AT_AFTER_TONEMAP`, in that view's
+chain (`postfx_add_pass` underneath). The pass borrows its program, which its owner registers with
+`engine_add_program`.
 - **Scratch and blit.** GL 4.1 has no texture barrier, so a pass draws over the frame into a
   scratch target and is blitted back, the motion-blur idiom, and the frame keeps its handle. The
   HDR passes share their scratch with motion blur, whose use of it a frame never overlaps.

@@ -37,11 +37,11 @@ CONFIG_GUI_LOCALS = {
     "yaw": "position",
     "pitch": "position",
     "mode": "meter_mode",
-    "msaa": "msaa_samples",
+    "msaa": "samples",
     "msm_size_idx": "msm_size",
     "pending_scale": "render_scale",
     "pending_size": "typical_size",
-    "rm": "current_render_mode",
+    "rm": "render_mode",
     "so": "spec_occlusion_mode",
     "tm": "tonemap_mode",
 }
@@ -60,16 +60,13 @@ CONFIG_GUI_UNCARRIED = {
 }
 
 
-# Values a restore is allowed NOT to reproduce, each with the reason. Two are a
-# setter doing its job, which is itself worth pinning -- a perturbation that came
-# back unchanged would mean the table had gone round the setter. The third is a
-# field nothing can carry.
+# Values a restore is allowed NOT to reproduce, each with the reason. A view's
+# sample count and render scale are not among them: they are plain settings that
+# keep the value written, and the clamps apply where the targets are built.
 #
 # The list is the whole point of config-perturb: it inverts the default from
 # "uncovered unless an arm names it" to "covered unless this names it".
 CONFIG_PERTURB_EXCEPTIONS = {
-    "engine.msaa_samples": "engine_set_msaa_samples validates; 5 is not a sample count",
-    "engine.render_scale": "clamped to [0.5, 1], and forced to 1 headless without jitter",
     "camera.near_clip": "render.c recomputes it every frame from the camera-to-target distance",
     # This fixture runs without --clouds, so flipping the switch asks for a layer
     # whose noise bake -- a one-shot at startup -- never ran. Refused by name, and

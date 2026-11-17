@@ -566,8 +566,8 @@ static void gi_volume_store(const GIWorld* world, size_t index, struct Engine* e
 // admitted.
 static void gi_world_rank(GIWorld* world, const struct Engine* engine, const LightingAtlas* atlas) {
     vec3 eye = {0.0f, 0.0f, 0.0f};
-    if (engine->camera)
-        glm_vec3_copy(engine->camera->position, eye);
+    if (engine->focus_view)
+        glm_vec3_copy(engine->focus_view->camera.position, eye);
     for (size_t i = 0; i < world->residency.count; ++i) {
         const GIVolume* gi = world->volumes[i];
         const AABB box = gi_volume_box(gi);

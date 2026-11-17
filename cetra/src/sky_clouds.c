@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "sky.h" // pulls GL/glew.h, which must precede GLFW's GL header
 
@@ -7,7 +8,6 @@
 
 #include "cook.h"
 #include "engine.h"
-#include "engine_internal.h"
 #include "noise.h"
 #include "texture.h"
 #include "thread.h"
@@ -192,37 +192,45 @@ int sky_bake_cloud_noise(SkyAtmosphere* sky) {
     return 0;
 }
 
-// Lazy half-internal-res march ping-pong. One-shot like the aerial volume:
-// a failed allocation logs and disables rather than retrying every frame.
-static bool ensure_march_targets(CloudLayer* c, int w, int h) {
-    if (c->march_tex[0] && c->march_w == w && c->march_h == h)
-        return true;
+void cloud_march_init(CloudMarch* march) {
+    memset(march, 0, sizeof(*march));
+    march->prev_frame = -1;
+}
+
+void cloud_march_release(CloudMarch* march) {
     for (int i = 0; i < 2; i++) {
-        gl_delete_texture(&c->march_tex[i]);
-        gl_delete_fbo(&c->march_fbo[i]);
+        gl_delete_texture(&march->tex[i]);
+        gl_delete_fbo(&march->fbo[i]);
     }
+    march->w = 0;
+    march->h = 0;
+    march->prev_frame = -1;
+}
+
+// Lazy half-internal-res march ping-pong. One-shot like the aerial volume:
+// a failed allocation logs and disables the layer rather than retrying every frame.
+static bool ensure_march_targets(CloudLayer* c, CloudMarch* m, int w, int h) {
+    if (m->tex[0] && m->w == w && m->h == h)
+        return true;
+    cloud_march_release(m);
     // The FBO wrapping is gl_color_fbo_create's, written out because that
     // makes its own texture: this one reuses the shared LUT helper, so the
     // sampler state cannot drift from the LUTs'.
     for (int i = 0; i < 2; i++) {
-        glGenFramebuffers(1, &c->march_fbo[i]);
-        c->march_tex[i] = create_texture_2d_float(w, h, GL_RGBA16F, GL_RGBA, NULL);
-        glBindFramebuffer(GL_FRAMEBUFFER, c->march_fbo[i]);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, c->march_tex[i],
-                               0);
+        glGenFramebuffers(1, &m->fbo[i]);
+        m->tex[i] = create_texture_2d_float(w, h, GL_RGBA16F, GL_RGBA, NULL);
+        glBindFramebuffer(GL_FRAMEBUFFER, m->fbo[i]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m->tex[i], 0);
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
             log_error("Cloud march FBO incomplete; clouds disabled");
-            for (int j = 0; j <= i; j++) {
-                gl_delete_texture(&c->march_tex[j]);
-                gl_delete_fbo(&c->march_fbo[j]);
-            }
+            cloud_march_release(m);
             c->enabled = false;
             return false;
         }
     }
-    c->march_w = w;
-    c->march_h = h;
-    c->prev_frame = -1; // fresh targets carry no history
+    m->w = w;
+    m->h = h;
+    m->prev_frame = -1; // fresh targets carry no history
     return true;
 }
 
@@ -324,9 +332,10 @@ static void build_cloud_shadow(SkyAtmosphere* sky, struct Engine* engine, CloudL
     draw_fullscreen_quad(sky->quad_vao);
 }
 
-void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4 projection) {
-    if (!sky || !engine || !sky->enabled || !sky->clouds.enabled || !sky->clouds.noise_baked ||
-        !sky->luts_baked || !sky->sky_view_lut)
+void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, CloudMarch* march, mat4 view,
+                      mat4 projection, int rw, int rh) {
+    if (!sky || !engine || !march || !sky->enabled || !sky->clouds.enabled ||
+        !sky->clouds.noise_baked || !sky->luts_baked || !sky->sky_view_lut)
         return;
     CloudLayer* c = &sky->clouds;
 
@@ -339,17 +348,15 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4
         }
     }
 
-    int rw = 0, rh = 0;
-    engine_render_size(engine, &rw, &rh);
-    if (!ensure_march_targets(c, rw > 1 ? rw / 2 : 1, rh > 1 ? rh / 2 : 1))
+    if (!ensure_march_targets(c, march, rw > 1 ? rw / 2 : 1, rh > 1 ? rh / 2 : 1))
         return;
 
     // Parity ping-pong + adjacency stamp: history is only trusted when the
-    // previous march was exactly last frame (a skipped frame resets rather
-    // than blending stale sky).
+    // view's previous march was exactly last frame (a skipped frame resets
+    // rather than blending stale sky).
     int frame = (int)(engine->total_frames);
     int write = frame & 1;
-    int temporal = (c->prev_frame >= 0 && c->prev_frame == frame - 1) ? 1 : 0;
+    int temporal = (march->prev_frame >= 0 && march->prev_frame == frame - 1) ? 1 : 0;
 
     GLint prev_viewport[4];
     GLint prev_framebuffer;
@@ -365,8 +372,8 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4
     float units = sky->world_units_per_km > 0.0f ? sky->world_units_per_km : 1000.0f;
     float cam_alt_km = inv_view[3][1] / units;
 
-    glBindFramebuffer(GL_FRAMEBUFFER, c->march_fbo[write]);
-    glViewport(0, 0, c->march_w, c->march_h);
+    glBindFramebuffer(GL_FRAMEBUFFER, march->fbo[write]);
+    glViewport(0, 0, march->w, march->h);
     glUseProgram(c->march_program->id);
     UniformManager* um = c->march_program->uniforms;
 
@@ -383,7 +390,7 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4
     glBindTexture(GL_TEXTURE_2D, sky->sky_view_lut);
     uniform_set_int(um, "skyViewLut", 3);
     glActiveTexture(GL_TEXTURE4);
-    glBindTexture(GL_TEXTURE_2D, c->march_tex[write ^ 1]);
+    glBindTexture(GL_TEXTURE_2D, march->tex[write ^ 1]);
     uniform_set_int(um, "historyTex", 4);
     glActiveTexture(GL_TEXTURE0);
 
@@ -398,12 +405,17 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4
     sky_bind_emission(sky, c->march_program, sky->sun_dir[1]);
     uniform_set_int(um, "temporal", temporal);
     uniform_set_int(um, "frameIndex", frame % 4096);
-    uniform_set_mat4(um, "prevView", (float*)c->prev_view);
-    uniform_set_vec2(um, "prevFocal", c->prev_focal);
+    uniform_set_mat4(um, "prevView", (float*)march->prev_view);
+    uniform_set_vec2(um, "prevFocal", march->prev_focal);
 
     // Drift rides the frame clock: fixed-step headless via the producer, real
-    // delta live, and honestly frozen when an embedder's clock is paused
-    c->scroll += engine->render_delta;
+    // delta live, and honestly frozen when an embedder's clock is paused. Once
+    // a frame, at its first march: a second view marching the same deck would
+    // otherwise blow it twice as fast.
+    if (c->scroll_frame != frame) {
+        c->scroll += engine->render_delta;
+        c->scroll_frame = frame;
+    }
     float wind_kms = c->wind_speed_kmh / 3600.0f;
     float wind_rad = c->wind_dir_deg * 0.01745329f;
     vec3 wind_off = {sinf(wind_rad) * wind_kms * (float)c->scroll, 0.0f,
@@ -414,19 +426,20 @@ void sky_clouds_march(SkyAtmosphere* sky, struct Engine* engine, mat4 view, mat4
 
     // The sun-transmittance map, from the SAME wind offset this march just used. Sharing the
     // offset is the point: the drift clock advanced once, above, so anything recomputing it
-    // would shadow a deck one frame from the one on screen.
+    // would shadow a deck one frame from the one on screen. A second view's march finds the
+    // map built from the same inputs and keeps it.
     build_cloud_shadow(sky, engine, c, units, wind_off);
 
     // Store this frame's camera for the next march's reprojection:
     // rotation-only view (ray-direction reprojection) + the projection
     // focals, and the adjacency stamp.
-    glm_mat4_copy(view, c->prev_view);
-    c->prev_view[3][0] = 0.0f;
-    c->prev_view[3][1] = 0.0f;
-    c->prev_view[3][2] = 0.0f;
-    c->prev_focal[0] = projection[0][0];
-    c->prev_focal[1] = projection[1][1];
-    c->prev_frame = frame;
+    glm_mat4_copy(view, march->prev_view);
+    march->prev_view[3][0] = 0.0f;
+    march->prev_view[3][1] = 0.0f;
+    march->prev_view[3][2] = 0.0f;
+    march->prev_focal[0] = projection[0][0];
+    march->prev_focal[1] = projection[1][1];
+    march->prev_frame = frame;
 
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_framebuffer);
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);

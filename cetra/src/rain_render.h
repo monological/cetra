@@ -26,9 +26,11 @@ typedef struct RainRenderer {
 RainRenderer* create_rain_renderer(void);
 void free_rain_renderer(RainRenderer* renderer);
 
-// Draw the scene's rain onto the bound canvas. Nothing when the scene has no rain falling.
+// Draw the scene's rain onto the bound canvas, from `view`'s camera. Nothing when the scene has no
+// rain falling.
+struct SceneView;
 void rain_render_drops(RainRenderer* renderer, struct Engine* engine, const struct Scene* scene,
-                       const struct PostFXLateDraw* late);
+                       const struct SceneView* view, const struct PostFXLateDraw* late);
 
 struct Rain;
 struct ShaderProgram;

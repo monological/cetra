@@ -37,6 +37,7 @@
 // is left be.
 typedef struct HauntHouse {
     Engine* engine;
+    SceneView* view; // the view whose picture the haunting grades
     Scene* scene;
     AudioSystem* audio;
     const DoorSounds* sounds; // the doors', the knob's and the rattle's held at the cellar door

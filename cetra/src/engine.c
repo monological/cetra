@@ -49,6 +49,7 @@
 #include "wind.h"
 #include "profiler.h"
 #include "postfx_programs.h"
+#include "scene_view_state.h"
 #include "crt.h"
 #include "uniform.h"
 
@@ -69,7 +70,6 @@ static Engine* _engine_alloc(const EngineConfig* cfg);
 static int _engine_init(Engine* engine, const EngineConfig* cfg);
 static void _engine_late_draw(void* user, const PostFXLateDraw* late);
 static int _setup_engine_glfw(Engine* engine, EngineWindowMode window_mode, const char* monitor);
-static int _setup_engine_msaa(Engine* engine);
 static int _setup_engine_gui(Engine* engine);
 static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, double ypos);
 static void _engine_mouse_button_callback(GLFWwindow* window, int button, int action, int mods);
@@ -78,14 +78,13 @@ static void _engine_char_callback(GLFWwindow* window, unsigned int codepoint);
 static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, int fb_height);
 static void _engine_close_callback(GLFWwindow* window);
-static void _engine_derive_camera(Engine* engine);
+static void _engine_derive_view(const Engine* engine, SceneView* view);
 static void _engine_input_script_frame(Engine* engine);
 static void _engine_input_script_close(Engine* engine);
 static void _engine_input_script_free(Engine* engine);
 static bool _engine_input_script_cursor(const Engine* engine, double* fb_x, double* fb_y);
 static bool _engine_input_script_running(const Engine* engine);
-static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x, double mouse_fb_y);
-static void _destroy_msaa_attachments(Engine* engine);
+static SceneNode* _engine_pick(Engine* engine, double mouse_fb_x, double mouse_fb_y);
 
 // The timed wakes held at once (spec 14.9), and how late merging two may make one.
 #define ENGINE_WAKES_MAX          64
@@ -112,76 +111,6 @@ static double _engine_wake_soonest(const EngineWake* w) {
     return w->wake_count ? w->wakes[0].at : INFINITY;
 }
 
-// One scene-MRT color attachment. The engine drives several draw buffers into a
-// single multisample framebuffer; describing each one's format + clear + write
-// gate in a single list keeps create / destroy / clear iterating off one source
-// of truth, so a new attachment is one row rather than an edit scattered across
-// half a dozen sites (each a place to forget one).
-//
-// Attachment 0 is HDR scene color: always written, and cleared with the scene
-// background by the shared glClear (which also clears depth/stencil), so its
-// write gate is NULL and the 1..N clear loop skips it.
-//
-// Each row names its color attachment explicitly rather than deriving it from
-// the row index: fragment-output locations 5 and 6 belong to the OIT
-// accumulate targets, which live on the OIT FBO -- so the ambient-specular row
-// binds attachment 7 and the scene FBO simply has no attachments 5/6.
-typedef struct GBufferAttachment {
-    GLuint* tex;            // storage on the Engine
-    bool* this_frame;       // per-frame write gate (NULL = always written)
-    GLenum internal_format; // multisample texture format
-    GLenum attachment;      // GL_COLOR_ATTACHMENTn == fragment output location n
-    GLfloat clear[4];       // per-frame clear color
-} GBufferAttachment;
-
-#define GBUFFER_ATTACHMENT_COUNT 6
-// Draw-buffer slots the scene MRT spans: highest attachment in the table
-// (7) + 1. Sizes the draw-buffer list and the GL_MAX_DRAW_BUFFERS check, so
-// a table row past slot 7 fails the startup check instead of silently
-// overrunning the list.
-#define GBUFFER_DRAW_BUFFER_SLOTS 8
-
-// Describe this engine's scene-MRT attachments. Pure (no GL): the
-// tex/this_frame pointers alias Engine fields so create/destroy/clear share one
-// description of what each attachment is. The aux buffer is full float
-// (RGBA32F): fp16 quantizes linear Z into scene-scale steps on large scenes and
-// GTAO reads the staircase as banded occlusion. Ambient specular is R11G11B10F:
-// positive HDR only (WS_SCENE_MAX sits under the format's ~65024 ceiling), no
-// alpha needed, half the bandwidth of RGBA16F.
-static void _gbuffer_attachments(Engine* engine, GBufferAttachment out[GBUFFER_ATTACHMENT_COUNT]) {
-    out[0] = (GBufferAttachment){
-        &engine->multisample_texture,
-        NULL,
-        GL_RGBA16F,
-        GL_COLOR_ATTACHMENT0,
-        {engine->clear_color[0], engine->clear_color[1], engine->clear_color[2], 1.0f}};
-    out[1] = (GBufferAttachment){&engine->normal_multisample_texture,
-                                 &engine->normals_this_frame,
-                                 GL_RGBA16F,
-                                 GL_COLOR_ATTACHMENT1,
-                                 {0.0f, 0.0f, 0.0f, 0.0f}};
-    out[2] = (GBufferAttachment){&engine->aux_multisample_texture,
-                                 &engine->aux_this_frame,
-                                 GL_RGBA32F,
-                                 GL_COLOR_ATTACHMENT2,
-                                 {0.0f, 0.0f, 0.0f, 0.0f}};
-    out[3] = (GBufferAttachment){&engine->albedo_multisample_texture,
-                                 &engine->albedo_this_frame,
-                                 GL_RGBA8,
-                                 GL_COLOR_ATTACHMENT3,
-                                 {0.0f, 0.0f, 0.0f, 0.0f}};
-    out[4] = (GBufferAttachment){&engine->sss_diffuse_multisample_texture,
-                                 &engine->sss_this_frame,
-                                 GL_RGBA16F,
-                                 GL_COLOR_ATTACHMENT4,
-                                 {0.0f, 0.0f, 0.0f, 0.0f}};
-    out[5] = (GBufferAttachment){&engine->spec_multisample_texture,
-                                 &engine->spec_this_frame,
-                                 GL_R11F_G11F_B10F,
-                                 GL_COLOR_ATTACHMENT7,
-                                 {0.0f, 0.0f, 0.0f, 0.0f}};
-}
-
 /*
  * Engine
  */
@@ -190,8 +119,8 @@ static void _gbuffer_attachments(Engine* engine, GBufferAttachment out[GBUFFER_A
 static Engine* _engine_alloc(const EngineConfig* cfg) {
     // Zeroed, not malloc'd: every field below is still set explicitly, but a
     // struct this wide cannot rely on each new field being remembered here --
-    // and a field only ever written conditionally, like render_suspended, has
-    // no other initializer at all.
+    // and a field only ever written conditionally has no other initializer at
+    // all.
     Engine* engine = calloc(1, sizeof(Engine));
     if (!engine) {
         log_error("Failed to allocate memory for engine");
@@ -206,13 +135,10 @@ static Engine* _engine_alloc(const EngineConfig* cfg) {
     }
 
     engine->window = NULL;
-    exposure_settings_init(&engine->exposure_settings);
-    exposure_init(&engine->exposure, &engine->exposure_settings);
 
     engine->win_width = cfg->width > 0 ? cfg->width : 1280;
     engine->win_height = cfg->height > 0 ? cfg->height : 720;
     engine->headless = cfg->headless;
-    engine->headless_jitter = cfg->headless_jitter;
     engine->capture_budget_ms = cfg->headless ? 0.0f : ENGINE_CAPTURE_BUDGET_MS;
     engine->typical_size = 1.0f;
     engine->fb_width = 0;
@@ -226,11 +152,6 @@ static Engine* _engine_alloc(const EngineConfig* cfg) {
     engine->window_monitor = NULL;
     engine->window_mode_refused = false;
     engine->windowed = (EngineWindowRect){0, 0, engine->win_width, engine->win_height};
-    engine->ss_scale = 1;             // Supersampling off by default (4x fragment cost);
-                                      // opt in with --ssaa 2 for beauty shots
-    engine->render_scale = 1.0f;      // Full render resolution by default; opt in
-                                      // with --render-scale for the TAAU upscale
-    engine->msaa_samples = 4;         // 4x MSAA by default (runtime-toggleable)
     engine->layers_vt_enabled = true; // composite cache on; --no-layers-vt is the bisect lever
     engine->layers_vt_res = 0;        // derived from the splat domain unless overridden
     engine->layers_vt_pages_enabled = true;    // pages on; --no-layers-vt-pages is stage 1 exactly
@@ -245,46 +166,15 @@ static Engine* _engine_alloc(const EngineConfig* cfg) {
     engine->key_callback = NULL;
     engine->scroll_callback = NULL;
 
-    engine->framebuffer = 0;
-    GBufferAttachment gb_init[GBUFFER_ATTACHMENT_COUNT];
-    _gbuffer_attachments(engine, gb_init);
-    for (int i = 0; i < GBUFFER_ATTACHMENT_COUNT; i++)
-        *gb_init[i].tex = 0;
-    engine->depth_renderbuffer = 0;
-    engine->opaque_color_fbo = 0;
-    engine->opaque_color_texture = 0;
-    engine->opaque_color_w = 0;
-    engine->opaque_color_h = 0;
-    engine->scene_depth_fbo = 0;
-    engine->scene_depth_texture = 0;
-    engine->scene_depth_w = 0;
-    engine->scene_depth_h = 0;
-    engine->oit_fbo = 0;
-    engine->oit_accum_multisample_texture = 0;
-    engine->oit_revealage_multisample_texture = 0;
-    engine->oit_w = 0;
-    engine->oit_h = 0;
-    engine->moment_fbo = 0;
-    engine->moment_multisample_texture = 0;
-    engine->moment_b0_multisample_texture = 0;
-    engine->moment_atlas_fbo = 0;
-    engine->moment_atlas_texture = 0;
-    engine->moment_w = 0;
-    engine->moment_h = 0;
+    engine->views = NULL;
+    engine->view_count = 0;
+    engine->view_capacity = 0;
+    engine->focus_view = NULL;
+    engine->capture_view = NULL;
+
     engine->light_cluster = NULL;
     engine->cluster_debug = false;
-    engine->scene_color_this_frame = false;
-    engine->normals_this_frame = false;
-    engine->aux_this_frame = false;
-    engine->albedo_this_frame = false;
-    engine->sss_this_frame = false;
-    engine->spec_this_frame = false;
-    engine->oit_this_frame = false;
-    engine->moments_this_frame = false;
-    engine->taa_jitter_this_frame = false;
     engine->alpha_jitter_enabled = true;
-
-    engine->camera = NULL;
 
     engine->scenes = NULL;
     engine->scene_count = 0;
@@ -294,7 +184,6 @@ static Engine* _engine_alloc(const EngineConfig* cfg) {
     engine->program_count = 0;
     engine->program_map = NULL;
 
-    engine->current_render_mode = RENDER_MODE_PBR;
     engine->specular_aa_strength = 1.0f;
     engine->energy_comp_enabled = true; // Correctness fix; ships on
     engine->refraction_enabled = true;  // Transmissive materials refract by default
@@ -331,13 +220,6 @@ static Engine* _engine_alloc(const EngineConfig* cfg) {
     // the loss of shading that hidden leaves were contributing -- see 11.30.
     engine->opaque_sort_enabled = true;
 
-    glm_mat4_identity(engine->view_matrix);
-    glm_mat4_identity(engine->projection_matrix);
-    glm_mat4_identity(engine->view_proj);
-    glm_mat4_identity(engine->draw_projection);
-    glm_mat4_identity(engine->prev_view_proj);
-
-    glm_vec3_copy((vec3){0.1f, 0.1f, 0.1f}, engine->clear_color);
     // A look, so off. Its settings are a console's 480 lines on a living-room set, there to be
     // seen and not to fight the picture.
     engine->crt_enabled = false;
@@ -347,12 +229,8 @@ static Engine* _engine_alloc(const EngineConfig* cfg) {
     engine->crt_curvature = 0.35f;
     engine->crt_bleed = 0.5f;
     engine->show_gui = false;
-    engine->show_wireframe = false;
-    engine->show_xyz = false;
     engine->show_fps = false;
     engine->show_camera_hud = false;
-    engine->show_bones = false;
-    engine->show_lights = false;
     engine->gui_frame_active = false;
     engine->screenshot_path = NULL;
     engine->screenshot_every = 0;
@@ -385,7 +263,6 @@ static Engine* _engine_alloc(const EngineConfig* cfg) {
     engine->catcher_vao = 0;
     engine->catcher_vbo = 0;
 
-    engine->postfx = NULL;
     engine->profiler = NULL;
 
     init_input_state(&engine->input);
@@ -456,10 +333,6 @@ void free_engine(Engine* engine) {
         free(engine->failed_variants[i]);
     free(engine->failed_variants);
 
-    if (engine->camera) {
-        free_camera(engine->camera);
-    }
-
     if (engine->screenshot_path) {
         free(engine->screenshot_path);
     }
@@ -471,9 +344,11 @@ void free_engine(Engine* engine) {
     // the window is destroyed; and there is a context to release them into
     // only if the window came up.
     if (engine->window) {
-        if (engine->postfx) {
-            free_postfx(engine->postfx);
-        }
+        // First, since each view's chain borrows the programs below. Freeing a view takes it off
+        // the list, so the list empties from its end.
+        while (engine->view_count > 0)
+            free_scene_view(engine->views[engine->view_count - 1]);
+        free_scene_view(engine->capture_view);
         free_postfx_programs(engine->postfx_programs);
         free_crt(engine->crt);
         free_loading_screen(engine->loading_screen);
@@ -487,13 +362,6 @@ void free_engine(Engine* engine) {
         free_ubo(engine->vt_pages_ubo);
         free_ubo(engine->roads_ubo);
         free_layers_vt_feedback(engine->vt_feedback);
-
-        glDeleteFramebuffers(1, &engine->framebuffer);
-        _destroy_msaa_attachments(engine); // color attachments + depth renderbuffer
-        glDeleteFramebuffers(1, &engine->opaque_color_fbo);
-        glDeleteTextures(1, &engine->opaque_color_texture);
-        glDeleteFramebuffers(1, &engine->scene_depth_fbo);
-        glDeleteTextures(1, &engine->scene_depth_texture);
 
         if (engine->catcher_vao)
             glDeleteVertexArrays(1, &engine->catcher_vao);
@@ -529,6 +397,7 @@ void free_engine(Engine* engine) {
     // Safe when GLFW never initialised, which is the window-less case.
     glfwTerminate();
 
+    free(engine->views);
     free(engine->wake);
     free(engine);
 }
@@ -687,249 +556,10 @@ static int _setup_engine_glfw(Engine* engine, EngineWindowMode window_mode, cons
     return 0;
 }
 
-/*
- * MSAA anti-aliasing
- *
- */
-// The scene renders into a target supersampled by ss_scale and scaled by
-// render_scale; the post chain brings it back to display size. This render
-// (not display) resolution is shared by the MSAA allocation and the
-// scene-pass viewport. The render_scale rounding lives in postfx_scaled_dim
-// so this target and the postfx resolve targets cannot disagree.
-void engine_render_size(const Engine* engine, int* w, int* h) {
-    engine_post_size(engine, w, h);
-    *w = postfx_scaled_dim(*w, engine->render_scale);
-    *h = postfx_scaled_dim(*h, engine->render_scale);
-}
-
-void engine_post_size(const Engine* engine, int* w, int* h) {
-    *w = engine->fb_width * engine->ss_scale;
-    *h = engine->fb_height * engine->ss_scale;
-}
-
-// Clamp a requested MSAA sample count to [1, driver max]. Needs a live GL context.
-static int _clamp_msaa_samples(int samples) {
-    if (samples < 1)
-        samples = 1;
-    GLint max_color_samples = 0;
-    GLint max_samples = 0;
-    glGetIntegerv(GL_MAX_COLOR_TEXTURE_SAMPLES, &max_color_samples);
-    glGetIntegerv(GL_MAX_SAMPLES, &max_samples);
-    if (max_samples > 0 && max_samples < max_color_samples)
-        max_color_samples = max_samples;
-    if (max_color_samples > 0 && samples > max_color_samples)
-        samples = max_color_samples;
-    return samples;
-}
-
-// Delete the multisample color/normal attachments and depth renderbuffer.
-// The framebuffer object itself is left intact for reuse.
-static void _destroy_msaa_attachments(Engine* engine) {
-    GBufferAttachment gb[GBUFFER_ATTACHMENT_COUNT];
-    _gbuffer_attachments(engine, gb);
-    for (int i = 0; i < GBUFFER_ATTACHMENT_COUNT; i++) {
-        gl_delete_texture(gb[i].tex);
-    }
-    glDeleteRenderbuffers(1, &engine->depth_renderbuffer);
-    engine->depth_renderbuffer = 0;
-    // The OIT and moment FBOs share depth_renderbuffer; tear them down too so
-    // they are rebuilt against the fresh depth on the next OIT frame (0 handles
-    // when never created).
-    gl_delete_fbo(&engine->oit_fbo);
-    gl_delete_texture(&engine->oit_accum_multisample_texture);
-    gl_delete_texture(&engine->oit_revealage_multisample_texture);
-    engine->oit_w = 0;
-    engine->oit_h = 0;
-    gl_delete_fbo(&engine->moment_fbo);
-    gl_delete_texture(&engine->moment_multisample_texture);
-    gl_delete_texture(&engine->moment_b0_multisample_texture);
-    gl_delete_fbo(&engine->moment_atlas_fbo);
-    gl_delete_texture(&engine->moment_atlas_texture);
-    engine->moment_w = 0;
-    engine->moment_h = 0;
-}
-
-// Create one scene color attachment (texture + framebuffer binding) on the
-// currently-bound framebuffer -- multisample above one sample, a plain
-// GL_TEXTURE_2D at one. Each G-buffer target is written only when a consumer is
-// active (see engine_set_scene_draw_buffers); the texture is always allocated so
-// the FBO layout is stable across frames.
-//
-// The branch is HERE, in the one allocator, rather than at its four call sites,
-// and that placement is load-bearing: the scene, OIT and moment FBOs all share
-// depth_renderbuffer, and GL requires every attachment of an FBO to carry the
-// same sample count. One branch on the one field every caller passes flips all
-// three FBOs in lockstep by construction; four caller-side branches could
-// disagree and the failure would be a quietly-incomplete OIT FBO falling back
-// to the unsorted late pass.
-//
-// It used to be multisample even at samples == 1, which was a live cost: this
-// driver refuses a 1-sample multisample target and returns a 2-sample one (see
-// msaa_samples_actual), so the TAA path -- which requests one sample precisely
-// to avoid MSAA -- silently rasterized two samples per pixel (spec 11.34).
-//
-// The single-sample texture sets sampler state where the multisample one cannot
-// carry any: nothing samples these targets today (every consumer is a blit),
-// but a plain texture left at the GL_NEAREST_MIPMAP_LINEAR default would be
-// mip-incomplete the day something does, and that failure is black, not loud.
-static void _add_scene_color_attachment(GLuint* out_tex, GLenum internal_format, GLenum attachment,
-                                        int rw, int rh, int samples) {
-    glGenTextures(1, out_tex);
-    if (samples > 1) {
-        glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, *out_tex);
-        glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, samples, internal_format, rw, rh,
-                                GL_TRUE);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, GL_TEXTURE_2D_MULTISAMPLE, *out_tex, 0);
-        return;
-    }
-    glBindTexture(GL_TEXTURE_2D, *out_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, (GLint)internal_format, rw, rh, 0,
-                 gl_transfer_format(internal_format), GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, GL_TEXTURE_2D, *out_tex, 0);
-}
-
-// (Re)create the multisample attachments on engine->framebuffer at the given
-// sample count and render size. Attachment 0 is float (RGBA16F) so the scene
-// accumulates in linear HDR; the G-buffer targets follow.
-static int _create_msaa_attachments(Engine* engine, int rw, int rh, int samples) {
-    glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
-
-    // GL 4.1 guarantees >= 8 draw buffers, but query once so a hypothetical
-    // thin driver fails loudly here instead of silently dropping the last
-    // attachment.
-    GBufferAttachment gb[GBUFFER_ATTACHMENT_COUNT];
-    _gbuffer_attachments(engine, gb);
-    GLint max_draw_buffers = 0;
-    glGetIntegerv(GL_MAX_DRAW_BUFFERS, &max_draw_buffers);
-    if (max_draw_buffers < GBUFFER_DRAW_BUFFER_SLOTS)
-        log_error("GL_MAX_DRAW_BUFFERS is %d (< %d): the last scene-MRT attachment will not bind",
-                  max_draw_buffers, GBUFFER_DRAW_BUFFER_SLOTS);
-
-    // Draw-buffer layout: 0 HDR color, 1 view normals (SSAO/SSR), 2 aux (TAA
-    // motion + GTAO linear-Z), 3 albedo (SSGI), 4 skin diffuse (SSS), 7
-    // ambient specular (split spec-occ). Every target is allocated each
-    // (re)build for a stable FBO layout, but written only when its consumer is
-    // active (see engine_set_scene_draw_buffers).
-    for (int i = 0; i < GBUFFER_ATTACHMENT_COUNT; i++) {
-        _add_scene_color_attachment(gb[i].tex, gb[i].internal_format, gb[i].attachment, rw, rh,
-                                    samples);
-    }
-
-    glGenRenderbuffers(1, &engine->depth_renderbuffer);
-    glBindRenderbuffer(GL_RENDERBUFFER, engine->depth_renderbuffer);
-    // Same branch as the colour allocator, for the same shared-depth reason: a
-    // plain renderbuffer at one sample, multisample above. It stays a
-    // renderbuffer either way -- it was never sampleable, which is why
-    // engine_resolve_scene_depth exists.
-    if (samples > 1)
-        glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH24_STENCIL8, rw, rh);
-    else
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, rw, rh);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
-                              engine->depth_renderbuffer);
-
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        log_error("Error: MSAA Framebuffer is not complete!");
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        return -1;
-    }
-
-    // What the driver ACTUALLY gave us, which above one sample is not always
-    // what was asked for. Read back while the target is still bound, once per
-    // build, so no consumer has to repeat the query or -- worse -- trust the
-    // request. The readback earned its keep before 11.34: back when a 1-sample
-    // request was still allocated multisample, this driver rounded it up to 2,
-    // and trusting the request had every depth-complexity figure on the TAA
-    // path reading exactly twice the truth (spec 11.31). At one sample the
-    // plain-texture path now makes request and answer agree by construction.
-    GLint got = 0;
-    glGetIntegerv(GL_SAMPLES, &got);
-    engine->msaa_samples_actual = got < 1 ? 1 : got;
-    if (engine->msaa_samples_actual != samples)
-        log_info("Scene target: asked for %dx MSAA, driver gave %dx", samples,
-                 engine->msaa_samples_actual);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0); // Bind back to the default framebuffer
-    return 0;
-}
-
-static int _setup_engine_msaa(Engine* engine) {
-    if (!engine || !engine->window)
-        return -1;
-
-    int rw, rh;
-    engine_render_size(engine, &rw, &rh);
-    engine->msaa_samples = _clamp_msaa_samples(engine->msaa_samples);
-
-    glGenFramebuffers(1, &engine->framebuffer);
-    if (_create_msaa_attachments(engine, rw, rh, engine->msaa_samples) != 0) {
-        _destroy_msaa_attachments(engine);
-        gl_delete_fbo(&engine->framebuffer);
-        return -1;
-    }
-    return 0;
-}
-
-// Rebuild the multisample scene attachments at the current render size and
-// sample count, on the same FBO name. The one place that pairing lives, so a
-// caller cannot destroy without recreating, or ignore the result -- an
-// incomplete scene FBO is invisible until something draws into it.
-static bool _engine_rebuild_msaa_target(Engine* engine) {
-    int rw, rh;
-    engine_render_size(engine, &rw, &rh);
-    _destroy_msaa_attachments(engine);
-    if (_create_msaa_attachments(engine, rw, rh, engine->msaa_samples) != 0) {
-        log_error("Scene target rebuild failed at %dx%d (%dx MSAA)", rw, rh, engine->msaa_samples);
-        return false;
-    }
-    return true;
-}
-
-// Bring the scene target and the whole post chain to the current
-// fb_width/fb_height/ss_scale/render_scale. The MSAA scene target goes first
-// and its failure is checked before postfx is touched: every G-buffer resolve
-// is a multisample blit, which needs identical rects, so a half-applied
-// resize is worse than none. Suspends rendering rather than limping on if
-// either half fails -- a chain whose hdr target is 0 would blit into the
-// default framebuffer.
-static void _engine_rebuild_render_targets(Engine* engine) {
-    int rw, rh;
-    engine_render_size(engine, &rw, &rh);
-    // Record what this attempt is FOR before making it. The sync compares
-    // against these, so a failure latches on its own size and is retried only
-    // when a genuinely different one is asked for. Deriving the same answer
-    // from whatever the failure happened to leave behind does not work: the
-    // two failure paths leave opposite states -- the MSAA one leaves postfx at
-    // the old size (retry forever), the postfx one leaves it at the new size
-    // (never retry).
-    engine->target_render_w = rw;
-    engine->target_render_h = rh;
-    engine_post_size(engine, &engine->target_post_w, &engine->target_post_h);
-
-    if (!_engine_rebuild_msaa_target(engine)) {
-        engine->render_suspended = true;
-        return;
-    }
-    if (!postfx_resize(engine->postfx, engine->fb_width, engine->fb_height, engine->ss_scale,
-                       engine->render_scale)) {
-        log_error("Post chain rebuild failed at %dx%d; rendering suspended", rw, rh);
-        engine->render_suspended = true;
-        return;
-    }
-    engine->render_suspended = false;
-    // The lazily-sized engine targets (opaque color, scene depth, OIT) each
-    // compare their stored size and rebuild themselves on next use.
-    log_info("Render targets rebuilt: %dx%d render, scale %.2f", rw, rh, engine->render_scale);
-}
-
-// False when the frame cannot be drawn: a zero-area (minimized) window, or a
-// rebuild that failed and left the chain without usable targets.
+// False when the frame cannot be drawn: a zero-area (minimized) window. A view whose targets failed
+// to build is skipped by itself.
 static bool _engine_frame_renderable(const Engine* engine) {
-    return !engine->render_suspended && engine->fb_width > 0 && engine->fb_height > 0;
+    return engine->fb_width > 0 && engine->fb_height > 0;
 }
 
 // Events arrive only inside a poll, so by the next one the frame's hooks have read this frame's
@@ -1213,34 +843,6 @@ static void _engine_close_callback(GLFWwindow* window) {
         _engine_close_asked(engine);
 }
 
-// Frame-top self-heal: if the sizes the engine now derives disagree with what
-// the post chain was built at, rebuild. Keyed on the built sizes rather than
-// on an event flag so that every trigger -- the GUI slider, a window resize,
-// the diagnostic schedule, a future dynamic-resolution controller -- works
-// without its own call site, and so a size field changing behind our back
-// heals instead of desyncing. The idiom is _ensure_opaque_color_target's and
-// ensure_march_targets'.
-static void _engine_sync_render_targets(Engine* engine) {
-    if (!engine->postfx)
-        return;
-    int rw, rh, pw, ph;
-    engine_render_size(engine, &rw, &rh);
-    engine_post_size(engine, &pw, &ph);
-    // A minimized window reports 0x0, where every downstream size formula
-    // degenerates (NaN aspect, +inf cluster params, incomplete framebuffers).
-    // Hold the existing targets untouched; _engine_frame_renderable is what
-    // skips the frame, so no flag has to be un-set when the window returns.
-    if (rw < 1 || rh < 1 || pw < 1 || ph < 1)
-        return;
-    // Already built (or already attempted) at this size: nothing to do. Also
-    // the retry policy -- a failed attempt is not repeated until something
-    // actually asks for a different size.
-    if (rw == engine->target_render_w && rh == engine->target_render_h &&
-        pw == engine->target_post_w && ph == engine->target_post_h)
-        return;
-    _engine_rebuild_render_targets(engine);
-}
-
 const char* const* engine_monitor_names(const Engine* engine, int* out_count) {
     // Rebuilt per call rather than cached: GLFW owns the strings, a display can
     // leave between two calls, and the list is asked for when a screen is built
@@ -1374,32 +976,6 @@ void engine_set_window_mode(Engine* engine, EngineWindowMode mode, const char* m
     engine_apply_swap_interval(engine);
 }
 
-// Change the MSAA sample count. While the scene target does not exist yet
-// (creation, from the config) this stores the count the first build uses; at
-// runtime it rebuilds the multisample attachments in place (the single-sample
-// post-process resolve targets are unaffected by the sample count).
-void engine_set_msaa_samples(Engine* engine, int samples) {
-    if (!engine)
-        return;
-    if (samples < 1)
-        samples = 1;
-
-    if (!engine->framebuffer) {
-        engine->msaa_samples = samples; // _setup_engine_msaa clamps
-        return;
-    }
-
-    samples = _clamp_msaa_samples(samples);
-    if (samples == engine->msaa_samples)
-        return;
-    engine->msaa_samples = samples;
-
-    // Same latch as a resolution change: a scene target that failed to rebuild
-    // is not something to keep drawing into.
-    if (!_engine_rebuild_msaa_target(engine))
-        engine->render_suspended = true;
-}
-
 static int _setup_engine_gui(Engine* engine) {
     if (!engine || !engine->window)
         return -1;
@@ -1452,10 +1028,6 @@ static int _engine_init(Engine* engine, const EngineConfig* cfg) {
 
     if (_setup_engine_glfw(engine, cfg->window_mode, cfg->monitor) != 0) {
         log_error("Failed to initialize engine GLFW");
-        return -1;
-    }
-    if (_setup_engine_msaa(engine) != 0) {
-        log_error("Failed to initialize engine MSAA");
         return -1;
     }
 
@@ -1567,33 +1139,13 @@ static int _engine_init(Engine* engine, const EngineConfig* cfg) {
         glBindVertexArray(0);
     }
 
-    // HDR post-processing (resolve + bloom + tone map). Sized at the display
-    // resolution; the supersample factor enlarges the internal chain to match
-    // the enlarged MSAA scene target. The render scale arrives already clamped
-    // for headless by its setter.
+    // The post chain's programs (resolve + bloom + tone map and the rest), made once for every
+    // view's chain; each view builds its own targets.
     engine->postfx_programs = create_postfx_programs();
     if (!engine->postfx_programs) {
         log_error("Failed to initialize engine post-processing");
         return -1;
     }
-    postfx_settings_init(&engine->post_settings);
-    engine->post_settings.taa_enabled = cfg->taa;
-    engine->postfx =
-        create_postfx(engine->postfx_programs, &engine->post_settings, engine->fb_width,
-                      engine->fb_height, engine->ss_scale, engine->render_scale);
-    if (!engine->postfx) {
-        log_error("Failed to initialize engine post-processing");
-        return -1;
-    }
-
-    engine->postfx->exposure = &engine->exposure;
-    engine->postfx->profiler = engine->profiler;
-
-    // Record what init just built at, or the first frame-top sync would see
-    // zeroes, decide the sizes had changed, and rebuild everything once for
-    // nothing -- resetting the temporal histories on frame 0 as it went.
-    engine_render_size(engine, &engine->target_render_w, &engine->target_render_h);
-    engine_post_size(engine, &engine->target_post_w, &engine->target_post_h);
 
     // Shown only once everything it draws with is built (spec 13.39): shown before the programs
     // and the post chain, it stood blank and unanswering for the second they took. A size the
@@ -1691,14 +1243,15 @@ static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, 
     glfwGetWindowSize(window, &engine->win_width, &engine->win_height);
 
     // A minimized window reports 0x0; leave the derived state alone rather
-    // than computing a NaN aspect from it. _engine_sync_render_targets holds
-    // the targets and engine_frame_renderable skips the frame meanwhile.
+    // than computing a NaN aspect from it. Each view holds its targets and
+    // _engine_frame_renderable skips the frame meanwhile.
     if (fb_width <= 0 || fb_height <= 0)
         return;
 
     // Events are polled at the end of the frame, so a click in the same batch
     // as this resize would otherwise ray-pick through an aspect one frame old.
-    _engine_derive_camera(engine);
+    for (size_t i = 0; i < engine->view_count; i++)
+        _engine_derive_view(engine, engine->views[i]);
     // Window points, matching init_text_renderer -- text is authored in points
     // and the ortho must stay in the space it was set up in. Handing it
     // framebuffer pixels here would halve every string on a Retina display the
@@ -1819,7 +1372,7 @@ static void _engine_pointer_button(Engine* engine, int button, int action, int m
         engine->input.drag_fb_x = 0.0f;
         engine->input.drag_fb_y = 0.0f;
 
-        engine->input.selected_node = _perform_engine_ray_picking(engine, mouse_fb_x, mouse_fb_y);
+        engine->input.selected_node = _engine_pick(engine, mouse_fb_x, mouse_fb_y);
     }
 
     if (engine->mouse_button_callback) {
@@ -2248,18 +1801,6 @@ static void _engine_input_script_free(Engine* engine) {
     engine->input_script = NULL;
 }
 
-void engine_set_camera_rig(Engine* engine, CameraRig* rig) {
-    if (!engine) {
-        log_error("engine_set_camera_rig: NULL engine");
-        return;
-    }
-    if (engine->camera_rig && rig && engine->camera_rig != rig)
-        log_info("camera rig replaced; the previous one no longer moves the camera");
-    engine->camera_rig = rig;
-    if (rig)
-        rig->typical_size = engine->typical_size;
-}
-
 bool engine_set_input_script(Engine* engine, const char* path) {
     if (!engine || !path) {
         log_error("engine_set_input_script: NULL engine or path");
@@ -2292,15 +1833,8 @@ bool engine_set_input_script(Engine* engine, const char* path) {
 }
 
 /*
- * Camera
+ * The views' cameras
  */
-void engine_set_camera(Engine* engine, Camera* camera) {
-    if (!engine || !camera)
-        return;
-
-    engine->camera = camera;
-}
-
 static void _fit_add_box(const AABB* box, void* fit) {
     camera_clip_fit_add(fit, box);
 }
@@ -2309,18 +1843,19 @@ static void _fit_add_box(const AABB* box, void* fit) {
 // default, since such a sea runs on to the horizon wherever the far plane is put.
 #define SEA_REACH 1000.0f
 
-// A fit_clip camera's planes, from what the frame draws at rest: the scene's mesh boxes, and the
+// A fit_clip camera's planes, from what the view draws at rest: the scene's mesh boxes, and the
 // shadow catcher's quad or the water's rectangle when one draws -- a sea with no bounds as a
 // square SEA_REACH out from under the eye.
-static void _engine_fit_clip(const Engine* engine, Camera* camera) {
+static void _engine_fit_clip(const Engine* engine, SceneView* view) {
     const Scene* scene = engine_get_scene(engine);
     if (!scene)
         return;
+    Camera* camera = &view->camera;
     CameraClipFit fit;
     camera_clip_fit_begin(&fit, camera);
     scene_for_each_mesh_box(scene, _fit_add_box, &fit);
     AABB box;
-    if (water_will_draw(scene->water, engine, engine->current_render_mode)) {
+    if (water_will_draw(scene->water, view)) {
         if (!water_surface_box(scene->water, &box)) {
             const float r = SEA_REACH * engine->typical_size;
             const float* eye = camera->position;
@@ -2328,31 +1863,61 @@ static void _engine_fit_clip(const Engine* engine, Camera* camera) {
                          {eye[0] + r, scene->water->level, eye[2] + r}};
         }
         camera_clip_fit_add(&fit, &box);
-    } else if (render_shadow_catcher_box(engine, scene, engine->current_render_mode, &box)) {
+    } else if (render_shadow_catcher_box(engine, scene, view, &box)) {
         camera_clip_fit_add(&fit, &box);
     }
     camera_clip_fit_apply(camera, &fit);
 }
 
-// The view and projection matrices, and the camera's aspect, from the camera
-// and the framebuffer as they stand -- and a fitted camera's planes, which read the aspect.
-static void _engine_derive_camera(Engine* engine) {
-    Camera* camera = engine->camera;
-    if (!camera)
-        return;
-
-    camera_view_matrix(camera, engine->view_matrix);
+// The view and projection matrices, and the camera's aspect, from the view's camera and its
+// rectangle as they stand -- and a fitted camera's planes, which read the aspect.
+static void _engine_derive_view(const Engine* engine, SceneView* view) {
+    SceneViewState* vs = view->state;
+    Camera* camera = &view->camera;
+    camera_view_matrix(camera, vs->view_matrix);
 
     // A minimized window is 0x0, and 0/0 is a NaN that would propagate through
     // the projection into the view-proj, the frustum, and next frame's
-    // reprojection. Keep the last good aspect until the window returns.
-    if (engine->fb_width <= 0 || engine->fb_height <= 0)
+    // reprojection. Keep the last good aspect until the view has an area again.
+    int w, h;
+    scene_view_out_size(view, &w, &h);
+    if (w <= 0 || h <= 0)
         return;
 
-    camera->aspect_ratio = (float)engine->fb_width / (float)engine->fb_height;
+    camera->aspect_ratio = (float)w / (float)h;
     if (camera->fit_clip)
-        _engine_fit_clip(engine, camera);
-    camera_projection_matrix(camera, engine->projection_matrix);
+        _engine_fit_clip(engine, view);
+    camera_projection_matrix(camera, vs->projection_matrix);
+}
+
+// The mode a view renders with this frame: albedo under the wireframe overlay, which is for speed
+// and for every edge of every face, and its settings' otherwise.
+static RenderMode _view_frame_mode(const SceneView* view) {
+    return view->settings.show_wireframe ? RENDER_MODE_ALBEDO : view->settings.render_mode;
+}
+
+// Whether a view draws this frame: shown, with an area, and with the targets the frame top built.
+// A setting a hook wrote this frame is taken at the next frame top, never mid-frame.
+static bool _view_drawable(const SceneView* view) {
+    const SceneViewState* vs = view->state;
+    int w, h;
+    scene_view_out_size(view, &w, &h);
+    return !view->hidden && vs->postfx && !vs->render_suspended && w > 0 && h > 0;
+}
+
+SceneView* engine_view_at(const Engine* engine, double fb_x, double fb_y) {
+    if (!engine)
+        return NULL;
+    for (size_t i = engine->view_count; i-- > 0;) {
+        SceneView* view = engine->views[i];
+        if (view->hidden)
+            continue;
+        float point[2];
+        scene_view_point_from_fb(view, fb_x, fb_y, point);
+        if (scene_view_contains(view, point))
+            return view;
+    }
+    return NULL;
 }
 
 /*
@@ -2843,22 +2408,11 @@ Engine* create_engine(const EngineConfig* cfg) {
     if (!engine)
         return NULL;
 
-    // The sample count and the two scales go through their setters for the
-    // clamps, which store while the targets do not exist and rebuild once they
-    // do; the rest of the config is read where it is consumed, inside init.
-    if (cfg->msaa_samples > 0)
-        engine_set_msaa_samples(engine, cfg->msaa_samples);
-    if (cfg->ss_scale > 0)
-        engine_set_ss_scale(engine, cfg->ss_scale);
-    if (cfg->render_scale > 0.0f)
-        engine_set_render_scale(engine, cfg->render_scale);
-
     if (_engine_init(engine, cfg) != 0) {
         log_error("create_engine: the window or the GL context could not be made");
         free_engine(engine);
         return NULL;
     }
-    // After init, since it writes PostFX's lengths.
     if (cfg->typical_size != 0.0f)
         engine_set_typical_size(engine, cfg->typical_size);
     return engine;
@@ -2873,76 +2427,12 @@ void engine_set_typical_size(Engine* engine, float metres) {
         return;
     }
     engine->typical_size = metres;
-    postfx_settings_reset_lengths(&engine->post_settings, metres);
-    if (engine->camera_rig)
-        engine->camera_rig->typical_size = metres;
-}
-
-void engine_set_2d_preset(Engine* engine, Scene* scene) {
-    if (!engine)
-        return;
-    PostFX* fx = engine->postfx;
-    fx->settings->bloom_enabled = false;
-    fx->settings->glare_enabled = false;
-    fx->settings->local_exposure_enabled = false;
-    fx->settings->ssao_enabled = false;
-    fx->settings->ssr_enabled = false;
-    fx->settings->vignette_enabled = false;
-    fx->settings->dither_enabled = false;
-    fx->settings->taa_enabled = false;
-    fx->settings->tonemap_mode = POSTFX_TONEMAP_LINEAR;
-    engine->exposure.settings->physical = false;
-    engine->exposure.settings->automatic = false;
-    engine->exposure.settings->multiplier = 1.0f;
-    if (!scene)
-        return;
-    // White ambient radiance: the no-environment ambient is radiance times
-    // albedo, so unity here is what makes an authored colour come out exactly.
-    glm_vec3_one(scene->ambient_radiance);
-    if (scene->shadow_system)
-        scene->shadow_system->enabled = false;
-}
-
-void engine_set_ss_scale(Engine* engine, int ss_scale) {
-    if (!engine)
-        return;
-    if (ss_scale < 1)
-        ss_scale = 1;
-    // The tone-map downsample is an exact box filter only at 2x (GL linear
-    // sampling averages one 2x2 texel block); higher factors under-resolve and
-    // can also exceed GL_MAX_TEXTURE_SIZE. Cap until a proper mip/N-tap
-    // downsample exists.
-    if (ss_scale > 2) {
-        log_warn("SSAA %dx unsupported (exact downsample only at 2x); using 2x", ss_scale);
-        ss_scale = 2;
+    for (size_t i = 0; i < engine->view_count; i++) {
+        SceneView* view = engine->views[i];
+        postfx_settings_reset_lengths(&view->settings.post, metres);
+        if (view->rig)
+            view->rig->typical_size = metres;
     }
-    engine->ss_scale = ss_scale;
-}
-
-void engine_set_render_scale(Engine* engine, float render_scale) {
-    if (!engine)
-        return;
-    float clamped = postfx_clamp_render_scale(render_scale);
-    if (clamped != render_scale) {
-        log_warn("render scale %.2f outside [0.5, 1]; using %.2f", render_scale, clamped);
-        render_scale = clamped;
-    }
-    // TAAU reconstructs from the jitter, and headless suppresses the jitter
-    // unless headless_jitter is set -- without it the resolve integrates one
-    // repeated sample position forever, which does not fail, it just looks
-    // permanently soft. Enforced here, the one path a scale arrives by, rather
-    // than in an app, because this is where all three facts are known and
-    // every headless app would otherwise have to rediscover the rule.
-    if (engine->headless && !engine->headless_jitter && render_scale < 1.0f) {
-        log_warn("render scale needs jitter under headless; staying at full resolution");
-        render_scale = 1.0f;
-    }
-    if (render_scale == engine->render_scale)
-        return;
-    engine->render_scale = render_scale;
-    // The targets follow at the next frame top (_engine_sync_render_targets).
-    // Deferred rather than rebuilt here because this is reachable from the GUI
-    // panel, which draws mid-frame after the post chain has already run.
 }
 
 void engine_set_screenshot_path(Engine* engine, const char* path) {
@@ -3024,19 +2514,20 @@ void engine_set_render_clock(Engine* engine, const EngineFrameClock* clock) {
 // What the engine draws after the temporal seam, published only on frames that have
 // something to draw. The rain's renderer comes into being the first frame a scene rains; the
 // fire's already exists, since its simulation ran at the frame top. Fire first, so rain falling
-// in front of a fire draws over it and refracts it.
+// in front of a fire draws over it and refracts it. `user` is the view whose chain is running.
 static void _engine_late_draw(void* user, const PostFXLateDraw* late) {
-    Engine* engine = user;
+    SceneView* view = user;
+    Engine* engine = view->state->engine;
     const Scene* scene = engine_get_scene(engine);
     // An app's late-draw surfaces first (spec 13.29): fire and rain are translucent and composite
     // over whatever is behind them, a screen included.
-    render_late_items(engine, scene, late);
+    render_late_items(engine, scene, view, late);
     if (scene && fire_system_active(scene->fire))
-        fire_render_draw(engine->fire_renderer, engine, scene, late);
+        fire_render_draw(engine->fire_renderer, engine, scene, view, late);
     if (scene && rain_draws(scene->rain)) {
         if (!engine->rain_renderer)
             engine->rain_renderer = create_rain_renderer();
-        rain_render_drops(engine->rain_renderer, engine, scene, late);
+        rain_render_drops(engine->rain_renderer, engine, scene, view, late);
     }
 }
 
@@ -3103,8 +2594,7 @@ static bool _engine_crt_on(Engine* engine) {
 // The window's last write, when the chain drew this frame into its picture rather than the window:
 // the picture through the CRT, or as it is through the present pass. That write is the 8-bit one,
 // so it is the one that dithers (spec 11.24).
-static void _engine_present_window(Engine* engine) {
-    PostFX* fx = engine->postfx;
+static void _engine_present_window(Engine* engine, const PostFX* fx) {
     switch (fx->show) {
         case POSTFX_SHOW_WINDOW:
             return;
@@ -3143,10 +2633,73 @@ static void _engine_present_window(Engine* engine) {
     }
 }
 
-void engine_present_frame(Engine* engine, RenderMode frame_mode) {
-    if (!engine)
-        return;
+// A view's post chain, from its scene target into the window or its picture, after what the
+// current scene publishes to it. Only PBR frames are linear HDR and get SSAO + bloom + exposure +
+// tone mapping; debug render modes emit display-ready colors and are copied unchanged.
+static void _engine_run_view_chain(Engine* engine, SceneView* view) {
+    SceneViewState* vs = view->state;
+    PostFX* fx = vs->postfx;
+    const RenderMode frame_mode = vs->render_mode;
+    // Seed the film grain off the frame counter so it animates live yet stays
+    // deterministic across equal --frames runs.
+    fx->frame_index = (int)engine->total_frames;
+    fx->time = (float)engine->render_time;
+    fx->crt_on = _engine_crt_on(engine);
+    // Depth-of-field autofocus: keep the subject sharp as the camera orbits or
+    // zooms by refocusing on the point the camera looks at (the orbit target),
+    // unless a manual focus distance was pinned.
+    fx->dof_autofocus_distance = glm_vec3_distance(view->camera.position, view->camera.look_at);
+    // Hand the current scene's reflection probes and shadow casters to postfx
+    // (SSR miss fallback / fog march) without postfx learning about Scene
+    const Scene* fx_scene = engine_get_scene(engine);
+    fx->sss_profiles = fx_scene ? (const vec4*)fx_scene->sss_profiles : NULL;
+    fx->sss_profile_count = fx_scene ? fx_scene->sss_profile_count : 0;
+    probe_set_publish_to_postfx(fx_scene ? fx_scene->probe_set : NULL,
+                                fx_scene ? fx_scene->lighting_atlas : NULL, fx);
+    shadow_publish_to_postfx(fx_scene, fx);
+    rain_publish_to_postfx(fx_scene ? fx_scene->rain : NULL, fx);
+    fx->late_draw = fx_scene && (rain_draws(fx_scene->rain) || fire_system_active(fx_scene->fire) ||
+                                 render_has_late_items(fx_scene))
+                        ? _engine_late_draw
+                        : NULL;
+    fx->late_draw_user = view;
+    // Aerial perspective is a camera-frustum volume, so unlike the sky's other
+    // LUTs it is rebuilt here, for each view, immediately before it is published
+    // to that view's chain. The unjittered projection: the bake reads only
+    // [0][0]/[1][1]/[2][2]/[3][2] so TAA's jitter in [2][0]/[2][1] cannot reach
+    // it, and handing it an input that churns every frame would defeat any
+    // future rebuild-elision.
+    if (fx_scene && fx_scene->sky)
+        sky_update_aerial(fx_scene->sky, vs->view_matrix, vs->projection_matrix);
+    sky_publish_to_postfx(fx_scene ? fx_scene->sky : NULL, fx);
+    // Order-independent of the sky's: water publishes a suppression REQUEST rather than
+    // clearing the aerial volume the line above filled, so neither publish can undo the
+    // other. Gated on the surface actually drawing -- a debug mode that skips the water
+    // pass must not leave a medium behind for the volume to integrate.
+    water_publish_to_postfx(fx_scene && water_will_draw(fx_scene->water, view) ? fx_scene->water
+                                                                               : NULL,
+                            fx_scene, view);
+    // Unconditional, including with no scene: count 0 is the off state, and only a
+    // publish every frame can reach it after a scene that had volumes goes away.
+    scene_publish_fog_volumes_to_postfx(fx_scene, fx);
+    const PostFXGBufferWrites writes = {
+        .normals = vs->normals_this_frame,
+        .aux = vs->aux_this_frame,
+        .albedo = vs->albedo_this_frame,
+        .sss = vs->sss_this_frame,
+        .spec = vs->spec_this_frame,
+        .oit_fbo = vs->oit_this_frame ? vs->oit_fbo : 0,
+        .oit_moment_atlas = vs->moments_this_frame ? vs->moment_atlas_texture : 0,
+        .oit_near_far = {view->camera.near_clip, view->camera.far_clip}};
+    postfx_run(fx, vs->framebuffer, frame_mode == RENDER_MODE_PBR, &writes, vs->draw_projection,
+               vs->view_matrix);
+}
 
+// The window's part of the frame, once the views have drawn: the debug views over `shown`, the
+// view whose chain wrote the window this frame (NULL for none), then the app's overlays, the CRT
+// or the present pass, the loading screen and the GUI. All draw after tone mapping, and the GUI
+// is never tone mapped.
+static void _engine_present_frame(Engine* engine, SceneView* shown) {
     // Under a loading screen that hides the whole frame (spec 13.34) the window is the screen's
     // alone: no picture under it, and no GUI over it, which a frame drawn between two of this
     // frame's pieces would show and hide by turns.
@@ -3157,69 +2710,17 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
         return;
     }
 
-    // Only PBR frames are linear HDR and get SSAO + bloom + exposure + tone
-    // mapping; debug render modes emit display-ready colors and are copied
-    // unchanged. The GUI draws after so it is never tone mapped.
-    // Seed the film grain off the frame counter so it animates live yet stays
-    // deterministic across equal --frames runs.
-    engine->postfx->frame_index = (int)engine->total_frames;
-    engine->postfx->time = (float)engine->render_time;
-    engine->postfx->crt_on = _engine_crt_on(engine);
-    // Depth-of-field autofocus: keep the subject sharp as the camera orbits or
-    // zooms by refocusing on the point the camera looks at (the orbit target),
-    // unless a manual focus distance was pinned. Negative with no camera to measure.
-    engine->postfx->dof_autofocus_distance =
-        engine->camera ? glm_vec3_distance(engine->camera->position, engine->camera->look_at)
-                       : -1.0f;
-    // Hand the current scene's reflection probes and shadow casters to postfx
-    // (SSR miss fallback / fog march) without postfx learning about Scene
-    const Scene* fx_scene = engine_get_scene(engine);
-    engine->postfx->sss_profiles = fx_scene ? (const vec4*)fx_scene->sss_profiles : NULL;
-    engine->postfx->sss_profile_count = fx_scene ? fx_scene->sss_profile_count : 0;
-    probe_set_publish_to_postfx(fx_scene ? fx_scene->probe_set : NULL,
-                                fx_scene ? fx_scene->lighting_atlas : NULL, engine->postfx);
-    shadow_publish_to_postfx(fx_scene, engine->postfx);
-    rain_publish_to_postfx(fx_scene ? fx_scene->rain : NULL, engine->postfx);
-    engine->postfx->late_draw =
-        fx_scene && (rain_draws(fx_scene->rain) || fire_system_active(fx_scene->fire) ||
-                     render_has_late_items(fx_scene))
-            ? _engine_late_draw
-            : NULL;
-    engine->postfx->late_draw_user = engine;
-    // Aerial perspective is a camera-frustum volume, so unlike the sky's other
-    // LUTs it is rebuilt here every frame, immediately before it is published.
-    // The unjittered projection: the bake reads only [0][0]/[1][1]/[2][2]/[3][2]
-    // so TAA's jitter in [2][0]/[2][1] cannot reach it, and handing it an input
-    // that churns every frame would defeat any future rebuild-elision.
-    if (fx_scene && fx_scene->sky)
-        sky_update_aerial(fx_scene->sky, engine->view_matrix, engine->projection_matrix);
-    sky_publish_to_postfx(fx_scene ? fx_scene->sky : NULL, engine->postfx);
-    // Order-independent of the sky's: water publishes a suppression REQUEST rather than
-    // clearing the aerial volume the line above filled, so neither publish can undo the
-    // other. Gated on the surface actually drawing -- a debug mode or a capture that
-    // skips the water pass must not leave a medium behind for the volume to integrate.
-    water_publish_to_postfx(
-        fx_scene && water_will_draw(fx_scene->water, engine, frame_mode) ? fx_scene->water : NULL,
-        fx_scene, engine);
-    // Unconditional, including with no scene: count 0 is the off state, and only a
-    // publish every frame can reach it after a scene that had volumes goes away.
-    scene_publish_fog_volumes_to_postfx(fx_scene, engine->postfx);
-    const PostFXGBufferWrites writes = {
-        .normals = engine->normals_this_frame,
-        .aux = engine->aux_this_frame,
-        .albedo = engine->albedo_this_frame,
-        .sss = engine->sss_this_frame,
-        .spec = engine->spec_this_frame,
-        .oit_fbo = engine->oit_this_frame ? engine->oit_fbo : 0,
-        .oit_moment_atlas = engine->moments_this_frame ? engine->moment_atlas_texture : 0,
-        .oit_near_far = {engine->camera ? engine->camera->near_clip : 1.0f,
-                         engine->camera ? engine->camera->far_clip : 2.0f}};
-    postfx_run(engine->postfx, engine->framebuffer, frame_mode == RENDER_MODE_PBR, &writes,
-               engine->draw_projection, engine->view_matrix);
-    // Everything up to the overlay draws over the frame where postfx_run drew it: the window, or
-    // the picture that postfx_present_picture shows after them.
-    glBindFramebuffer(GL_FRAMEBUFFER, postfx_picture_fbo(engine->postfx));
+    // Everything up to the overlay draws over the frame where the chain drew it: the window, or
+    // the picture _engine_present_window shows after them. With no view the window is cleared.
+    const PostFX* fx = shown ? shown->state->postfx : NULL;
+    glBindFramebuffer(GL_FRAMEBUFFER, fx ? postfx_picture_fbo(fx) : 0);
+    if (!fx) {
+        glViewport(0, 0, engine->fb_width, engine->fb_height);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    }
 
+    const Scene* fx_scene = engine_get_scene(engine);
     // Sky LUT debug overlay onto the composited frame (an acceptance tool,
     // the csm_debug shape: a library-side flag the app/GUI toggles)
     if (fx_scene && fx_scene->sky && fx_scene->sky->debug_luts) {
@@ -3237,11 +2738,10 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     if (fx_scene && fx_scene->fire && fx_scene->fire->debug_field >= 0)
         fire_render_slice(engine->fire_renderer, fx_scene->fire, engine->fb_height);
 
-    // The app's overlays, then the GUI: all draw after tone mapping, and the
-    // debug panel goes over the game's own screens rather than under them.
-    // Walked over a copy, so an overlay may take itself or another off as it
-    // draws; one taken off before its turn is not drawn, since its user may be
-    // gone with it.
+    // The app's overlays, then the GUI: the debug panel goes over the game's own
+    // screens rather than under them. Walked over a copy, so an overlay may take
+    // itself or another off as it draws; one taken off before its turn is not
+    // drawn, since its user may be gone with it.
     if (engine->overlay_count > 0) {
         EngineOverlay overlays[ENGINE_OVERLAY_MAX];
         int count = engine->overlay_count;
@@ -3255,7 +2755,8 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
 
     // The picture into the window, if it went into one; the GUI is the developer's and goes over
     // the television, sharp.
-    _engine_present_window(engine);
+    if (fx)
+        _engine_present_window(engine, fx);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     loading_screen_frame(engine);
 
@@ -3264,385 +2765,6 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     profiler_scope_begin_if(engine->profiler, engine->gui_frame_active, "gui");
     gui_render_frame(engine);
     profiler_scope_end(engine->profiler);
-}
-
-void engine_set_scene_draw_buffers(const Engine* engine, bool with_gbuffer) {
-    if (!engine)
-        return;
-
-    // The opaque pass may publish G-buffer attachments 1 (normals), 2 (aux:
-    // motion .xy + linear view-Z .z), and 3 (albedo) alongside color; every other
-    // pass is color only. Build the draw-buffer list left to right: GL_NONE fills
-    // a skipped slot so the fragment-output-location -> attachment mapping is
-    // preserved, and count extends to the highest enabled attachment. Blending is
-    // enabled globally, so keep each aux target opaque via indexed disable
-    // (re-issued at every pass boundary because any blanket glEnable(GL_BLEND)
-    // wipes it).
-    // Read each attachment's per-frame write gate from the same descriptor table
-    // that drives create/clear (const cast: this only reads the this_frame flags).
-    // Attachment 0 (this_frame NULL) is always written and starts the list.
-    //
-    // A capture target has attachment 0 and nothing else, so the whole G-buffer
-    // is off for the duration -- asked HERE, once, rather than by clearing each
-    // this_frame flag at the capture site. That list was hand-maintained and had
-    // already fallen behind: attachment 4 (SSS) was added without one, so a
-    // re-convergence sweep in an --sss scene emitted a five-attachment draw list
-    // against a one-attachment FBO. Gating the loop instead is correct for
-    // attachment 4 and for every attachment added after it.
-    const bool gbuffer = with_gbuffer && !engine->capturing;
-    GBufferAttachment gb[GBUFFER_ATTACHMENT_COUNT];
-    _gbuffer_attachments((Engine*)engine, gb);
-    // bufs[slot] carries GL_COLOR_ATTACHMENT0+slot or GL_NONE (0), so
-    // fragment output location N always lands on attachment N. Slots 5/6 stay
-    // GL_NONE here -- those locations are the OIT accumulate targets, bound on
-    // the OIT FBO.
-    GLenum bufs[GBUFFER_DRAW_BUFFER_SLOTS] = {GL_COLOR_ATTACHMENT0}; // rest GL_NONE (0)
-    int count = 1;
-    for (int i = 1; i < GBUFFER_ATTACHMENT_COUNT; i++) {
-        if (gbuffer && *gb[i].this_frame) {
-            int slot = (int)(gb[i].attachment - GL_COLOR_ATTACHMENT0);
-            bufs[slot] = gb[i].attachment;
-            glDisablei(GL_BLEND, slot);
-            if (slot + 1 > count)
-                count = slot + 1;
-        }
-    }
-    glDrawBuffers(count, bufs);
-}
-
-// Refraction blurs the resolved scene by sampling coarser mips; the shader
-// clamps its LOD to this, so mip generation stops here too (levels past it
-// would never be read)
-#define OPAQUE_COLOR_MAX_LOD 6
-
-// Lazy allocation for the refraction source (the postfx ensure_* pattern):
-// created on first transmissive frame at the internal render size and
-// recreated if that ever changes. Leaves the new FBO bound on success.
-static bool _ensure_opaque_color_target(Engine* engine, int rw, int rh) {
-    if (engine->opaque_color_texture != 0 && engine->opaque_color_w == rw &&
-        engine->opaque_color_h == rh) {
-        return true;
-    }
-    if (engine->opaque_color_texture) {
-        glDeleteTextures(1, &engine->opaque_color_texture);
-        glDeleteFramebuffers(1, &engine->opaque_color_fbo);
-    }
-    glGenTextures(1, &engine->opaque_color_texture);
-    glBindTexture(GL_TEXTURE_2D, engine->opaque_color_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, rw, rh, 0, GL_RGBA, GL_FLOAT, NULL);
-    // CLAMP: refraction offsets must not wrap to the far edge; LINEAR
-    // mipmap so roughness-scaled textureLod blends between blur levels
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, OPAQUE_COLOR_MAX_LOD);
-    glGenFramebuffers(1, &engine->opaque_color_fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, engine->opaque_color_fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                           engine->opaque_color_texture, 0);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        log_error("Opaque-color resolve framebuffer incomplete");
-        gl_delete_texture(&engine->opaque_color_texture);
-        gl_delete_fbo(&engine->opaque_color_fbo);
-        return false;
-    }
-    engine->opaque_color_w = rw;
-    engine->opaque_color_h = rh;
-    return true;
-}
-
-// Resolve the MSAA color attachment (opaques + skybox) into the mipped
-// single-sample texture transmissive surfaces sample for screen-space
-// refraction. The copy is what makes sampling legal: reading the scene
-// FBO while drawing into it would be a framebuffer feedback loop.
-// Exit state: engine->framebuffer bound with its draw-buffer list intact
-// (per-FBO state) and the active texture unit restored to 0, so the late
-// pass resumes untouched. Only valid while engine->framebuffer holds the
-// scene being drawn -- captures that redirect the scene into another FBO
-// (the reflection probe) must disable refraction for the capture.
-bool engine_resolve_opaque_color(Engine* engine) {
-    int rw, rh;
-    engine_render_size(engine, &rw, &rh);
-    if (rw <= 0 || rh <= 0)
-        return false;
-    if (!_ensure_opaque_color_target(engine, rw, rh)) {
-        glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
-        return false;
-    }
-
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, engine->framebuffer);
-    glReadBuffer(GL_COLOR_ATTACHMENT0);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, engine->opaque_color_fbo);
-    glBlitFramebuffer(0, 0, rw, rh, 0, 0, rw, rh, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, engine->opaque_color_texture);
-    glGenerateMipmap(GL_TEXTURE_2D); // box mips (to MAX_LEVEL) = the blur chain
-    glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
-    return true;
-}
-
-// Lazy single-sample depth resolve target (mirrors _ensure_opaque_color_target).
-// DEPTH24_STENCIL8 matches the multisample depth renderbuffer so the depth blit
-// is format-compatible; sampled as sampler2D it returns window-space depth in .r.
-static bool _ensure_scene_depth_target(Engine* engine, int rw, int rh) {
-    if (engine->scene_depth_texture != 0 && engine->scene_depth_w == rw &&
-        engine->scene_depth_h == rh) {
-        return true;
-    }
-    if (engine->scene_depth_texture) {
-        glDeleteTextures(1, &engine->scene_depth_texture);
-        glDeleteFramebuffers(1, &engine->scene_depth_fbo);
-    }
-    glGenTextures(1, &engine->scene_depth_texture);
-    glBindTexture(GL_TEXTURE_2D, engine->scene_depth_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, rw, rh, 0, GL_DEPTH_STENCIL,
-                 GL_UNSIGNED_INT_24_8, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glGenFramebuffers(1, &engine->scene_depth_fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, engine->scene_depth_fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D,
-                           engine->scene_depth_texture, 0);
-    glDrawBuffer(GL_NONE);
-    glReadBuffer(GL_NONE);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        log_error("Scene-depth resolve framebuffer incomplete");
-        gl_delete_texture(&engine->scene_depth_texture);
-        gl_delete_fbo(&engine->scene_depth_fbo);
-        return false;
-    }
-    engine->scene_depth_w = rw;
-    engine->scene_depth_h = rh;
-    return true;
-}
-
-GLuint engine_resolve_scene_depth(Engine* engine) {
-    if (!engine)
-        return 0;
-    int rw, rh;
-    engine_render_size(engine, &rw, &rh);
-    if (rw <= 0 || rh <= 0)
-        return 0;
-    if (!_ensure_scene_depth_target(engine, rw, rh)) {
-        glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
-        return 0;
-    }
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, engine->framebuffer);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, engine->scene_depth_fbo);
-    glBlitFramebuffer(0, 0, rw, rh, 0, 0, rw, rh, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
-    glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
-    return engine->scene_depth_texture;
-}
-
-// Lazy allocation for the weighted-blended OIT targets: two multisample color
-// textures -- accum (RGBA16F, attachment 5) and revealage (R16F, attachment 6) --
-// on a dedicated FBO that SHARES engine->depth_renderbuffer, so transparent frags
-// depth-test against opaque geometry (without writing depth). Same sample count as
-// the scene depth (engine->msaa_samples is the clamped effective value) or the FBO
-// would be incomplete. Recreated on a size change; torn down with the MSAA
-// attachments (they share the depth renderbuffer).
-static bool _ensure_oit_targets(Engine* engine, int rw, int rh) {
-    if (engine->oit_fbo != 0 && engine->oit_w == rw && engine->oit_h == rh)
-        return true;
-    if (engine->oit_fbo) {
-        glDeleteTextures(1, &engine->oit_accum_multisample_texture);
-        glDeleteTextures(1, &engine->oit_revealage_multisample_texture);
-        glDeleteFramebuffers(1, &engine->oit_fbo);
-    }
-    glGenFramebuffers(1, &engine->oit_fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, engine->oit_fbo);
-    _add_scene_color_attachment(&engine->oit_accum_multisample_texture, GL_RGBA16F,
-                                GL_COLOR_ATTACHMENT5, rw, rh, engine->msaa_samples);
-    _add_scene_color_attachment(&engine->oit_revealage_multisample_texture, GL_R16F,
-                                GL_COLOR_ATTACHMENT6, rw, rh, engine->msaa_samples);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
-                              engine->depth_renderbuffer);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        log_error("OIT framebuffer incomplete");
-        gl_delete_texture(&engine->oit_accum_multisample_texture);
-        gl_delete_texture(&engine->oit_revealage_multisample_texture);
-        gl_delete_fbo(&engine->oit_fbo);
-        return false;
-    }
-    engine->oit_w = rw;
-    engine->oit_h = rh;
-    return true;
-}
-
-// Begin the weighted-blended OIT accumulate sub-pass: bind the OIT FBO (accum +
-// revealage sharing the scene depth), clear accum to 0 / revealage to 1, and set
-// the independent per-target blend (accum sums, revealage multiplies 1-alpha).
-// Returns false if the targets couldn't be allocated (caller falls back to the
-// classic unsorted late pass). Leaves depth-write to the caller (off).
-bool engine_begin_oit_pass(Engine* engine) {
-    int rw, rh;
-    engine_render_size(engine, &rw, &rh);
-    if (!_ensure_oit_targets(engine, rw, rh))
-        return false;
-    glBindFramebuffer(GL_FRAMEBUFFER, engine->oit_fbo);
-    glViewport(0, 0, rw, rh);
-    // Only slots 5 (accum) and 6 (revealage) active; the shader's AccumOut /
-    // RevealageOut (locations 5/6) land there, FragColor + G-buffer are discarded.
-    GLenum bufs[7] = {
-        GL_NONE, GL_NONE, GL_NONE, GL_NONE, GL_NONE, GL_COLOR_ATTACHMENT5, GL_COLOR_ATTACHMENT6};
-    glDrawBuffers(7, bufs);
-    const GLfloat zero[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    const GLfloat one[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    glClearBufferfv(GL_COLOR, 5, zero); // accum: additive identity
-    glClearBufferfv(GL_COLOR, 6, one);  // revealage: full reveal before the product
-    glEnablei(GL_BLEND, 5);
-    glEnablei(GL_BLEND, 6);
-    glBlendFunci(5, GL_ONE, GL_ONE);                  // accum += premultiplied * weight
-    glBlendFunci(6, GL_ZERO, GL_ONE_MINUS_SRC_COLOR); // revealage *= (1 - alpha)
-    return true;
-}
-
-// End the OIT accumulate sub-pass: back to the scene FBO, color-only draw buffer,
-// and the standard alpha blend for the refraction sub-pass and later draws.
-void engine_end_oit_pass(Engine* engine) {
-    int rw, rh;
-    engine_render_size(engine, &rw, &rh);
-    glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
-    glViewport(0, 0, rw, rh);
-    engine_set_scene_draw_buffers(engine, false);
-    // Undo the indexed blend we set on draw buffers 5/6. The scene MRT now
-    // spans slot 7, but 5/6 stay structurally reserved for these OIT targets
-    // (the attachment table skips them), so the disables cannot collide.
-    glDisablei(GL_BLEND, 5);
-    glDisablei(GL_BLEND, 6);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-}
-
-// Lazy allocation for the moment-based OIT generation targets (spec 11.17):
-// b1..b4 (attachment 5) and b0 (attachment 6) as multisample color textures on a
-// dedicated FBO sharing engine->depth_renderbuffer, plus the single-sample atlas
-// the two resolve into. Same lifetime and teardown as the OIT targets beside
-// them.
-//
-// Both generation targets are RGBA32F, including the one that carries a single
-// scalar: a multisample resolve blit demands identical formats, and both halves
-// blit into the one atlas texture the accumulate pass can afford to sample (see
-// the atlas note in engine.h). The atlas is twice as tall for the same reason.
-static bool _ensure_moment_targets(Engine* engine, int rw, int rh) {
-    if (engine->moment_fbo != 0 && engine->moment_w == rw && engine->moment_h == rh)
-        return true;
-    gl_delete_fbo(&engine->moment_fbo);
-    gl_delete_texture(&engine->moment_multisample_texture);
-    gl_delete_texture(&engine->moment_b0_multisample_texture);
-    gl_delete_fbo(&engine->moment_atlas_fbo);
-    gl_delete_texture(&engine->moment_atlas_texture);
-
-    glGenFramebuffers(1, &engine->moment_fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, engine->moment_fbo);
-    _add_scene_color_attachment(&engine->moment_multisample_texture, GL_RGBA32F,
-                                GL_COLOR_ATTACHMENT5, rw, rh, engine->msaa_samples);
-    // b0 carries one scalar, and above one sample it is padded to RGBA32F
-    // anyway: a MULTISAMPLE resolve blit demands identical formats on both
-    // sides, and it shares the atlas with the four-channel b1..b4. A
-    // single-sample blit only needs compatibility, so at one sample the padding
-    // goes -- a quarter of the b0 target, on the path that ships.
-    _add_scene_color_attachment(&engine->moment_b0_multisample_texture,
-                                engine->msaa_samples > 1 ? GL_RGBA32F : GL_R32F,
-                                GL_COLOR_ATTACHMENT6, rw, rh, engine->msaa_samples);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
-                              engine->depth_renderbuffer);
-    bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
-
-    if (ok) {
-        glGenTextures(1, &engine->moment_atlas_texture);
-        glBindTexture(GL_TEXTURE_2D, engine->moment_atlas_texture);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, rw, rh * 2, 0, GL_RGBA, GL_FLOAT, NULL);
-        // Point sampling only: the accumulate pass reads its own pixel, and a
-        // filtered tap would mix moments across a silhouette.
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glGenFramebuffers(1, &engine->moment_atlas_fbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, engine->moment_atlas_fbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                               engine->moment_atlas_texture, 0);
-        ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
-    }
-
-    if (!ok) {
-        log_error("OIT moment framebuffer incomplete");
-        gl_delete_texture(&engine->moment_multisample_texture);
-        gl_delete_texture(&engine->moment_b0_multisample_texture);
-        gl_delete_fbo(&engine->moment_fbo);
-        gl_delete_texture(&engine->moment_atlas_texture);
-        gl_delete_fbo(&engine->moment_atlas_fbo);
-        return false;
-    }
-    engine->moment_w = rw;
-    engine->moment_h = rh;
-    // Worth a line, because it is the largest single allocation the renderer
-    // makes and it buys accuracy rather than resolution: two fp32 targets at the
-    // scene's sample count, plus the resolved atlas. fp16 would halve it and
-    // costs a third of the accuracy (spec 11.17).
-    // The count the targets were actually built at, not the one requested.
-    // Above one sample the driver may adjust the count; and back when 1-sample
-    // requests were still allocated multisample (pre-11.34), a VRAM figure that
-    // believed the request understated the renderer's largest allocation on the
-    // shipping path.
-    int samples = engine->msaa_samples_actual;
-    // Per scene pixel: b1..b4 at 16 bytes a sample, b0 at 16 above one sample
-    // and 4 at one (R32F -- see the allocation), and the two-high RGBA32F atlas.
-    double b0_bytes = samples > 1 ? 16.0 * samples : 4.0;
-    double mb = ((double)rw * rh * (16.0 * samples + b0_bytes + 32.0)) / (1024.0 * 1024.0);
-    log_info("OIT moments: %dx%d x%d fp32 + %dx%d atlas (%.0f MB)", rw, rh, samples, rw, rh * 2,
-             mb);
-    return true;
-}
-
-// Begin the moment generation sub-pass: bind the moment FBO, clear both targets
-// to zero, and make both additive. Absorbance adds where transmittance
-// multiplies, which is the whole reason the summary can be built in one unsorted
-// pass -- so unlike the OIT accumulate beside it, BOTH slots sum here.
-bool engine_begin_moment_pass(Engine* engine) {
-    int rw, rh;
-    engine_render_size(engine, &rw, &rh);
-    if (!_ensure_moment_targets(engine, rw, rh))
-        return false;
-    glBindFramebuffer(GL_FRAMEBUFFER, engine->moment_fbo);
-    glViewport(0, 0, rw, rh);
-    GLenum bufs[7] = {
-        GL_NONE, GL_NONE, GL_NONE, GL_NONE, GL_NONE, GL_COLOR_ATTACHMENT5, GL_COLOR_ATTACHMENT6};
-    glDrawBuffers(7, bufs);
-    const GLfloat zero[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    glClearBufferfv(GL_COLOR, 5, zero);
-    glClearBufferfv(GL_COLOR, 6, zero);
-    glEnablei(GL_BLEND, 5);
-    glEnablei(GL_BLEND, 6);
-    glBlendFunci(5, GL_ONE, GL_ONE);
-    glBlendFunci(6, GL_ONE, GL_ONE);
-    return true;
-}
-
-// End the moment generation sub-pass, resolving each multisample target into its
-// own half of the atlas the accumulate reads: same size, different destination
-// origin, which a multisample blit allows (it forbids scaling, not offsets).
-// b1..b4 land in the lower half, b0 in the upper -- MBOIT_ATLAS_B0_TAP is the
-// other end of that agreement.
-void engine_end_moment_pass(Engine* engine) {
-    int rw, rh;
-    engine_render_size(engine, &rw, &rh);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, engine->moment_fbo);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, engine->moment_atlas_fbo);
-    glReadBuffer(GL_COLOR_ATTACHMENT5);
-    glBlitFramebuffer(0, 0, rw, rh, 0, 0, rw, rh, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    glReadBuffer(GL_COLOR_ATTACHMENT6);
-    glBlitFramebuffer(0, 0, rw, rh, 0, rh, rw, rh * 2, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
-    glViewport(0, 0, rw, rh);
-    engine_set_scene_draw_buffers(engine, false);
-    glDisablei(GL_BLEND, 5);
-    glDisablei(GL_BLEND, 6);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
 // POM (§4.11): resolve "<name>_height" sibling maps once the async texture
@@ -3700,7 +2822,7 @@ static float engine_origin_lattice(float threshold) {
 }
 
 void engine_upload_displacement_uniforms(const Engine* engine, const Scene* scene,
-                                         UniformManager* u) {
+                                         const SceneView* view, UniformManager* u) {
     // The CLOCK is a displacement input too, and it carries the same five-program
     // hazard the rest of this function exists for: a program that misses it
     // evaluates the wind at time 0 and puts its vertices somewhere else. It was
@@ -3723,15 +2845,16 @@ void engine_upload_displacement_uniforms(const Engine* engine, const Scene* scen
     wind_upload_to_program(scene ? scene->wind : NULL,
                            scene ? (const float*)scene->world_origin : NULL, u);
 
-    // The morph's two camera positions. With no camera they are both the origin,
-    // which is a legal answer rather than a fallback: every mesh that carries no
-    // morph attribute is an exact identity whatever these say, and one that does
-    // is not being drawn by anything without a camera.
-    const float* eye = engine && engine->camera ? engine->camera->position : GLM_VEC3_ZERO;
+    // The morph's two camera positions, the view's. With no view they are both the
+    // origin, which is a legal answer rather than a fallback: every mesh that
+    // carries no morph attribute is an exact identity whatever these say, and one
+    // that does is not being drawn by anything without a camera.
+    const float* eye = view ? view->camera.position : GLM_VEC3_ZERO;
     // Falls back to THIS frame's eye rather than to the origin, which is what
     // "no previous frame" actually means: a camera that has not moved yet.
-    const float* prev =
-        engine && engine->prev_camera_valid ? (const float*)engine->prev_camera_position : eye;
+    const float* prev = view && view->state->prev_camera_valid
+                            ? (const float*)view->state->prev_camera_position
+                            : eye;
     uniform_set_vec3(u, "uMorphEye", eye);
     uniform_set_vec3(u, "uMorphEyePrev", prev);
     // The diagnostic off switch, and it rides this call rather than the quadtree
@@ -3742,11 +2865,12 @@ void engine_upload_displacement_uniforms(const Engine* engine, const Scene* scen
 }
 
 void engine_recentre_on_camera(const Engine* engine, float lattice) {
-    if (!engine || !engine->camera)
+    if (!engine || !engine->focus_view)
         return;
     Scene* scene = engine_get_scene(engine);
     if (!scene || !(lattice > 0.0f))
         return;
+    const Camera* camera = &engine->focus_view->camera;
     // The camera is in STORAGE space and the origin is authored, so the current
     // origin has to be added back -- without it a second shift moves the world by
     // snap(camera) - world_origin and drags it toward where it started.
@@ -3757,17 +2881,18 @@ void engine_recentre_on_camera(const Engine* engine, float lattice) {
     // ground projection, and any terrain whose centre is an XZ pair.
     vec3 target;
     glm_vec3_copy(scene->world_origin, target);
-    target[0] += floorf(engine->camera->position[0] / lattice + 0.5f) * lattice;
-    target[2] += floorf(engine->camera->position[2] / lattice + 0.5f) * lattice;
+    target[0] += floorf(camera->position[0] / lattice + 0.5f) * lattice;
+    target[2] += floorf(camera->position[2] / lattice + 0.5f) * lattice;
     scene_set_world_origin(scene, target);
 }
 
-// Automatic re-centring (spec 11.62 phase 5): once the camera has drifted further
+// Automatic re-centring (spec 11.62 phase 5): once the focus view's camera has drifted further
 // than the scene tolerates, re-centre on it.
 static void engine_schedule_origin_shift(const Engine* engine, const Scene* scene) {
-    if (!scene || scene->origin_shift_distance <= 0.0f || !engine->camera)
+    if (!scene || scene->origin_shift_distance <= 0.0f || !engine->focus_view)
         return;
-    if (glm_vec3_distance(engine->camera->position, GLM_VEC3_ZERO) <= scene->origin_shift_distance)
+    if (glm_vec3_distance((float*)engine->focus_view->camera.position, GLM_VEC3_ZERO) <=
+        scene->origin_shift_distance)
         return;
     engine_recentre_on_camera(engine, engine_origin_lattice(scene->origin_shift_distance));
 }
@@ -3775,8 +2900,8 @@ static void engine_schedule_origin_shift(const Engine* engine, const Scene* scen
 /*
  * Apply a scheduled origin shift, the scene's half and the engine's together.
  *
- * The engine half is only what no owner republishes: the live camera, the
- * previous view-projection, and the froxel volume's stored camera. Anything that
+ * The engine half is only what no owner republishes: each view's live camera, its
+ * previous view-projection, and its froxel volume's stored camera. Anything that
  * IS republished every frame -- the fog volumes, the water plane, the reflection
  * probe's parallax proxy -- must be shifted at its owner instead, because a
  * correction applied to PostFX's mirror is overwritten before it is read.
@@ -3801,20 +2926,22 @@ static void engine_apply_origin_shift(Engine* engine, Scene* scene) {
 
     scene_apply_origin_delta(scene, delta);
 
-    if (engine->camera) {
-        glm_vec3_sub(engine->camera->position, delta, engine->camera->position);
-        glm_vec3_sub(engine->camera->look_at, delta, engine->camera->look_at);
+    for (size_t i = 0; i < engine->view_count; i++) {
+        SceneView* view = engine->views[i];
+        SceneViewState* vs = view->state;
+        glm_vec3_sub(view->camera.position, delta, view->camera.position);
+        glm_vec3_sub(view->camera.look_at, delta, view->camera.look_at);
+
+        // Rule 1 applies to the camera's own past as much as to the world's: the
+        // morph reads the difference between this eye and the previous one, so
+        // shifting one and not the other reports the whole shift as a camera move
+        // and re-morphs the terrain in a single frame.
+        glm_vec3_sub(vs->prev_camera_position, delta, vs->prev_camera_position);
+
+        glm_translate(vs->prev_view_proj, delta);
+        if (vs->postfx)
+            glm_translate(vs->postfx->froxel_prev_view, delta);
     }
-
-    // Rule 1 applies to the camera's own past as much as to the world's: the
-    // morph reads the difference between this eye and the previous one, so
-    // shifting one and not the other reports the whole shift as a camera move
-    // and re-morphs the terrain in a single frame.
-    glm_vec3_sub(engine->prev_camera_position, delta, engine->prev_camera_position);
-
-    glm_translate(engine->prev_view_proj, delta);
-    if (engine->postfx)
-        glm_translate(engine->postfx->froxel_prev_view, delta);
 
     // The captures are NOT re-armed. A rigid translation moves every probe by the
     // same delta as everything it sees, so the irradiance and radiance they hold
@@ -3833,6 +2960,135 @@ static void engine_apply_origin_shift(Engine* engine, Scene* scene) {
     log_info("origin shift: delta (%.1f, %.1f, %.1f), world origin now (%.1f, %.1f, %.1f)",
              (double)delta[0], (double)delta[1], (double)delta[2], (double)scene->world_origin[0],
              (double)scene->world_origin[1], (double)scene->world_origin[2]);
+}
+
+// What the scene passes read and the world gets once a frame: the texture uploads, the material
+// array, roads, the composite cache and the POM heights. Run before the frame's first scene pass,
+// after that view's shadows, or at the frame's end when no view draws.
+static void _engine_settle_world(Engine* engine, Scene* scene) {
+    // Process pending async texture uploads (max 5 per frame to avoid stutter), each into
+    // the pool it was asked for. Five delivered may leave more waiting, which the next frame
+    // takes.
+    if (async_loader_process_pending(engine->async_loader, 5) == 5)
+        engine_request_frame(engine);
+
+    // (Re)build the material texture array once its sources have loaded
+    // (a no-op until then; masks fall back to their scalar factors).
+    material_texture_array_ensure_built(scene, engine);
+
+    // Roads BEFORE the composite cache, and the order is load-bearing: the
+    // bake samples the road block, so an edited road must reach the GPU
+    // before the key change it causes triggers the re-bake that reads it.
+    material_roads_ensure(scene, engine);
+
+    // The composite cache samples the array, so it is strictly after: a
+    // no-op while the array is dirty, and one frame behind it at worst.
+    material_layers_vt_ensure(scene, engine);
+
+    // POM (§4.11): resolve height maps once the async texture loader drains.
+    heights_ensure_resolved(scene, engine);
+}
+
+// One view's part of the frame, from its shadows to its post chain. `*settled` says whether the
+// world has settled this frame; the first view to reach its scene pass settles it.
+static void _engine_draw_view(Engine* engine, Scene* scene, SceneView* view, EngineRenderFunc draw,
+                              bool* settled) {
+    SceneViewState* vs = view->state;
+    const RenderMode frame_mode = vs->render_mode;
+
+    // Wireframe mode: albedo-only for speed, and every edge of every face,
+    // so culling goes off with it. Both GL states are applied from the view's
+    // setting here, once a frame, which is what lets show_wireframe be a plain
+    // write: nothing has to run at the moment it changes.
+    if (view->settings.show_wireframe) {
+        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+        glDisable(GL_CULL_FACE);
+    }
+
+    // Shadow depth pass, fitted to this view's camera.
+    if (scene && scene->shadow_system && scene->shadow_system->enabled) {
+        // Unscoped here on purpose: render_shadow_depth_pass opens its own
+        // cascade/punctual/msm/tsm scopes, and an outer one would swallow
+        // all four -- flat scopes mean the coarser wrapper simply wins.
+        render_shadow_depth_pass(engine, scene, view);
+    }
+    // The rain's cover, into the punctual array after the lights' layers. Outside the
+    // `enabled` gate on purpose: that switches shadows off, not roofs.
+    if (scene)
+        shadow_render_rain_layer(engine, scene);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, vs->framebuffer);
+    // The scene target is supersampled; the present pass left the viewport
+    // at display size, so set it to the full render size here.
+    int rw, rh;
+    scene_view_render_size(view, &rw, &rh);
+    glViewport(0, 0, rw, rh);
+    // Published from here rather than computed inside the profiler, because
+    // this is where the render size and the sample count are both settled --
+    // supersample, render scale and any mid-run resolution change have all
+    // been applied by now.
+    //
+    // msaa_samples_actual, never the request: above one sample the driver
+    // may adjust the count, and GL_SAMPLES_PASSED counts what the target
+    // HAS. The rule was written in scar tissue -- back when a 1-sample
+    // request was allocated multisample, this driver returned 2 and every
+    // depth-complexity reading on the TAA path came out at exactly twice
+    // the truth until this read the count back (spec 11.31; the request is
+    // honoured at 1 since 11.34).
+    profiler_set_sample_budget(engine->profiler,
+                               (size_t)rw * (size_t)rh * (size_t)vs->msaa_samples_actual);
+    vs->normals_this_frame = frame_mode == RENDER_MODE_PBR && postfx_wants_normals(vs->postfx);
+    // The frame's draw list, built here so the material registry describes
+    // what the graph draws before anything reads it: the build registers
+    // every material it walks past, and the subsurface gate below and the
+    // mask-array build read the registry. A stamp compare when the shadow
+    // pass or a capture already built it this frame, and the frame's one
+    // build otherwise. An app that builds materials in code never called
+    // scene_add_material, so its registry was empty and every consumer
+    // silently saw a scene with no materials at all.
+    engine_build_draw_list(engine, scene, view);
+    if (_engine_scene_draws(scene))
+        engine_request_frame(engine);
+    // SSS writes attachment 4 (skin diffuse) only when it has real work: the
+    // feature is on AND the scene carries a subsurface material. This keeps a
+    // non-skin scene byte-identical to master (the blur/composite would add 0)
+    // AND free of the pass's per-frame cost. Mirrors the albedo-on-SSGI gate.
+    vs->sss_this_frame =
+        frame_mode == RENDER_MODE_PBR && engine->sss_enabled && scene_has_subsurface(scene);
+    // SSS reads aux .z for the depth-aware profile, so it must force the aux
+    // G-buffer (like motion blur), else --no-ssao + SSS reads stale/undefined Z.
+    vs->aux_this_frame = frame_mode == RENDER_MODE_PBR &&
+                         (postfx_wants_aux_gbuffer(vs->postfx) || vs->sss_this_frame);
+    vs->albedo_this_frame = frame_mode == RENDER_MODE_PBR && postfx_wants_albedo(vs->postfx);
+    // Split spec-occ: ambient specular routes to attachment 7 so the post
+    // chain can occlude exactly that share and fold it back. Not gated on
+    // AO -- with AO off the composite still owes the scene its specular.
+    vs->spec_this_frame = frame_mode == RENDER_MODE_PBR && postfx_wants_spec_split(vs->postfx);
+    profiler_scope_begin(engine->profiler, "scene clear");
+    scene_view_clear(view);
+    profiler_scope_end(engine->profiler);
+
+    // After the first view's shadows, as the frame has always run it, and before any scene pass.
+    if (!*settled) {
+        _engine_settle_world(engine, scene);
+        *settled = true;
+    }
+
+    if (scene)
+        draw(engine, scene, view);
+
+    // The feedback vote pass (spec 11.67), after the scene so the draw
+    // list is this frame's; its readback retires at fixed latency into the
+    // NEXT frames' residency, which is what keeps the loop deterministic.
+    // The focus view's alone: the pages are the world's, ranked from its eye.
+    if (scene && view == engine->focus_view)
+        layers_vt_feedback_pass(engine, scene, view);
+
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    if (!loading_screen_covers(engine))
+        _engine_run_view_chain(engine, view);
+    if (view->settings.show_wireframe)
+        glEnable(GL_CULL_FACE);
 }
 
 void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre_render,
@@ -3883,10 +3139,11 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             engine->fps_update_timer = 0.0f;
         }
 
-        // Adopt any pending resolution change (render scale, window size)
-        // before this frame touches GL. Everything below assumes the scene
-        // target and the post chain agree on a size.
-        _engine_sync_render_targets(engine);
+        // Adopt any pending resolution change (a view's samples or scales, the window's size)
+        // before this frame touches GL. Everything below assumes each view's scene target and
+        // post chain agree on a size.
+        for (size_t i = 0; i < engine->view_count; i++)
+            scene_view_ensure_targets(engine->views[i]);
         if (!_engine_frame_renderable(engine)) {
             // Nothing to draw. There is no swap on this path, so nothing
             // throttles it either -- block on events rather than spinning a
@@ -3992,22 +3249,15 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // probes around an origin the rest of the frame no longer uses.
         engine_apply_origin_shift(engine, engine_get_scene(engine));
 
-        // Wireframe mode: albedo-only for speed, and every edge of every face,
-        // so culling goes off with it. Both GL states are re-applied from the
-        // field here, once a frame, which is what lets show_wireframe be a plain
-        // write: nothing has to run at the moment it changes.
-        RenderMode saved_render_mode = engine->current_render_mode;
-        if (engine->show_wireframe) {
-            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-            glDisable(GL_CULL_FACE);
-            engine->current_render_mode = RENDER_MODE_ALBEDO;
-        } else {
-            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-            glEnable(GL_CULL_FACE);
-        }
-        // The mode this frame actually renders with (wireframe substitutes
-        // ALBEDO), used by the present pass after the mode is restored
-        RenderMode frame_mode = engine->current_render_mode;
+        // The frame's GL baseline, every polygon filled and back faces culled; a view under the
+        // wireframe overlay leaves it for its own passes. Re-applied here, once a frame, so no
+        // overlay has to put it back at the moment it changes.
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        glEnable(GL_CULL_FACE);
+        // The mode each view renders with this frame, read by everything below that asks whether
+        // a view's frame is PBR -- the camera fit among them.
+        for (size_t i = 0; i < engine->view_count; i++)
+            engine->views[i]->state->render_mode = _view_frame_mode(engine->views[i]);
 
         Scene* shadow_scene = engine_get_scene(engine);
 
@@ -4029,7 +3279,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
                 gi_world_mark_dirty(shadow_scene->gi);
         }
 
-        // The app settles its camera and its graph, then the engine propagates
+        // The app settles its cameras and its graph, then the engine propagates
         // that graph -- once, here, for everything downstream (spec 11.96).
         //
         // THE WINDOW IS ONE STATEMENT WIDE and all three edges are load-bearing.
@@ -4060,7 +3310,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             profiler_cpu_scope_end(engine->profiler);
         }
 
-        // The rig, then the camera as the hook left it, before the shadow pass
+        // Each view's rig, then its camera as the hook left it, before the shadow pass
         // reads it. Every app used to rebuild both matrices at the end of its
         // own hook, and the three that did so only through the drag controller
         // skipped it whenever the GUI held the pointer.
@@ -4070,12 +3320,13 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // app's: the hook turns input into a rig pose, this writes it to the
         // camera, and the derive turns that into matrices. The update itself
         // stays with the app, which is where the input is -- an action table, a
-        // mouse or a script, and the rig is not allowed to know which. An app
-        // with no rig is untouched, which is what let this arrive before any app
-        // converted.
-        if (engine->camera)
-            camera_rig_apply(engine->camera_rig, engine->camera);
-        _engine_derive_camera(engine);
+        // mouse or a script, and the rig is not allowed to know which. A view
+        // with no rig is untouched.
+        for (size_t i = 0; i < engine->view_count; i++) {
+            SceneView* view = engine->views[i];
+            camera_rig_apply(view->rig, &view->camera);
+            _engine_derive_view(engine, view);
+        }
 
         // The fires: their steps, on the GPU, and what they cast handed to the lights and
         // embers they drive. After the walk, because a fire burns where its node is this frame
@@ -4090,92 +3341,12 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
                               (float)engine->render_delta);
         }
 
-        // The streamed lighting: shadow tiles, GI volumes, reflection probes. Deliberately
-        // BEFORE the shadow pass: a capture needs the camera-independent single-cascade map
-        // and bakes its own, and the pass below then restores the camera-fit cascades by
-        // simply overwriting them. A converged world costs a ranking.
+        // The streamed lighting: shadow tiles, GI volumes, reflection probes, ranked from the
+        // focus view's eye. Deliberately BEFORE the shadow passes: a capture needs the
+        // camera-independent single-cascade map and bakes its own, and each view's pass below
+        // then restores its camera-fit cascades by simply overwriting them. A converged world
+        // costs a ranking.
         scene_update_lighting(shadow_scene, engine);
-
-        // Shadow depth pass (before main render)
-        if (shadow_scene && shadow_scene->shadow_system && shadow_scene->shadow_system->enabled) {
-            // Unscoped here on purpose: render_shadow_depth_pass opens its own
-            // cascade/punctual/msm/tsm scopes, and an outer one would swallow
-            // all four -- flat scopes mean the coarser wrapper simply wins.
-            render_shadow_depth_pass(engine, shadow_scene);
-        }
-        // The rain's cover, into the punctual array after the lights' layers. Outside the
-        // `enabled` gate on purpose: that switches shadows off, not roofs.
-        if (shadow_scene)
-            shadow_render_rain_layer(engine, shadow_scene);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
-        // The scene target is supersampled; the present pass left the viewport
-        // at display size, so set it to the full render size here.
-        int rw, rh;
-        engine_render_size(engine, &rw, &rh);
-        glViewport(0, 0, rw, rh);
-        // Published from here rather than computed inside the profiler, because
-        // this is where the render size and the sample count are both settled --
-        // supersample, render scale and any mid-run resolution change have all
-        // been applied by now.
-        //
-        // msaa_samples_actual, never msaa_samples: above one sample the driver
-        // may adjust the count, and GL_SAMPLES_PASSED counts what the target
-        // HAS. The rule was written in scar tissue -- back when a 1-sample
-        // request was allocated multisample, this driver returned 2 and every
-        // depth-complexity reading on the TAA path came out at exactly twice
-        // the truth until this read the count back (spec 11.31; the request is
-        // honoured at 1 since 11.34).
-        profiler_set_sample_budget(engine->profiler,
-                                   (size_t)rw * (size_t)rh * (size_t)engine->msaa_samples_actual);
-        engine->normals_this_frame =
-            frame_mode == RENDER_MODE_PBR && postfx_wants_normals(engine->postfx);
-        // The frame's draw list, built here so the material registry describes
-        // what the graph draws before anything reads it: the build registers
-        // every material it walks past, and the subsurface gate below and the
-        // mask-array build read the registry. A stamp compare when the shadow
-        // pass or a capture already built it this frame, and the frame's one
-        // build otherwise. An app that builds materials in code never called
-        // scene_add_material, so its registry was empty and every consumer
-        // silently saw a scene with no materials at all.
-        engine_build_draw_list(engine, shadow_scene);
-        if (_engine_scene_draws(shadow_scene))
-            engine_request_frame(engine);
-        // SSS writes attachment 4 (skin diffuse) only when it has real work: the
-        // feature is on AND the scene carries a subsurface material. This keeps a
-        // non-skin scene byte-identical to master (the blur/composite would add 0)
-        // AND free of the pass's per-frame cost. Mirrors the albedo-on-SSGI gate.
-        engine->sss_this_frame = frame_mode == RENDER_MODE_PBR && engine->sss_enabled &&
-                                 scene_has_subsurface(shadow_scene);
-        // SSS reads aux .z for the depth-aware profile, so it must force the aux
-        // G-buffer (like motion blur), else --no-ssao + SSS reads stale/undefined Z.
-        engine->aux_this_frame =
-            frame_mode == RENDER_MODE_PBR &&
-            (postfx_wants_aux_gbuffer(engine->postfx) || engine->sss_this_frame);
-        engine->albedo_this_frame =
-            frame_mode == RENDER_MODE_PBR && postfx_wants_albedo(engine->postfx);
-        // Split spec-occ: ambient specular routes to attachment 7 so the post
-        // chain can occlude exactly that share and fold it back. Not gated on
-        // AO -- with AO off the composite still owes the scene its specular.
-        engine->spec_this_frame =
-            frame_mode == RENDER_MODE_PBR && postfx_wants_spec_split(engine->postfx);
-        profiler_scope_begin(engine->profiler, "scene clear");
-        engine_set_scene_draw_buffers(engine, true);
-        GBufferAttachment gb[GBUFFER_ATTACHMENT_COUNT];
-        _gbuffer_attachments(engine, gb);
-        glClearColor(gb[0].clear[0], gb[0].clear[1], gb[0].clear[2], gb[0].clear[3]);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-        // Each written G-buffer target carries 0 on uncovered/sky/no-signal
-        // texels so its consumer early-outs there (GTAO on linear-Z, SSGI on
-        // albedo, SSS on skin diffuse). glClear painted them the scene
-        // background above, so re-clear the written ones to 0; the skybox and
-        // shadow catcher draw color-only and leave them cleared.
-        for (int i = 1; i < GBUFFER_ATTACHMENT_COUNT; i++) {
-            if (*gb[i].this_frame)
-                glClearBufferfv(GL_COLOR, (GLint)(gb[i].attachment - GL_COLOR_ATTACHMENT0),
-                                gb[i].clear);
-        }
-        profiler_scope_end(engine->profiler);
 
         // The SAME scene the walk above propagated, not a fresh lookup. The
         // pre-render hook can switch the active scene, and re-reading it here
@@ -4185,41 +3356,20 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // difference.
         Scene* current_scene = shadow_scene;
 
-        // Process pending async texture uploads (max 5 per frame to avoid stutter), each into
-        // the pool it was asked for. Five delivered may leave more waiting, which the next frame
-        // takes.
-        if (async_loader_process_pending(engine->async_loader, 5) == 5)
-            engine_request_frame(engine);
+        // Every shown view that can draw, in list order, each from its shadows to its chain.
+        bool settled = false;
+        SceneView* shown = NULL;
+        for (size_t i = 0; i < engine->view_count; i++) {
+            SceneView* view = engine->views[i];
+            if (!_view_drawable(view))
+                continue;
+            _engine_draw_view(engine, current_scene, view, draw, &settled);
+            shown = view;
+        }
+        if (!settled)
+            _engine_settle_world(engine, current_scene);
 
-        // (Re)build the material texture array once its sources have loaded
-        // (a no-op until then; masks fall back to their scalar factors).
-        material_texture_array_ensure_built(current_scene, engine);
-
-        // Roads BEFORE the composite cache, and the order is load-bearing: the
-        // bake samples the road block, so an edited road must reach the GPU
-        // before the key change it causes triggers the re-bake that reads it.
-        material_roads_ensure(current_scene, engine);
-
-        // The composite cache samples the array, so it is strictly after: a
-        // no-op while the array is dirty, and one frame behind it at worst.
-        material_layers_vt_ensure(current_scene, engine);
-
-        // POM (§4.11): resolve height maps once the async texture loader drains.
-        heights_ensure_resolved(current_scene, engine);
-
-        if (current_scene != NULL)
-            draw(engine, current_scene);
-
-        // The feedback vote pass (spec 11.67), after the scene so the draw
-        // list is this frame's; its readback retires at fixed latency into the
-        // NEXT frames' residency, which is what keeps the loop deterministic.
-        if (current_scene)
-            layers_vt_feedback_pass(engine, current_scene);
-
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-        engine->current_render_mode = saved_render_mode;
-
-        engine_present_frame(engine, frame_mode);
+        _engine_present_frame(engine, shown);
         _engine_frame_end_requests(engine);
         profiler_end_frame(engine->profiler);
 
@@ -4260,58 +3410,17 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
     }
 }
 
-void engine_mouse_to_drag_plane(Engine* engine, double mouse_fb_x, double mouse_fb_y,
-                                vec3 out_world_pos) {
-    if (!engine || !engine->camera)
-        return;
-
-    // Build projection and view matrices
-    mat4 projection = {0}, view;
-    camera_projection_matrix(engine->camera, projection);
-    glm_lookat(engine->camera->position, engine->camera->look_at, engine->camera->up_vector, view);
-
-    // Compute ray from screen coordinates. Under ortho the ray starts at the pixel rather
-    // than at the camera, so the origin has to travel with the direction.
-    vec3 ray_origin = {0}, ray_dir = {0};
-    if (engine->camera->is_orthographic) {
-        compute_ortho_ray_from_screen((float)mouse_fb_x, (float)mouse_fb_y, engine->fb_width,
-                                      engine->fb_height, projection, view, ray_origin, ray_dir);
-    } else {
-        glm_vec3_copy(engine->camera->position, ray_origin);
-        compute_ray_from_screen((float)mouse_fb_x, (float)mouse_fb_y, engine->fb_width,
-                                engine->fb_height, projection, view, ray_origin, ray_dir);
-    }
-
-    // Project ray to the stored drag plane distance
-    ray_point_at_distance(ray_origin, ray_dir, engine->input.drag_plane_distance, out_world_pos);
-}
-
-static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x,
-                                              double mouse_fb_y) {
-    // Need camera for ray picking
-    if (!engine->camera)
-        return NULL;
-
-    // Build projection and view matrices
-    mat4 projection = {0}, view;
-    camera_projection_matrix(engine->camera, projection);
-    glm_lookat(engine->camera->position, engine->camera->look_at, engine->camera->up_vector, view);
-
-    // Compute ray from screen coordinates
-    vec3 ray_origin = {0}, ray_dir = {0};
-    if (engine->camera->is_orthographic) {
-        compute_ortho_ray_from_screen((float)mouse_fb_x, (float)mouse_fb_y, engine->fb_width,
-                                      engine->fb_height, projection, view, ray_origin, ray_dir);
-    } else {
-        glm_vec3_copy(engine->camera->position, ray_origin);
-        compute_ray_from_screen((float)mouse_fb_x, (float)mouse_fb_y, engine->fb_width,
-                                engine->fb_height, projection, view, ray_origin, ray_dir);
-    }
-
-    // Perform scene graph picking
+// The node under a press, through the view it lands in: the hit's point and distance and the
+// node's position are kept for the drag that may follow. NULL over no view or no node.
+static SceneNode* _engine_pick(Engine* engine, double mouse_fb_x, double mouse_fb_y) {
+    const SceneView* view = engine_view_at(engine, mouse_fb_x, mouse_fb_y);
     Scene* current_scene = engine_get_scene(engine);
-    if (!current_scene || !current_scene->root_node)
+    if (!view || !current_scene || !current_scene->root_node)
         return NULL;
+    float point[2];
+    scene_view_point_from_fb(view, mouse_fb_x, mouse_fb_y, point);
+    vec3 ray_origin = {0.0f, 0.0f, 0.0f}, ray_dir = {0.0f, 0.0f, 0.0f};
+    scene_view_ray(view, point, ray_origin, ray_dir);
 
     RayPickResult result = pick_scene_node(current_scene->root_node, ray_origin, ray_dir);
 

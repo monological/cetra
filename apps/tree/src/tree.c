@@ -260,6 +260,8 @@ static float sun_azimuth = 193.0f;
  */
 static CameraRig* view_rig = NULL;
 static CameraDrag* drag_controller = NULL;
+// The one view, filling the window.
+static SceneView* g_view = NULL;
 // Non-NULL only under --player; the orbit controller and the walker both own the camera, so
 // exactly one of them exists at a time.
 static Player* player = NULL;
@@ -674,11 +676,11 @@ static void render_tree_gui(const Engine* engine, Scene* scene) {
         }
 
         igSeparatorText("Atmosphere");
-        if (engine->postfx) {
-            igCheckbox("Fog", &engine->postfx->settings->fog_enabled);
-            igSliderFloat("Fog Density", &engine->postfx->settings->fog_density, 0.0f, 0.0015f,
-                          "%.5f", 0);
-            igSliderFloat("Fog Height", &engine->postfx->settings->fog_height_falloff, 5.0f, 200.0f,
+        {
+            igCheckbox("Fog", &g_view->settings.post.fog_enabled);
+            igSliderFloat("Fog Density", &g_view->settings.post.fog_density, 0.0f, 0.0015f, "%.5f",
+                          0);
+            igSliderFloat("Fog Height", &g_view->settings.post.fog_height_falloff, 5.0f, 200.0f,
                           "%.0f", 0);
         }
 
@@ -762,9 +764,8 @@ static void render_tree_gui(const Engine* engine, Scene* scene) {
             igSliderFloat("Units per km", &sky->world_units_per_km, 1.0f, 100000.0f, "%.0f",
                           ImGuiSliderFlags_Logarithmic);
             igCheckbox("Aerial Perspective", &sky->aerial_enabled);
-            if (engine->postfx)
-                igCheckbox("Sky drives Fog Ambient",
-                           &engine->postfx->settings->fog_ambient_from_sky);
+            if (g_view)
+                igCheckbox("Sky drives Fog Ambient", &g_view->settings.post.fog_ambient_from_sky);
             igCheckbox("Debug: LUTs", &sky->debug_luts);
         }
         if (scene) {
@@ -811,10 +812,10 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
             engine->show_gui = !engine->show_gui;
             break;
         case GLFW_KEY_X:
-            engine->show_xyz = !engine->show_xyz;
+            g_view->settings.show_xyz = !g_view->settings.show_xyz;
             break;
         case GLFW_KEY_T:
-            engine->show_wireframe = !engine->show_wireframe;
+            g_view->settings.show_wireframe = !g_view->settings.show_wireframe;
             break;
         default:
             break;
@@ -1284,11 +1285,7 @@ int main(int argc, char** argv) {
     EngineConfig cfg = {.title = "Procedural Tree",
                         .width = args.width,
                         .height = args.height,
-                        .headless = args.headless != 0,
-                        .headless_jitter = args.headless_jitter != 0,
-                        .taa = true,
-                        .msaa_samples = args.msaa > 0 ? args.msaa : 1,
-                        .render_scale = 0.70f};
+                        .headless = args.headless != 0};
     Engine* engine = create_engine(&cfg);
     if (!engine) {
         fprintf(stderr, "Failed to initialize engine\n");
@@ -1297,10 +1294,42 @@ int main(int argc, char** argv) {
     engine_set_screenshot_path(engine, args.screenshot);
     engine->screenshot_every = args.screenshot_every;
     engine->exit_after_frames = args.frames;
+
+    // Camera: low and off-axis so the canopy tops the frame and the low sun
+    // rakes its shadows toward the viewer.
+    //
+    // Overridable, because a look bug in a scene this size is reported as a viewpoint and
+    // there was previously no way to hand one over -- the orbit controller's state is not
+    // expressible on a command line. Same flags render and forest already carry.
+    SceneViewDesc view_desc = {.camera = {.position = {140.0f, 95.0f, 600.0f},
+                                          .look_at = {0.0f, 145.0f, 0.0f},
+                                          .fov = args.fov > 0.0f ? args.fov : 0.55f,
+                                          .near = 2.0f,
+                                          .far = 3000.0f},
+                               .fills_window = true};
+    if (args.cam_eye_set)
+        glm_vec3_copy(args.cam_eye, view_desc.camera.position);
+    if (args.cam_target_set)
+        glm_vec3_copy(args.cam_target, view_desc.camera.look_at);
+    if (args.cam_up_set)
+        glm_vec3_copy(args.cam_up, view_desc.camera.up);
+    SceneViewSettings view_settings;
+    engine_init_view_settings(engine, &view_settings);
+    view_settings.post.taa_enabled = true;
+    view_settings.samples = args.msaa > 0 ? args.msaa : 1;
+    view_settings.render_scale = 0.70f;
+    view_settings.headless_jitter = args.headless_jitter != 0;
     // Off by default in the engine; this is the scene it is for -- the sun low over the sea,
     // its glints bright enough to star.
-    if (engine->postfx)
-        engine->postfx->settings->glare_enabled = !args.no_glare;
+    view_settings.post.glare_enabled = !args.no_glare;
+    view_desc.settings = &view_settings;
+    g_view = create_scene_view(engine, &view_desc);
+    if (!g_view || !engine_add_view(engine, g_view)) {
+        fprintf(stderr, "Failed to make the view\n");
+        free_scene_view(g_view);
+        free_engine(engine);
+        return -1;
+    }
 
     engine_set_mouse_button_callback(engine, mouse_button_callback);
     engine_set_key_callback(engine, key_callback);
@@ -1310,26 +1339,7 @@ int main(int argc, char** argv) {
         return -1;
     }
     ShaderProgram* xyz_program = engine_get_program(engine, CETRA_PROGRAM_XYZ);
-
-    // Camera: low and off-axis so the canopy tops the frame and the low sun
-    // rakes its shadows toward the viewer.
-    //
-    // Overridable, because a look bug in a scene this size is reported as a viewpoint and
-    // there was previously no way to hand one over -- the orbit controller's state is not
-    // expressible on a command line. Same flags render and forest already carry.
-    CameraDesc camera_desc = {.position = {140.0f, 95.0f, 600.0f},
-                              .look_at = {0.0f, 145.0f, 0.0f},
-                              .fov = args.fov > 0.0f ? args.fov : 0.55f,
-                              .near = 2.0f,
-                              .far = 3000.0f};
-    if (args.cam_eye_set)
-        glm_vec3_copy(args.cam_eye, camera_desc.position);
-    if (args.cam_target_set)
-        glm_vec3_copy(args.cam_target, camera_desc.look_at);
-    if (args.cam_up_set)
-        glm_vec3_copy(args.cam_up, camera_desc.up);
-    Camera* camera = create_camera(&camera_desc);
-    engine_set_camera(engine, camera);
+    const Camera* camera = &g_view->camera;
 
     if (args.player) {
         /*
@@ -1354,13 +1364,13 @@ int main(int argc, char** argv) {
         }
         static Player walker;
         view_rig = create_camera_rig();
-        camera_rig_set_pose(view_rig, engine->camera->position, engine->camera->look_at);
-        engine_set_camera_rig(engine, view_rig);
+        camera_rig_set_pose(view_rig, (float*)camera->position, (float*)camera->look_at);
+        scene_view_set_rig(g_view, view_rig);
         walker.rig = view_rig;
         player = &walker;
         // Yaw 0 looks down -Z, so facing the origin from `bearing` is that same angle: the
         // spawn point and the direction home are the same bearing, one negated in Z.
-        player_init(player, engine, spawn_x, spawn_z,
+        player_init(player, engine, g_view, spawn_x, spawn_z,
                     args.cam_eye_set ? atan2f(spawn_x, spawn_z) : bearing);
         if (args.walk_speed > 0.0f)
             player->walk_speed = args.walk_speed;
@@ -1370,9 +1380,9 @@ int main(int argc, char** argv) {
             player->invert_pitch = false;
     } else {
         view_rig = create_camera_rig();
-        camera_rig_set_pose(view_rig, engine->camera->position, engine->camera->look_at);
-        drag_controller = create_camera_drag(engine, view_rig);
-        engine_set_camera_rig(engine, view_rig);
+        camera_rig_set_pose(view_rig, (float*)camera->position, (float*)camera->look_at);
+        drag_controller = create_camera_drag(engine, g_view, view_rig);
+        scene_view_set_rig(g_view, view_rig);
     }
 
     Scene* scene = create_scene();
@@ -1709,7 +1719,7 @@ int main(int argc, char** argv) {
     // matches no branch, which shades nothing and reads as a black frame rather than as a bad
     // argument.
     if (args.render_mode > 0) {
-        engine->current_render_mode =
+        g_view->settings.render_mode =
             (RenderMode)(args.render_mode > RENDER_MODE_EXTRAPOLATION ? RENDER_MODE_EXTRAPOLATION
                                                                       : args.render_mode);
     }
@@ -1847,32 +1857,32 @@ int main(int argc, char** argv) {
      * Post-processing: a film look rather than the engine defaults, on PBR
      * Neutral so foliage colour stays faithful rather than being pushed.
      */
-    PostFX* fx = engine->postfx;
+    PostFXSettings* fx = &g_view->settings.post;
     if (fx) {
-        fx->settings->tonemap_mode = POSTFX_TONEMAP_NEUTRAL;
-        postfx_settings_apply_film_look(fx->settings);
-        fx->settings->grain_strength = 0.015f;
+        fx->tonemap_mode = POSTFX_TONEMAP_NEUTRAL;
+        postfx_settings_apply_film_look(fx);
+        fx->grain_strength = 0.015f;
 
         // Off unless asked for: the haze flattens this scene, and without it the
         // dusk sky reads as a gradient and the ground has depth. The parameters
         // below stay live either way -- the GUI's own Fog checkbox is what they
         // are tuned for, and --fog is the only way to reach that state headless.
-        fx->settings->fog_enabled = args.fog != 0;
-        fx->settings->fog_density = 0.0005f;
-        fx->settings->fog_height_falloff = 75.0f;
-        fx->settings->fog_floor_y = 0.0f;
-        fx->settings->fog_far = 800.0f;
+        fx->fog_enabled = args.fog != 0;
+        fx->fog_density = 0.0005f;
+        fx->fog_height_falloff = 75.0f;
+        fx->fog_floor_y = 0.0f;
+        fx->fog_far = 800.0f;
 
-        fx->settings->dof_enabled = false;
-        fx->settings->dof_autofocus = true;
-        fx->settings->dof_focus_distance = 620.0f;
-        fx->settings->dof_focus_range = 320.0f;
+        fx->dof_enabled = false;
+        fx->dof_autofocus = true;
+        fx->dof_focus_distance = 620.0f;
+        fx->dof_focus_range = 320.0f;
 
-        if (fx->settings->ssao_radius < 1.6f)
-            fx->settings->ssao_radius = 1.6f;
-        fx->settings->contact_shadows_enabled = true;
-        fx->settings->ssr_enabled = true;
-        fx->settings->ssgi_enabled = true;
+        if (fx->ssao_radius < 1.6f)
+            fx->ssao_radius = 1.6f;
+        fx->contact_shadows_enabled = true;
+        fx->ssr_enabled = true;
+        fx->ssgi_enabled = true;
     }
     engine->oit_enabled = true;
 
@@ -1933,7 +1943,7 @@ int main(int argc, char** argv) {
     engine_run(engine, NULL, pre_render_callback, NULL);
 
     printf("Cleaning up...\n");
-    engine_set_camera_rig(engine, NULL);
+    scene_view_set_rig(g_view, NULL);
     free_camera_drag(drag_controller);
     free_camera_rig(view_rig);
     // The scene owns the wind, sky, and IBL; free_engine takes them with it.

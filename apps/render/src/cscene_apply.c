@@ -1441,8 +1441,8 @@ void apply_cscene_material_overrides(Engine* engine, Scene* scene, const CetraSc
     }
 }
 
-void apply_cscene_post_passes(Engine* engine, const CetraSceneDesc* cscn) {
-    if (!engine || !cscn)
+void apply_cscene_post_passes(Engine* engine, SceneView* view, const CetraSceneDesc* cscn) {
+    if (!engine || !view || !cscn)
         return;
     for (int i = 0; i < cscn->post_pass_count; i++) {
         const CScenePostPass* p = &cscn->post_passes[i];
@@ -1457,7 +1457,7 @@ void apply_cscene_post_passes(Engine* engine, const CetraSceneDesc* cscn) {
             continue;
         }
         engine_add_program(engine, program);
-        PostFXPass* pass = postfx_add_pass(engine->postfx, (PostFXLocation)p->at, program);
+        PostFXPass* pass = scene_view_add_pass(view, (PostFXLocation)p->at, program);
         if (!pass)
             continue;
         pass->enabled = p->enabled;

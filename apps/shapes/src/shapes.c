@@ -34,14 +34,16 @@ const unsigned int WIDTH = 375;
 // because the engine applies the camera rig after that hook returns.
 static bool trace_camera = false;
 
-static void canvas_trace(Engine* engine, Scene* scene) {
-    engine_render_scene(engine, scene);
+static void canvas_trace(Engine* engine, Scene* scene, SceneView* view) {
+    engine_render_scene(engine, scene, view);
     if (trace_camera)
-        app_trace_camera(engine);
+        app_trace_camera(engine, view);
 }
 
 // A drag on a shape moves it, a drag on empty space pans, the wheel zooms.
 static PlaneDrag* drag = NULL;
+// The one view, filling the window.
+static SceneView* g_view = NULL;
 
 /*
  * Callbacks
@@ -78,10 +80,10 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
             engine->show_gui = !engine->show_gui;
             break;
         case GLFW_KEY_X:
-            engine->show_xyz = !engine->show_xyz;
+            g_view->settings.show_xyz = !g_view->settings.show_xyz;
             break;
         case GLFW_KEY_T:
-            engine->show_wireframe = !engine->show_wireframe;
+            g_view->settings.show_wireframe = !g_view->settings.show_wireframe;
             break;
         default:
             break;
@@ -115,13 +117,12 @@ int main(int argc, char** argv) {
             trace_camera = true;
     }
 
-    // NO AA POLICY HERE, DELIBERATELY: the config's msaa_samples and taa are
-    // left at their defaults. This app keeps the engine's 4x MSAA and no
-    // temporal filter where the 3D apps drop to one sample plus TAA (spec
-    // 11.103). Multisampling is what 2D line art wants, and nothing in this
-    // scene moves, so a temporal accumulator would have only its own jitter to
-    // integrate while switching on the aux G-buffer, the resolve, and the
-    // eight passes keyed off taa_resolving.
+    // NO AA POLICY HERE, DELIBERATELY: the view's samples and TAA are left at
+    // their defaults. This app keeps 4x MSAA and no temporal filter where the 3D
+    // apps drop to one sample plus TAA (spec 11.103). Multisampling is what 2D
+    // line art wants, and nothing in this scene moves, so a temporal accumulator
+    // would have only its own jitter to integrate while switching on the aux
+    // G-buffer, the resolve, and the eight passes keyed off taa_resolving.
     EngineConfig cfg = {
         .title = "Cetra Engine", .width = WIDTH, .height = HEIGHT, .headless = headless};
     Engine* engine = create_engine(&cfg);
@@ -135,7 +136,25 @@ int main(int argc, char** argv) {
     engine_set_cursor_position_callback(engine, cursor_position_callback);
     engine_set_scroll_callback(engine, scroll_callback);
     engine_set_key_callback(engine, key_callback);
-    drag = create_plane_drag(engine);
+
+    /*
+     * Set up the view. Its camera is square-on to the z=0 shape plane, so panning along world XY
+     * stays in that plane.
+     */
+    const SceneViewDesc view_desc = {.camera = {.position = {0.0f, 0.0f, 300.0f},
+                                                .ortho_height = ORTHO_HEIGHT,
+                                                .near = 7.0f,
+                                                .far = 10000.0f},
+                                     .fills_window = true};
+    g_view = create_scene_view(engine, &view_desc);
+    if (!g_view || !engine_add_view(engine, g_view)) {
+        free_scene_view(g_view);
+        free_engine(engine);
+        return -1;
+    }
+    // No light: under the 2D preset a material's albedo is the colour on screen.
+    scene_view_set_2d_preset(g_view);
+    drag = create_plane_drag(engine, g_view);
 
     /*
      * Set up shaders.
@@ -162,17 +181,6 @@ int main(int argc, char** argv) {
     pbr_material->albedo[2] = 0.0f; // Blue
 
     /*
-     * Set up camera.
-     */
-    // Square-on to the z=0 shape plane, so panning along world XY stays in that plane
-    CameraDesc camera_desc = {.position = {0.0f, 0.0f, 300.0f},
-                              .ortho_height = ORTHO_HEIGHT,
-                              .near = 7.0f,
-                              .far = 10000.0f};
-    Camera* camera = create_camera(&camera_desc);
-    engine_set_camera(engine, camera);
-
-    /*
      * Import fbx model.
      */
 
@@ -184,8 +192,7 @@ int main(int argc, char** argv) {
     engine_add_scene(engine, scene);
     SceneNode* root_node = scene->root_node;
 
-    // No light: under the 2D preset a material's albedo is the colour on screen.
-    engine_set_2d_preset(engine, scene);
+    scene_set_2d_preset(scene);
 
     scene_set_xyz_program(scene, xyz_shader_program);
 

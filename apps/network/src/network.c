@@ -147,17 +147,26 @@ int main(int argc, char** argv) {
     }
     engine_add_program(engine, network_program); // the engine owns it now
 
-    // The sketch's camera.
-    CameraDesc camera = {
-        .position = {0.0f, 3.0f, 2.0f}, .fov = glm_rad(45.0f), .near = 0.1f, .far = 100.0f};
-    engine_set_camera(engine, create_camera(&camera));
+    // The sketch's camera, in the one view filling the window.
+    const SceneViewDesc view_desc = {.camera = {.position = {0.0f, 3.0f, 2.0f},
+                                                .fov = glm_rad(45.0f),
+                                                .near = 0.1f,
+                                                .far = 100.0f},
+                                     .fills_window = true};
+    SceneView* view = create_scene_view(engine, &view_desc);
+    if (!view || !engine_add_view(engine, view)) {
+        free_scene_view(view);
+        free_engine(engine);
+        return 1;
+    }
 
     Scene* scene = create_scene();
     engine_add_scene(engine, scene);
     SceneNode* root = scene->root_node;
     // No post effects and a linear curve, so the sine colours land as computed;
     // negative values clamp to black, as they did in the sketch.
-    engine_set_2d_preset(engine, scene);
+    scene_view_set_2d_preset(view);
+    scene_set_2d_preset(scene);
     engine->show_fps = !headless;
 
     Material* material = create_material();

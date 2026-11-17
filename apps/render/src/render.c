@@ -20,6 +20,7 @@
 #include "cetra/util.h"
 #include "cetra/internal/async_loader.h"
 #include "cetra/internal/render.h"
+#include "cetra/internal/scene_view_state.h"
 #include "cetra/cook.h"
 #include "cetra/engine.h"
 #include "cetra/loading_screen.h"
@@ -2609,6 +2610,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
 // pointer into what the rig is told.
 static CameraRig* view_rig = NULL;
 static CameraDrag* view_drag = NULL;
+// The one view, filling the window: what every flag below that shapes the picture writes.
+static SceneView* g_view = NULL;
 // --loading-screen: the keys that change the screen's palette and play it again.
 static bool g_loading_preview = false;
 
@@ -2986,28 +2989,28 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
             engine->show_gui = !engine->show_gui;
             break;
         case GLFW_KEY_X:
-            engine->show_xyz = !engine->show_xyz;
+            g_view->settings.show_xyz = !g_view->settings.show_xyz;
             break;
         case GLFW_KEY_T:
-            engine->show_wireframe = !engine->show_wireframe;
+            g_view->settings.show_wireframe = !g_view->settings.show_wireframe;
             break;
         case GLFW_KEY_1:
-            engine->current_render_mode = RENDER_MODE_PBR;
+            g_view->settings.render_mode = RENDER_MODE_PBR;
             break;
         case GLFW_KEY_2:
-            engine->current_render_mode = RENDER_MODE_NORMALS;
+            g_view->settings.render_mode = RENDER_MODE_NORMALS;
             break;
         case GLFW_KEY_3:
-            engine->current_render_mode = RENDER_MODE_WORLD_POS;
+            g_view->settings.render_mode = RENDER_MODE_WORLD_POS;
             break;
         case GLFW_KEY_4:
-            engine->current_render_mode = RENDER_MODE_TEX_COORDS;
+            g_view->settings.render_mode = RENDER_MODE_TEX_COORDS;
             break;
         case GLFW_KEY_5:
-            engine->current_render_mode = RENDER_MODE_TANGENT_SPACE;
+            g_view->settings.render_mode = RENDER_MODE_TANGENT_SPACE;
             break;
         case GLFW_KEY_6:
-            engine->current_render_mode = RENDER_MODE_FLAT_COLOR;
+            g_view->settings.render_mode = RENDER_MODE_FLAT_COLOR;
             break;
         case GLFW_KEY_P:
             if (g_loading_preview)
@@ -3090,7 +3093,7 @@ static void render_frame_update(Engine* engine, float dt) {
     if (frame_schedule->loading_lift_at == (int)engine->total_frames)
         engine_hide_loading_screen(engine);
     if (frame_schedule->exposure_at_frame == (int)engine->total_frames) {
-        engine->exposure.settings->multiplier = frame_schedule->exposure_at_value;
+        g_view->settings.exposure.multiplier = frame_schedule->exposure_at_value;
         fprintf(stderr, "frame %d: exposure multiplier %g\n", frame_schedule->exposure_at_frame,
                 (double)frame_schedule->exposure_at_value);
     }
@@ -3131,7 +3134,7 @@ static void render_frame_update(Engine* engine, float dt) {
     // camera-matrix update and before the residency ensure, and refreshes the
     // view matrices itself so the moved pose is what residency sees.
     for (int c = 0; c < frame_schedule->cam_at_count; c++) {
-        if (frame_schedule->cam_at_frame[c] != (int)engine->total_frames || !engine->camera)
+        if (frame_schedule->cam_at_frame[c] != (int)engine->total_frames || !g_view)
             continue;
         const float* pose = frame_schedule->cam_at[c];
         vec3 eye = {pose[0], pose[1], pose[2]};
@@ -3189,15 +3192,15 @@ static void render_frame_update(Engine* engine, float dt) {
     for (int i = 0; i < frame_schedule->scale_at_count; i++) {
         if (frame_schedule->scale_at_frame[i] != (int)engine->total_frames)
             continue;
-        engine_set_render_scale(engine, frame_schedule->scale_at_value[i]);
+        g_view->settings.render_scale = frame_schedule->scale_at_value[i];
         // stderr, not stdout: this line is the record of how far a stress run
         // got, and stdout is block-buffered when redirected, so a crash would
         // take it with it. It also keeps the switch ordered against the
         // engine's own log lines rather than split across two streams.
-        // Reports what the setter settled on, not what was asked -- it clamps,
-        // and refuses outright in headless without jitter.
+        // Reports what the view will build at, not what was asked -- it clamps,
+        // and the arguments have already refused the schedule headless without jitter.
         fprintf(stderr, "frame %d: render scale -> %.2f\n", frame_schedule->scale_at_frame[i],
-                engine->render_scale);
+                postfx_clamp_render_scale(frame_schedule->scale_at_value[i]));
     }
     if (frame_schedule->probe_set_probe > 0 &&
         (int)engine->total_frames % frame_schedule->probe_set_probe == 0) {
@@ -3394,16 +3397,16 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
     // load-time near at the default 2.5x-radius framing (so nothing changes
     // until the user zooms), then shrinks with the camera so close-ups don't
     // clip into the model.
-    if (engine->camera && view_rig && clip_scene_radius >= 0.0f && !engine->camera->fit_clip) {
+    if (g_view && view_rig && clip_scene_radius >= 0.0f && !g_view->camera.fit_clip) {
         // The RIG's arm, not the camera's: the engine applies the rig after this
         // hook returns, so the camera still holds last frame's pose here. Same
         // quantity, read from the thing that has already worked it out.
-        engine->camera->near_clip =
+        g_view->camera.near_clip =
             fmaxf(fminf(0.02f * view_rig->dist, clip_near_max(engine)), clip_near_floor(engine));
     }
 }
 
-void render_scene_callback(Engine* engine, Scene* current_scene) {
+void render_scene_callback(Engine* engine, Scene* current_scene, SceneView* view) {
     if (!engine || !current_scene->root_node)
         return;
 
@@ -3412,14 +3415,14 @@ void render_scene_callback(Engine* engine, Scene* current_scene) {
     // trace taken there reads last frame's camera and reports every drag one
     // frame short. %.9g because a textual diff of two runs is then a bit diff.
     if (trace_camera)
-        app_trace_camera(engine);
+        app_trace_camera(engine, view);
 
-    engine_render_scene(engine, current_scene);
+    engine_render_scene(engine, current_scene, view);
 
     // Render skeleton bones if enabled
-    if (engine->show_bones) {
+    if (view->settings.show_bones) {
         Skeleton* skel = (current_scene->skeleton_count > 0) ? current_scene->skeletons[0] : NULL;
-        render_skeleton_bones(engine, skel, animator ? animator->state : NULL);
+        render_skeleton_bones(engine, view, skel, animator ? animator->state : NULL);
     }
 }
 
@@ -3820,11 +3823,12 @@ int main(int argc, char** argv) {
                         .width = args.width,
                         .height = args.height,
                         .headless = args.headless != 0,
-                        .headless_jitter = args.headless_jitter != 0,
                         .idle = args.idle != 0,
                         .profiler = args.profiler_enabled != 0,
-                        .ss_scale = args.ssaa,
                         .typical_size = args.typical_size};
+    // What the one view draws with, filled once the engine exists: its sample count, scales and
+    // TAA are the view's.
+    float view_render_scale = 1.0f;
     if (args.render_scale != 0.0f) {
         // TAAU is a temporal reconstruction: it needs the resolve running and
         // the jitter live. Windowed runs force TAA on below; headless must opt
@@ -3838,7 +3842,7 @@ int main(int argc, char** argv) {
             fprintf(stderr, "--render-scale needs --taa --headless-jitter under --headless; "
                             "rendering at full resolution\n");
         } else {
-            cfg.render_scale = args.render_scale;
+            view_render_scale = args.render_scale;
         }
     }
 
@@ -3852,18 +3856,41 @@ int main(int argc, char** argv) {
     // asked for lands before frame 1 (spec 14.8), but one asked for later
     // still streams, so it is not for byte-compared screenshots.
     const bool taa_policy = !args.headless || args.force_taa;
-    cfg.taa = taa_policy;
-    if (taa_policy)
-        cfg.msaa_samples = 1;
-    // After the policy, deliberately, so --taa --msaa 4 is expressible: nothing
-    // else can vary the sample count independently of TAA, and pricing a sample
-    // (spec 11.34) needs exactly that.
-    if (args.msaa > 0)
-        cfg.msaa_samples = args.msaa;
 
     Engine* engine = create_engine(&cfg);
     if (!engine) {
         fprintf(stderr, "Failed to initialize engine\n");
+        return -1;
+    }
+
+    SceneViewSettings view_settings;
+    engine_init_view_settings(engine, &view_settings);
+    view_settings.post.taa_enabled = taa_policy;
+    if (taa_policy)
+        view_settings.samples = 1;
+    // After the policy, deliberately, so --taa --msaa 4 is expressible: nothing
+    // else can vary the sample count independently of TAA, and pricing a sample
+    // (spec 11.34) needs exactly that.
+    if (args.msaa > 0)
+        view_settings.samples = args.msaa;
+    if (args.ssaa > 0)
+        view_settings.ss_scale = args.ssaa;
+    view_settings.render_scale = view_render_scale;
+    view_settings.headless_jitter = args.headless_jitter != 0;
+    // The view's camera, and the one view, filling the window.
+    const SceneViewDesc view_desc = {
+        .camera = {.position = {0.0f, 150.0f, 100.0f},
+                   .look_at = {0.0f, 150.0f, 0.0f},
+                   .fov = glm_rad(args.fov_deg > 0.0f ? args.fov_deg : 50.0f),
+                   .near = 7.0f,
+                   .far = 10000.0f},
+        .settings = &view_settings,
+        .fills_window = true};
+    g_view = create_scene_view(engine, &view_desc);
+    if (!g_view || !engine_add_view(engine, g_view)) {
+        fprintf(stderr, "Failed to make the view\n");
+        free_scene_view(g_view);
+        free_engine(engine);
         return -1;
     }
 
@@ -3891,7 +3918,7 @@ int main(int argc, char** argv) {
     check_stretch = args.check_stretch;
 
     {
-        Exposure* ex = &engine->exposure;
+        Exposure* ex = &g_view->state->exposure;
         if (args.aperture > 0.0f) {
             ex->settings->physical = true;
             ex->settings->aperture = args.aperture;
@@ -3943,77 +3970,77 @@ int main(int argc, char** argv) {
         if (args.adapt_down >= 0.0f)
             ex->settings->adapt_rate_down = args.adapt_down;
     }
-    if (args.no_history_rescale && engine->postfx)
-        engine->postfx->settings->rescale_histories = false;
-    if (args.no_ssao && engine->postfx) {
-        engine->postfx->settings->ssao_enabled = false;
+    if (args.no_history_rescale && g_view->state->postfx)
+        g_view->settings.post.rescale_histories = false;
+    if (args.no_ssao && g_view->state->postfx) {
+        g_view->settings.post.ssao_enabled = false;
     }
-    if (args.spec_occ_mode >= 0 && engine->postfx) {
-        engine->postfx->settings->spec_occlusion_mode = (PostFXSpecOccMode)args.spec_occ_mode;
+    if (args.spec_occ_mode >= 0 && g_view->state->postfx) {
+        g_view->settings.post.spec_occlusion_mode = (PostFXSpecOccMode)args.spec_occ_mode;
     }
-    if (args.no_ao_edge_filter && engine->postfx) {
-        engine->postfx->settings->ao_edge_filter_enabled = false;
+    if (args.no_ao_edge_filter && g_view->state->postfx) {
+        g_view->settings.post.ao_edge_filter_enabled = false;
     }
-    if (args.ssao_debug && engine->postfx) {
-        engine->postfx->settings->debug_view = POSTFX_DEBUG_AO;
+    if (args.ssao_debug && g_view->state->postfx) {
+        g_view->settings.post.debug_view = POSTFX_DEBUG_AO;
     }
-    if (args.spec_occ_debug && engine->postfx) {
-        engine->postfx->settings->debug_view = POSTFX_DEBUG_SPEC_OCC;
+    if (args.spec_occ_debug && g_view->state->postfx) {
+        g_view->settings.post.debug_view = POSTFX_DEBUG_SPEC_OCC;
     }
-    if (args.bent_debug && engine->postfx) {
-        engine->postfx->settings->debug_view = POSTFX_DEBUG_BENT;
+    if (args.bent_debug && g_view->state->postfx) {
+        g_view->settings.post.debug_view = POSTFX_DEBUG_BENT;
     }
-    if (args.debug_purkinje && engine->postfx) {
-        engine->postfx->settings->debug_view = POSTFX_DEBUG_PURKINJE;
+    if (args.debug_purkinje && g_view->state->postfx) {
+        g_view->settings.post.debug_view = POSTFX_DEBUG_PURKINJE;
     }
-    if (args.ssgi && engine->postfx) {
-        engine->postfx->settings->ssgi_enabled = true;
+    if (args.ssgi && g_view->state->postfx) {
+        g_view->settings.post.ssgi_enabled = true;
     }
-    if (args.ssgi_debug && engine->postfx) {
-        engine->postfx->settings->debug_view = POSTFX_DEBUG_SSGI;
+    if (args.ssgi_debug && g_view->state->postfx) {
+        g_view->settings.post.debug_view = POSTFX_DEBUG_SSGI;
     }
-    if (args.fog && engine->postfx) {
-        engine->postfx->settings->fog_enabled = true;
+    if (args.fog && g_view->state->postfx) {
+        g_view->settings.post.fog_enabled = true;
     }
-    if (args.contact_shadows && engine->postfx) {
-        engine->postfx->settings->contact_shadows_enabled = true;
+    if (args.contact_shadows && g_view->state->postfx) {
+        g_view->settings.post.contact_shadows_enabled = true;
         if (args.cs_strength >= 0.0f)
-            engine->postfx->settings->cs_strength = args.cs_strength;
+            g_view->settings.post.cs_strength = args.cs_strength;
         // The reach (args.cs_distance, incl. 0 = off) is applied in the
         // scene-scaling block below, which owns the world-space post params.
     }
-    if (args.contact_shadows_debug && engine->postfx) {
-        engine->postfx->settings->debug_view = POSTFX_DEBUG_CONTACT;
+    if (args.contact_shadows_debug && g_view->state->postfx) {
+        g_view->settings.post.debug_view = POSTFX_DEBUG_CONTACT;
     }
-    if (args.albedo_debug && engine->postfx) {
-        engine->postfx->settings->debug_view = POSTFX_DEBUG_ALBEDO;
+    if (args.albedo_debug && g_view->state->postfx) {
+        g_view->settings.post.debug_view = POSTFX_DEBUG_ALBEDO;
     }
-    if (args.no_normals_mrt && engine->postfx) {
-        engine->postfx->settings->normals_enabled = false;
+    if (args.no_normals_mrt && g_view->state->postfx) {
+        g_view->settings.post.normals_enabled = false;
     }
-    if (args.normals_debug && engine->postfx) {
-        engine->postfx->settings->debug_view = POSTFX_DEBUG_NORMALS;
+    if (args.normals_debug && g_view->state->postfx) {
+        g_view->settings.post.debug_view = POSTFX_DEBUG_NORMALS;
     }
-    if (args.no_ssr && engine->postfx) {
-        engine->postfx->settings->ssr_enabled = false;
+    if (args.no_ssr && g_view->state->postfx) {
+        g_view->settings.post.ssr_enabled = false;
     }
-    if (args.no_ssr_full_res && engine->postfx) {
-        engine->postfx->settings->ssr_full_res = false;
+    if (args.no_ssr_full_res && g_view->state->postfx) {
+        g_view->settings.post.ssr_full_res = false;
     }
-    if (args.no_ssr_temporal && engine->postfx) {
-        engine->postfx->settings->ssr_temporal = false;
+    if (args.no_ssr_temporal && g_view->state->postfx) {
+        g_view->settings.post.ssr_temporal = false;
     }
-    if (args.no_ssr_denoise && engine->postfx) {
-        engine->postfx->settings->ssr_denoise = false;
+    if (args.no_ssr_denoise && g_view->state->postfx) {
+        g_view->settings.post.ssr_denoise = false;
     }
-    if (args.ssr_jitter >= 0.0f && engine->postfx) {
-        engine->postfx->settings->ssr_jitter = args.ssr_jitter;
+    if (args.ssr_jitter >= 0.0f && g_view->state->postfx) {
+        g_view->settings.post.ssr_jitter = args.ssr_jitter;
     }
-    if (args.ssr_debug && engine->postfx) {
-        engine->postfx->settings->debug_view = POSTFX_DEBUG_SSR;
+    if (args.ssr_debug && g_view->state->postfx) {
+        g_view->settings.post.debug_view = POSTFX_DEBUG_SSR;
     }
-    if (args.ssr_strength >= 0.0f && engine->postfx) {
-        engine->postfx->settings->ssr_strength = args.ssr_strength;
+    if (args.ssr_strength >= 0.0f && g_view->state->postfx) {
+        g_view->settings.post.ssr_strength = args.ssr_strength;
     }
     if (args.specular_aa >= 0.0f) {
         engine->specular_aa_strength = args.specular_aa;
@@ -4073,15 +4100,15 @@ int main(int argc, char** argv) {
     if (args.layers_vt_probe > 0) {
         engine->layers_vt_probe_interval = args.layers_vt_probe;
     }
-    engine->show_lights = args.show_lights != 0;
+    g_view->settings.show_lights = args.show_lights != 0;
     engine->cluster_debug = args.cluster_heatmap != 0;
     // Set the POM default depth before the model loads (the height convention
     // loader stamps it onto materials as it resolves their height maps).
     if (args.parallax_scale >= 0.0f) {
         import_set_parallax_default_scale(args.parallax_scale);
     }
-    if (engine->postfx) {
-        PostFX* fx = engine->postfx;
+    if (g_view->state->postfx) {
+        PostFX* fx = g_view->state->postfx;
         if (args.glare_enable >= 0)
             fx->settings->glare_enabled = args.glare_enable != 0;
         if (args.glare_strength >= 0.0f)
@@ -4225,7 +4252,7 @@ int main(int argc, char** argv) {
             fx->settings->purkinje_enabled = false;
     }
     if (args.render_mode > 0) {
-        engine->current_render_mode = (RenderMode)args.render_mode;
+        g_view->settings.render_mode = (RenderMode)args.render_mode;
     }
 
     engine_set_error_callback(engine, app_error_callback);
@@ -4255,25 +4282,14 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    /*
-     * Set up camera.
-     */
-    float fov_radians = glm_rad(args.fov_deg > 0.0f ? args.fov_deg : 50.0f);
-    CameraDesc camera_desc = {.position = {0.0f, 150.0f, 100.0f},
-                              .look_at = {0.0f, 150.0f, 0.0f},
-                              .fov = fov_radians,
-                              .near = 7.0f,
-                              .far = 10000.0f};
-    Camera* camera = create_camera(&camera_desc);
-    engine_set_camera(engine, camera);
-
     // The viewer rig and the pointer that drives it; the auto-orbit is tuned
     // once the model's framing is known, below. Installing the rig is what makes
     // the engine, rather than this app, responsible for getting the pose into
     // the camera before the matrices are derived.
+    Camera* camera = &g_view->camera;
     view_rig = create_camera_rig();
-    view_drag = create_camera_drag(engine, view_rig);
-    engine_set_camera_rig(engine, view_rig);
+    view_drag = create_camera_drag(engine, g_view, view_rig);
+    scene_view_set_rig(g_view, view_rig);
 
     /*
      * Import model with async texture loading.
@@ -4303,7 +4319,7 @@ int main(int argc, char** argv) {
     // final look only through the profile it registers, but a reader of this
     // block should see the base material settled before anything layers on it.
     apply_cscene_material_overrides(engine, scene, cscn);
-    apply_cscene_post_passes(engine, cscn);
+    apply_cscene_post_passes(engine, g_view, cscn);
     configure_sss_materials(scene, args.sss_radius, args.sss_color, cscn);
     // Applied to every skin material rather than only those that authored a
     // value, so the flag doubles as "turn this on for this scene at strength X"
@@ -4892,8 +4908,8 @@ int main(int argc, char** argv) {
     // Depth of field focuses on the subject (camera-to-model distance) unless
     // overridden. --film turns it on too; --no-dof forces it off. Range scales
     // with the scene so the model stays sharp and the backdrop falls away.
-    if ((args.dof || args.film_preset) && !args.no_dof && engine->postfx) {
-        PostFX* fx = engine->postfx;
+    if ((args.dof || args.film_preset) && !args.no_dof && g_view->state->postfx) {
+        PostFX* fx = g_view->state->postfx;
         fx->settings->dof_enabled = true;
         if (args.dof_focus > 0.0f) {
             // A pinned manual focus plane turns autofocus off
@@ -4918,10 +4934,10 @@ int main(int argc, char** argv) {
     // Motion blur: off unless requested. Velocity comes from the aux buffer
     // (already produced for TAA/SSAO), so this is a toggle plus an optional
     // shutter scale.
-    if (args.motion_blur && engine->postfx) {
-        engine->postfx->settings->motion_blur_enabled = true;
+    if (args.motion_blur && g_view->state->postfx) {
+        g_view->settings.post.motion_blur_enabled = true;
         if (args.motion_blur_scale >= 0.0f)
-            engine->postfx->settings->motion_blur_scale = args.motion_blur_scale;
+            g_view->settings.post.motion_blur_scale = args.motion_blur_scale;
     }
 
     // Clip planes tuned for depth precision, not just coverage. A huge
@@ -4956,12 +4972,12 @@ int main(int argc, char** argv) {
     // bounce); much larger and the sparse 8-step march ring-aliases distant
     // geometry into concentric bands. Small scenes keep the tuned default, which
     // the typical size has already scaled; --ao-radius pins an explicit reach.
-    if (engine->postfx) {
+    if (g_view->state->postfx) {
         if (args.ao_radius > 0.0f) {
-            engine->postfx->settings->ssao_radius = args.ao_radius;
+            g_view->settings.post.ssao_radius = args.ao_radius;
         } else if (scene_radius > 0.0f) {
-            engine->postfx->settings->ssao_radius =
-                fmaxf(engine->postfx->settings->ssao_radius, scene_radius * 0.01f);
+            g_view->settings.post.ssao_radius =
+                fmaxf(g_view->settings.post.ssao_radius, scene_radius * 0.01f);
         }
 
         // The SSR march reach and thickness floor are world-space distances
@@ -4970,18 +4986,18 @@ int main(int argc, char** argv) {
         // below the depth quantization at its distances. Scale both up with
         // the scene (never down: small scenes keep the tuned defaults).
         if (scene_radius > 0.0f) {
-            engine->postfx->settings->ssr_max_distance =
-                fmaxf(engine->postfx->settings->ssr_max_distance, scene_radius * 2.0f);
-            engine->postfx->settings->ssr_thickness_min =
-                fmaxf(engine->postfx->settings->ssr_thickness_min, scene_radius * 0.002f);
+            g_view->settings.post.ssr_max_distance =
+                fmaxf(g_view->settings.post.ssr_max_distance, scene_radius * 2.0f);
+            g_view->settings.post.ssr_thickness_min =
+                fmaxf(g_view->settings.post.ssr_thickness_min, scene_radius * 0.002f);
 
             // Contact-shadow reach is a world-space distance like the AO radius:
             // a few percent of the scene, so the march covers the near-contact
             // gap without streaking. A CLI --cs-distance (incl. 0 = off) wins.
-            engine->postfx->settings->cs_distance =
+            g_view->settings.post.cs_distance =
                 args.cs_distance >= 0.0f
                     ? args.cs_distance
-                    : fmaxf(engine->postfx->settings->cs_distance, scene_radius * 0.02f);
+                    : fmaxf(g_view->settings.post.cs_distance, scene_radius * 0.02f);
 
             // Fog parameters are world-space too: fixed meter-scale density
             // on a large-unit scene is invisible (or opaque soup on a tiny
@@ -4989,17 +5005,17 @@ int main(int argc, char** argv) {
             // camera-to-subject path at ground level — present, not
             // smothering; the falloff spans half the model height; sky rays
             // march the whole dome interior.
-            engine->postfx->settings->fog_density =
+            g_view->settings.post.fog_density =
                 args.fog_density > 0.0f ? args.fog_density : 0.08f / scene_radius;
-            engine->postfx->settings->fog_height_falloff =
+            g_view->settings.post.fog_height_falloff =
                 args.fog_height > 0.0f ? args.fog_height : scene_radius * 0.5f;
-            engine->postfx->settings->fog_far = scene_radius * 5.0f;
-            engine->postfx->settings->fog_floor_y = scene_floor_y;
+            g_view->settings.post.fog_far = scene_radius * 5.0f;
+            g_view->settings.post.fog_floor_y = scene_floor_y;
         }
         // Authored fog in-scatter, after the density block so it survives it.
         if (cscn && cscn->has_fog_ambient) {
-            glm_vec3_copy(cscn->fog_ambient, engine->postfx->settings->fog_ambient);
-            engine->postfx->settings->fog_ambient_from_sky = false;
+            glm_vec3_copy(cscn->fog_ambient, g_view->settings.post.fog_ambient);
+            g_view->settings.post.fog_ambient_from_sky = false;
             printf("Scene file: fog ambient %.3f %.3f %.3f cd/m2\n", cscn->fog_ambient[0],
                    cscn->fog_ambient[1], cscn->fog_ambient[2]);
         }
@@ -5052,7 +5068,7 @@ int main(int argc, char** argv) {
     // land in screenshots, which breaks byte-comparability
     engine->show_gui = !args.headless;
     engine->show_fps = !args.headless;
-    engine->show_bones = args.show_bones != 0;
+    g_view->settings.show_bones = args.show_bones != 0;
 
     // Capture the local reflection probe: the scene rendered once into a
     // prefiltered cubemap, consumed as parallax-corrected local specular and
@@ -5562,11 +5578,13 @@ int main(int argc, char** argv) {
         }
         // The medium as the post chain holds it, which is what the fog volume was built from:
         // the rain's publish, read back rather than recomputed.
-        if (engine->postfx)
+        if (g_view->state->postfx)
             printf("rain-probe medium sigma=%.9g near=%.9g g=%.9g cover_layer=%d armed=%d\n",
-                   (double)engine->postfx->rain_sigma, (double)engine->postfx->rain_near,
-                   (double)engine->postfx->rain_forward_g, engine->postfx->rain_cover_layer,
-                   postfx_has_medium(engine->postfx) ? 1 : 0);
+                   (double)g_view->state->postfx->rain_sigma,
+                   (double)g_view->state->postfx->rain_near,
+                   (double)g_view->state->postfx->rain_forward_g,
+                   g_view->state->postfx->rain_cover_layer,
+                   postfx_has_medium(g_view->state->postfx) ? 1 : 0);
     }
 
     // After the loop, so the blocks are what the last frame drew and kept.

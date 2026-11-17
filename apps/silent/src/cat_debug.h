@@ -13,6 +13,7 @@
  * The mind's half is left out when it has none, as under --cat-goto.
  */
 
-void cat_debug_draw(Cat* cat, CatMind* mind, Engine* engine);
+// Drawn through `scene_view`'s camera.
+void cat_debug_draw(Cat* cat, CatMind* mind, const Engine* engine, SceneView* scene_view);
 
 #endif // _SILENT_CAT_DEBUG_H_

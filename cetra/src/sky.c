@@ -83,7 +83,7 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     sky->clouds.coverage = 0.45f;
     sky->clouds.cloud_type = 0.6f;
     sky->clouds.density = 1.0f;
-    sky->clouds.prev_frame = -1;
+    sky->clouds.scroll_frame = -1;
     // On with the deck rather than behind its own switch: a cloud that casts no shadow is
     // wrong, not un-featured. --no-cloud-shadows clears it, for bisecting.
     sky->clouds.shadows_enabled = true;
@@ -113,12 +113,6 @@ void free_sky_atmosphere(SkyAtmosphere* sky) {
         glDeleteTextures(1, &sky->clouds.shape_tex);
     if (sky->clouds.detail_tex)
         glDeleteTextures(1, &sky->clouds.detail_tex);
-    for (int i = 0; i < 2; i++) {
-        if (sky->clouds.march_tex[i])
-            glDeleteTextures(1, &sky->clouds.march_tex[i]);
-        if (sky->clouds.march_fbo[i])
-            glDeleteFramebuffers(1, &sky->clouds.march_fbo[i]);
-    }
     if (sky->clouds.shadow_tex)
         glDeleteTextures(1, &sky->clouds.shadow_tex);
     if (sky->clouds.shadow_fbo)
@@ -1475,7 +1469,7 @@ bool sky_cycle_tick(SkyAtmosphere* sky, struct IBLResources* ibl, float dt) {
 }
 
 void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 view, mat4 projection,
-                           bool main_camera) {
+                           const CloudMarch* march) {
     if (!sky || !ibl || !sky->background_program || !sky->sky_view_lut)
         return;
 
@@ -1489,11 +1483,11 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
     // Clouds bind a SEPARATE program rather than a uniform branch in the
     // plain shader, so the off path never carries a cloud sampler. The
     // subsystem gates itself (enabled + a march recorded); the caller's
-    // main_camera says only what it alone knows -- that this draw is not a
-    // capture, whose cube-face cameras the screen-space march texture would
-    // be wrong for.
-    bool clouds = main_camera && sky->clouds.enabled && sky->background_clouds_program &&
-                  sky->clouds.prev_frame >= 0;
+    // march says only what it alone knows -- which view this draw is, and
+    // that it is not a capture, whose cube-face cameras the screen-space
+    // march texture would be wrong for.
+    bool clouds =
+        march && sky->clouds.enabled && sky->background_clouds_program && march->prev_frame >= 0;
     ShaderProgram* prog = clouds ? sky->background_clouds_program : sky->background_program;
 
     glUseProgram(prog->id);
@@ -1633,7 +1627,7 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
     uniform_set_float(u, "moonMaria", sky->moon_maria ? 1.0f : 0.0f);
     if (clouds) {
         glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, sky->clouds.march_tex[sky->clouds.prev_frame & 1]);
+        glBindTexture(GL_TEXTURE_2D, march->tex[march->prev_frame & 1]);
         uniform_set_int(u, "cloudTex", 2);
         GLint vp[4];
         glGetIntegerv(GL_VIEWPORT, vp);

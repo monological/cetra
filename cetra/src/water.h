@@ -6,7 +6,7 @@
 #include <cglm/cglm.h>
 
 #include "aabb.h"         // AABB, for water_surface_box
-#include "common.h"       // RenderMode, for water_will_draw
+#include "common.h"       // TEXUNIT_SCENE_COLOR, asserted against this file's own units below
 #include "shore_runup.h"  // ShoreRunupParams, for the CPU twin the film is driven by
 #include "water_bounds.h" // WaterDomain
 #include "sky.h"          // SKY_CLOUD_SHADOW_UNIT, asserted against this file's own ledger below
@@ -228,6 +228,7 @@ typedef enum WaterFoamDebug {
 struct Engine;
 struct Light;
 struct Scene;
+struct SceneView;
 
 /*
  * Bed height under (x, z), in world units. Water needs a depth in the VERTEX
@@ -672,6 +673,9 @@ typedef struct Water {
     bool caustic_drawn[WATER_CAUSTIC_LEVELS]; // false = skipped this frame, its window too deep
     bool caustic_ready;  // rendered this frame; false = the surface reads no caustics
     bool caustic_failed; // no program or target; never retried
+    // The frame the world's passes -- the spectrum, the ripples, the probe, the caustics -- last
+    // ran in, so the first view to draw the surface runs them and the rest draw it; -1 = never.
+    long long passes_frame;
     // The spectrum the lookup spreads the one trace across (spec 13.4): each band's index against
     // 550 nm's and its share of R, G and B. Constant, set at creation.
     float caustic_spectrum_dn[WATER_CAUSTIC_SPECTRAL_TAPS];
@@ -706,11 +710,12 @@ typedef struct Water {
  * Flatten the body (or its absence) into postfx's per-frame block, so the froxel
  * volume can carry water as a second medium below the surface.
  *
- * Takes the engine for the camera, which decides which side of the surface the eye is
- * on, and the scene for the light falling on the water -- the medium's in-scatter is
+ * Into `view`'s chain, whose camera decides which side of the surface the eye is on,
+ * and from the scene for the light falling on the water -- the medium's in-scatter is
  * DERIVED from it (spec 11.84) rather than copied off the Water.
  */
-void water_publish_to_postfx(const Water* water, const struct Scene* scene, struct Engine* engine);
+void water_publish_to_postfx(const Water* water, const struct Scene* scene,
+                             const struct SceneView* view);
 
 /*
  * Publish the sea to a program that is not the water: where the swash has been (shore.glsl)
@@ -772,7 +777,7 @@ bool water_active(const Water* water);
 float water_effective_steepness(const Water* water);
 
 /*
- * Will the surface actually rasterize this frame.
+ * Will the surface actually rasterize in `view` this frame.
  *
  * The whole predicate, in one place, because more than the draw depends on it -- the
  * shadow catcher steps aside for water and the froxel volume takes it as a second
@@ -780,15 +785,17 @@ float water_effective_steepness(const Water* water);
  * capture then suppressed the ground plane on behalf of a surface that never drew,
  * leaving the frame with no floor.
  */
-bool water_will_draw(const Water* water, const struct Engine* engine, RenderMode render_mode);
+bool water_will_draw(const Water* water, const struct SceneView* view);
 
 // The water's surface as a flat box at its level over its bounds, or false for a sea with none,
 // whose projected grid reaches the horizon.
 bool water_surface_box(const Water* water, AABB* out);
 
 /*
- * Draw the surface into the currently bound scene FBO. Callers gate on
- * water_will_draw; this repeats the check rather than trusting it.
+ * Draw the surface into `view`'s scene target, from its camera. Callers gate on
+ * water_will_draw; this repeats the check rather than trusting it. The first view to draw
+ * it in a frame runs the world's passes first -- the spectrum, the ripples, the probe and
+ * the caustics, their windows centred on the focus view.
  *
  * The one precondition still on the caller: the refraction resolve has run this frame,
  * since the surface samples it for transmission.
@@ -796,8 +803,7 @@ bool water_surface_box(const Water* water, AABB* out);
  * Restores the framebuffer binding, viewport, blend, depth test, cull face and the
  * draw-buffer list. Leaves its own program and texture bindings current.
  */
-void water_render(Water* water, struct Scene* scene, struct Engine* engine, const mat4 view,
-                  const mat4 draw_projection);
+void water_render(Water* water, struct Scene* scene, struct Engine* engine, struct SceneView* view);
 
 /*
  * Advance the water's simulation for the frame: the bed's bake and the swash film's step.

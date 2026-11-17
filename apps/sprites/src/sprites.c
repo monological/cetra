@@ -196,12 +196,18 @@ int main(int argc, char** argv) {
     engine->exit_after_frames = frames;
     engine_set_screenshot_path(engine, screenshot);
 
-    // The sketch's camera: 45 degrees, five units back along Z.
-    CameraDesc camera = {.position = {0.0f, 0.0f, CAMERA_DISTANCE},
-                         .fov = glm_rad(FOV_DEG),
-                         .near = 0.1f,
-                         .far = 100.0f};
-    engine_set_camera(engine, create_camera(&camera));
+    // The sketch's camera: 45 degrees, five units back along Z, in the one view filling the window.
+    const SceneViewDesc view_desc = {.camera = {.position = {0.0f, 0.0f, CAMERA_DISTANCE},
+                                                .fov = glm_rad(FOV_DEG),
+                                                .near = 0.1f,
+                                                .far = 100.0f},
+                                     .fills_window = true};
+    SceneView* view = create_scene_view(engine, &view_desc);
+    if (!view || !engine_add_view(engine, view)) {
+        free_scene_view(view);
+        free_engine(engine);
+        return 1;
+    }
 
     // The sketch's point sizes are pixels across, and glPointSize counts
     // FRAMEBUFFER pixels, which on a Retina display are half a window pixel.
@@ -216,12 +222,13 @@ int main(int argc, char** argv) {
     // No post effects, and the raw values out: the sketch drew its colours
     // straight into the framebuffer with no display encode, so passthrough
     // rather than the preset's linear curve, which encodes.
-    engine_set_2d_preset(engine, scene);
-    engine->postfx->settings->tonemap_mode = POSTFX_TONEMAP_PASSTHROUGH;
+    scene_view_set_2d_preset(view);
+    scene_set_2d_preset(scene);
+    view->settings.post.tonemap_mode = POSTFX_TONEMAP_PASSTHROUGH;
     engine->show_fps = !headless;
 
     // The sketch cleared to black.
-    glm_vec3_zero(engine->clear_color);
+    glm_vec3_zero(view->settings.background);
 
     // The engine registers no particle program of its own.
     ShaderProgram* particle_program = create_particle_program();

@@ -1,9 +1,9 @@
 # shapes
 
 Two filled red rectangles from `geometry.h`'s `mesh_generate_rect`, one with square corners and
-one rounded, under an orthographic camera and the engine's 2D preset (`engine_set_2d_preset`), with
-no light: under the preset a material's albedo is the colour on screen. It is the only user of
-`PlaneDrag`, the plane camera in `app.h`.
+one rounded, under an orthographic camera and the 2D preset (`scene_view_set_2d_preset` and
+`scene_set_2d_preset`), with no light: under the preset a material's albedo is the colour on
+screen. It is the only user of `PlaneDrag`, the plane camera in `app.h`.
 
 ```bash
 ./out/bin/shapes

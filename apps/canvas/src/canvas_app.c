@@ -41,6 +41,7 @@
 #include "cetra/internal/thread.h"
 #include "cetra/internal/triangulate_hooks.h" // bridges by grid or walk, for the probe's check
 #include "cetra/internal/ui_editor_hooks.h"   // where the editor drew a range, for the probe
+#include "cetra/internal/scene_view_state.h"  // the view's chain, for the frame-target probe
 #include "cetra/postfx.h"
 #include "cetra/program.h"
 #include "cetra/scene.h"
@@ -84,7 +85,8 @@ static CanvasPaint butt(CanvasPaint paint) {
 }
 
 static Canvas* g_canvas;
-static CanvasView g_views[2]; // the window's views, side by side under --split
+static CanvasView g_views[2];   // the window's views, side by side under --split
+static SceneView* g_scene_view; // the empty scene's view, under the canvas
 static int g_view_count = 1;
 static int g_only_view = -1;     // under --only-view, the one of the split drawn
 static int g_drag_view = -1;     // the view a drag pans
@@ -2232,7 +2234,7 @@ static void draw_view(Engine* engine, void* user) {
     lay_out_views(engine);
     if (g_probe_target) {
         printf("canvas frame target %s\n",
-               postfx_picture_fbo(engine->postfx) ? "picture" : "window");
+               postfx_picture_fbo(g_scene_view->state->postfx) ? "picture" : "window");
         fflush(stdout);
         g_probe_target = false;
     }
@@ -4557,13 +4559,20 @@ int main(int argc, char** argv) {
         return 1;
     }
     g_idle_say = idle && headless;
-    // An empty scene and a camera on it: the canvas draws over the frame, and
+    // An empty scene and a view of it: the canvas draws over the frame, and
     // the frame wants a scene to be the frame of.
     Scene* scene = create_scene();
     engine_add_scene(engine, scene);
-    engine_set_camera(engine, create_camera(&(CameraDesc){.position = {0.0f, 0.0f, 1.0f}}));
-    engine_set_2d_preset(engine, scene);
-    glm_vec3_zero(engine->clear_color);
+    g_scene_view = create_scene_view(
+        engine, &(SceneViewDesc){.camera = {.position = {0.0f, 0.0f, 1.0f}}, .fills_window = true});
+    if (!g_scene_view || !engine_add_view(engine, g_scene_view)) {
+        free_scene_view(g_scene_view);
+        free_engine(engine);
+        return 1;
+    }
+    scene_view_set_2d_preset(g_scene_view);
+    scene_set_2d_preset(scene);
+    glm_vec3_zero(g_scene_view->settings.background);
     // A scene not loaded from a file has no texture directory: --idle-load names its file from
     // the working directory.
     if (g_idle_load)
@@ -4573,7 +4582,7 @@ int main(int argc, char** argv) {
         ShaderProgram* pass = create_post_pass_program("canvas_identity", IDENTITY_PASS);
         if (pass) {
             engine_add_program(engine, pass);
-            postfx_add_pass(engine->postfx, POSTFX_AT_AFTER_TONEMAP, pass);
+            scene_view_add_pass(g_scene_view, POSTFX_AT_AFTER_TONEMAP, pass);
         }
     }
 

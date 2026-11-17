@@ -82,9 +82,9 @@ void inspect_init(Inspect* in, Game* game, Arms* arms, Birdcage* cage, HouseKey*
 }
 
 void inspect_free(Inspect* in) {
-    // The engine is not left looking through a rig that is gone.
+    // The view is not left looking through a rig that is gone.
     if (in->state != INSPECT_NONE)
-        engine_set_camera_rig(in->game->engine, in->player->rig);
+        scene_view_set_rig(in->player->scene_view, in->player->rig);
     free_camera_rig(in->rig);
     in->rig = NULL;
 }
@@ -104,7 +104,7 @@ static void take_hold(Inspect* in) {
     arms_place(in->arms, body);
     camera_rig_set_pose(in->rig, in->player->rig->pose.eye, in->player->rig->pose.look);
     camera_rig_blend_from_here(in->rig, SETTLE);
-    engine_set_camera_rig(in->game->engine, in->rig);
+    scene_view_set_rig(in->player->scene_view, in->rig);
     in->player->holding = true;
     // In the hands the cage and its key are a hand's breadth from the lamp on the chest, and would
     // throw a shadow over most of the wall the beam lights; the arms holding them cast none.
@@ -184,7 +184,7 @@ static void begin_return(Inspect* in) {
 
 static void let_go(Inspect* in) {
     arms_show(in->arms, false);
-    engine_set_camera_rig(in->game->engine, in->player->rig);
+    scene_view_set_rig(in->player->scene_view, in->player->rig);
     in->player->holding = false;
     lights_flashlight_release(in->lights);
     kit_node_casts(in->cage->node, true);

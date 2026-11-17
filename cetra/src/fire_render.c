@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "engine.h"
+#include "scene_view_state.h"
 #include "fire.h"
 #include "fire_internal.h"
 #include "mesh.h"
@@ -163,17 +164,20 @@ typedef struct FireDrawable {
                  // projection
 } FireDrawable;
 
-static float _view_depth(const Engine* engine, const vec3 p) {
-    vec3 v = {0.0f, 0.0f, 0.0f};
-    glm_mat4_mulv3((vec4*)engine->view_matrix, (float*)p, 1.0f, v);
-    return -v[2];
-}
-
-// The frame's view, the same for every drawable.
+// The drawing view's camera, the same for every drawable.
 typedef struct FireView {
+    mat4 view;
+    mat4 projection;
     mat4 view_proj;
     mat4 inv_view_proj;
+    vec3 eye;
 } FireView;
+
+static float _view_depth(const FireView* fv, const vec3 p) {
+    vec3 v = {0.0f, 0.0f, 0.0f};
+    glm_mat4_mulv3((vec4*)fv->view, (float*)p, 1.0f, v);
+    return -v[2];
+}
 
 // A card's bottom centre in the world, and its size.
 static void _card_world(const Fire* fire, const FireCard* card, vec3 base, vec2 size) {
@@ -192,9 +196,9 @@ static void _draw_card(FireRenderer* r, const Engine* engine, const Fire* fire, 
     vec2 size = {0.0f, 0.0f};
     _card_world(fire, card, base, size);
     uniform_set_mat4(u, "viewProj", (const float*)fv->view_proj);
-    uniform_set_mat4(u, "view", (const float*)engine->view_matrix);
-    uniform_set_mat4(u, "projection", (const float*)engine->projection_matrix);
-    uniform_set_vec3(u, "cameraPos", engine->camera->position);
+    uniform_set_mat4(u, "view", (const float*)fv->view);
+    uniform_set_mat4(u, "projection", (const float*)fv->projection);
+    uniform_set_vec3(u, "cameraPos", fv->eye);
     uniform_set_vec3(u, "cardBase", base);
     uniform_set_vec2(u, "cardSize", size);
     const int layout[4] = {b->frames, b->cols, b->rows, 0};
@@ -220,8 +224,8 @@ static void _draw_marched(FireRenderer* r, const Engine* engine, const Scene* sc
     const FireParams* p = &fire->params;
     vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f};
     _march_box(r, fire, index, lo, hi);
-    uniform_set_mat4(u, "view", (const float*)engine->view_matrix);
-    uniform_set_mat4(u, "projection", (const float*)engine->projection_matrix);
+    uniform_set_mat4(u, "view", (const float*)fv->view);
+    uniform_set_mat4(u, "projection", (const float*)fv->projection);
     uniform_set_mat4(u, "viewProj", (const float*)fv->view_proj);
     uniform_set_mat4(u, "invViewProj", (const float*)fv->inv_view_proj);
     uniform_set_vec3(u, "ambientRadiance", (float*)scene->ambient_radiance);
@@ -282,11 +286,17 @@ void fire_render_slice(FireRenderer* r, const FireSystem* fs, int height) {
     gl_pass_end(&pass);
 }
 
-void fire_render_draw(FireRenderer* r, Engine* engine, const Scene* scene,
+void fire_render_draw(FireRenderer* r, Engine* engine, const Scene* scene, const SceneView* view,
                       const PostFXLateDraw* late) {
     const FireSystem* fs = scene ? scene->fire : NULL;
-    if (!r || !fs || !late || !late->scene_depth || !engine->camera)
+    if (!r || !fs || !view || !late || !late->scene_depth)
         return;
+    FireView fv;
+    glm_mat4_copy((vec4*)view->state->view_matrix, fv.view);
+    glm_mat4_copy((vec4*)view->state->projection_matrix, fv.projection);
+    glm_mat4_copy((vec4*)view->state->view_proj, fv.view_proj);
+    glm_mat4_inv(fv.view_proj, fv.inv_view_proj);
+    glm_vec3_copy((float*)view->camera.position, fv.eye);
     profiler_scope_begin(engine->profiler, "fire");
     // Every marched fire and every card, back to front, so what is seen through what composites
     // in the right order.
@@ -304,7 +314,7 @@ void fire_render_draw(FireRenderer* r, Engine* engine, const Scene* scene,
                 vec2 size = {0.0f, 0.0f};
                 _card_world(fire, &fire->cards.list[c], base, size);
                 base[1] += 0.5f * size[1];
-                list[n++] = (FireDrawable){i, c, _view_depth(engine, base)};
+                list[n++] = (FireDrawable){i, c, _view_depth(&fv, base)};
             }
             continue;
         }
@@ -313,7 +323,7 @@ void fire_render_draw(FireRenderer* r, Engine* engine, const Scene* scene,
         vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f}, mid = {0.0f, 0.0f, 0.0f};
         _march_box(r, fire, i, lo, hi);
         glm_vec3_center(lo, hi, mid);
-        list[n++] = (FireDrawable){i, -1, _view_depth(engine, mid)};
+        list[n++] = (FireDrawable){i, -1, _view_depth(&fv, mid)};
     }
     for (int a = 1; a < n; a++) {
         const FireDrawable d = list[a];
@@ -325,9 +335,6 @@ void fire_render_draw(FireRenderer* r, Engine* engine, const Scene* scene,
         list[at] = d;
     }
 
-    FireView fv;
-    glm_mat4_copy(engine->view_proj, fv.view_proj);
-    glm_mat4_inv(fv.view_proj, fv.inv_view_proj);
     const GLPassState pass = gl_pass_begin();
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);

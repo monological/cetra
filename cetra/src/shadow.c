@@ -15,6 +15,7 @@
 #include "mesh.h"
 #include "engine.h"
 #include "engine_internal.h"
+#include "scene_view_state.h"
 #include "draw_list.h"
 #include "intersect.h"
 #include "shadow.h"
@@ -1152,13 +1153,15 @@ static ShaderProgram* _caster_program(const ShadowSystem* ss, const DrawItem* it
 
 // What every caster in one layer shares, onto `program` as the layer first draws through it. The
 // displacement inputs carry the frame's one render clock, which the shading pass reads too --
-// that is what keeps a swaying caster and its shadow in lockstep rather than merely close.
-static void _prime_caster_program(ShaderProgram* program, const Engine* engine, const Scene* scene,
-                                  const float* matrix) {
+// that is what keeps a swaying caster and its shadow in lockstep rather than merely close -- and
+// the morph's eye: the drawing view's in its pass, the focus view's for the world's tiles.
+static void _prime_caster_program(ShaderProgram* program, const ShadowSystem* ss,
+                                  const Engine* engine, const Scene* scene, const float* matrix) {
     UniformManager* u = program->uniforms;
     uniform_set_mat4(u, "lightSpaceMatrix", matrix);
     uniform_set_int(u, "albedoTex", 0);
-    engine_upload_displacement_uniforms(engine, scene, u);
+    engine_upload_displacement_uniforms(
+        engine, scene, ss->drawing_view ? ss->drawing_view : engine->focus_view, u);
 }
 
 // One layer's casters, through `matrix`, with the depth program or with `absorb` the translucent
@@ -1207,7 +1210,7 @@ static void _draw_shadow_items(ShadowSystem* ss, const DrawList* list, bool abso
             ShaderProgram* drawn = _caster_program(ss, item, absorb);
             UniformManager* u = drawn->uniforms;
             if (submit_use_program(state, drawn->id))
-                _prime_caster_program(drawn, engine, scene, matrix);
+                _prime_caster_program(drawn, ss, engine, scene, matrix);
 
             // The depth stage reads InstanceBlock, so casters batch here even
             // when the same mesh cannot batch on the camera path. A run shares
@@ -1752,8 +1755,8 @@ static int tile_rank_order(const void* a, const void* b) {
     return x->order - y->order;
 }
 
-// The cached lights, nearest the camera first, ties to scene order, each with the block it
-// held last frame. False on out of memory, with nothing ranked.
+// The cached lights, nearest the focus view's camera first, ties to scene order, each with the
+// block it held last frame. False on out of memory, with nothing ranked.
 static bool tiles_rank(ShadowSystem* ss, const Engine* engine, const Scene* scene) {
     ss->tile_rank_count = 0;
     if (!grow_array((void**)&ss->tile_rank, &ss->tile_rank_capacity, scene->light_count,
@@ -1761,8 +1764,8 @@ static bool tiles_rank(ShadowSystem* ss, const Engine* engine, const Scene* scen
         return false;
     ss->tile_rank_margin = TILE_STREAM_MARGIN * engine->typical_size;
     vec3 eye = {0.0f, 0.0f, 0.0f};
-    if (engine->camera)
-        glm_vec3_copy(engine->camera->position, eye);
+    if (engine->focus_view)
+        glm_vec3_copy(engine->focus_view->camera.position, eye);
     for (size_t i = 0; i < scene->light_count; ++i) {
         Light* light = scene->lights[i];
         if (!light || !shadow_light_takes_tiles(light))
@@ -2412,11 +2415,15 @@ static bool tile_face_in_view(const Frustum* view, mat4 face_matrix) {
     return true;
 }
 
-// The camera's view this frame.
-static void tile_camera_view(const Engine* engine, Frustum* view) {
+// The drawing view's frustum this frame, or false outside a view's pass.
+static bool tile_camera_view(const ShadowSystem* ss, Frustum* view) {
+    if (!ss->drawing_view)
+        return false;
+    const SceneViewState* vs = ss->drawing_view->state;
     mat4 view_proj;
-    glm_mat4_mul((vec4*)engine->projection_matrix, (vec4*)engine->view_matrix, view_proj);
+    glm_mat4_mul((vec4*)vs->projection_matrix, (vec4*)vs->view_matrix, view_proj);
     frustum_extract_from_vp(view_proj, view);
+    return true;
 }
 
 // Whether none of a block's faces show the light as it is now, so all are drawn again from where
@@ -2431,14 +2438,14 @@ static bool tile_block_stale(const ShadowSystem* ss, const ShadowTileBlock* bloc
 }
 
 // The faces of a block render_shadow_movers draws this frame: those that see a mover, but a face
-// out of the camera's view keeps the copy it has, which nothing on screen reads -- unless it
-// holds nothing yet, or inside a capture, which keeps what it sees.
+// out of the drawing view keeps the copy it has, which nothing on screen reads -- unless it
+// holds nothing yet, or inside a capture or with no view, which keeps what it sees.
 static uint64_t tile_mover_faces_drawn(const ShadowSystem* ss, const Engine* engine,
                                        const Frustum* view, const ShadowTileBlock* block) {
     if (!block->light || !block->dynamic || block->views <= 0 ||
         block->generation != ss->tile_generation || !(block->light->intensity > 0.0f))
         return 0;
-    const bool every = !engine->camera || engine->capture_kind != SCENE_CAPTURE_NONE;
+    const bool every = !view || engine->capture_kind != SCENE_CAPTURE_NONE;
     uint64_t drawn = 0;
     for (int f = 0; f < 6 * block->views; ++f) {
         if (!tile_face_in(block->dynamic, f))
@@ -2506,12 +2513,12 @@ static void tiles_take_stores(ShadowSystem* ss, const Engine* engine) {
         usable = 0;
     uint64_t free_cells = usable >= 64 ? ~0ull : (1ull << usable) - 1ull;
     Frustum view;
-    tile_camera_view(engine, &view);
+    const Frustum* in_view = tile_camera_view(ss, &view) ? &view : NULL;
     uint64_t drawn[SHADOW_TILE_MAX_BLOCKS];
     for (int b = 0; b < ss->tile_block_count; ++b) {
         ShadowTileBlock* block = &ss->tile_blocks[b];
         const bool stale = block->light && tile_block_stale(ss, block);
-        drawn[b] = stale ? 0 : tile_mover_faces_drawn(ss, engine, &view, block);
+        drawn[b] = stale ? 0 : tile_mover_faces_drawn(ss, engine, in_view, block);
         // What each face holds: kept if it is a cell of the pool as large as it now is, under a
         // view the block still has, and no other face's.
         for (int f = 0; f < 6 * SHADOW_TILE_VIEWS; ++f) {
@@ -2676,10 +2683,10 @@ static void render_shadow_movers(ShadowSystem* ss, const Engine* engine, const S
                                  SubmitState* state) {
     const int edge = ss->punctual_map_size;
     Frustum view;
-    tile_camera_view(engine, &view);
+    const Frustum* in_view = tile_camera_view(ss, &view) ? &view : NULL;
     for (int b = 0; b < ss->tile_block_count; ++b) {
         ShadowTileBlock* block = &ss->tile_blocks[b];
-        const uint64_t drawn = tile_mover_faces_drawn(ss, engine, &view, block);
+        const uint64_t drawn = tile_mover_faces_drawn(ss, engine, in_view, block);
         for (int f = 0; f < 6 * block->views; ++f) {
             if (!tile_face_in(drawn, f))
                 continue;
@@ -3116,15 +3123,12 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, const Scene
     return ok;
 }
 
-void render_shadow_depth_pass(Engine* engine, Scene* scene) {
-    if (!engine || !scene || !scene->shadow_system)
-        return;
-
-    // This pass runs BEFORE the camera passes, so it is usually the one that
-    // flattens the graph; the stamp makes the camera pass reuse what this built
+static void _render_shadow_depth_pass(Engine* engine, Scene* scene, const SceneView* view) {
+    // This pass runs BEFORE the view's own passes, so it is usually the one that
+    // flattens the graph; the stamp makes the view's pass reuse what this built
     // rather than build a second time -- unless the app mutated the graph in
     // between, which the epoch half of the stamp catches.
-    engine_build_draw_list((Engine*)engine, scene);
+    engine_build_draw_list((Engine*)engine, scene, view ? view : engine->focus_view);
 
     ShadowSystem* ss = scene->shadow_system;
 
@@ -3234,7 +3238,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         ss->cascade_count = 1;
     if (ss->cascade_count > SHADOW_CASCADES)
         ss->cascade_count = SHADOW_CASCADES;
-    if (!engine->camera)
+    if (!view)
         ss->cascade_count = 1;
 
     // Grow the array when the cascade count exceeds its layer capacity. A
@@ -3280,12 +3284,12 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     int cc = ss->cascade_count;
     CascadeCamera cam = {0};
     if (cc > 1) {
-        const Camera* camera = engine->camera;
+        const Camera* camera = &view->camera;
         glm_vec3_copy((float*)camera->position, cam.position);
         // World-space view forward from the view matrix's third row
-        cam.forward[0] = -engine->view_matrix[0][2];
-        cam.forward[1] = -engine->view_matrix[1][2];
-        cam.forward[2] = -engine->view_matrix[2][2];
+        cam.forward[0] = -view->state->view_matrix[0][2];
+        cam.forward[1] = -view->state->view_matrix[1][2];
+        cam.forward[2] = -view->state->view_matrix[2][2];
         glm_vec3_normalize(cam.forward);
         cam.fov_radians = camera->fov_radians;
         cam.aspect_ratio = camera->aspect_ratio;
@@ -3353,7 +3357,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 ss->cascade_params[slot][1] = ss->near_plane;
                 ss->cascade_params[slot][2] = ss->far_plane;
             } else {
-                float slice_near = engine->camera->near_clip;
+                float slice_near = view->camera.near_clip;
                 // The scene pad covers casters toward the light outside the
                 // slice; the legacy fit's eye sat at far/2, reuse that scale
                 float scene_pad = ss->far_plane * 0.5f;
@@ -3516,6 +3520,16 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
 }
 
+void render_shadow_depth_pass(Engine* engine, Scene* scene, const SceneView* view) {
+    if (!engine || !scene || !scene->shadow_system)
+        return;
+    // Held for the pass alone, over every early return inside it: what reads it outside the
+    // pass is the world's, and takes the focus view.
+    scene->shadow_system->drawing_view = view;
+    _render_shadow_depth_pass(engine, scene, view);
+    scene->shadow_system->drawing_view = NULL;
+}
+
 // RAIN_OCCLUSION_REACH and RAIN_EXPOSED_BIAS: the map's depth range and the lookup's
 // bias, shared with rain_occlusion.glsl, which has to invert the one and apply the other.
 // A tower above and a cellar below both fit in the reach, and 500 m in 24 bits is 30
@@ -3603,7 +3617,7 @@ void shadow_render_rain_layer(Engine* engine, Scene* scene) {
     ShadowSystem* ss = scene->shadow_system;
     ss->rain_layer = -1;
     const Rain* rain = scene->rain;
-    if (!rain_active(rain) || !engine->camera || !(rain->occlusion_extent > 0.0f)) {
+    if (!rain_active(rain) || !engine->focus_view || !(rain->occlusion_extent > 0.0f)) {
         // No map, so no answer -- and the ring starts over, so the first answer once it rains
         // again is not a slot issued before it stopped.
         ss->rain_ask_passes = 0;
@@ -3619,7 +3633,7 @@ void shadow_render_rain_layer(Engine* engine, Scene* scene) {
             return;
     }
     // A stamp compare when the shadow pass built it; the build when shadows are off.
-    engine_build_draw_list(engine, scene);
+    engine_build_draw_list(engine, scene, engine->focus_view);
 
     /*
      * Looking along the rain, from the origin, so the camera's position in that view
@@ -3633,7 +3647,7 @@ void shadow_render_rain_layer(Engine* engine, Scene* scene) {
     mat4 view, proj;
     glm_lookat((vec3){0.0f, 0.0f, 0.0f}, dir, up, view);
     vec4 c;
-    const float* eye = engine->camera->position;
+    const float* eye = engine->focus_view->camera.position;
     glm_mat4_mulv(view, (vec4){eye[0], eye[1], eye[2], 1.0f}, c);
     const float half = 0.5f * rain->occlusion_extent;
     const float texel = rain->occlusion_extent / (float)RAIN_OCCLUSION_SIZE;

@@ -45,10 +45,12 @@ void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn);
 void apply_cscene_material_overrides(struct Engine* engine, Scene* scene,
                                      const CetraSceneDesc* cscn);
 
-// Compile each of post.passes (spec 13.29) and add it at its location. The engine owns the
-// programs. A file that does not read or compile is reported by name and skipped, and the frame
-// renders without it.
-void apply_cscene_post_passes(struct Engine* engine, const CetraSceneDesc* cscn);
+// Compile each of post.passes (spec 13.29) and add it at its location in `view`'s chain. The
+// engine owns the programs. A file that does not read or compile is reported by name and skipped,
+// and the frame renders without it.
+struct SceneView;
+void apply_cscene_post_passes(struct Engine* engine, struct SceneView* view,
+                              const CetraSceneDesc* cscn);
 
 // Attach the scene file's water surface (if the .cscn declares a water block).
 // Runs BEFORE the CLI water block, which overrides whatever it finds.

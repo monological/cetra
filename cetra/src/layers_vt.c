@@ -6,6 +6,7 @@
 #include "scene.h"
 #include "engine.h"
 #include "engine_internal.h"
+#include "scene_view_state.h"
 #include "draw_list.h"
 #include "intersect.h"
 #include "mesh.h"
@@ -446,7 +447,8 @@ static int vt_cand_cmp(const void* a, const void* b) {
  */
 static void vt_pages_update(Material* m, struct Scene* scene, struct Engine* engine) {
     MaterialLayersVt* vt = m->layers_vt;
-    if (!engine->layers_vt_pages_enabled || vt->page_grid <= 0 || !engine->camera)
+    const SceneView* focus = engine->focus_view;
+    if (!engine->layers_vt_pages_enabled || vt->page_grid <= 0 || !focus)
         return;
     int slots = VT_PAGE_SLOTS;
     if (engine->layers_vt_page_slots > 0 && engine->layers_vt_page_slots < VT_PAGE_SLOTS)
@@ -455,10 +457,12 @@ static void vt_pages_update(Material* m, struct Scene* scene, struct Engine* eng
     if (budget > VT_PAGE_BAKE_MAX)
         budget = VT_PAGE_BAKE_MAX;
 
+    // The pages are the world's, predicted from the focus view: the view-projection its scene
+    // pass last computed, and its eye as this frame's hook left it.
     Frustum fr;
-    frustum_extract_from_vp(engine->view_proj, &fr);
-    const float cam[3] = {engine->camera->position[0], engine->camera->position[1],
-                          engine->camera->position[2]};
+    frustum_extract_from_vp((vec4*)focus->state->view_proj, &fr);
+    const float cam[3] = {focus->camera.position[0], focus->camera.position[1],
+                          focus->camera.position[2]};
 
     VtPageCand cands[VT_PAGE_TABLE_MAX] = {{0.0f, 0}};
     int nc = 0;
@@ -785,11 +789,11 @@ static void vt_feedback_parse(LayersVtFeedback* fb, GLuint pbo, int grid) {
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 }
 
-void layers_vt_feedback_pass(struct Engine* engine, struct Scene* scene) {
+void layers_vt_feedback_pass(struct Engine* engine, struct Scene* scene, const SceneView* view) {
     // Gated on pages too: feedback exists solely to feed page residency, and
     // vt_pages_update -- its only consumer -- early-outs when pages are off,
     // so running the pass there would be dead draws and a dead readback ring.
-    if (!engine || !scene || !engine->layers_vt_feedback_enabled ||
+    if (!engine || !scene || !view || !engine->layers_vt_feedback_enabled ||
         !engine->layers_vt_pages_enabled)
         return;
     // The scene's one paged material; without it there is nothing to vote for.
@@ -814,7 +818,7 @@ void layers_vt_feedback_pass(struct Engine* engine, struct Scene* scene) {
     }
     LayersVtFeedback* fb = engine->vt_feedback;
     int rw = 0, rh = 0;
-    engine_render_size(engine, &rw, &rh);
+    scene_view_render_size(view, &rw, &rh);
     int w = rw / VT_FEEDBACK_DIVISOR;
     int h = rh / VT_FEEDBACK_DIVISOR;
     if (w < 16)
@@ -838,7 +842,7 @@ void layers_vt_feedback_pass(struct Engine* engine, struct Scene* scene) {
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(prog->id);
-    uniform_set_mat4(prog->uniforms, "viewProj", (const float*)engine->view_proj);
+    uniform_set_mat4(prog->uniforms, "viewProj", (const float*)view->state->view_proj);
     const float domain[4] = {paged->splat_origin[0], paged->splat_origin[1], paged->splat_size[0],
                              paged->splat_size[1]};
     uniform_set_vec4(prog->uniforms, "splatDomain", domain);
@@ -853,7 +857,7 @@ void layers_vt_feedback_pass(struct Engine* engine, struct Scene* scene) {
     // stage applies no displacement, so the undisplaced bound is the rendered
     // bound even where the main pass would need the expanded one.
     Frustum fr;
-    frustum_extract_from_vp(engine->view_proj, &fr);
+    frustum_extract_from_vp((vec4*)view->state->view_proj, &fr);
     const DrawList* list = scene->draw_list;
     for (size_t i = 0; i < list->count; i++) {
         const DrawItem* item = &list->items[i];

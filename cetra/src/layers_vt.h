@@ -114,10 +114,12 @@ typedef struct LayersVtFeedback {
     unsigned char requested[VT_PAGE_TABLE_MAX]; // frame N-RING's votes, parsed
 } LayersVtFeedback;
 
-// Render the vote pass for the scene's paged material and cycle the readback
-// ring. Called once per frame after the scene render (it re-walks the draw
+// Render the vote pass for the scene's paged material from `view`, the focus, and cycle the
+// readback ring. Called once per frame after that view's scene render (it re-walks the draw
 // list); a no-op without an armed paged material or with feedback disabled.
-void layers_vt_feedback_pass(struct Engine* engine, struct Scene* scene);
+struct SceneView;
+void layers_vt_feedback_pass(struct Engine* engine, struct Scene* scene,
+                             const struct SceneView* view);
 
 void free_layers_vt_feedback(LayersVtFeedback* fb);
 

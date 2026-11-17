@@ -47,18 +47,24 @@ frame top (wireframe's polygon mode and cull switch), and a consumer notices its
 changing (the shadow pass rebuilds on a new cascade count, the water bakes compare against what
 they last used). Where neither holds, the field is a function.
 
-**Engine:** window; `ss_scale` (SSAA) and `msaa_samples`; the scene MSAA HDR FBO with the
-multi-target G-buffer (see Render Pipeline); lazy resolve targets (mip'd opaque colour for
-refraction, single-sample scene depth for soft particles); the camera (borrowed,
-`engine_set_camera`); the scenes; the program cache (uthash, name to program); the
-material-feature toggles; matrices (`view_matrix`, `projection_matrix` un-jittered,
-`draw_projection` TAA-jittered, `prev_view_proj` for motion vectors); the overlays and the run's
-counts as plain fields (`show_gui`, `show_fps`, `show_wireframe`, `show_xyz`,
-`exit_after_frames`, `screenshot_every`) and `clear_color`; the headless flag; the embedded
-`PostFX* postfx`; the bone-overlay and shadow-catcher programs; the async loader; the text
-renderer. By function: the sample count and the two scales (clamp and rebuild), the typical size
-(`engine_set_typical_size`, see The Typical Size), the screenshot path (owned), the callbacks and
-the clock (installs).
+**Engine:** window; the views (owned, `engine_add_view`) and the focus among them
+(`engine_set_focus_view`), plus the capture view every probe and GI face draws through; the
+scenes; the program cache (uthash, name to program); the post chain's programs, made once
+(`postfx_programs.h`); the material-feature toggles; the overlays and the run's counts as plain
+fields (`show_gui`, `show_fps`, `exit_after_frames`, `screenshot_every`); the headless flag; the
+bone-overlay and shadow-catcher programs; the async loader; the text renderer. By function: the
+typical size (`engine_set_typical_size`, see The Typical Size), the screenshot path (owned), the
+callbacks and the clock (installs).
+
+**SceneView** (`scene_view.h`): the camera, by value; its rig (`scene_view_set_rig`, borrowed);
+its settings (`SceneViewSettings`: the post chain's and the meter's, the sample count, `ss_scale`
+and `render_scale`, the background, the render mode and the debug overlays), read each frame.
+Engine-owned, its state (`scene_view_state.h`): the scene MSAA HDR FBO with the multi-target
+G-buffer (see Render Pipeline), the lazy resolve targets (mip'd opaque colour for refraction,
+single-sample scene depth for soft particles), the matrices (`view_matrix`, `projection_matrix`
+un-jittered, `draw_projection` TAA-jittered, `prev_view_proj` for motion vectors), its post chain,
+its meter and its cloud march. Every pass that draws a view is handed it; world work follows the
+focus view.
 
 **Scene:** the root SceneNode (`scene_set_root`); the registries, each a `scene_add_*`: lights,
 particle systems (owned), cameras, materials, skeletons and animations; the texture pool;
@@ -588,10 +594,10 @@ turns it on for every windowed session (`taa_policy = !args.headless || args.for
 the struct default: anything gated on `taa_resolving` is live in the window and dead in a golden,
 so an artifact can be invisible in one and obvious in the other.
 
-**The same policy drops the sample count to 1, and both halves are `EngineConfig` fields**
-(`msaa_samples` and `taa`). `create_engine` reads them in the right order: the count before the
-scene target is built, the TAA switch after the post chain exists. After creation the switch is the
-plain field `postfx->settings->taa_enabled`. Apps that keep four samples do so by decision (spec 11.103):
+**The same policy drops the sample count to 1, and both halves are a view's settings**
+(`samples` and `post.taa_enabled`), written before `create_scene_view` and plain fields after it: a
+changed count rebuilds that view's targets at its next draw. Apps that keep four samples do so by
+decision (spec 11.103):
 - `apps/forest`, `apps/tree` (always) and `apps/gametest` run one sample with TAA, like render.
 - `apps/spores` keeps four because its particles write no motion vector, and TAA turns 32,000 motes
   into dashes.
@@ -606,12 +612,12 @@ under a clamped history cannot, but cost +108% of forest's opaque row and +296% 
 scene's frame to recover nothing the eye finds. The one-sample path carries 11.101's jitter
 instead.
 
-**A 2D app's defaults are one call**, `engine_set_2d_preset`: bloom, glare, local exposure, GTAO,
-SSR, vignette, dither, TAA and shadows off, exposure pinned at unity, the `linear` tone curve (the
-identity with the display encode, which passthrough is not), and a white ambient radiance on the
-scene, under which an albedo is the colour on screen with no light at all. It runs after
-`create_engine`, since the post chain has to exist, and takes the scene for the ambient and shadow
-half. It leaves the overlays alone; a 2D app that wants the FPS counter writes `show_fps`. Through
+**A 2D app's defaults are two calls**, one per half. `scene_view_set_2d_preset` turns bloom,
+glare, local exposure, GTAO, SSR, vignette, dither and TAA off on a view, pins its exposure at
+unity and picks the `linear` tone curve (the identity with the display encode, which passthrough
+is not); `scene_set_2d_preset` turns the scene's shadows off and gives it a white ambient
+radiance, under which an albedo is the colour on screen with no light at all. Both leave the
+overlays alone; a 2D app that wants the FPS counter writes `show_fps`. Through
 the plain defaults a flat red square comes out pink with a halo: the light needed to reach albedo
 through the PBR path pushes red past white, the neutral curve desaturates it, and bloom draws the
 glow.

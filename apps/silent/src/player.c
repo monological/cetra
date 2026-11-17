@@ -102,9 +102,10 @@ static void stand(Player* p, float yaw, float pitch) {
     camera_rig_aim(p->rig, yaw, pitch);
 }
 
-void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em, const vec3 feet,
-                 float yaw, float pitch) {
+void player_init(Player* p, Game* game, SceneView* view, PhysicsWorld* physics, EntityManager* em,
+                 const vec3 feet, float yaw, float pitch) {
     *p = (Player){0};
+    p->scene_view = view;
     p->entity = create_entity(em, "player");
     glm_vec3_copy((vec3){feet[0], feet[1] + CAPSULE_REST + 0.02f, feet[2]}, p->entity->position);
     CharacterControllerConfig cc = character_controller_default_config();
@@ -127,7 +128,7 @@ void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em
     glm_vec3_copy(p->entity->position, p->rig->anchor);
     camera_rig_set_distance(p->rig, 0.0f);
     stand(p, yaw, pitch);
-    engine_set_camera_rig(game->engine, p->rig);
+    scene_view_set_rig(view, p->rig);
 }
 
 // The horizontal velocity asked of the body this step: its heading turned toward what the stick
@@ -189,7 +190,7 @@ static void crouch_frame(Player* p, Game* game, const CharacterController* cc, f
     // under a ceiling the capsule only just clears the view would cut into it. The capsule's
     // height is its top over the feet, since the engine keeps its foot where it was.
     const float tall = 2.0f * ((cc ? cc->half_height : CAPSULE_HALF_HEIGHT) + CAPSULE_RADIUS);
-    const Camera* cam = game->engine->camera;
+    const Camera* cam = p->scene_view ? &p->scene_view->camera : NULL;
     p->gait->lag_above = fmaxf(tall - player_eye_height(p) - (cam ? cam->near_clip : 0.0f), 0.0f);
 }
 

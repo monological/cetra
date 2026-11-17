@@ -23,13 +23,14 @@
 
 struct IBLResources;
 struct Scene;
+struct SceneView;
 
 // Capture policy every caller of scene_capture_faces needs, in one place.
 // Previously each caller hand-wrote it; the two copies had already drifted
 // apart on whether a disabled shadow system still gets baked.
 //
 // Two clauses, both about making the six faces agree with each other:
-//   CASCADES fit the MAIN camera, so a cube face sampling them as layer 0 would
+//   CASCADES fit a view's camera, so a cube face sampling them as layer 0 would
 //   drop its shadows -- forced to the camera-independent single map and baked
 //   once for the whole burst.
 //   THE CLOCK freezes, so wind-displaced geometry is caught at rest and the
@@ -55,8 +56,8 @@ typedef struct SceneCaptureState {
 // emissive surface that is also a derived area panel (spec 11.49) must sit it
 // out, or the panel delivers that light and the capture delivers it again. A
 // reflection probe bakes RADIANCE, which is what a mirror sees, so the same
-// surface must appear. Both go through scene_capture_faces and both raise
-// engine->capturing, which is exactly why that flag cannot answer this.
+// surface must appear. Both go through scene_capture_faces and both draw through
+// the capture's view, which is exactly why that view cannot answer this.
 //
 // A third clause of capture policy, and it belongs here for the reason the two
 // above it do: it was briefly hand-written by one caller with its own
@@ -88,9 +89,9 @@ void scene_capture_end(Engine* engine, struct Scene* scene, const SceneCaptureSt
 //            targets). `ibl` is unused, which is what lets a GI capture run in a
 //            scene with no HDR environment at all.
 //
-// Saves and restores every piece of engine and camera state it substitutes, so a
-// capture leaves the next real frame bit-identical, and raises engine->capturing
-// for the duration so passes that reach outside the bound target sit out.
+// Each face draws through the engine's capture view (Engine.capture_view): its own
+// camera at `position`, no post chain, no overlays, colour alone, so no view the
+// frame draws is touched and passes that reach outside the bound target sit out.
 //
 // Called inside scene_capture_begin/end, which own the policy this does not and
 // prepare the panels and the material variants every face draws with.
@@ -128,10 +129,11 @@ bool capture_budget_take(CaptureBudget* budget, bool first);
 // will draw at. A site that spelled either differently would silently get a
 // second list, or a depth map drawn at levels the camera pass disagrees with.
 //
-// Idempotent within a frame -- the first caller settles both, and the rest
-// reuse. That ordering is load-bearing where a caller is about to substitute
-// the camera: see scene_capture_begin.
-void engine_build_draw_list(Engine* engine, struct Scene* scene);
+// Idempotent within a frame -- the first caller settles the list, and the rest
+// reuse it, each taking `view`'s levels (a capture's view keeps the levels its
+// capture chose). That ordering is load-bearing where a capture is about to
+// choose its own: see scene_capture_begin. NULL view selects from the origin.
+void engine_build_draw_list(Engine* engine, struct Scene* scene, const struct SceneView* view);
 
 // Point every lit material at the variant carrying exactly the features it can
 // use (spec 11.93). Idempotent; the steady state is an integer compare per
@@ -279,27 +281,30 @@ static inline void submit_bind_vao(SubmitState* state, GLuint vao) {
     }
 }
 
-// Bone X-ray visualization
+// Bone X-ray visualization in `view`, over what it drew.
 // Renders skeleton bones as colored lines overlaid on the model
 // If anim_state is provided, shows animated pose in red
 // If skeleton is provided, shows bind pose in green
-void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* anim_state);
+void render_skeleton_bones(Engine* engine, const struct SceneView* view, Skeleton* skeleton,
+                           AnimationState* anim_state);
 
-// X-ray light overlay: position cross per light (tinted by the light's color)
+// X-ray light overlay in `view`: position cross per light (tinted by the light's color)
 // plus a wireframe sphere at its clustered-lighting cull radius. Called by
-// render_current_scene when engine->show_lights is set.
-void render_light_overlay(Engine* engine, Scene* scene);
+// engine_render_scene when the view's show_lights is set.
+void render_light_overlay(Engine* engine, const struct SceneView* view, Scene* scene);
 
 // Whether this frame's list holds anything drawn in the late draw (spec 13.29).
 bool render_has_late_items(const Scene* scene);
 
-// The shadow catcher's quad in world space, or false when it does not draw in `render_mode`.
-bool render_shadow_catcher_box(const Engine* engine, const Scene* scene, RenderMode render_mode,
-                               AABB* out);
+// The shadow catcher's quad in world space, or false when it does not draw in `view`.
+bool render_shadow_catcher_box(const Engine* engine, const Scene* scene,
+                               const struct SceneView* view, AABB* out);
 
 // The scene's MATERIAL_PASS_LATE_DRAW meshes onto the late draw's canvas (spec 13.29), farthest
-// first, each through its own late surface program with the frame's depth, fog and clock bound
-// by name. Called from the late draw, so after this frame's list was built by the scene pass.
-void render_late_items(Engine* engine, const Scene* scene, const PostFXLateDraw* late);
+// first from `view`'s camera, each through its own late surface program with the frame's depth,
+// fog and clock bound by name. Called from the view's late draw, so after this frame's list was
+// built by the scene pass.
+void render_late_items(Engine* engine, const Scene* scene, const struct SceneView* view,
+                       const PostFXLateDraw* late);
 
 #endif // _RENDER_H_

@@ -179,6 +179,7 @@ _Static_assert(SHADOW_TILE_STORE_CELLS <= 64, "the pool's free cells must fit on
 struct Scene;
 struct Engine;
 struct Light;
+struct SceneView;
 
 // One cached light's faces: a run of consecutive tiles of the region, six a view, each view's
 // in the +X -X +Y -Y +Z -Z order a point light's per-frame layers take. A light with a body is
@@ -435,6 +436,9 @@ typedef struct ShadowSystem {
     // The indices into tile_mover_list a kept face draws over its copy, ascending, settled once a
     // depth pass after the movers are. NULL outside the pass that listed them.
     const struct DrawList* tile_mover_list;
+    // The view the running depth pass is fitted to, whose eye its casters morph from and whose
+    // frustum its kept faces are culled by; NULL outside the pass and in a capture's bake.
+    const struct SceneView* drawing_view;
     size_t* tile_mover_items;
     size_t tile_mover_item_count;
     size_t tile_mover_item_capacity;
@@ -665,13 +669,16 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program);
 // NULL system is no rain cover, every point open sky.
 void shadow_bind_rain_cover(const ShadowSystem* system, ShaderProgram* program, int unit);
 
-// Main shadow rendering function
-void render_shadow_depth_pass(struct Engine* engine, struct Scene* scene);
+// Every shadow the frame draws for `view`: the sun's cascades fitted to its camera, the lamps'
+// per-frame layers and their kept faces. NULL view is a capture's bake: the outermost scene-fit
+// map alone, which no camera moves.
+void render_shadow_depth_pass(struct Engine* engine, struct Scene* scene,
+                              const struct SceneView* view);
 
 // The rain's occlusion map: an orthographic depth along the rain's travel, centred on
-// the camera, into its own layer of the punctual array. After render_shadow_depth_pass
-// and regardless of the system's `enabled`, which switches SHADOWS off and not cover.
-// Leaves rain_layer -1 when the scene has no active rain.
+// the focus view's camera, into its own layer of the punctual array. After
+// render_shadow_depth_pass and regardless of the system's `enabled`, which switches SHADOWS
+// off and not cover. Leaves rain_layer -1 when the scene has no active rain or no view.
 void shadow_render_rain_layer(struct Engine* engine, struct Scene* scene);
 
 // Whether the rain reaches a point, for the CPU: ask with the point every frame it matters

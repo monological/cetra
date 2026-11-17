@@ -456,6 +456,16 @@ int scene_add_sss_profile(Scene* scene, const float* color, float radius) {
     return slot;
 }
 
+void scene_set_2d_preset(Scene* scene) {
+    if (!scene)
+        return;
+    // White ambient radiance: the no-environment ambient is radiance times
+    // albedo, so unity here is what makes an authored colour come out exactly.
+    glm_vec3_one(scene->ambient_radiance);
+    if (scene->shadow_system)
+        scene->shadow_system->enabled = false;
+}
+
 void scene_add_material(Scene* scene, Material* material) {
     if (!scene || !material || material->owner == scene)
         return;

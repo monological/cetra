@@ -500,6 +500,10 @@ void scene_add_material(Scene* scene, Material* material);
 // tag each of that material's pixels. Returns -1 if the table is full.
 void scene_reset_sss_profiles(Scene* scene);
 int scene_add_sss_profile(Scene* scene, const float* color, float radius);
+// The scene half of a flat 2D look (scene_view_set_2d_preset is the view's): white ambient
+// radiance, under which a material's albedo reaches the display as authored with no light at all,
+// and the shadows off. A light the app adds then adds to the flat colour rather than replacing it.
+void scene_set_2d_preset(Scene* scene);
 // Give up a material this scene owns, which then belongs to whichever scene registers it next:
 // how a model loaded into a scene of its own lends its materials to the one that draws it.
 // False when this scene does not own it.

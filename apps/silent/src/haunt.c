@@ -202,7 +202,7 @@ static void tint_tv(Haunt* h, float red, float level) {
 // The picture `w` of the way to the haunting's, its finishing put back exactly at none. Not part
 // of apply either: no capture sees the post chain.
 static void grade(Haunt* h, float w) {
-    PostFX* fx = h->house.engine ? h->house.engine->postfx : NULL;
+    PostFXSettings* fx = h->house.view ? &h->house.view->settings.post : NULL;
     if (!fx)
         return;
     const HauntNormal* n = &h->normal;
@@ -212,24 +212,24 @@ static void grade(Haunt* h, float w) {
                           (vec4){GRADE_RED[0], GRADE_RED[1], GRADE_RED[2], GRADE_AMOUNT * w});
     }
     if (w <= 0.0f) {
-        fx->settings->vignette_enabled = n->vignette;
-        fx->settings->vignette_strength = n->vignette_strength;
-        fx->settings->vignette_radius = n->vignette_radius;
-        fx->settings->grain_enabled = n->grain;
-        fx->settings->grain_strength = n->grain_strength;
-        glm_vec3_copy((float*)n->fog_ambient, fx->settings->fog_ambient);
-        fx->settings->fog_ambient_from_sky = n->fog_from_sky;
+        fx->vignette_enabled = n->vignette;
+        fx->vignette_strength = n->vignette_strength;
+        fx->vignette_radius = n->vignette_radius;
+        fx->grain_enabled = n->grain;
+        fx->grain_strength = n->grain_strength;
+        glm_vec3_copy((float*)n->fog_ambient, fx->fog_ambient);
+        fx->fog_ambient_from_sky = n->fog_from_sky;
         return;
     }
-    fx->settings->vignette_enabled = true;
-    fx->settings->vignette_strength = glm_lerp(n->vignette_strength, GRADE_VIGNETTE, w);
-    fx->settings->vignette_radius = glm_lerp(n->vignette_radius, GRADE_VIGNETTE_RADIUS, w);
-    fx->settings->grain_enabled = true;
-    fx->settings->grain_strength = glm_lerp(n->grain ? n->grain_strength : 0.0f, GRADE_GRAIN, w);
+    fx->vignette_enabled = true;
+    fx->vignette_strength = glm_lerp(n->vignette_strength, GRADE_VIGNETTE, w);
+    fx->vignette_radius = glm_lerp(n->vignette_radius, GRADE_VIGNETTE_RADIUS, w);
+    fx->grain_enabled = true;
+    fx->grain_strength = glm_lerp(n->grain ? n->grain_strength : 0.0f, GRADE_GRAIN, w);
     // The fog glows by a light no wall stops, which fills the rooms as a haze and the windows with
     // the street's fog: put out with the rest, leaving it lit only by the lamps that are on.
-    fx->settings->fog_ambient_from_sky = false;
-    glm_vec3_scale((float*)n->fog_ambient, 1.0f - w, fx->settings->fog_ambient);
+    fx->fog_ambient_from_sky = false;
+    glm_vec3_scale((float*)n->fog_ambient, 1.0f - w, fx->fog_ambient);
 }
 
 // The try under way at `u` seconds into the rattle, or the last one begun, walked from the first:
@@ -316,15 +316,15 @@ void haunt_start(Haunt* h, const HauntHouse* house, unsigned int seed) {
             h->street[h->street_count++] = l;
     }
     Engine* engine = house->engine;
-    ShaderProgram* program = engine && engine->postfx
+    ShaderProgram* program = engine && house->view
                                  ? create_post_pass_program("haunt_grade", haunt_grade_shader_str)
                                  : NULL;
     if (program) {
         engine_add_program(engine, program);
-        h->grade = postfx_add_pass(engine->postfx, POSTFX_AT_AFTER_TONEMAP, program);
+        h->grade = scene_view_add_pass(house->view, POSTFX_AT_AFTER_TONEMAP, program);
         if (h->grade)
             h->grade->enabled = false;
-    } else if (engine && engine->postfx) {
+    } else if (engine && house->view) {
         fprintf(stderr, "silent: the haunting's picture is not drained to red, its pass unbuilt\n");
     }
     AudioSystem* audio = house->audio;
@@ -388,15 +388,15 @@ void haunt_begin(Haunt* h, double time, double into) {
         n->street_candela[i] = h->street[i]->intensity;
     if (h->house.scene && h->house.scene->ibl)
         n->sky = h->house.scene->ibl->intensity;
-    const PostFX* fx = h->house.engine ? h->house.engine->postfx : NULL;
+    const PostFXSettings* fx = h->house.view ? &h->house.view->settings.post : NULL;
     if (fx) {
-        n->vignette = fx->settings->vignette_enabled;
-        n->vignette_strength = fx->settings->vignette_strength;
-        n->vignette_radius = fx->settings->vignette_radius;
-        n->grain = fx->settings->grain_enabled;
-        n->grain_strength = fx->settings->grain_strength;
-        glm_vec3_copy((float*)fx->settings->fog_ambient, n->fog_ambient);
-        n->fog_from_sky = fx->settings->fog_ambient_from_sky;
+        n->vignette = fx->vignette_enabled;
+        n->vignette_strength = fx->vignette_strength;
+        n->vignette_radius = fx->vignette_radius;
+        n->grain = fx->grain_enabled;
+        n->grain_strength = fx->grain_strength;
+        glm_vec3_copy((float*)fx->fog_ambient, n->fog_ambient);
+        n->fog_from_sky = fx->fog_ambient_from_sky;
     }
     h->active = true;
     h->began = time - into;

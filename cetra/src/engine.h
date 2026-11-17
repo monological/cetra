@@ -26,6 +26,7 @@
 #include "common.h"
 #include "input.h"
 #include "postfx.h"
+#include "scene_view.h"
 
 /*
  * How the window relates to a display.
@@ -129,30 +130,26 @@ typedef struct Engine {
     // SETTINGS throughout, in feature order, except:
     //
     // ENGINE-OWNED, read only: the window and its sizes, every GL name, every
-    // *_actual / *_ready / target_* record of what was built, the matrices,
-    // the frame clock and counters, idle mode's `time_waited` and `wake`, the
-    // program cache, the async loader, the
-    // input state, the capture state (`capturing`, `capture_kind`), and the
-    // owned subsystems (postfx and its programs, the CRT, the text renderer, the
-    // profiler). What an app
-    // may change among them has a function: engine_set_camera,
+    // *_ready record of what was built, the frame clock and counters, idle
+    // mode's `time_waited` and `wake`, the program cache, the async loader, the
+    // input state, the capture state (`capture_kind`, `capture_view`), and the
+    // owned subsystems (the post programs, the CRT, the text renderer, the
+    // profiler). What an app may change among them has a function:
     // engine_add_scene and the scene selectors, engine_add_program.
     //
-    // BY FUNCTION: msaa_samples, ss_scale and render_scale (each clamps and
-    // rebuilds the targets at the next frame top), window_mode (moves the
-    // window, keeping the windowed rectangle current), vsync (re-applied when a
-    // mode change drops it), typical_size (writes the tuning lengths it sets),
-    // screenshot_path (owned
-    // string), the five callbacks and user_data (installs), and the animation
-    // clock (engine_set_render_clock samples a borrowed one each frame, and
-    // engine_set_render_time sets a frame's directly for a loop that is not
-    // engine_run), the overlays (engine_add_overlay, engine_remove_overlay),
-    // and the close hook (engine_set_close_hook).
+    // BY FUNCTION: the views (engine_add_view, engine_remove_view,
+    // engine_set_focus_view), window_mode (moves the window, keeping the
+    // windowed rectangle current), vsync (re-applied when a mode change drops
+    // it), typical_size (writes the tuning lengths it sets), screenshot_path
+    // (owned string), the five callbacks and user_data (installs), and the
+    // animation clock (engine_set_render_clock samples a borrowed one each
+    // frame, and engine_set_render_time sets a frame's directly for a loop that
+    // is not engine_run), the overlays (engine_add_overlay,
+    // engine_remove_overlay), and the close hook (engine_set_close_hook).
     //
     // Everything else -- the feature toggles, the draw levers, the overlays,
-    // the run's counts, clear_color, current_render_mode -- is
-    // written directly and read at the frame top. The exposure block has
-    // banners of its own.
+    // the run's counts -- is written directly and read at the frame top. What a
+    // view draws and how is its own (scene_view.h).
     GLFWwindow* window;
     char* window_title; // Title of the GLFW window
 
@@ -184,35 +181,6 @@ typedef struct Engine {
     int layers_vt_page_budget;       // page bakes per frame; 0 = the default
     int layers_vt_probe_interval;    // print page residency every N frames; 0 = off
     struct LayersVtFeedback* vt_feedback; // the vote pass's targets + readback ring
-    int ss_scale;                         // Supersampling factor: scene + post render at ss_scale x
-                                          // display resolution, box-downsampled at tone map.
-                                          // 1 = off, 2 = 2x SSAA. engine_set_ss_scale clamps it
-                                          // and the targets rebuild at the next frame top.
-    float render_scale;                   // Render-resolution scale in [0.5, 1]: the scene + the
-                                          // pre-TAA post chain rasterize at this fraction of the
-                                          // post size. 1 = off. engine_set_render_scale clamps it
-                                          // and the targets rebuild at the next frame top.
-    bool render_suspended;                // A render-target rebuild failed; frames are skipped
-                                          // until a size that allocates successfully is set
-    // The size the render targets were last built AT, or last attempted at.
-    // The frame-top sync compares against these, so it both detects a change
-    // and declines to retry a size that already failed.
-    int target_render_w, target_render_h;
-    int target_post_w, target_post_h;
-    // MSAA sample count REQUESTED for the scene framebuffer (1 = off, 4 = 4x).
-    // Runtime-changeable via engine_set_msaa_samples.
-    //
-    // A request the allocator honours at 1: a single-sample request gets a
-    // plain GL_TEXTURE_2D target (spec 11.34), where it used to get a
-    // multisample one the driver silently rounded up to 2. Above 1 the driver
-    // may still adjust the count, so anything reasoning about what the target
-    // actually holds reads msaa_samples_actual; this field is which AA mode was
-    // chosen.
-    int msaa_samples;
-    // What the driver returned for the request above, read back from the scene
-    // FBO at every build. Equal to the request at 1 by construction now; above 1
-    // it is still the driver's answer, not the request's promise.
-    int msaa_samples_actual;
 
     GLFWerrorfun error_callback;
 
@@ -221,62 +189,15 @@ typedef struct Engine {
     KeyCallback key_callback;
     ScrollCallback scroll_callback;
 
-    GLuint framebuffer; // Framebuffer object
-    // The *_multisample_texture names predate spec 11.34: at msaa_samples == 1
-    // these are plain GL_TEXTURE_2D targets, multisample only above that. The
-    // attachment layout and every consumer (all blit-side) are the same either
-    // way, which is why the fields keep their names.
-    GLuint multisample_texture;        // HDR color (attachment 0)
-    GLuint normal_multisample_texture; // Multisample view-space normal .xyz + SSR reflective marker
-                                       // .a (0 model / -1 floor / +alpha A2C) (attachment 1)
-    GLuint aux_multisample_texture;    // Multisample aux G-buffer: motion .xy + linear view-Z .z +
-                                       // effective roughness .w (attachment 2)
-    GLuint albedo_multisample_texture; // Multisample base color for SSGI (attachment 3)
-    GLuint
-        sss_diffuse_multisample_texture; // Multisample skin diffuse irradiance for SSS (attachment
-                                         // 4); 0 off-skin, so it doubles as the SSS mask
-    GLuint spec_multisample_texture;     // Multisample ambient specular (attachment 7; slots 5/6
-                                         // belong to the OIT FBO's attachments)
-    GLuint depth_renderbuffer;           // Depth renderbuffer
-    // Refraction source: mid-frame resolve of the opaque scene into a mipped
-    // RGBA16F texture, created lazily on the first transmissive frame
-    GLuint opaque_color_fbo;
-    GLuint opaque_color_texture;
-    int opaque_color_w, opaque_color_h;
-    // Soft-particle source: mid-frame resolve of the scene depth into a
-    // single-sample depth texture (the MSAA depth renderbuffer isn't sampleable),
-    // created lazily on the first engine_resolve_scene_depth call.
-    GLuint scene_depth_fbo;
-    GLuint scene_depth_texture;
-    int scene_depth_w, scene_depth_h;
-    // Weighted-blended OIT: a lazily-created multisample FBO that shares
-    // depth_renderbuffer (so transparent frags depth-test against opaque geometry
-    // without writing depth). accum (color attachment 5, RGBA16F) sums premultiplied
-    // weighted color; revealage (attachment 6, R16F) multiplies the alpha product.
-    // Only allocated/drawn when oit_enabled; postfx resolves + composites them.
-    GLuint oit_fbo;
-    GLuint oit_accum_multisample_texture;
-    GLuint oit_revealage_multisample_texture;
-    int oit_w, oit_h;
-    // Moment-based OIT (spec 11.17): a second FBO, same shape, that the
-    // generation sub-pass sums absorbance moments into -- b1..b4 at attachment
-    // 5, the total b0 at attachment 6 -- before the accumulate sub-pass weights
-    // colour by them.
-    //
-    // They land in one ATLAS rather than staying two textures because the
-    // accumulate reads them from pbr_frag, which already declares all sixteen
-    // fragment samplers the driver allows -- and the driver counts DECLARED
-    // samplers, not distinct units, so there is no seventeenth even for a unit
-    // that is provably free. The moments have to arrive through the one sampler
-    // that is idle in that sub-pass, which is four floats against their five.
-    // Hence the atlas: twice the render height, b1..b4 in the lower half and b0
-    // in the upper.
-    GLuint moment_fbo;
-    GLuint moment_multisample_texture;    // attachment 5: b1..b4
-    GLuint moment_b0_multisample_texture; // attachment 6: b0 (.r)
-    GLuint moment_atlas_fbo;
-    GLuint moment_atlas_texture;
-    int moment_w, moment_h;
+    // The views the frame draws, in list order (engine_add_view); owned. The focus is one of them,
+    // NULL with none (engine_set_focus_view).
+    struct SceneView** views;
+    size_t view_count;
+    size_t view_capacity;
+    struct SceneView* focus_view;
+    // ENGINE-OWNED: the view every capture face draws through, made on the first capture.
+    struct SceneView* capture_view;
+
     // Clustered-forward lighting (spec 9.1). The module owns its own GPU
     // buffers and scratch; rebuilt per engine_render_scene invocation.
     struct LightClusterContext* light_cluster;
@@ -339,18 +260,7 @@ typedef struct Engine {
     // pass and freed once. Never the list the other passes read. By pointer
     // so the list's type stays internal.
     DrawList* sorted_opaque;
-    bool cluster_debug;          // Tint fragments by cluster light count (heatmap)
-    bool scene_color_this_frame; // Resolve ran this frame; transmissive draws may sample
-    bool normals_this_frame;     // Attachment 1 written this frame (PBR + consumer active)
-    bool aux_this_frame;         // Attachment 2 written this frame (TAA needs motion, or GTAO needs
-                                 // linear-Z)
-    bool albedo_this_frame;      // Attachment 3 (albedo) written this frame (SSGI active)
-    bool sss_this_frame;         // Attachment 4 (skin diffuse) written this frame (SSS active)
-    bool spec_this_frame;        // Attachment 7 (ambient specular) written this frame (split mode)
-    bool oit_this_frame;         // OIT accumulate pass ran this frame (postfx composites oit_fbo)
-    bool moments_this_frame;     // Moment generation ran, so the accumulate weighted by measured
-                             // transmittance rather than the depth curve (changes the composite)
-    bool taa_jitter_this_frame; // The TAA accumulator is live and the projection is jittered
+    bool cluster_debug; // Tint fragments by cluster light count (heatmap)
     // false = the jittered alpha lookup (spec 11.101) stays on the plain fetch
     // even while TAA accumulates. It exists so the crawling Moire the jitter
     // dissolves -- and the churn it cuts -- can be re-measured on demand; a
@@ -358,18 +268,9 @@ typedef struct Engine {
     // turned it off is a session the snapshot claims to reproduce.
     bool alpha_jitter_enabled;
 
-    // The scene is being rendered into an offscreen capture target (a probe face,
-    // a GI probe face) rather than into engine->framebuffer. Set for the duration
-    // of the capture and restored after.
-    //
-    // A capture target carries colour and nothing else, and it is single-sample.
-    // Any pass that reaches outside the bound target, or that keys off the SCENE
-    // framebuffer's shape rather than the bound one, must consult this.
-    bool capturing;
-
     // The capture burst in progress and what its output is for, between scene_capture_begin and
-    // scene_capture_end; SCENE_CAPTURE_NONE outside one. Wider than `capturing`, which is only
-    // the faces: it covers the burst's own shadow passes too.
+    // scene_capture_end; SCENE_CAPTURE_NONE outside one. Wider than a capture view's faces: it
+    // covers the burst's own shadow passes too.
     SceneCaptureKind capture_kind;
 
     // A setting, not capture state: the most of a frame, in milliseconds, the light captures --
@@ -384,8 +285,6 @@ typedef struct Engine {
     struct SubmitStats* capture_submit;
 
     float typical_size; // metres: the size of what the scene holds; engine_set_typical_size
-
-    Camera* camera; // The camera the frame renders (engine_set_camera); borrowed
 
     Scene** scenes;             // Array of scenes managed by the engine
     size_t scene_count;         // Number of scenes
@@ -403,8 +302,6 @@ typedef struct Engine {
 
     Material** materials;  // Global materials used across meshes
     size_t material_count; // Count of global materials
-
-    RenderMode current_render_mode; // default is PBR
 
     float specular_aa_strength;   // Geometric specular AA (0 disables)
     bool energy_comp_enabled;     // Multi-scatter specular energy compensation;
@@ -436,38 +333,6 @@ typedef struct Engine {
                                   // is how a constant-colour surface is authored, so most
                                   // emissive geometry in the wild is not a lamp.
 
-    mat4 view_matrix;
-    mat4 projection_matrix; // Un-jittered truth: frustum culling, motion vectors
-    mat4 view_proj;         // Un-jittered projection*view for the current frame, computed once in
-                            // engine_render_scene (frustum + motion vectors); the scene draws with
-    // a locally sub-pixel-jittered projection derived from projection_matrix
-    mat4 draw_projection; // The projection this frame actually rasterized with (jittered under
-                          // TAA, == projection_matrix otherwise). Postfx passes reconstructing
-                          // positions from the depth buffer must use THIS one: marching rays
-                          // with the un-jittered matrix flips marginal hits every jitter phase,
-                          // and TAA bakes the flicker into stationary crosshatch.
-    mat4 prev_view_proj;  // Previous frame's view_proj, for motion vectors
-    // Where the camera was last frame, in storage space. The CDLOD morph is a
-    // function of the camera, so a static surface really does move when the
-    // camera does; this is what lets the previous-frame position report it.
-    // Stashed beside prev_view_proj, from the same camera it was built from.
-    vec3 prev_camera_position;
-    // Whether the above has ever been written. Without it frame 0 reports the
-    // camera as having travelled from the world ORIGIN, so every morphing vertex
-    // gets a velocity the length of the camera's position -- the same defect
-    // SceneNode.prev_valid exists for, on the other half of the same subtraction,
-    // and it would be strange for the branch to answer it one way for nodes and
-    // another way here.
-    bool prev_camera_valid;
-    // How far the camera moved over the frame just drawn, in storage space: zero on the first
-    // frame. An origin shift moves both ends of it, so it is never counted as travel.
-    vec3 camera_travel;
-
-    // What the scene target is cleared to each frame, linear, where nothing
-    // draws: the backdrop of a scene with no sky. 0.1 grey by default; write
-    // it any time.
-    vec3 clear_color;
-
     // The CRT (spec 13.28): the finished window, the app's overlays on it, shown as a
     // living-room television shows a console's. Off by default.
     bool crt_enabled;
@@ -482,15 +347,9 @@ typedef struct Engine {
     // The overlays, plain writes: the engine re-applies each from its field at
     // the frame top, so nothing has to run when one changes.
     bool show_gui;
-    bool show_wireframe; // Every edge of every face, albedo-only, no culling
-    bool show_xyz;       // The XYZ gizmo on every node, drawn with the scene's xyz program
     bool show_fps;
-    bool show_camera_hud; // Live camera pose overlay next to the FPS readout
-    bool show_bones;      // X-ray bone visualization
-    bool show_lights;     // Light overlay: position cross + cull-radius wireframe
+    bool show_camera_hud; // Live pose of the focus view's camera next to the FPS readout
     bool headless;        // Hidden window, no vsync, fixed frame clock
-    bool headless_jitter; // Apply the TAA sub-pixel jitter even in headless (non-deterministic
-                          // screenshots, but lets temporal accumulation converge for verification)
 
     // Latched at NewFrame time: an ImGui frame is open this iteration and must
     // be closed with a matching igRender. Pairs the begin/end across the loop.
@@ -580,11 +439,7 @@ typedef struct Engine {
     GLuint catcher_vao;
     GLuint catcher_vbo;
 
-    // HDR post-processing (bloom + tone mapping)
-    PostFX* postfx;
-    // What the post chain does: plain settings, written directly at any time (postfx.h)
-    PostFXSettings post_settings;
-    // The post chain's programs, made once and shared by every chain
+    // The post chain's programs, made once and shared by every view's chain
     struct PostFXPrograms* postfx_programs;
 
     // Per-pass GPU time, CPU time and submission counts (specs 11.27, 11.28).
@@ -592,28 +447,11 @@ typedef struct Engine {
     // NULL, so an ordinary run issues no query calls and keeps no counts at all.
     struct Profiler* profiler;
 
-    // The camera's exposure -- read by render.c when it publishes ViewParams,
-    // and by PostFX, which runs the metering that feeds it. On the Engine rather
-    // than inside PostFX because it defines the working space the SCENE passes
-    // write into, which happens before any post runs.
-    //
-    // By value: it is not optional, and a pointer made it look like it was.
-    // Every reader then guarded, differently -- one skipped the ViewParams
-    // upload entirely, which would have left preExposure at the UBO's calloc'd
-    // zero and rendered a black frame as the fallback for an invariant that
-    // cannot fail.
-    Exposure exposure;
-    // What the camera's exposure is set to: plain settings, written directly at any time.
-    ExposureSettings exposure_settings;
-
     InputState input;
     // The scripted input, or NULL for the real devices (engine_set_input_script).
     struct InputScript* input_script;
     // The clipboard of a headless run, owned; a window's is the system's (engine_clipboard_get).
     char* clipboard;
-    // What moves the camera, or NULL for an app that poses it itself
-    // (engine_set_camera_rig); borrowed.
-    struct CameraRig* camera_rig;
 
     // FPS tracking
     double last_frame_time;
@@ -653,65 +491,53 @@ typedef struct Engine {
 // global. It is still the wrong place, because everything between the two reads
 // the graph as it stood here, so the shadow pass and the LOD selection will not
 // see the change until the next frame. A camera pose written there is simply a
-// frame late.
+// frame late. `render` is called once a frame for each view drawn, with the
+// view's own target bound.
 typedef void (*EngineUpdateFunc)(Engine* engine, float dt);
 typedef void (*EnginePreRenderFunc)(Engine* engine, Scene* scene);
-typedef void (*EngineRenderFunc)(Engine* engine, Scene* scene);
+typedef void (*EngineRenderFunc)(Engine* engine, Scene* scene, struct SceneView* view);
 
 // What an engine is created from: the window, and every setting that the
-// window or the first render-target build reads. Fill the fields you mean with
+// window or the engine's init reads. Fill the fields you mean with
 // designated initialisers and leave the rest zero; zero is the default, named
 // beside each field. The config exists because these settings have an ORDER --
 // a hidden window is decided when the window is made, the profiler is built
-// during init, the sample count sizes the first target -- and a struct that
-// init reads is an order nothing can violate from outside.
+// during init -- and a struct that init reads is an order nothing can violate
+// from outside. What a view draws with is the view's (scene_view.h).
 typedef struct EngineConfig {
     const char* title;            // window title; NULL = "Cetra"
     int width, height;            // window size; 0 = 1280 x 720
     bool headless;                // hidden window, vsync off, fixed frame clock
-    bool headless_jitter;         // keep the TAA jitter under headless (non-deterministic frames)
     bool no_vsync;                // swap without waiting for the display; headless implies it
     bool profiler;                // build the per-pass profiler
-    bool taa;                     // temporal anti-aliasing, applied once the post chain is up
-    int msaa_samples;             // scene target sample count; 0 = 4; 1 = off
-    int ss_scale;                 // supersampling factor, clamped to [1, 2]; 0 = 1
-    float render_scale;           // render-resolution scale in [0.5, 1]; 0 = 1
     float typical_size;           // metres: the size of what the scene holds; 0 = 1
     EngineWindowMode window_mode; // 0 = windowed; the window is shown already in it
     const char* monitor;          // display name for a non-windowed mode; NULL = primary
     bool idle;                    // draw only when something asks for a frame (Engine.idle)
 } EngineConfig;
 
-// Creates the window, the GL context, the scene target and the post chain, and
-// registers the built-in programs, all in one call. NULL means every default.
-// Returns NULL with the reason logged when any of that fails.
+// Creates the window and the GL context, and registers the built-in programs
+// and the post chain's, all in one call; the views are the app's to make.
+// NULL means every default. Returns NULL with the reason logged when any of
+// that fails.
 Engine* create_engine(const EngineConfig* cfg);
+// Frees the added views with the rest.
 void free_engine(Engine* engine);
 
-// Supersampling factor (clamped to [1, 2]). The render targets are rebuilt at
-// the next frame top.
-void engine_set_ss_scale(Engine* engine, int ss_scale);
-// Render-resolution scale (clamped to [0.5, 1]). The render targets are rebuilt
-// at the next frame top. Forced to 1 in headless without headless_jitter,
-// which TAAU needs to reconstruct from.
-void engine_set_render_scale(Engine* engine, float render_scale);
 // The size, in metres, of the things the scene holds: 1 for people and rooms, 0.001 for a
 // circuit board (spec 13.57). Every length the engine chooses for itself -- how far an effect
-// looks, a bias, a floor -- is its metre value times this, and this writes PostFX's defaults that
-// way (postfx_reset_lengths) and hands the installed camera rig the size. A camera's planes stay
-// its owner's, or the engine's under Camera.fit_clip. An app sets the size first and its own
-// values after. Refused unless positive and finite.
+// looks, a bias, a floor -- is its metre value times this, and this writes every added view's
+// defaults that way (postfx_settings_reset_lengths) and hands their rigs the size. A camera's
+// planes stay its owner's, or the engine's under Camera.fit_clip. An app sets the size first and
+// its own values after. Refused unless positive and finite.
 void engine_set_typical_size(Engine* engine, float metres);
-// Re-centre the world on the camera, snapped to `lattice` (spec 11.62). Applies
-// at the next frame top like the render-scale switch above, and only on X and Z.
+// Re-centre the world on the focus view's camera, snapped to `lattice` (spec 11.62). Applies at
+// the next frame top, and only on X and Z.
 //
 // The one place the snap is spelled, so a caller driving this by hand and the
 // automatic threshold cannot disagree about where the origin lands -- they did,
 // and the hand-driven copy was the one missing the current origin.
 void engine_recentre_on_camera(const Engine* engine, float lattice);
-// MSAA sample count for the scene framebuffer (clamped to [1, driver max]).
-// 1 disables MSAA. Rebuilds the multisample attachments.
-void engine_set_msaa_samples(Engine* engine, int samples);
 
 // More displays than anyone attaches; a machine with more is warned and sees
 // the first of them.
@@ -788,17 +614,6 @@ void engine_set_window_mode(Engine* engine, EngineWindowMode mode, const char* m
  * Headless swaps without waiting whatever is asked.
  */
 void engine_set_vsync(Engine* engine, bool vsync);
-// The flat-colour preset for a 2D scene. Everything that describes a lens or
-// an atmosphere goes off -- bloom, GTAO, SSR, vignette, dither, TAA, shadows --
-// exposure pins at unity with adaptation and local exposure off, the tone curve is the identity,
-// and the scene's ambient radiance becomes white, under which a material's
-// albedo reaches the display as authored with no light in the scene at all.
-// Left alone on purpose: the sample count, since multisampling is the
-// anti-aliasing 2D line art wants, the clear colour, the overlays, and any
-// light the app adds on top, which then adds to the flat colour rather than
-// replacing it. All of it is plain fields, so an app that wants one back
-// writes it after the call. The scene half is skipped when `scene` is NULL.
-void engine_set_2d_preset(Engine* engine, Scene* scene);
 // Where the final frame is written on exit, PPM; NULL clears it. Owned.
 void engine_set_screenshot_path(Engine* engine, const char* path);
 // Adds a post-tone-map draw at `order`, `user` borrowed. False, and nothing
@@ -827,9 +642,6 @@ bool engine_gui_wants_keyboard(void);
 const char* engine_clipboard_get(Engine* engine);
 // Puts `text` on the clipboard, copied; NULL is the empty string.
 void engine_clipboard_set(Engine* engine, const char* text);
-
-// The camera the frame renders; refuses NULL.
-void engine_set_camera(Engine* engine, Camera* camera);
 
 // A material's texture from a file, decoded on the engine's loader threads (spec 13.39): `path`
 // resolves against `pool`'s directory as texture_load_file's does, and `set` -- a
@@ -873,13 +685,14 @@ void engine_set_user_data(Engine* engine, void* user_data);
 void* engine_get_user_data(const Engine* engine);
 
 // The unified main loop: owns the frame skeleton (dt, FPS, GUI frame, transform
-// propagation, shadow pass, G-buffer setup, present, screenshot, swap). The
-// three hooks run in the order they are declared -- `update` once per frame
-// before anything reads the scene, `pre_render` after the sky and origin shift
-// and immediately before the graph is propagated, `render` to draw. Any of them
-// may be NULL, and a NULL `render` draws the scene itself (engine_render_scene);
-// a hook there is for what an app does around that draw. The render apps and
-// the game framework's game_run all drive the engine through it.
+// propagation, each view's shadow pass, G-buffer setup and post chain, present,
+// screenshot, swap). The three hooks run in the order they are declared --
+// `update` once per frame before anything reads the scene, `pre_render` after
+// the sky and origin shift and immediately before the graph is propagated,
+// `render` to draw each view. Any of them may be NULL, and a NULL `render`
+// draws the scene itself (engine_render_scene); a hook there is for what an app
+// does around that draw. The render apps and the game framework's game_run all
+// drive the engine through it.
 void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre_render,
                 EngineRenderFunc render);
 
@@ -926,12 +739,13 @@ void engine_end_work(Engine* engine);
  */
 void engine_set_close_hook(Engine* engine, EngineCloseFunc fn, void* user);
 
-// Draws `scene` through every scene pass, into the engine's scene target. What
-// a `render` hook calls with the scene it was handed, which is the one the
-// engine just propagated. Animation time comes from engine->render_time,
-// latched once per frame before any pass, so this and the shadow depth pass
-// cannot disagree about where wind-displaced geometry is.
-void engine_render_scene(Engine* engine, Scene* scene);
+// Draws `scene` through every scene pass from `view`'s camera, into the view's
+// scene target. What a `render` hook calls with the scene and the view it was
+// handed, the scene being the one the engine just propagated. Animation time
+// comes from engine->render_time, latched once per frame before any pass, so
+// this and the shadow depth pass cannot disagree about where wind-displaced
+// geometry is.
+void engine_render_scene(Engine* engine, Scene* scene, struct SceneView* view);
 
 // Substitute an animation clock for the wall clock. `clock` is borrowed and must
 // outlive the loop; engine_run samples it each frame after the update callback
@@ -991,30 +805,8 @@ bool engine_fb_to_points(const Engine* engine, double fb_x, double fb_y, double*
  */
 bool engine_set_input_script(Engine* engine, const char* path);
 
-/*
- * What moves the camera this frame (spec 12.19). Borrowed: the app owns the rig
- * and must outlive the engine's use of it. NULL puts the camera back under the
- * app's own hand.
- *
- * The engine runs the installed rig immediately BEFORE it derives the view and
- * projection matrices, which is spec 11.107's rule extended rather than
- * replaced: an app writes the rig's anchor and its input in the pre-render hook
- * and nothing else, and the engine turns that into a pose and then into
- * matrices. An app that posed the camera in its hook still works -- there is
- * simply no rig to run.
- *
- * ONE rig, deliberately. Five apps each hand-rolled a guard to stop two things
- * writing the camera in the same frame, every one of them reasoned out
- * independently, and a single slot is what makes those guards unnecessary
- * rather than uniform. Installing a second rig replaces the first and says so,
- * because a silent swap is how two writers start fighting. Installing gives the
- * rig the engine's typical size.
- */
-void engine_set_camera_rig(Engine* engine, struct CameraRig* rig);
-
-// The world point under a framebuffer position, on the plane through the
-// press's pick at the eye's distance from it: where a dragged node goes.
-void engine_mouse_to_drag_plane(Engine* engine, double mouse_fb_x, double mouse_fb_y,
-                                vec3 out_world_pos);
+// The shown view under a framebuffer position, +Y up: the last in list order whose rectangle holds
+// it, so the one drawn on top. NULL over none.
+struct SceneView* engine_view_at(const Engine* engine, double fb_x, double fb_y);
 
 #endif // _ENGINE_H_

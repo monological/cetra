@@ -35,6 +35,11 @@
 static ShaderProgram* g_pbr = NULL;
 static CameraRig* g_rig = NULL;
 static CameraDrag* g_drag = NULL;
+// The one view, filling the window, and what main's flags ask of it.
+static SceneView* g_view = NULL;
+static bool g_force_taa = false;
+static bool g_headless_jitter = false;
+static int g_msaa = 0;         // 0 = the view's default
 static bool g_use_cpu = false; // --cpu: use the CPU sim backend instead of GPU transform feedback
 
 // A glass sphere that wanders through the cloud, pushing the dust (keep-OUT
@@ -126,6 +131,28 @@ static void on_init(Game* game) {
     Engine* engine = game->engine;
     g_pbr = engine_get_program(engine, CETRA_PROGRAM_PBR);
 
+    // The one view: an orbit camera looking into the room, with main's AA choices.
+    SceneViewSettings view_settings;
+    engine_init_view_settings(engine, &view_settings);
+    view_settings.post.taa_enabled = g_force_taa;
+    if (g_msaa > 0)
+        view_settings.samples = g_msaa;
+    view_settings.headless_jitter = g_headless_jitter;
+    const SceneViewDesc view_desc = {.camera = {.position = {0.0f, 6.0f, 22.0f},
+                                                .look_at = {0.0f, 4.0f, 0.0f},
+                                                .fov = 0.9f,
+                                                .near = 0.1f,
+                                                .far = 200.0f},
+                                     .settings = &view_settings,
+                                     .fills_window = true};
+    g_view = create_scene_view(engine, &view_desc);
+    if (!g_view || !engine_add_view(engine, g_view)) {
+        free_scene_view(g_view);
+        g_view = NULL;
+        game_quit(game);
+        return;
+    }
+
     // FPS readout pinned top-right (like the render app). Skipped in headless: the
     // digits change per run and would break screenshot determinism.
     engine->show_fps = !engine->headless;
@@ -139,22 +166,22 @@ static void on_init(Game* game) {
     // normalizes the metered mean toward middle gray, which for this lit room
     // is too bright for the intended dim interior -- the bias underexposes it
     // back down (photographic exposure compensation; auto-adaptation stays on).
-    engine->exposure.settings->multiplier = 0.15f;
-    if (engine->postfx) {
+    g_view->settings.exposure.multiplier = 0.15f;
+    {
         // Thin volumetric haze so the flashlight throws a visible beam shaft.
         // Kept low-density with near-zero ambient so the room stays moody and
         // the beam dominates rather than a general grey wash.
-        engine->postfx->settings->fog_enabled = true;
+        g_view->settings.post.fog_enabled = true;
         // Low density keeps extinction (scene dimming) small; sun_boost scales
         // the in-scatter only, so it brightens the beam without washing the room.
-        engine->postfx->settings->fog_density = 0.035f;
-        engine->postfx->settings->fog_height_falloff = 9.0f;
-        engine->postfx->settings->fog_floor_y = 0.0f;
-        engine->postfx->settings->fog_far = 40.0f;
-        engine->postfx->settings->fog_anisotropy = 0.82f; // strong forward scatter -> punchy beam
-        engine->postfx->settings->fog_sun_boost = 3.5f;
-        glm_vec3_copy((vec3){0.004f, 0.004f, 0.004f}, engine->postfx->settings->fog_ambient);
-        engine->postfx->settings->fog_ambient_from_sky = false;
+        g_view->settings.post.fog_density = 0.035f;
+        g_view->settings.post.fog_height_falloff = 9.0f;
+        g_view->settings.post.fog_floor_y = 0.0f;
+        g_view->settings.post.fog_far = 40.0f;
+        g_view->settings.post.fog_anisotropy = 0.82f; // strong forward scatter -> punchy beam
+        g_view->settings.post.fog_sun_boost = 3.5f;
+        glm_vec3_copy((vec3){0.004f, 0.004f, 0.004f}, g_view->settings.post.fog_ambient);
+        g_view->settings.post.fog_ambient_from_sky = false;
     }
 
     Scene* scene = create_scene();
@@ -214,19 +241,12 @@ static void on_init(Game* game) {
         scene->shadow_system->pcss_enabled = true;
     }
 
-    // Orbit camera looking into the room.
-    CameraDesc cam_desc = {.position = {0.0f, 6.0f, 22.0f},
-                           .look_at = {0.0f, 4.0f, 0.0f},
-                           .fov = 0.9f,
-                           .near = 0.1f,
-                           .far = 200.0f};
-    Camera* cam = create_camera(&cam_desc);
-    engine_set_camera(engine, cam);
-
+    // The orbit camera's rig, posed where the view's camera starts.
+    const Camera* cam = &g_view->camera;
     g_rig = create_camera_rig();
-    camera_rig_set_pose(g_rig, cam->position, cam->look_at);
-    g_drag = create_camera_drag(engine, g_rig);
-    engine_set_camera_rig(engine, g_rig);
+    camera_rig_set_pose(g_rig, (float*)cam->position, (float*)cam->look_at);
+    g_drag = create_camera_drag(engine, g_view, g_rig);
+    scene_view_set_rig(g_view, g_rig);
 
     // The wandering glass sphere (moved each fixed step in on_update).
     g_sphere_node = add_glass_sphere(root, SPHERE_RADIUS);
@@ -303,7 +323,7 @@ static void on_pre_render(Game* game, double alpha) {
     }
 }
 
-static void on_render(Game* game, double alpha) {
+static void on_render(Game* game, SceneView* view, double alpha) {
     (void)alpha;
     Engine* engine = game->engine;
     Scene* scene = game->scene;
@@ -317,13 +337,14 @@ static void on_render(Game* game, double alpha) {
 
     // The scene's particle systems are ticked + drawn by the engine; nothing to
     // do here but render the scene.
-    engine_render_scene(engine, scene);
+    engine_render_scene(engine, scene, view);
 }
 
 static void on_shutdown(Game* game) {
+    (void)game;
     // The particle system is owned by the scene (freed in free_scene).
     // Unnested: create_camera_drag can fail, and the rig must free either way.
-    engine_set_camera_rig(game->engine, NULL);
+    scene_view_set_rig(g_view, NULL);
     free_camera_drag(g_drag);
     free_camera_rig(g_rig);
     g_drag = NULL;
@@ -352,7 +373,7 @@ static void key_callback(Engine* engine, int key, int scancode, int action, int 
             engine->show_camera_hud = !engine->show_camera_hud;
             break;
         case GLFW_KEY_L:
-            engine->show_lights = !engine->show_lights;
+            g_view->settings.show_lights = !g_view->settings.show_lights;
             break;
         default:
             break;
@@ -362,8 +383,6 @@ static void key_callback(Engine* engine, int key, int scancode, int action, int 
 int main(int argc, char** argv) {
     GameConfig config = {.engine = {.title = "Cetra Spores", .width = 1280, .height = 720}};
 
-    bool force_taa = false;
-    int msaa = 0;
     int frames = 0;
     const char* screenshot = NULL;
     int screenshot_every = 0;
@@ -384,11 +403,11 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "--cpu") == 0) {
             g_use_cpu = true;
         } else if (strcmp(argv[i], "--taa") == 0) {
-            force_taa = true;
+            g_force_taa = true;
         } else if (strcmp(argv[i], "--headless-jitter") == 0) {
-            config.engine.headless_jitter = true;
+            g_headless_jitter = true;
         } else if (strcmp(argv[i], "--msaa") == 0 && i + 1 < argc) {
-            msaa = atoi(argv[++i]);
+            g_msaa = atoi(argv[++i]);
         }
     }
 
@@ -403,11 +422,9 @@ int main(int argc, char** argv) {
     // giving the particle pass a motion vector could, and that is a question
     // about the pass rather than about a default.
     //
-    // The flags below are what measured it and stay for the next attempt. --taa
+    // The flags above are what measured it and stay for the next attempt. --taa
     // is an explicit opt-in with no policy behind it, so a windowed session is
-    // unchanged unless it asks.
-    config.engine.taa = force_taa;
-    config.engine.msaa_samples = msaa;
+    // unchanged unless it asks; on_init hands them to the view.
 
     Game* game = create_game(&config);
     if (!game) {

@@ -7,7 +7,9 @@ linked doc explains the subsystem. `cetra/src/ext/` is vendored and not listed.
 
 | Module | Purpose |
 |--------|---------|
-| `engine.c/h` | The window, the frame loop, idle mode, input and the input script, the G-buffer, the program cache and the embedded post chain. See `docs/architecture.md`. |
+| `engine.c/h` | The window, the frame loop and its views, idle mode, input and the input script, the program cache and the shared post programs. See `docs/architecture.md`. |
+| `scene_view.c/h` | A view: its camera, rig and settings, its targets (the G-buffer and the resolves) built to its size, and the picking rays from a point in it. See `docs/architecture.md`. |
+| `scene_view_state.h` | Private: what the engine keeps per view (targets, matrices, last frame's camera, the chain, the meter, the cloud march) and the pass brackets on its targets. |
 | `engine_internal.h` | Private: the pass brackets and frame plumbing the renderer, shadows, captures and post chain call between them, and the lit-surface variant cache. |
 | `input.c/h` | The engine's input state: keys, the ordered typed-key list, the pointer and its latched press and release, and the platform's shortcut modifiers. |
 | `scene.c/h` | The scene graph and its transform walk, and what a scene owns: lights, materials and their skin profiles, particles, shadows, IBL, sky, probes, GI, water, rain. See `docs/architecture.md`. |
@@ -70,7 +72,7 @@ linked doc explains the subsystem. `cetra/src/ext/` is vendored and not listed.
 | `water_bounds.h` | Where a water is: its rectangle less its dry shapes, the same rule as `include/water_bounds.glsl`. See `docs/shader-subsystems.md`. |
 | `shore_runup.c/h`, `shore_chain.c/h` | The shore's run-up on the CPU, twin of the shader's, and the swash film's Lagrangian chains. See `docs/shader-subsystems.md`. |
 
-## Post-processing (on Engine)
+## Post-processing (one chain per view)
 
 | Module | Purpose |
 |--------|---------|

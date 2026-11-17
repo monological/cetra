@@ -31,6 +31,7 @@
 #include "common.h"
 #include "engine.h"
 #include "engine_internal.h"
+#include "scene_view_state.h"
 #include "ltc.h"
 #include "render.h"
 #include "profiler.h"
@@ -86,25 +87,27 @@ CullView render_cull_view(const Engine* engine, const Scene* scene, const Frustu
 // every item's bit once, and arm the camera view. Static because the frame
 // site in engine_render_scene is its only legal caller -- anywhere else is
 // either before the transforms are final or inside a capture.
-static void render_occlusion_pass(Engine* engine, Scene* scene, CullView* cull) {
-    if (!engine->occlusion_cull_enabled || !engine->occlusion || !engine->camera)
+static void render_occlusion_pass(Engine* engine, Scene* scene, const SceneView* view,
+                                  CullView* cull) {
+    if (!engine->occlusion_cull_enabled || !engine->occlusion)
         return;
     DrawList* list = scene->draw_list;
     // The whole off state for an unoccluded scene: two integer compares.
     if (scene->occluder_count == 0 && list->occluder_flag_count == 0)
         return;
 
+    const SceneViewState* vs = view->state;
     vec4 eye;
-    if (engine->camera->is_orthographic) {
+    if (view->camera.is_orthographic) {
         // An eye at infinity: w = 0, along the view matrix's third rotation row.
-        eye[0] = engine->view_matrix[0][2];
-        eye[1] = engine->view_matrix[1][2];
-        eye[2] = engine->view_matrix[2][2];
+        eye[0] = vs->view_matrix[0][2];
+        eye[1] = vs->view_matrix[1][2];
+        eye[2] = vs->view_matrix[2][2];
         eye[3] = 0.0f;
     } else {
-        glm_vec4(engine->camera->position, 1.0f, eye);
+        glm_vec4((float*)view->camera.position, 1.0f, eye);
     }
-    occlusion_begin(engine->occlusion, engine->view_proj, eye);
+    occlusion_begin(engine->occlusion, (vec4*)vs->view_proj, eye);
     for (int i = 0; i < scene->occluder_count; ++i)
         occlusion_add_box(engine->occlusion, scene->occluders[i].box_min,
                           scene->occluders[i].box_max, NULL);
@@ -167,9 +170,10 @@ void render_update_skinning_uniforms(ShaderProgram* program, const Mesh* mesh,
 // Uploaded per program switch rather than per material because
 // _update_program_material_uniforms has no Engine, and widening its signature
 // to reach postfx would be a far larger blast radius than one call here.
-static void _upload_skin_preint_uniforms(const Engine* engine, const Scene* scene,
+static void _upload_skin_preint_uniforms(const SceneView* view, const Scene* scene,
                                          UniformManager* u) {
-    const PostFX* fx = engine->postfx;
+    const SceneViewState* vs = view->state;
+    const PostFX* fx = vs->postfx;
     if (!fx)
         return;
     GLint prof_loc = uniform_location(u, "sssProfiles[0]");
@@ -186,8 +190,8 @@ static void _upload_skin_preint_uniforms(const Engine* engine, const Scene* scen
     // the pass also needs a scene that actually carries subsurface and a PBR
     // frame mode (engine.c). Reading the toggle instead leaves the same defect
     // reachable through a debug render mode.
-    float reach = engine->sss_this_frame
-                      ? postfx_sss_max_sigma_per_depth(fx, engine->projection_matrix)
+    float reach = vs->sss_this_frame
+                      ? postfx_sss_max_sigma_per_depth(fx, (vec4*)vs->projection_matrix)
                       : 0.0f;
     uniform_set_float(u, "sssMaxScatterPerDepth", reach);
 }
@@ -416,7 +420,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     glActiveTexture(GL_TEXTURE0);
 }
 
-static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
+static void _update_camera_uniforms(ShaderProgram* program, const Camera* camera) {
     if (!program || !program->uniforms || !camera)
         return;
 
@@ -432,9 +436,9 @@ static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
 // would read every surface as open sky, and a probe never re-captures -- a roofed floor
 // would stay soaked in it. Only where a cover is coming: with no shadow system, or a rain
 // that draws none, the camera reads open sky everywhere too, and a capture should agree.
-static const Rain* _rain_for_pass(const Engine* engine, const Scene* scene) {
+static const Rain* _rain_for_pass(const SceneView* sv, const Scene* scene) {
     const Rain* rain = scene ? scene->rain : NULL;
-    if (engine->capturing && rain_active(rain) && rain->occlusion_extent > 0.0f &&
+    if (sv->state->capturing && rain_active(rain) && rain->occlusion_extent > 0.0f &&
         scene->shadow_system && scene->shadow_system->rain_layer < 0)
         return NULL;
     return rain;
@@ -456,9 +460,11 @@ static SubmitStats* _submit_stats(const Engine* engine) {
 // everything below -- the program switch, the material uniforms and their
 // textures, skinning, the alpha-to-coverage bracket, the instanced draw -- is
 // what the two passes have to agree on, and one copy cannot disagree.
-static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* item, Camera* camera,
-                         mat4 view, mat4 projection, RenderMode render_mode, SubmitState* state,
-                         SubmitPass pass, size_t instances) {
+static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* item,
+                         const SceneView* sv, mat4 view, mat4 projection, RenderMode render_mode,
+                         SubmitState* state, SubmitPass pass, size_t instances) {
+    const SceneViewState* vs = sv->state;
+    const Camera* camera = &sv->camera;
     const SceneNode* node = item->node;
     Mesh* mesh = item->mesh;
     // Only the opaque pass submits the opaque lane, so the lane says which pass
@@ -473,15 +479,14 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
     // A2C path would keep every fragment down to alpha 0.02, so masked geometry
     // would render as solid quads. Fall back to the binary cutoff there.
     //
-    // msaa_samples describes the SCENE framebuffer, which is not what is bound
-    // during a capture -- capture targets are always single-sample, so reading
-    // it alone would take the A2C path with no coverage hardware behind it and
-    // bake solid quads into the capture.
-    // The REQUEST, which since spec 11.34 the allocator honours at 1 -- so the
-    // divergence this comment used to hedge against is gone, and request and
-    // actual agree on the shipping path. The field is still the right one to
-    // read: this asks "which AA mode did the app choose", not "what did the
-    // driver allocate".
+    // A capture's view has no scene framebuffer -- capture targets are always
+    // single-sample, so reading a count alone would take the A2C path with no
+    // coverage hardware behind it and bake solid quads into the capture.
+    // The count the view's targets were built at, the request clamped, which
+    // since spec 11.34 the allocator honours at 1 -- so the divergence this
+    // comment used to hedge against is gone, and request and actual agree on
+    // the shipping path. It is still the right one to read: this asks "which
+    // AA mode did the app choose", not "what did the driver allocate".
     //
     // Kept for the record: routing this to msaa_samples_actual back when a
     // 1-sample request came back as 2 was tried and rejected. It switched
@@ -497,7 +502,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
     // edges under TAA are what hashed alpha testing is for -- spec 11.31 defers
     // to it and 11.87 chose sharpening instead, with the paper on hand at
     // docs/papers/ so the comparison is a decision rather than a preference.
-    bool a2c_capable = engine->msaa_samples > 1 && !engine->capturing;
+    bool a2c_capable = vs->msaa_samples_built > 1 && !vs->capturing;
     SubmitStats* stats = _submit_stats(engine);
 
     {
@@ -515,9 +520,9 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // frame in engine_render_scene.
             uniform_set_mat4(u, "view", (const float*)view);
             uniform_set_mat4(u, "projection", (const float*)projection);
-            uniform_set_mat4(u, "uCurrViewProjNoJitter", (const float*)engine->view_proj);
-            uniform_set_mat4(u, "uPrevViewProj", (const float*)engine->prev_view_proj);
-            engine_upload_displacement_uniforms(engine, scene, u);
+            uniform_set_mat4(u, "uCurrViewProjNoJitter", (const float*)vs->view_proj);
+            uniform_set_mat4(u, "uPrevViewProj", (const float*)vs->prev_view_proj);
+            engine_upload_displacement_uniforms(engine, scene, sv, u);
             uniform_set_int(u, "renderMode", render_mode);
             uniform_set_float(u, "specularAAStrength", engine->specular_aa_strength);
             uniform_set_int(u, "energyCompEnabled", engine->energy_comp_enabled ? 1 : 0);
@@ -532,8 +537,8 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // projection and depth. Baking a view-dependent falloff into an
             // irradiance probe shows up later as GI that changes when you move.
             uniform_set_int(u, "skinPreintEnabled",
-                            engine->skin_preint_enabled && !engine->capturing ? 1 : 0);
-            _upload_skin_preint_uniforms(engine, scene, u);
+                            engine->skin_preint_enabled && !vs->capturing ? 1 : 0);
+            _upload_skin_preint_uniforms(sv, scene, u);
             uniform_set_int(u, "clusterDebug", engine->cluster_debug ? 1 : 0);
             // Asserted by every pass rather than cleaned up by the one that set
             // it: the prepass and the shading pass carry their own SubmitState,
@@ -541,20 +546,20 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // is. A shading pass that inherited a stale DEPTH_ONLY would return
             // before writing any colour and the surface would simply vanish.
             uniform_set_int(u, "passMode", pass);
-            uniform_set_int(u, "oitMomentWeighted", engine->moments_this_frame ? 1 : 0);
+            uniform_set_int(u, "oitMomentWeighted", vs->moments_this_frame ? 1 : 0);
             // Split ambient specular only where attachment 7 is live: the
             // opaque pass of a split-mode PBR frame. The late/OIT passes and
             // captures draw into targets with no attachment 7, so their
             // specular must stay inline or it is silently discarded.
             uniform_set_int(u, "splitAmbientSpec",
-                            engine->spec_this_frame && !alpha_pass && !engine->capturing ? 1 : 0);
-            uniform_set_int(u, "captureDiffuseOnly", engine->capturing ? 1 : 0);
+                            vs->spec_this_frame && !alpha_pass && !vs->capturing ? 1 : 0);
+            uniform_set_int(u, "captureDiffuseOnly", vs->capturing ? 1 : 0);
             // The jittered alpha lookup (spec 11.101) is live only while TAA
             // accumulates -- with no accumulator its per-frame noise arrives
             // raw -- and never in a capture, where a probe would bake one
             // frame of noise and idle on it.
             const bool alpha_jitter =
-                engine->taa_jitter_this_frame && engine->alpha_jitter_enabled && !engine->capturing;
+                vs->taa_jitter_this_frame && engine->alpha_jitter_enabled && !vs->capturing;
             uniform_set_int(u, "alphaJitter", alpha_jitter ? 1 : 0);
             // Unit 6 has two disjoint tenants. The moment-weighted accumulate
             // binds the moment atlas there; every other pass binds the
@@ -565,14 +570,14 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // They cannot collide, and not by convention: the accumulate draws
             // only non-transmissive meshes, and that is the same routing that
             // makes sceneColorTex unreadable there.
-            bool moments_bound = pass == SUBMIT_PASS_OIT_ACCUMULATE && engine->moments_this_frame &&
-                                 engine->moment_atlas_texture != 0;
+            bool moments_bound = pass == SUBMIT_PASS_OIT_ACCUMULATE && vs->moments_this_frame &&
+                                 vs->moment_atlas_texture != 0;
             uniform_set_int(u, "sceneColorAvailable",
-                            engine->scene_color_this_frame && !moments_bound ? 1 : 0);
-            if (moments_bound || engine->scene_color_this_frame) {
+                            vs->scene_color_this_frame && !moments_bound ? 1 : 0);
+            if (moments_bound || vs->scene_color_this_frame) {
                 glActiveTexture(GL_TEXTURE0 + TEXUNIT_SCENE_COLOR);
-                glBindTexture(GL_TEXTURE_2D, moments_bound ? engine->moment_atlas_texture
-                                                           : engine->opaque_color_texture);
+                glBindTexture(GL_TEXTURE_2D,
+                              moments_bound ? vs->moment_atlas_texture : vs->opaque_color_texture);
                 glActiveTexture(GL_TEXTURE0);
             }
             // Unit 6's THIRD tenant, and the only one disjoint by PASS rather than
@@ -587,7 +592,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // Excluded from captures for the reason splitAmbientSpec above is: a
             // probe converges and then idles, so a dapple baked into one freezes
             // while the visible one keeps moving with the wind.
-            if (pass == SUBMIT_PASS_SHADE && !alpha_pass && !engine->capturing)
+            if (pass == SUBMIT_PASS_SHADE && !alpha_pass && !vs->capturing)
                 sky_bind_cloud_shadow(scene ? scene->sky : NULL, program, TEXUNIT_SCENE_COLOR);
             else
                 uniform_set_int(u, "cloudShadowLight", -1);
@@ -597,7 +602,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // describe a different instant of the swash than the water surface draws.
             water_bind_sea(scene ? scene->water : NULL, scene, program);
             // And how soaked the world is, for the same reason and on the same switch.
-            rain_bind_surface(_rain_for_pass(engine, scene), program);
+            rain_bind_surface(_rain_for_pass(sv, scene), program);
             // Both are read only inside an OIT sub-pass, so they upload only
             // there: the warp interval the moments are stated over, and (where
             // the atlas is actually bound) the reciprocal FRAME size. The atlas
@@ -609,8 +614,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
                 uniform_set_vec2(u, "oitNearFar", near_far);
             }
             if (moments_bound) {
-                const float inv_size[2] = {1.0f / (float)engine->moment_w,
-                                           1.0f / (float)engine->moment_h};
+                const float inv_size[2] = {1.0f / (float)vs->moment_w, 1.0f / (float)vs->moment_h};
                 uniform_set_vec2(u, "oitMomentInvSize", inv_size);
             }
             _update_camera_uniforms(program, camera);
@@ -770,11 +774,11 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
 
         // Resolved here, as render.h asks: under wireframe the whole pass runs
         // with culling off, so no item may toggle it.
-        bool two_sided = (item->flags & DRAW_DOUBLE_SIDED) && !engine->show_wireframe;
+        bool two_sided = (item->flags & DRAW_DOUBLE_SIDED) && !sv->settings.show_wireframe;
         // A fur coat's shells, in this pass alone and never in a capture: the skinned stage
         // draws one object a run, which leaves its instances to be the shells.
         size_t copies = instances;
-        if (pass == SUBMIT_PASS_SHADE && !engine->capturing && program->fur_shells &&
+        if (pass == SUBMIT_PASS_SHADE && !vs->capturing && program->fur_shells &&
             mat->fur_layers > 0)
             copies = (size_t)mat->fur_layers + 1;
         submit_draw_run(state, u, item, copies, two_sided, stats);
@@ -933,27 +937,39 @@ void engine_resolve_material_variants(Engine* engine, Scene* scene) {
     }
 }
 
-// The CPU-only scope, because this runs more than once per frame and issues no
-// GL. A GPU scope would refuse the second open and time only the first, which
-// on a scene that re-parents nodes between the two calls is the wrong one:
-// both flatten for real, and the row would report half the cost.
-// How the camera picks its levels.
-static LodSelect _camera_lod(const Engine* engine) {
+// How a view's camera picks its levels; with no view, every item at the origin's.
+static LodSelect _view_lod(const Engine* engine, const SceneView* view) {
     LodSelect lod = {.enabled = engine->lod_enabled, .bias = engine->lod_bias};
-    if (engine->camera) {
-        glm_vec3_copy(engine->camera->position, lod.eye);
-        lod.ortho_height = camera_ortho_height(engine->camera);
+    if (view) {
+        glm_vec3_copy((float*)view->camera.position, lod.eye);
+        lod.ortho_height = camera_ortho_height(&view->camera);
     }
     return lod;
 }
 
-void engine_build_draw_list(Engine* engine, Scene* scene) {
+// Whether any added view shows the axis gizmos, which the one list then carries for every view.
+static bool _any_view_shows_xyz(const Engine* engine) {
+    for (size_t i = 0; i < engine->view_count; i++)
+        if (engine->views[i]->settings.show_xyz)
+            return true;
+    return false;
+}
+
+// The CPU-only scope, because this runs more than once per frame and issues no
+// GL. A GPU scope would refuse the second open and time only the first, which
+// on a scene that re-parents nodes between the two calls is the wrong one:
+// both flatten for real, and the row would report half the cost.
+void engine_build_draw_list(Engine* engine, Scene* scene, const SceneView* view) {
     if (!engine || !scene)
         return;
     profiler_cpu_scope_begin(engine->profiler, "draw list build");
-    const LodSelect lod = _camera_lod(engine);
+    const LodSelect lod = _view_lod(engine, view);
     draw_list_build(scene->draw_list, scene, engine->total_frames ^ (scene_graph_epoch() << 32),
-                    &lod, engine->show_xyz);
+                    &lod, _any_view_shows_xyz(engine));
+    // Built this frame from another view's eye, it takes this one's levels -- unless this is a
+    // capture's, which selects its own for the face it draws.
+    if (view && !view->state->capturing)
+        draw_list_select_lod(scene->draw_list, &lod);
     profiler_cpu_scope_end(engine->profiler);
 }
 
@@ -1082,7 +1098,7 @@ static bool item_is_prepassable(const DrawItem* item) {
 // sit ABOVE its depth-only exits, so any other mode would write colour and never
 // reach the coverage decision at all.
 static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* list,
-                                  Camera* camera, mat4 view, mat4 projection,
+                                  const SceneView* sv, mat4 view, mat4 projection,
                                   const CullView* cull) {
     if (!engine->depth_prepass_program || !scene || !list)
         return false;
@@ -1120,7 +1136,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
     submit_use_program(&state, program->id);
     uniform_set_mat4(u, "view", (const float*)view);
     uniform_set_mat4(u, "projection", (const float*)projection);
-    engine_upload_displacement_uniforms(engine, scene, u);
+    engine_upload_displacement_uniforms(engine, scene, sv, u);
 
     for (size_t i = 0; i < list->count; ++i) {
         const DrawItem* item = &list->items[i];
@@ -1160,7 +1176,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
         }
         render_update_skinning_uniforms(program, mesh, item->pose);
 
-        bool two_sided = (item->flags & DRAW_DOUBLE_SIDED) && !engine->show_wireframe;
+        bool two_sided = (item->flags & DRAW_DOUBLE_SIDED) && !sv->settings.show_wireframe;
         submit_draw_run(&state, u, item, run, two_sided, stats);
         drew = true;
         i += run - 1;
@@ -1199,7 +1215,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
         if (run > 1)
             instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, true);
 
-        _submit_item(engine, scene, item, camera, view, projection, RENDER_MODE_PBR, &state,
+        _submit_item(engine, scene, item, sv, view, projection, RENDER_MODE_PBR, &state,
                      SUBMIT_PASS_DEPTH_ONLY, run);
         drew = true;
         i += run - 1;
@@ -1219,9 +1235,10 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
 // pass names the meshes it draws instead of re-deriving them: the opaque pass
 // takes OPAQUE and XYZ, the OIT sub-passes take BLEND, the late pass takes
 // whichever of BLEND and TRANSMISSIVE the OIT routing left for it.
-static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* list, Camera* camera,
-                          mat4 view, mat4 projection, RenderMode render_mode, SubmitState* state,
-                          const CullView* cull, unsigned lanes, SubmitPass pass) {
+static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* list,
+                          const SceneView* sv, mat4 view, mat4 projection, RenderMode render_mode,
+                          SubmitState* state, const CullView* cull, unsigned lanes,
+                          SubmitPass pass) {
     if (!scene || !list)
         return;
 
@@ -1265,7 +1282,7 @@ static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* li
         if (run > 1)
             instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, true);
 
-        _submit_item(engine, scene, item, camera, view, projection, render_mode, state, pass, run);
+        _submit_item(engine, scene, item, sv, view, projection, render_mode, state, pass, run);
         i += run - 1;
     }
 }
@@ -1341,12 +1358,11 @@ static float _halton(int index, int base) {
 // water rather than as z-fighting. Two stand-in ground planes in one scene is
 // not a configuration to arbitrate; water is the more specific one, so it
 // wins and the catcher sits the frame out.
-bool render_shadow_catcher_box(const Engine* engine, const Scene* scene, RenderMode render_mode,
+bool render_shadow_catcher_box(const Engine* engine, const Scene* scene, const SceneView* view,
                                AABB* out) {
-    if (!scene->shadow_catcher || water_will_draw(scene->water, engine, render_mode) ||
-        !scene->shadow_system || !scene->shadow_system->enabled ||
-        !shadow_scene_casts_cascades(scene) || !engine->shadow_catcher_program ||
-        !engine->catcher_vao)
+    if (!scene->shadow_catcher || water_will_draw(scene->water, view) || !scene->shadow_system ||
+        !scene->shadow_system->enabled || !shadow_scene_casts_cascades(scene) ||
+        !engine->shadow_catcher_program || !engine->catcher_vao)
         return false;
     // catcher_vert.glsl's quad: centred on the origin at y = 0, the dome's radius out.
     const float r = scene->skybox_gp_radius;
@@ -1354,10 +1370,10 @@ bool render_shadow_catcher_box(const Engine* engine, const Scene* scene, RenderM
     return true;
 }
 
-static void _draw_shadow_catcher(Engine* engine, Scene* scene, mat4 view, mat4 projection,
-                                 RenderMode render_mode) {
+static void _draw_shadow_catcher(Engine* engine, Scene* scene, const SceneView* sv, mat4 view,
+                                 mat4 projection) {
     AABB quad;
-    if (!render_shadow_catcher_box(engine, scene, render_mode, &quad))
+    if (!render_shadow_catcher_box(engine, scene, sv, &quad))
         return;
     profiler_scope_begin(engine->profiler, "shadow catcher");
     ShaderProgram* catcher = engine->shadow_catcher_program;
@@ -1373,7 +1389,7 @@ static void _draw_shadow_catcher(Engine* engine, Scene* scene, mat4 view, mat4 p
     // marker across the whole quad (surfaceMode 1 skips the unshadowed
     // discard) so the reflection march has a surface to start from
     bool ssr_floor =
-        engine->postfx && postfx_ssr_active(engine->postfx, engine->normals_this_frame);
+        sv->state->postfx && postfx_ssr_active(sv->state->postfx, sv->state->normals_this_frame);
     uniform_set_int(catcher->uniforms, "surfaceMode", ssr_floor ? 1 : 0);
     // The widest cascade and everything csm.glsl's CSM_OUTERMOST_PCF path reads. This
     // was hand-rolled here and picked up msmEnabled and tsmEnabled by going through the
@@ -1425,13 +1441,13 @@ static void _draw_shadow_catcher(Engine* engine, Scene* scene, mat4 view, mat4 p
     // SSAO's read of it) untouched. Must come after the blanket blend
     // enable above, which resets the indexed blend-off state this call
     // establishes for attachment 1.
-    engine_set_scene_draw_buffers(engine, ssr_floor);
+    scene_view_set_draw_buffers(sv, ssr_floor);
 
     glBindVertexArray(engine->catcher_vao);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
 
-    engine_set_scene_draw_buffers(engine, false);
+    scene_view_set_draw_buffers(sv, false);
     glDisable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(0.0f, 0.0f);
     if (cull_was_enabled)
@@ -1439,14 +1455,23 @@ static void _draw_shadow_catcher(Engine* engine, Scene* scene, mat4 view, mat4 p
     profiler_scope_end(engine->profiler);
 }
 
-// What a pass over the scene from engine->view_matrix and projection_matrix starts from: the
+// The settings a view's debug overlays are read from: its own, and for a capture's view the focus
+// view's, whose light lines and gizmos a capture has always drawn.
+static const SceneViewSettings* _overlay_settings(const Engine* engine, const SceneView* sv) {
+    if (sv->state->capturing && engine->focus_view)
+        return &engine->focus_view->settings;
+    return &sv->settings;
+}
+
+// What a pass over the scene from a view's view and projection matrices starts from: the
 // view-projection, its frustum, the cull view over it, and the frame's draw list.
-static CullView _scene_pass_prepare(Engine* engine, Scene* scene, Frustum* frustum) {
+static CullView _scene_pass_prepare(Engine* engine, Scene* scene, SceneView* sv, Frustum* frustum) {
+    SceneViewState* vs = sv->state;
     // Un-jittered view-projection, computed once per frame for frustum culling
     // and motion vectors (and stashed as next frame's prev at the end). Held on
-    // the engine so _render_node uploads it without recomputing per program.
-    glm_mat4_mul(engine->projection_matrix, engine->view_matrix, engine->view_proj);
-    frustum_extract_from_vp(engine->view_proj, frustum);
+    // the view so _render_node uploads it without recomputing per program.
+    glm_mat4_mul(vs->projection_matrix, vs->view_matrix, vs->view_proj);
+    frustum_extract_from_vp(vs->view_proj, frustum);
 
     // The pose these passes cull against is the pose they are about to upload,
     // and since 11.96 it is also the pose the shadow pass drew: the app steps
@@ -1460,7 +1485,7 @@ static CullView _scene_pass_prepare(Engine* engine, Scene* scene, Frustum* frust
     cull.distance = !cull.capture;
     // A GI probe leaves out what its selection marked too small to see (spec 13.42); the shaded
     // faces and the wall test both come through here, so they leave out the same.
-    cull.size = engine->capturing && engine->capture_kind == SCENE_CAPTURE_IRRADIANCE;
+    cull.size = vs->capturing && engine->capture_kind == SCENE_CAPTURE_IRRADIANCE;
 
     // Flatten once. Cube captures re-enter here once a face with their own
     // camera; the stamp makes those reuses rather than rebuilds, which is right
@@ -1479,7 +1504,7 @@ static CullView _scene_pass_prepare(Engine* engine, Scene* scene, Frustum* frust
     // every consumer loops over count, and returning here would skip the
     // per-frame flag resets and the prev_view_proj stash, poisoning the
     // NEXT frame's motion vectors as well as this one's composite.
-    engine_build_draw_list(engine, scene);
+    engine_build_draw_list(engine, scene, sv);
     return cull;
 }
 
@@ -1489,31 +1514,32 @@ static CullView _scene_pass_prepare(Engine* engine, Scene* scene, Frustum* frust
 // opaque lane, the gizmos and the shadow catcher are everything that writes depth in a capture:
 // the sky and the late lanes write none, and water, OIT and particles sit captures out. A pass
 // added to engine_render_scene that writes depth in a capture belongs here too.
-static void _render_capture_depth(Engine* engine, Scene* scene) {
-    Camera* camera = engine->camera;
-    mat4* view = &engine->view_matrix;
-    mat4* projection = &engine->projection_matrix;
-    const RenderMode render_mode = engine->current_render_mode;
+static void _render_capture_depth(Engine* engine, Scene* scene, SceneView* sv) {
+    SceneViewState* vs = sv->state;
+    mat4* view = &vs->view_matrix;
+    mat4* projection = &vs->projection_matrix;
+    const RenderMode render_mode = vs->render_mode;
 
     Frustum frustum;
-    CullView cull = _scene_pass_prepare(engine, scene, &frustum);
+    CullView cull = _scene_pass_prepare(engine, scene, sv, &frustum);
     // No pass before this one in a capture binds the refraction source or the moment atlas.
-    engine->scene_color_this_frame = false;
-    engine->moments_this_frame = false;
+    vs->scene_color_this_frame = false;
+    vs->moments_this_frame = false;
 
     SubmitState submit_state = {0};
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-    _submit_lanes(engine, scene, scene->draw_list, camera, *view, *projection, render_mode,
+    _submit_lanes(engine, scene, scene->draw_list, sv, *view, *projection, render_mode,
                   &submit_state, &cull, 1u << DRAW_LANE_OPAQUE, SUBMIT_PASS_DEPTH_ONLY);
-    _submit_gizmos(engine->xyz_vao, scene->xyz_shader_program, scene->draw_list, *view, *projection,
-                   &submit_state);
-    _draw_shadow_catcher(engine, scene, *view, *projection, render_mode);
+    if (_overlay_settings(engine, sv)->show_xyz)
+        _submit_gizmos(engine->xyz_vao, scene->xyz_shader_program, scene->draw_list, *view,
+                       *projection, &submit_state);
+    _draw_shadow_catcher(engine, scene, sv, *view, *projection);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glBindVertexArray(0);
     glUseProgram(0);
 }
 
-void engine_render_scene(Engine* engine, Scene* scene) {
+void engine_render_scene(Engine* engine, Scene* scene, SceneView* sv) {
     if (!engine) {
         log_error("error: render called with NULL engine");
         return;
@@ -1530,33 +1556,34 @@ void engine_render_scene(Engine* engine, Scene* scene) {
         return;
     }
 
-    Camera* camera = engine->camera;
-    if (!camera) {
-        log_error("error: render called with NULL camera");
+    if (!sv) {
+        log_error("error: render called with NULL view");
         return;
     }
 
-    mat4* view = &engine->view_matrix;
-    mat4* projection = &engine->projection_matrix; // un-jittered
+    SceneViewState* vs = sv->state;
+    const Camera* camera = &sv->camera;
+    mat4* view = &vs->view_matrix;
+    mat4* projection = &vs->projection_matrix; // un-jittered
 
-    RenderMode render_mode = engine->current_render_mode;
+    RenderMode render_mode = vs->render_mode;
 
     // Whatever below writes depth in a capture, _render_capture_depth must draw as well: a GI
     // probe's wall test is that depth, without the rest of this pass.
     Frustum frustum;
-    CullView cull = _scene_pass_prepare(engine, scene, &frustum);
+    CullView cull = _scene_pass_prepare(engine, scene, sv, &frustum);
 
     // Occlusion culling (spec 11.98), HERE for three reasons that are all
     // ordering. It reads the unjittered view_proj published above; it writes
     // bits onto the list the build call above just finalised, so a pre-render
     // graph mutation cannot zero them by triggering a later rebuild; and it
     // must precede every camera sweep below, which is what makes one answer
-    // serve all of them. Skipped under a capture: the buffer is the MAIN
-    // camera's, and a cube face testing against it would be conservative in
-    // neither direction -- into a baked cubemap, permanently.
+    // serve all of them. Skipped under a capture: the buffer is a view's, and a
+    // cube face testing against it would be conservative in neither direction
+    // -- into a baked cubemap, permanently.
     profiler_cpu_scope_begin(engine->profiler, "occlusion");
-    if (!engine->capturing)
-        render_occlusion_pass((Engine*)engine, scene, &cull);
+    if (!vs->capturing)
+        render_occlusion_pass((Engine*)engine, scene, sv, &cull);
     profiler_cpu_scope_end(engine->profiler);
 
     // Derived emissive panels (spec 11.49), immediately upstream of the only
@@ -1568,7 +1595,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // made the disabled path unreachable, so turning the feature off mid-run
     // stranded every derived light instead of removing them. Costs one branch when
     // off -- the registry is NULL and there is nothing to tear down.
-    if (!engine->capturing) {
+    if (!vs->capturing) {
         profiler_scope_begin(engine->profiler, "emissive panels");
         scene_build_emissive_lights(scene, engine->emissive_lights_enabled);
         profiler_scope_end(engine->profiler);
@@ -1598,19 +1625,19 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // variant of a family shares, and keys on mesh and level, so a program
     // swapped after it changes nothing it built. The submit-time reads --
     // prepass safety, the instanced test -- are live and see this.
-    if (!engine->capturing)
+    if (!vs->capturing)
         engine_resolve_material_variants(engine, scene);
 
     // Under a loading screen that hides the whole frame (spec 13.34) the camera's passes are not
     // drawn. What runs above is the scene's per-frame settling -- its derived panels, its
     // variants -- which the captures read and so must not skip.
-    if (!engine->capturing && loading_screen_covers(engine))
+    if (!vs->capturing && loading_screen_covers(engine))
         return;
 
     // Clustered forward (spec 9.1): rebuild the light grid + UBOs for THIS
     // invocation's camera and viewport. A capture builds its own in
     // scene_capture_faces, gathering its lights once for every face.
-    if (engine->light_cluster && !engine->capturing) {
+    if (engine->light_cluster && !vs->capturing) {
         profiler_scope_begin(engine->profiler, "cluster build");
         GLint cluster_viewport[4];
         glGetIntegerv(GL_VIEWPORT, cluster_viewport);
@@ -1630,7 +1657,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // That only holds because nothing upstream of it is a fixed multiple of
     // white any more -- see spec 10.1 phase 5.
     if (engine->view_ubo) {
-        float pre = exposure_multiplier(&engine->exposure);
+        float pre = exposure_multiplier(&vs->exposure);
         // A capture bakes ABSOLUTE radiance, so it renders at unity. The cubemap
         // it produces substitutes for the IBL environment prefilter -- same
         // sampler unit, same shader path -- and that prefilter comes from an HDR
@@ -1640,11 +1667,11 @@ void engine_render_scene(Engine* engine, Scene* scene) {
         // composite multiplies, and the debug background goes through
         // skybox_frag, which multiplies too. Squared exposure, invisible at
         // unity and wrong everywhere else.
-        if (engine->capturing)
+        if (vs->capturing)
             pre = 1.0f;
-        else if (engine->postfx)
-            engine->postfx->pre_exposure = pre;
-        const float view_params[4] = {pre, 1.0f / pre, exposure_ev100(&engine->exposure),
+        else if (vs->postfx)
+            vs->postfx->pre_exposure = pre;
+        const float view_params[4] = {pre, 1.0f / pre, exposure_ev100(&vs->exposure),
                                       engine->typical_size};
         ubo_upload(engine->view_ubo, view_params, sizeof(view_params));
     }
@@ -1656,21 +1683,21 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // Off in headless (jitter would break deterministic screenshots).
     mat4 draw_projection;
     glm_mat4_copy(*projection, draw_projection);
-    bool taa_jitter_live = render_mode == RENDER_MODE_PBR && postfx_taa_active(engine->postfx) &&
-                           (!engine->headless || engine->headless_jitter);
-    // One predicate, published on the engine, so no consumer drifts onto its
+    bool taa_jitter_live = render_mode == RENDER_MODE_PBR && postfx_taa_active(vs->postfx) &&
+                           (!engine->headless || sv->settings.headless_jitter);
+    // One predicate, published on the view, so no consumer drifts onto its
     // own idea of "TAA is accumulating".
-    engine->taa_jitter_this_frame = taa_jitter_live;
+    vs->taa_jitter_this_frame = taa_jitter_live;
     if (taa_jitter_live) {
         // 16 Halton phases when TAAU upscales: each display pixel is visited by
         // fewer render samples per cycle, so the sequence needs more phases to
         // cover the same subpixel area. 8 at full scale -- bit-for-bit the
         // sequence TAA has always run. Asking the same predicate the resolve
         // dispatches on is what stops the sequence and its consumer diverging.
-        int phases = postfx_taau_active(engine->postfx) ? 16 : 8;
+        int phases = postfx_taau_active(vs->postfx) ? 16 : 8;
         int j = (int)(engine->total_frames % phases) + 1;
         int rw, rh;
-        engine_render_size(engine, &rw, &rh);
+        scene_view_render_size(sv, &rw, &rh);
         float jx = _halton(j, 2) - 0.5f;
         float jy = _halton(j, 3) - 0.5f;
         // WHICH ELEMENT CARRIES THE OFFSET DEPENDS ON THE PROJECTION, because
@@ -1712,11 +1739,11 @@ void engine_render_scene(Engine* engine, Scene* scene) {
         // place this frame's samples on the display grid. The published value
         // is the same either way, which is what makes the branch above a
         // change of ELEMENT rather than of contract.
-        engine->postfx->taau_jitter_px[0] = jx;
-        engine->postfx->taau_jitter_px[1] = jy;
-    } else if (engine->postfx) {
-        engine->postfx->taau_jitter_px[0] = 0.0f;
-        engine->postfx->taau_jitter_px[1] = 0.0f;
+        vs->postfx->taau_jitter_px[0] = jx;
+        vs->postfx->taau_jitter_px[1] = jy;
+    } else if (vs->postfx) {
+        vs->postfx->taau_jitter_px[0] = 0.0f;
+        vs->postfx->taau_jitter_px[1] = 0.0f;
     }
     // Stochastic PCSS rides the same predicate: the kernel may only rotate
     // while the TAA accumulator is live to average the noise it trades the
@@ -1731,19 +1758,21 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     }
     // Published for postfx: depth-buffer reconstruction must invert the
     // projection the depth was actually rasterized with
-    glm_mat4_copy(draw_projection, engine->draw_projection);
+    glm_mat4_copy(draw_projection, vs->draw_projection);
 
     // Cloud shell march (spec 11.0), inside the scene render so it sees
-    // this frame's actual camera (the sky_clouds_march contract). Never
-    // during captures (the march texture belongs to the main camera) and
-    // only when the PBR skybox slot below will consume it -- debug render
-    // modes would march, advance the wind clock, and discard the result.
+    // this frame's actual camera (the sky_clouds_march contract), into this
+    // view's own march. Never during captures (a march belongs to a view's
+    // screen) and only when the PBR skybox slot below will consume it -- debug
+    // render modes would march, advance the wind clock, and discard the result.
     // Unjittered projection, the aerial/froxel discipline.
-    if (scene->sky && !engine->capturing && render_mode == RENDER_MODE_PBR) {
+    if (scene->sky && !vs->capturing && render_mode == RENDER_MODE_PBR) {
         // Clouds are off by default, and the callee self-gates on that, so an
         // unconditional scope files a phantom row on every --sky run.
         profiler_scope_begin_if(engine->profiler, scene->sky->clouds.enabled, "cloud march");
-        sky_clouds_march(scene->sky, engine, *view, *projection);
+        int march_w, march_h;
+        scene_view_render_size(sv, &march_w, &march_h);
+        sky_clouds_march(scene->sky, engine, &vs->clouds, *view, *projection, march_w, march_h);
         profiler_scope_end(engine->profiler);
     }
 
@@ -1755,12 +1784,12 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // Pass 1: opaque and alpha-masked meshes. The only pass that publishes the
     // normals G-buffer; every later pass (skybox, translucents, catcher,
     // overlays) writes color only.
-    engine_set_scene_draw_buffers(engine, true);
+    scene_view_set_draw_buffers(sv, true);
     // False until this frame's resolve runs, so pass 1 never uploads or
     // binds a stale refraction source
-    engine->scene_color_this_frame = false;
-    engine->oit_this_frame = false; // set true below if the OIT accumulate pass runs
-    engine->moments_this_frame = false;
+    vs->scene_color_this_frame = false;
+    vs->oit_this_frame = false; // set true below if the OIT accumulate pass runs
+    vs->moments_this_frame = false;
     profiler_scope_begin(engine->profiler, "opaque");
     // Sorted from THIS pass's camera, not the frame's: a cube-capture face
     // re-enters here with its own, and ordering a face against the main camera
@@ -1776,7 +1805,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // exclusion and comes from the camera pass, where two coplanar quads tie on
     // depth and GL_LESS breaks the tie by whichever drew first.
     const DrawList* opaque_list = scene->draw_list;
-    if (engine->opaque_sort_enabled && !engine->capturing &&
+    if (engine->opaque_sort_enabled && !vs->capturing &&
         draw_list_sort_lane(engine->sorted_opaque, scene->draw_list, DRAW_LANE_OPAQUE,
                             camera->position))
         opaque_list = engine->sorted_opaque;
@@ -1814,7 +1843,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // from the pass it is supposed to agree with.
     glDisable(GL_BLEND);
     bool prepassed = false;
-    if (engine->depth_prepass_enabled && !engine->capturing && render_mode == RENDER_MODE_PBR) {
+    if (engine->depth_prepass_enabled && !vs->capturing && render_mode == RENDER_MODE_PBR) {
         if (!engine->depth_prepass_program && !engine->depth_prepass_failed) {
             engine->depth_prepass_program = create_depth_prepass_program();
             // Latched on failure: without it a compile error re-runs two shader
@@ -1826,8 +1855,8 @@ void engine_render_scene(Engine* engine, Scene* scene) {
             if (engine->depth_prepass_program)
                 engine_add_program(engine, engine->depth_prepass_program);
         }
-        prepassed = _submit_depth_prepass(engine, scene, opaque_list, camera, *view,
-                                          draw_projection, &cull);
+        prepassed =
+            _submit_depth_prepass(engine, scene, opaque_list, sv, *view, draw_projection, &cull);
     }
     // Both halves of the bracket here, adjacent, rather than the relax inside the
     // prepass and the restore 400 lines away in the caller. GL_LEQUAL and not
@@ -1840,15 +1869,17 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // too -- counting them made the number RISE when the pass that exists to
     // lower it was switched on (3.87 to 5.27, measured).
     profiler_samples_begin(engine->profiler);
-    _submit_lanes(engine, scene, opaque_list, camera, *view, draw_projection, render_mode,
+    _submit_lanes(engine, scene, opaque_list, sv, *view, draw_projection, render_mode,
                   &submit_state, &cull, 1u << DRAW_LANE_OPAQUE, SUBMIT_PASS_SHADE);
     profiler_samples_end(engine->profiler);
     if (prepassed)
         glDepthFunc(GL_LESS);
-    _submit_gizmos(engine->xyz_vao, scene->xyz_shader_program, scene->draw_list, *view,
-                   draw_projection, &submit_state);
+    // The list carries the gizmos when any view shows them; this view draws them when it does.
+    if (_overlay_settings(engine, sv)->show_xyz)
+        _submit_gizmos(engine->xyz_vao, scene->xyz_shader_program, scene->draw_list, *view,
+                       draw_projection, &submit_state);
     profiler_scope_end(engine->profiler);
-    engine_set_scene_draw_buffers(engine, false);
+    scene_view_set_draw_buffers(sv, false);
     // Restored only once the G-buffer scope is closed. glEnable(GL_BLEND) is
     // blanket -- it re-enables every draw buffer -- so issuing it while the
     // multi-target list is still bound would undo the per-attachment disables
@@ -1880,7 +1911,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
             // Procedural sky owns the background (sky-view LUT + sun disc)
             // rather than the cubemap skybox
             sky_render_background(scene->sky, scene->ibl, *view, draw_projection,
-                                  !engine->capturing);
+                                  vs->capturing ? NULL : &vs->clouds);
         } else if (scene->render_skybox) {
             render_skybox(scene->ibl, *view, draw_projection, scene->skybox_brightness,
                           scene->skybox_ground_projection, scene->skybox_gp_radius,
@@ -1899,16 +1930,17 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // the floor composites over the shadow instead of being hidden by it.
     // Ahead of the refraction resolve too, so transmissive surfaces see the
     // shadowed floor rather than an unshadowed one.
-    _draw_shadow_catcher(engine, scene, *view, draw_projection, render_mode);
+    _draw_shadow_catcher(engine, scene, sv, *view, draw_projection);
 
     // Refraction source: resolve the opaque scene (including the skybox
     // just drawn) into the mipped color texture transmissive surfaces
     // sample. Gated on this frame's count, the engine toggle, and PBR mode
-    // (debug modes skip the skybox and never reach the shader branch).
+    // (debug modes skip the skybox and never reach the shader branch). Never
+    // under a capture, whose face is not the view's own target the resolve reads.
     if (scene->transmissive_mesh_count > 0 && render_mode == RENDER_MODE_PBR &&
-        engine->refraction_enabled) {
+        engine->refraction_enabled && !vs->capturing) {
         profiler_scope_begin(engine->profiler, "refraction resolve");
-        engine->scene_color_this_frame = engine_resolve_opaque_color(engine);
+        vs->scene_color_this_frame = scene_view_resolve_opaque_color(sv);
         profiler_scope_end(engine->profiler);
     }
 
@@ -1923,12 +1955,11 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // scene can have water and no transmissive mesh, which is the common case.
     //
     // Not under capture, for the reason the particle block below states: the
-    // depth resolve blits at the MAIN render size and re-binds
-    // engine->framebuffer, which would redirect the rest of a cube face into the
-    // scene FBO. A probe therefore captures no water.
-    if (water_will_draw(scene->water, engine, render_mode)) {
+    // depth resolve reads a view's own scene target, which a capture's view
+    // does not have. A probe therefore captures no water.
+    if (water_will_draw(scene->water, sv)) {
         profiler_scope_begin(engine->profiler, "water");
-        water_render(scene->water, scene, engine, *view, draw_projection);
+        water_render(scene->water, scene, engine, sv);
         profiler_scope_end(engine->profiler);
     }
 
@@ -1948,7 +1979,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
         // on oit_this_frame, so the trailing call is correct either way.
         // Not under capture: engine_end_oit_pass re-binds engine->framebuffer at
         // the main render size, same hijack as the particle path below.
-        if (engine->oit_enabled && !engine->capturing && render_mode == RENDER_MODE_PBR &&
+        if (engine->oit_enabled && !vs->capturing && render_mode == RENDER_MODE_PBR &&
             scene->oit_mesh_count > 0) {
             // Moment generation (spec 11.17), over the same mesh set and before
             // the accumulate: it summarises WHERE the opacity is along each
@@ -1958,39 +1989,39 @@ void engine_render_scene(Engine* engine, Scene* scene) {
             // pass build it. Failing to allocate leaves the weighted-blended
             // path exactly as it was.
             bool moments_ready = false;
-            if (engine->oit_moments_enabled && engine_begin_moment_pass(engine)) {
+            if (engine->oit_moments_enabled && scene_view_begin_moment_pass(sv)) {
                 profiler_scope_begin(engine->profiler, "oit moments");
-                _submit_lanes(engine, scene, scene->draw_list, camera, *view, draw_projection,
+                _submit_lanes(engine, scene, scene->draw_list, sv, *view, draw_projection,
                               render_mode, &submit_state, &cull, 1u << DRAW_LANE_BLEND,
                               SUBMIT_PASS_OIT_MOMENTS);
                 profiler_scope_end(engine->profiler);
-                engine_end_moment_pass(engine);
+                scene_view_end_moment_pass(sv);
                 moments_ready = true;
                 submit_state_reset(&submit_state);
             }
-            if (engine_begin_oit_pass(engine)) {
-                engine->oit_this_frame = true;
+            if (scene_view_begin_oit_pass(sv)) {
+                vs->oit_this_frame = true;
                 // Published only here, where the accumulate that consumes them
                 // provably runs: postfx reads this to pick the composite's blend,
                 // so moments announced without an accumulate behind them would
                 // mis-composite the whole frame.
-                engine->moments_this_frame = moments_ready;
+                vs->moments_this_frame = moments_ready;
                 profiler_scope_begin(engine->profiler, "oit accumulate");
-                _submit_lanes(engine, scene, scene->draw_list, camera, *view, draw_projection,
+                _submit_lanes(engine, scene, scene->draw_list, sv, *view, draw_projection,
                               render_mode, &submit_state, &cull, 1u << DRAW_LANE_BLEND,
                               SUBMIT_PASS_OIT_ACCUMULATE);
                 profiler_scope_end(engine->profiler);
-                engine_end_oit_pass(engine);
+                scene_view_end_oit_pass(sv);
             }
             submit_state_reset(&submit_state);
         }
         // Whatever OIT did not take: transmissive alone when the accumulate ran
         // (blend went to the OIT FBO), both lanes when it did not.
-        unsigned late_lanes = engine->oit_this_frame
+        unsigned late_lanes = vs->oit_this_frame
                                   ? (1u << DRAW_LANE_TRANSMISSIVE)
                                   : ((1u << DRAW_LANE_BLEND) | (1u << DRAW_LANE_TRANSMISSIVE));
         profiler_scope_begin(engine->profiler, "transparent");
-        _submit_lanes(engine, scene, scene->draw_list, camera, *view, draw_projection, render_mode,
+        _submit_lanes(engine, scene, scene->draw_list, sv, *view, draw_projection, render_mode,
                       &submit_state, &cull, late_lanes, SUBMIT_PASS_SHADE);
         profiler_scope_end(engine->profiler);
         glDepthMask(GL_TRUE);
@@ -2012,7 +2043,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // would redirect the rest of the capture into the scene FBO. View-facing
     // billboards are also meaningless in a probe's omnidirectional capture.
     size_t live_particles = 0;
-    if (!engine->capturing) {
+    if (!vs->capturing) {
         for (size_t i = 0; i < scene->particle_system_count && live_particles == 0; i++)
             live_particles = particle_system_live_count(scene->particle_systems[i]);
     }
@@ -2020,7 +2051,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
         // One scope covering all systems, not one per system: the row is the
         // pass, not the emitter count.
         profiler_scope_begin(engine->profiler, "particles");
-        GLuint particle_depth = engine_resolve_scene_depth(engine);
+        GLuint particle_depth = scene_view_resolve_scene_depth(sv);
         glDepthMask(GL_FALSE);
         glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); // premultiplied
         ParticleRenderContext pctx = {0};
@@ -2037,8 +2068,8 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     }
 
     // Light overlay last, so the X-ray lines sit on top of the finished scene
-    if (engine->show_lights)
-        render_light_overlay(engine, scene);
+    if (_overlay_settings(engine, sv)->show_lights)
+        render_light_overlay(engine, sv, scene);
 
     // Reset program state at end of frame
     glUseProgram(0);
@@ -2046,16 +2077,13 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // Remember this frame's un-jittered view-projection for next frame's motion
     // vectors, and the eye the CDLOD morph was evaluated against for the same
     // reason. Done here (not in the engine loop) so every render path keeps it.
-    glm_mat4_copy(engine->view_proj, engine->prev_view_proj);
-    if (engine->camera) {
-        if (engine->prev_camera_valid)
-            glm_vec3_sub(engine->camera->position, engine->prev_camera_position,
-                         engine->camera_travel);
-        else
-            glm_vec3_zero(engine->camera_travel);
-        glm_vec3_copy(engine->camera->position, engine->prev_camera_position);
-        engine->prev_camera_valid = true;
-    }
+    glm_mat4_copy(vs->view_proj, vs->prev_view_proj);
+    if (vs->prev_camera_valid)
+        glm_vec3_sub((float*)camera->position, vs->prev_camera_position, vs->camera_travel);
+    else
+        glm_vec3_zero(vs->camera_travel);
+    glm_vec3_copy((float*)camera->position, vs->prev_camera_position);
+    vs->prev_camera_valid = true;
 }
 
 // Supersample factor for the blit capture path. 2x because that capture has no
@@ -2124,14 +2152,13 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
     // the scalar fallbacks still in place bakes them into the cubemap forever.
     material_texture_array_ensure_built(scene, engine);
 
-    // Flatten from the CAMERA before the capture substitutes camera->position
-    // with its own. The list is stamped per frame, so whoever builds it first
-    // fixes the LOD levels every pass will draw at -- and the six faces about to
-    // re-enter engine_render_scene would otherwise be that first builder, in
-    // which case the whole frame, main camera included, draws at levels measured
-    // from a probe. Only reachable with shadows off, since the depth pass below
-    // builds it otherwise, which is exactly why it cannot live inside that guard.
-    engine_build_draw_list(engine, scene);
+    // Flatten from the focus view's camera before the capture chooses levels of
+    // its own. The list is stamped per frame, so whoever builds it first fixes
+    // what it holds -- and the six faces about to re-enter engine_render_scene
+    // would otherwise be that first builder, with the levels the capture chose.
+    // Only reachable with shadows off, since the depth pass below builds it
+    // otherwise, which is exactly why it cannot live inside that guard.
+    engine_build_draw_list(engine, scene, engine->focus_view);
 
     // The light held at rest for the burst, before anything below derives from it: the panels from
     // the emissive strengths, the shadows from where the lights stand.
@@ -2160,7 +2187,7 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
         // face, and because the moment array is sized from the cascade count it
         // would thrash between the bake's one layer and the frame's three.
         scene->shadow_system->msm_enabled = false;
-        render_shadow_depth_pass(engine, scene);
+        render_shadow_depth_pass(engine, scene, NULL);
     }
 }
 
@@ -2169,9 +2196,10 @@ void scene_capture_end(Engine* engine, Scene* scene, const SceneCaptureState* sa
         return;
     profiler_resume(engine->profiler);
     _capture_rest(scene, false);
-    // The camera's levels back, where each capture of the burst chose its own.
-    const LodSelect camera_lod = _camera_lod(engine);
-    draw_list_select_lod(scene->draw_list, &camera_lod);
+    // The focus view's levels back, where each capture of the burst chose its own; every view
+    // takes its own again as it draws.
+    const LodSelect focus_lod = _view_lod(engine, engine->focus_view);
+    draw_list_select_lod(scene->draw_list, &focus_lod);
     engine->capture_kind = saved->kind;
     engine_set_render_time(engine, saved->render_time, saved->render_delta);
     if (scene->shadow_system) {
@@ -2184,7 +2212,7 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
                          const vec3 position, GLuint dst_cubemap, GLuint dst_depth_cubemap,
                          int face_size, float near_clip, float far_clip, SceneCaptureFaces faces,
                          int first, int count) {
-    if (!engine || !scene || !engine->camera || !dst_cubemap || face_size <= 0)
+    if (!engine || !scene || !dst_cubemap || face_size <= 0)
         return;
     if (first < 0 || count <= 0 || first + count > 6) {
         log_error("Scene capture of faces %d to %d: a cube has faces 0 to 5", first,
@@ -2209,6 +2237,16 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     if (!keep_depth && (!ibl || !ibl_capture_ss_target(ibl, ss_size)))
         return;
 
+    // Every face draws through the engine's capture view, made once: a camera of its own at the
+    // capture point, no target or chain, no overlays, and a capture's colour-only draw list --
+    // so no view the frame draws is touched, and nothing has to be put back.
+    if (!engine->capture_view)
+        engine->capture_view = create_capture_view(engine);
+    SceneView* sv = engine->capture_view;
+    if (!sv)
+        return;
+    SceneViewState* vs = sv->state;
+
     // Below every early return, because a suspend that leaks is a profiler that
     // silently times nothing for the rest of the run. Re-entries into
     // engine_render_scene follow, each opening the same scope names the frame
@@ -2217,71 +2255,17 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     // the world, so it is the one place that has to say so.
     profiler_suspend(engine->profiler);
 
-    // Save everything the capture substitutes
-    mat4 saved_view, saved_projection, saved_view_proj, saved_prev_view_proj;
-    glm_mat4_copy(engine->view_matrix, saved_view);
-    glm_mat4_copy(engine->projection_matrix, saved_projection);
-    glm_mat4_copy(engine->view_proj, saved_view_proj);
-    glm_mat4_copy(engine->prev_view_proj, saved_prev_view_proj);
-
-    Camera* camera = engine->camera;
-    vec3 saved_cam_pos, saved_prev_cam_pos;
-    glm_vec3_copy(camera->position, saved_cam_pos);
-    // The morph's previous eye, restored for the same reason prev_view_proj is:
-    // engine_render_scene republishes it at the end of every face, so without
-    // this the frame after a capture measures its terrain motion vectors from
-    // wherever the last cube face was. Its validity flag goes with it, or a
-    // capture taken before the first frame seeds it from a probe.
-    glm_vec3_copy(engine->prev_camera_position, saved_prev_cam_pos);
-    bool saved_prev_cam_valid = engine->prev_camera_valid;
-    float saved_near = camera->near_clip;
-    float saved_far = camera->far_clip;
-
-    bool saved_taa = engine->postfx ? engine->postfx->settings->taa_enabled : false;
-    // Each capture face re-enters engine_render_scene with TAA off, which
-    // republishes a zero jitter. Restoring it keeps a capture taken AFTER the
-    // main raster (this API is public) from handing the TAAU resolve a zero
-    // offset to un-apply against a raster that was jittered.
-    float saved_jitter[2] = {0.0f, 0.0f};
-    if (engine->postfx) {
-        saved_jitter[0] = engine->postfx->taau_jitter_px[0];
-        saved_jitter[1] = engine->postfx->taau_jitter_px[1];
-    }
-    bool saved_refraction = engine->refraction_enabled;
-    bool saved_capturing = engine->capturing;
-    // A capture runs inside the frame, after the frame top has applied the overlays, and the
-    // wireframe overlay draws lines in the albedo mode. A probe or a converged GI probe never
-    // re-captures, so a capture taken under it would keep the wireframe for the whole run.
-    const RenderMode saved_render_mode = engine->current_render_mode;
+    // A capture taken outside the frame loop -- a probe baked at load, an app's own -- finds
+    // whatever GL state was left, so the state the faces draw with is established here and the
+    // caller's put back after. The wireframe overlay draws lines; a probe or a converged GI probe
+    // never re-captures, so a capture taken under it would keep the wireframe for the whole run.
     GLint saved_polygon_mode[2] = {GL_FILL, GL_FILL};
     glGetIntegerv(GL_POLYGON_MODE, saved_polygon_mode);
-    engine->current_render_mode = RENDER_MODE_PBR;
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-
     GLint saved_viewport[4];
     GLint saved_fbo;
     glGetIntegerv(GL_VIEWPORT, saved_viewport);
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
-
-    // ONE flag says "a capture is running"; passes that must sit out ask it
-    // rather than having their configuration falsified here. The G-buffer used
-    // to be switched off by clearing three this_frame flags, which is a list
-    // that fell behind the moment a fourth attachment appeared --
-    // engine_set_scene_draw_buffers now consults `capturing` directly and covers
-    // every attachment by construction.
-    //
-    // TAA and refraction still substitute because they are read through paths
-    // that predate the flag; folding them in is the obvious next step and is not
-    // done here only to keep this commit's blast radius honest.
-    engine->refraction_enabled = false;
-    engine->capturing = true;
-    if (engine->postfx)
-        engine->postfx->settings->taa_enabled = false;
-
-    // Scene GL state: capture may run before the render loop's per-frame
-    // preamble has ever executed, so establish it explicitly. Culling is put
-    // back the way it was found: a GI capture runs inside the frame, after
-    // the frame top has set the state the rest of the frame draws with.
     GLboolean saved_cull = glIsEnabled(GL_CULL_FACE);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
@@ -2298,19 +2282,20 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     mat4 views[6];
     ibl_capture_views((float*)position, views);
 
-    // Per-face shading is evaluated from the capture point
+    // Per-face shading is evaluated from the capture point.
+    Camera* camera = &sv->camera;
     glm_vec3_copy((float*)position, camera->position);
     camera->near_clip = near_clip;
     camera->far_clip = far_clip;
-    glm_perspective(glm_rad(90.0f), 1.0f, near_clip, far_clip, engine->projection_matrix);
+    glm_perspective(glm_rad(90.0f), 1.0f, near_clip, far_clip, vs->projection_matrix);
 
     // Each item at the level its size from the capture point calls for at the face's resolution, a
-    // 90-degree face being face_size / 2 pixels to a unit of tan (spec 13.42): the camera's are for
-    // the window, and would make what a probe captured depend on where the camera stood. A GI
+    // 90-degree face being face_size / 2 pixels to a unit of tan (spec 13.42): a view's are for
+    // its screen, and would make what a probe captured depend on where a camera stood. A GI
     // probe also marks what spans fewer than the world's cull_pixels across a face -- a radius
     // over distance of r / d spans r / d * face_size of them -- once for all its faces and its wall
     // test, since the selection is kept while the eye is. A reflection probe is a mirror and takes
-    // everything. The burst gives the camera's levels back as it ends.
+    // everything. The burst gives the focus view's levels back as it ends.
     const bool gi = engine->capture_kind == SCENE_CAPTURE_IRRADIANCE && scene->gi;
     LodSelect capture_lod = {.bias = draw_lod_bias_for(engine->lod_bias, 0.5f * (float)face_size),
                              .enabled = engine->lod_enabled,
@@ -2348,14 +2333,14 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
         }
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glm_mat4_copy(views[i], engine->view_matrix);
+        glm_mat4_copy(views[i], vs->view_matrix);
         if (faces == SCENE_FACES_BACK_DEPTH) {
-            _render_capture_depth(engine, scene);
+            _render_capture_depth(engine, scene, sv);
         } else {
             if (shaded)
-                light_cluster_capture_face(engine->light_cluster, scene, engine->view_matrix,
-                                           engine->projection_matrix, ss_size, near_clip, far_clip);
-            engine_render_scene(engine, scene);
+                light_cluster_capture_face(engine->light_cluster, scene, vs->view_matrix,
+                                           vs->projection_matrix, ss_size, near_clip, far_clip);
+            engine_render_scene(engine, scene, sv);
         }
 
         if (keep_depth)
@@ -2375,26 +2360,7 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     if (!keep_depth && first + count == 6)
         ibl_release_capture_ss_target(ibl);
 
-    // Restore
-    glm_mat4_copy(saved_view, engine->view_matrix);
-    glm_mat4_copy(saved_projection, engine->projection_matrix);
-    glm_mat4_copy(saved_view_proj, engine->view_proj);
-    glm_mat4_copy(saved_prev_view_proj, engine->prev_view_proj);
-    glm_vec3_copy(saved_prev_cam_pos, engine->prev_camera_position);
-    engine->prev_camera_valid = saved_prev_cam_valid;
-    glm_vec3_copy(saved_cam_pos, camera->position);
-    camera->near_clip = saved_near;
-    camera->far_clip = saved_far;
-    engine->refraction_enabled = saved_refraction;
-    engine->capturing = saved_capturing;
-    engine->current_render_mode = saved_render_mode;
     glPolygonMode(GL_FRONT_AND_BACK, (GLenum)saved_polygon_mode[0]);
-    if (engine->postfx) {
-        engine->postfx->settings->taa_enabled = saved_taa;
-        engine->postfx->taau_jitter_px[0] = saved_jitter[0];
-        engine->postfx->taau_jitter_px[1] = saved_jitter[1];
-    }
-
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
     glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
     glCullFace(GL_BACK);
@@ -2449,8 +2415,8 @@ static void _overlay_ring(float* v, size_t* n, const vec3 center, float radius, 
     }
 }
 
-void render_light_overlay(Engine* engine, Scene* scene) {
-    if (!engine || !engine->bone_program || !scene || scene->light_count == 0)
+void render_light_overlay(Engine* engine, const SceneView* view, Scene* scene) {
+    if (!engine || !view || !engine->bone_program || !scene || scene->light_count == 0)
         return;
 
     float* vertices = malloc(scene->light_count * LIGHT_OVERLAY_FLOATS_PER_LIGHT * sizeof(float));
@@ -2461,12 +2427,12 @@ void render_light_overlay(Engine* engine, Scene* scene) {
     // Screen-constant cross size: world units per pixel at unit depth, scaled
     // by each light's distance (same trick the bone overlay uses)
     int render_w, render_h;
-    engine_render_size(engine, &render_w, &render_h);
-    Camera* cam = engine->camera;
+    scene_view_render_size(view, &render_w, &render_h);
+    const Camera* cam = &view->camera;
     float world_per_px =
-        (render_h > 0 && cam) ? (2.0f * tanf(cam->fov_radians * 0.5f) / (float)render_h) : 0.002f;
+        render_h > 0 ? (2.0f * tanf(cam->fov_radians * 0.5f) / (float)render_h) : 0.002f;
     vec3 cam_pos;
-    glm_vec3_copy(cam ? cam->position : (vec3){0.0f, 0.0f, 0.0f}, cam_pos);
+    glm_vec3_copy((float*)cam->position, cam_pos);
 
     for (size_t i = 0; i < scene->light_count; i++) {
         Light* light = scene->lights[i];
@@ -2533,9 +2499,10 @@ void render_light_overlay(Engine* engine, Scene* scene) {
     glBufferData(GL_ARRAY_BUFFER, vertex_floats * sizeof(float), vertices, GL_DYNAMIC_DRAW);
 
     glUseProgram(engine->bone_program->id);
-    uniform_set_mat4(engine->bone_program->uniforms, "view", (const float*)engine->view_matrix);
+    uniform_set_mat4(engine->bone_program->uniforms, "view",
+                     (const float*)view->state->view_matrix);
     uniform_set_mat4(engine->bone_program->uniforms, "projection",
-                     (const float*)engine->projection_matrix);
+                     (const float*)view->state->projection_matrix);
 
     // X-ray: lights are usually inside or behind geometry
     glDisable(GL_DEPTH_TEST);
@@ -2608,8 +2575,9 @@ static void _emit_bone_quad(float* v, size_t* n, const vec3 a, const vec3 b, con
     }
 }
 
-void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* anim_state) {
-    if (!engine || !engine->bone_program) {
+void render_skeleton_bones(Engine* engine, const SceneView* view, Skeleton* skeleton,
+                           AnimationState* anim_state) {
+    if (!engine || !view || !engine->bone_program) {
         return;
     }
 
@@ -2632,13 +2600,12 @@ void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* a
     // Render (not display) height: the scene target is supersampled, so a
     // "pixel" here is a render-target pixel, which is what the quads rasterize into.
     int render_w, render_h;
-    engine_render_size(engine, &render_w, &render_h);
-    Camera* bone_cam = engine->camera;
-    float world_per_px = (render_h > 0 && bone_cam)
-                             ? (2.0f * tanf(bone_cam->fov_radians * 0.5f) / (float)render_h)
-                             : 0.002f;
+    scene_view_render_size(view, &render_w, &render_h);
+    const Camera* bone_cam = &view->camera;
+    float world_per_px =
+        render_h > 0 ? (2.0f * tanf(bone_cam->fov_radians * 0.5f) / (float)render_h) : 0.002f;
     vec3 cam_pos;
-    glm_vec3_copy(bone_cam ? bone_cam->position : (vec3){0.0f, 0.0f, 0.0f}, cam_pos);
+    glm_vec3_copy((float*)bone_cam->position, cam_pos);
 
     // First pass: Draw BIND POSE in GREEN (from skeleton's inverse_bind_pose)
     if (skeleton) {
@@ -2708,9 +2675,10 @@ void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* a
 
     // Use bone program
     glUseProgram(engine->bone_program->id);
-    uniform_set_mat4(engine->bone_program->uniforms, "view", (const float*)engine->view_matrix);
+    uniform_set_mat4(engine->bone_program->uniforms, "view",
+                     (const float*)view->state->view_matrix);
     uniform_set_mat4(engine->bone_program->uniforms, "projection",
-                     (const float*)engine->projection_matrix);
+                     (const float*)view->state->projection_matrix);
 
     // Disable depth test for X-ray effect (bones always visible). Quads are
     // camera-facing but built without regard to winding, so back-face culling
@@ -2753,8 +2721,9 @@ static int _late_farther_first(const void* a, const void* b) {
 #define LATE_DEPTH_UNIT TEXUNIT_MATERIAL_MAX
 #define LATE_FOG_UNIT   (TEXUNIT_MATERIAL_MAX + 1)
 
-void render_late_items(Engine* engine, const Scene* scene, const PostFXLateDraw* late) {
-    if (!engine || !late || !render_has_late_items(scene))
+void render_late_items(Engine* engine, const Scene* scene, const SceneView* view,
+                       const PostFXLateDraw* late) {
+    if (!engine || !view || !late || !render_has_late_items(scene))
         return;
     const DrawList* list = scene->draw_list;
     const size_t n = list->lane_count[DRAW_LANE_LATE_DRAW];
@@ -2773,7 +2742,7 @@ void render_late_items(Engine* engine, const Scene* scene, const PostFXLateDraw*
         const DrawItem* item = &list->items[i];
         if (item->lane != DRAW_LANE_LATE_DRAW || item->beyond)
             continue;
-        const float depth = draw_item_view_depth(item, engine->view_matrix);
+        const float depth = draw_item_view_depth(item, (vec4*)view->state->view_matrix);
         order[count++] = (LateItem){item, isnan(depth) ? -FLT_MAX : depth, i};
     }
     qsort(order, count, sizeof(LateItem), _late_farther_first);
@@ -2793,8 +2762,8 @@ void render_late_items(Engine* engine, const Scene* scene, const PostFXLateDraw*
         UniformManager* u = mat->shader_program->uniforms;
         // What every late surface shares this frame, as each program first draws.
         if (submit_use_program(&state, mat->shader_program->id)) {
-            uniform_set_mat4(u, "view", (const float*)engine->view_matrix);
-            uniform_set_mat4(u, "projection", (const float*)engine->projection_matrix);
+            uniform_set_mat4(u, "view", (const float*)view->state->view_matrix);
+            uniform_set_mat4(u, "projection", (const float*)view->state->projection_matrix);
             shader_clock_upload(u, (float)engine->render_time, engine->total_frames);
             postfx_late_draw_bind(late, u, LATE_DEPTH_UNIT, LATE_FOG_UNIT);
         }

@@ -130,9 +130,9 @@ file, and a `--no-*` flag is the only way off something the file asked for.
     same every time.
 - `--tonemap <neutral|aces|agx|linear>` — `linear` is the identity curve with the display encode,
   which passthrough is not: an authored colour at unit exposure reaches the screen as authored, and
-  it is what `engine_set_2d_preset` selects. `passthrough` cannot be reached from the CLI by design,
-  because the "unset" sentinel in `render_args.h` is `POSTFX_TONEMAP_PASSTHROUGH = 0`; a gate that
-  needs a linear read is written as a ratio instead.
+  it is what `scene_view_set_2d_preset` selects. `passthrough` cannot be reached from the CLI by
+  design, because the "unset" sentinel in `render_args.h` is `POSTFX_TONEMAP_PASSTHROUGH = 0`; a
+  gate that needs a linear read is written as a ratio instead.
 - `--lut <f.cube>`, `--no-lut`, `--lut-strength <f>`, `--lut-interp <trilinear|tetrahedral>`
   (spec 11.58) — a 3D colour-grading LUT. Also a `post.lut` block.
   - **Display-referred: the table is applied after `displayEncode`**, the space a colourist's
@@ -1491,7 +1491,7 @@ reprojects through the geometry behind it and becomes a dash. `--taa`, `--headle
 It keeps 4x MSAA with no temporal filter: multisampling is the natural AA for 2D line art, and
 nothing in the scene moves, so an accumulator would integrate only its own jitter while switching
 on the aux G-buffer, the resolve and the passes that key off `taa_resolving`. The rest of its look
-is `engine_set_2d_preset` (`docs/architecture.md`). It takes `-x` and `-f <n>`, and
+is the 2D preset's two halves (`docs/architecture.md`). It takes `-x` and `-f <n>`, and
 `--input-script` and `--trace-camera` for the camera gate, but no screenshot flag.
 
 ### apps/pcb

@@ -45,8 +45,8 @@ static void draw_link(const Screen* s, const NavGraph* g, int link, ImU32 colour
     }
 }
 
-static void overlay(const Cat* cat, const CatMind* mind, Engine* engine) {
-    Camera* cam = engine->camera;
+static void overlay(const Cat* cat, const CatMind* mind, SceneView* scene_view) {
+    Camera* cam = scene_view ? &scene_view->camera : NULL;
     if (!cam)
         return;
     Screen s = {.list = igGetBackgroundDrawList(igGetMainViewport())};
@@ -120,10 +120,10 @@ static void mind_panel(CatMind* mind) {
     igCheckbox("blind", &mind->blind);
 }
 
-void cat_debug_draw(Cat* cat, CatMind* mind, Engine* engine) {
+void cat_debug_draw(Cat* cat, CatMind* mind, const Engine* engine, SceneView* scene_view) {
     if (!cat->entity || !engine->show_gui)
         return;
-    overlay(cat, mind, engine);
+    overlay(cat, mind, scene_view);
     igSetNextWindowPos((ImVec2){15, 300}, ImGuiCond_FirstUseEver, (ImVec2){0, 0});
     igSetNextWindowSize((ImVec2){320, 520}, ImGuiCond_FirstUseEver);
     if (igBegin("Cat", NULL, 0)) {

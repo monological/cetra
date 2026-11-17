@@ -125,13 +125,13 @@ static void on_yes(UIElement* el, void* user) {
 
 // ------------------------------------------------------------------------------- the screens
 
-void title_start(Title* t, UISystem* ui, Game* game, SettingsMenu* settings) {
+void title_start(Title* t, UISystem* ui, Game* game, SceneView* view, SettingsMenu* settings) {
     memset(t, 0, sizeof(*t));
     t->ui = ui;
     t->rig = create_camera_rig();
     if (t->rig)
         camera_rig_set_pose(t->rig, TITLE_EYE, TITLE_TARGET);
-    title_view(t, game->engine);
+    title_view(t, view);
     if (!ui)
         return;
 
@@ -166,9 +166,9 @@ void title_start(Title* t, UISystem* ui, Game* game, SettingsMenu* settings) {
     t->yes = hud_item(col, "Yes", HUD_ITEM_SIZE, on_yes, t);
 }
 
-void title_view(const Title* t, Engine* engine) {
+void title_view(const Title* t, SceneView* view) {
     if (t->rig)
-        engine_set_camera_rig(engine, t->rig);
+        scene_view_set_rig(view, t->rig);
 }
 
 bool title_show(Title* t) {

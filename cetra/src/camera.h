@@ -101,6 +101,10 @@ typedef struct CameraDesc {
 // NULL means every default. The orbit parameters are derived from the pose.
 Camera* create_camera(const CameraDesc* desc);
 void free_camera(Camera* camera);
+// The same, in place, for a camera held by value (a scene view's): camera_init overwrites every
+// field, and camera_release frees what it holds, the name, leaving the rest.
+void camera_init(Camera* camera, const CameraDesc* desc);
+void camera_release(Camera* camera);
 
 // The pose. Functions because the orbit parameters follow it: each re-derives
 // distance, theta and phi, so a camera moved by pose and then orbited continues

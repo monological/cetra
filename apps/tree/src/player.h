@@ -67,14 +67,16 @@ struct Engine;
 #define PLAYER_LOOK_RATE 1.0f
 
 struct CameraRig;
+struct SceneView;
 
 typedef struct Player {
-    // Where the camera goes; borrowed, and the caller installs it on the engine.
+    // Where the camera goes; borrowed, and the caller installs it on the view.
     // This file walks; camera_rig.h frames.
     struct CameraRig* rig;
-    vec3 feet;   // world position of the soles; the camera sits PLAYER_EYE_HEIGHT above
-    float yaw;   // radians, 0 = -Z
-    float pitch; // radians, clamped short of straight up/down
+    struct SceneView* view; // the view whose camera it walks; borrowed
+    vec3 feet;              // world position of the soles; the camera sits PLAYER_EYE_HEIGHT above
+    float yaw;              // radians, 0 = -Z
+    float pitch;            // radians, clamped short of straight up/down
     float vertical_velocity;
     bool grounded;
 
@@ -92,9 +94,10 @@ typedef struct Player {
 
 // Spawn standing on the ground at (x, z), looking at `yaw`, with the tunables above at their
 // defaults; overwrite them afterwards to change them.
-void player_init(Player* p, struct Engine* engine, float x, float z, float yaw);
+void player_init(Player* p, struct Engine* engine, struct SceneView* view, float x, float z,
+                 float yaw);
 
-// Advance one frame and write the result to the engine camera. `dt` is the frame delta.
+// Advance one frame and write the result to the view's camera. `dt` is the frame delta.
 void player_update(Player* p, struct Engine* engine, float dt);
 
 #endif // _PLAYER_H_

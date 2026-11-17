@@ -66,6 +66,8 @@
 
 static CameraRig* view_rig = NULL;
 static CameraDrag* drag_controller = NULL;
+// The one view, filling the window.
+static SceneView* g_view = NULL;
 static Entity* player_entity = NULL;
 static Entity* door_entity = NULL;
 static Constraint* door_hinge = NULL;
@@ -1926,7 +1928,7 @@ static void build_lights(Scene* scene) {
  * not under the platform: the long fall stays clear air, which is what keeps the middle
  * of the drop empty rather than milky, and the walls fade in as you reach them.
  */
-static void build_cavern_fog(Scene* scene, PostFX* fx) {
+static void build_cavern_fog(Scene* scene, PostFXSettings* fx) {
     if (!scene)
         return;
 
@@ -1978,9 +1980,9 @@ static void build_cavern_fog(Scene* scene, PostFX* fx) {
      * for anything outside the cascade, which down here is most of the basin. There are
      * no god rays in a cave lit from its floor.
      */
-    glm_vec3_copy((vec3){0.02f, 0.09f, 0.10f}, fx->settings->fog_ambient);
-    fx->settings->fog_ambient_from_sky = false;
-    fx->settings->fog_sun_boost = 0.0f;
+    glm_vec3_copy((vec3){0.02f, 0.09f, 0.10f}, fx->fog_ambient);
+    fx->fog_ambient_from_sky = false;
+    fx->fog_sun_boost = 0.0f;
 
     /*
      * No GLOBAL air term: this scene wants fog in the cavern and nowhere else.
@@ -1997,13 +1999,13 @@ static void build_cavern_fog(Scene* scene, PostFX* fx) {
      * the scene never asked for, and it is recorded here because the next reader will
      * otherwise reach for fog_enabled and find it already false.
      */
-    fx->settings->fog_density = 0.0f;
+    fx->fog_density = 0.0f;
 
     // The froxel volume is spent over the camera's depth range, and 60 is the default.
     // The shaft floor sits ~190 under the platform, so at the default every slice is
     // used up long before the fog is reached and the box renders as nothing at all.
-    if (fx->settings->fog_far < 400.0f)
-        fx->settings->fog_far = 400.0f;
+    if (fx->fog_far < 400.0f)
+        fx->fog_far = 400.0f;
 
     printf("Cavern fog: box y %g to %g, half %g, density %g, sun boost off\n", (double)bottom,
            (double)top, (double)(GROTTO_BASIN_HALF + 10.0f), (double)vol.density);
@@ -2837,7 +2839,7 @@ static void on_init(Game* game) {
     // whatever stands between, so the pit could not be made dark while it ran. See
     // build_lights for what replaces it and why there are two panels.
     build_lights(scene);
-    build_cavern_fog(scene, engine->postfx);
+    build_cavern_fog(scene, g_view ? &g_view->settings.post : NULL);
 
     // Create physics world
     PhysicsConfig physics_config = physics_default_config();
@@ -3295,15 +3297,8 @@ static void on_init(Game* game) {
     // Optimize broad phase after adding initial bodies
     physics_world_optimize(physics);
 
-    // Setup camera
-    CameraDesc camera_desc = {
-        .position = {0.0f, 20.0f, 35.0f}, .fov = 0.8f, .near = 0.1f, .far = 1000.0f};
-    // The FOV rides the desc rather than the built camera, so the explicit pose and the
-    // default go through one construction path instead of two.
-    if (cam_pose_fov_deg > 0.0f)
-        camera_desc.fov = glm_rad(cam_pose_fov_deg);
-    Camera* camera = create_camera(&camera_desc);
-    engine_set_camera(engine, camera);
+    // The view's camera, made with the view in main.
+    Camera* camera = &g_view->camera;
 
     // Both halves, or neither: an eye with no target is a direction nobody stated, and
     // silently keeping half of a pose is worse than ignoring it.
@@ -3332,7 +3327,7 @@ static void on_init(Game* game) {
      */
     view_rig = create_camera_rig();
     camera_rig_set_pose(view_rig, camera->position, camera->look_at);
-    drag_controller = create_camera_drag(engine, view_rig);
+    drag_controller = create_camera_drag(engine, g_view, view_rig);
 
     follow_rig = create_camera_rig();
     follow_rig->steers_controls = true;
@@ -3357,7 +3352,7 @@ static void on_init(Game* game) {
     camera_rig_set_probe(follow_rig, follow_cam_probe, game_get_physics_world(game));
 
     follow_cam_live = follow_cam && !(cam_eye_set && cam_target_set);
-    engine_set_camera_rig(engine, follow_cam_live ? follow_rig : view_rig);
+    scene_view_set_rig(g_view, follow_cam_live ? follow_rig : view_rig);
 
     // No GUI or FPS overlay headless, as the other apps: the FPS digits are
     // wall clock and land in the screenshot, which is what made two identical
@@ -3365,7 +3360,7 @@ static void on_init(Game* game) {
     engine->show_gui = !engine->headless;
     engine->show_fps = !engine->headless;
     // A rig brings twenty-two joint nodes, each of which would wear a gizmo.
-    engine->show_xyz = puppet_root == NULL;
+    g_view->settings.show_xyz = puppet_root == NULL;
 
     // Spawn a few initial boxes, unless somebody is about to measure where the player
     // ENDED UP. They fall at rand() positions in a 20-unit box centred on the spawn,
@@ -3441,12 +3436,12 @@ static void on_update(Game* game, double dt) {
     // not leaves the input in world axes. Before spec 12.19 this read a file
     // static belonging to the follow camera, which is why the scheme could flip
     // in 12.13 and back in 12.17 with nothing able to contradict either.
-    // Asked of the rig the ENGINE is running. Asking `follow_rig` by name gave
+    // Asked of the rig the VIEW is running. Asking `follow_rig` by name gave
     // the right answer only by accident: it is not installed under
     // --no-follow-cam or a pinned pose, and the yaw it happens to be seeded with
     // is the one whose sin and cos are the world-aligned identity.
     float basis_yaw = (float)M_PI;
-    camera_rig_move_basis(game->engine->camera_rig, &basis_yaw);
+    camera_rig_move_basis(g_view ? g_view->rig : NULL, &basis_yaw);
     const float cam_sin = sinf(basis_yaw), cam_cos = cosf(basis_yaw);
     const vec3 want_dir = {-cam_cos * input_dir[0] - cam_sin * input_dir[2], 0.0f,
                            cam_sin * input_dir[0] - cam_cos * input_dir[2]};
@@ -4225,7 +4220,7 @@ static void on_pre_render(Game* game, double alpha) {
 }
 
 // Render callback - runs every frame
-static void on_render(Game* game, double alpha) {
+static void on_render(Game* game, SceneView* view, double alpha) {
     (void)alpha;
 
     Engine* engine = game->engine;
@@ -4239,7 +4234,7 @@ static void on_render(Game* game, double alpha) {
     glDisable(GL_CULL_FACE);
 
     // Render the scene
-    engine_render_scene(engine, game->scene);
+    engine_render_scene(engine, game->scene, view);
 
     // Re-enable culling
     glEnable(GL_CULL_FACE);
@@ -4254,8 +4249,8 @@ static void on_shutdown(Game* game) {
         free_camera_drag(drag_controller);
         drag_controller = NULL;
     }
-    if (game && game->engine)
-        engine_set_camera_rig(game->engine, NULL);
+    if (g_view)
+        scene_view_set_rig(g_view, NULL);
     free_camera_rig(view_rig);
     view_rig = NULL;
     free_camera_rig(follow_rig);
@@ -8468,18 +8463,22 @@ static int run_cam_settings_probe(const Game* game) {
            (double)got.look_sensitivity, got.invert_look_y ? 1 : 0, got.reduce_motion ? 1 : 0);
 
     Engine* engine = game->engine;
-    // A camera, or the FOV half of settings_apply is guarded out and the arm
+    // A view, or the FOV half of settings_apply is guarded out and the arm
     // asserts a line that never runs.
-    CameraDesc probe_cam = {.fov = glm_rad(40.0f)};
-    engine_set_camera(engine, create_camera(&probe_cam));
+    SceneView* view = create_scene_view(
+        engine, &(SceneViewDesc){.camera = {.fov = glm_rad(40.0f)}, .fills_window = true});
+    if (!view || !engine_add_view(engine, view)) {
+        free_scene_view(view);
+        return 1;
+    }
     CameraRig* rig = create_camera_rig();
     if (!rig)
         return 1;
     const float authored_yaw = rig->yaw_rate, authored_pitch = rig->pitch_rate;
-    engine_set_camera_rig(engine, rig);
+    scene_view_set_rig(view, rig);
 
     settings_apply(&got, NULL, engine);
-    printf("cam settings fov %.9g\n", (double)glm_deg(engine->camera->fov_radians));
+    printf("cam settings fov %.9g\n", (double)glm_deg(view->camera.fov_radians));
     printf("cam settings applied scale %.9g invert %d shake %.9g authored %.9g %.9g\n",
            (double)rig->look_scale, rig->invert_pitch ? 1 : 0, (double)rig->shake_player_scale,
            (double)authored_yaw, (double)authored_pitch);
@@ -8499,18 +8498,20 @@ static int run_cam_settings_probe(const Game* game) {
            (double)rig->look_scale, rig->invert_pitch ? 1 : 0, (double)rig->shake_player_scale,
            (double)rig->yaw_rate, (double)rig->pitch_rate);
 
-    engine_set_camera_rig(engine, NULL);
+    scene_view_set_rig(view, NULL);
     free_camera_rig(rig);
     return 0;
 }
 
 static int run_cam_seam_probe(const Game* game) {
     Engine* engine = game->engine;
-    CameraDesc desc = {.position = {0.0f, 0.0f, 1.0f}};
-    Camera* camera = create_camera(&desc);
-    if (!camera)
+    SceneView* view = create_scene_view(
+        engine, &(SceneViewDesc){.camera = {.position = {0.0f, 0.0f, 1.0f}}, .fills_window = true});
+    if (!view || !engine_add_view(engine, view)) {
+        free_scene_view(view);
         return 1;
-    engine_set_camera(engine, camera);
+    }
+    Camera* camera = &view->camera;
     cam_seam_print("before", camera);
 
     CameraRig* a = create_camera_rig();
@@ -8529,22 +8530,23 @@ static int run_cam_seam_probe(const Game* game) {
 
     // Nothing installed: the engine must leave the camera exactly alone, which
     // is what lets an app that poses its own camera keep working untouched.
-    engine_set_camera_rig(engine, NULL);
-    camera_rig_apply(engine->camera_rig, camera);
+    scene_view_set_rig(view, NULL);
+    camera_rig_apply(view->rig, camera);
     cam_seam_print("none", camera);
 
-    engine_set_camera_rig(engine, a);
-    camera_rig_apply(engine->camera_rig, camera);
+    scene_view_set_rig(view, a);
+    camera_rig_apply(view->rig, camera);
     cam_seam_print("first", camera);
 
     // The second replaces the first. Then the FIRST is updated again: if it
     // still reached the camera, two writers would be live at once.
-    engine_set_camera_rig(engine, b);
+    scene_view_set_rig(view, b);
     glm_vec3_copy((vec3){99.0f, 99.0f, 99.0f}, a->anchor);
     camera_rig_update(a, 0.0f, 0.0f, 0.0f);
-    camera_rig_apply(engine->camera_rig, camera);
+    camera_rig_apply(view->rig, camera);
     cam_seam_print("second", camera);
 
+    scene_view_set_rig(view, NULL);
     free_camera_rig(a);
     free_camera_rig(b);
     return 0;
@@ -8762,9 +8764,9 @@ static void ui_settings_changed(UIElement* el, void* user) {
 
 static void ui_tonemap_changed(UIElement* el, void* user) {
     (void)el;
-    Engine* engine = user;
-    if (engine && engine->postfx)
-        engine->postfx->settings->tonemap_mode = ui_tonemap;
+    (void)user;
+    if (g_view)
+        g_view->settings.post.tonemap_mode = ui_tonemap;
 }
 
 // The selector binds an index; the file holds a NAME. The copy happens here
@@ -9044,8 +9046,8 @@ static bool ui_install(Engine* engine) {
     ui_slider(set_panel, "Music", 0.0f, 1.0f, &ui_settings.music_volume, ui_settings_changed,
               engine);
     ui_slider(set_panel, "SFX", 0.0f, 1.0f, &ui_settings.sfx_volume, ui_settings_changed, engine);
-    if (engine->postfx)
-        ui_toggle(set_panel, "Bloom", &engine->postfx->settings->bloom_enabled, NULL, NULL);
+    if (g_view)
+        ui_toggle(set_panel, "Bloom", &g_view->settings.post.bloom_enabled, NULL, NULL);
     ui_toggle(set_panel, "VSync", &ui_settings.vsync, ui_settings_changed, engine);
     // The camera, as a player states it (spec 12.19). Sensitivity scales the
     // rates the rig was authored with rather than replacing them, so a slow pan
@@ -9070,7 +9072,7 @@ static bool ui_install(Engine* engine) {
         ui_selector(set_panel, "Monitor", ui_monitor_names, ui_monitor_count, &ui_monitor_index,
                     ui_monitor_changed, engine);
     static const char* const modes[] = {"Passthrough", "ACES", "Neutral", "AgX", "Linear"};
-    ui_tonemap = engine->postfx ? engine->postfx->settings->tonemap_mode : POSTFX_TONEMAP_NEUTRAL;
+    ui_tonemap = g_view ? g_view->settings.post.tonemap_mode : POSTFX_TONEMAP_NEUTRAL;
     ui_selector(set_panel, "Tonemap", modes, 5, &ui_tonemap, ui_tonemap_changed, engine);
 
     // ESCAPE HATCH 1 on screen: an element the app paints itself, which still
@@ -9849,26 +9851,44 @@ int main(int argc, const char* argv[]) {
                                     .window_mode = display_mode,
                                     .monitor = display_monitor}};
 
-    // TAA replaces MSAA rather than joining it. This app is rigid meshes on the
-    // pbr program, so every surface writes a motion vector and the accumulator
-    // has something honest to reproject -- which is what separates it from the
-    // particle demo next door (spec 11.103).
+    Game* game = create_game(&config);
+    if (!game) {
+        fprintf(stderr, "Failed to create game\n");
+        return -1;
+    }
+
+    // The one view, filling the window. TAA replaces MSAA rather than joining
+    // it. This app is rigid meshes on the pbr program, so every surface writes a
+    // motion vector and the accumulator has something honest to reproject --
+    // which is what separates it from the particle demo next door (spec 11.103).
     //
     // Headless keeps MSAA and skips TAA unless asked, because jitter plus a
     // history makes the frame depend on the frame a texture lands in. Headless,
     // what the start-up asked for lands before frame 1 (spec 14.8); one asked
     // for later still streams.
+    SceneViewSettings view_settings;
+    engine_init_view_settings(game->engine, &view_settings);
     if (!headless || force_taa) {
-        config.engine.msaa_samples = 1;
-        config.engine.taa = true;
+        view_settings.samples = 1;
+        view_settings.post.taa_enabled = true;
     }
     // After the policy, so --taa --msaa 4 is expressible.
     if (msaa > 0)
-        config.engine.msaa_samples = msaa;
-
-    Game* game = create_game(&config);
-    if (!game) {
-        fprintf(stderr, "Failed to create game\n");
+        view_settings.samples = msaa;
+    view_settings.post.glare_enabled = glare_on;
+    // The FOV rides the desc rather than the built camera, so the explicit pose and the
+    // default go through one construction path instead of two.
+    SceneViewDesc view_desc = {
+        .camera = {.position = {0.0f, 20.0f, 35.0f}, .fov = 0.8f, .near = 0.1f, .far = 1000.0f},
+        .settings = &view_settings,
+        .fills_window = true};
+    if (cam_pose_fov_deg > 0.0f)
+        view_desc.camera.fov = glm_rad(cam_pose_fov_deg);
+    g_view = create_scene_view(game->engine, &view_desc);
+    if (!g_view || !engine_add_view(game->engine, g_view)) {
+        fprintf(stderr, "Failed to make the view\n");
+        free_scene_view(g_view);
+        free_game(game);
         return -1;
     }
     if (list_monitors) {
@@ -9889,8 +9909,6 @@ int main(int argc, const char* argv[]) {
         return -1;
     }
     game->engine->exit_after_frames = frames;
-    if (game->engine->postfx)
-        game->engine->postfx->settings->glare_enabled = glare_on;
     engine_set_screenshot_path(game->engine, screenshot);
     game->engine->screenshot_every = screenshot_every;
 

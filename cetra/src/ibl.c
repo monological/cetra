@@ -9,6 +9,7 @@
 #include "uniform.h"
 #include "util.h"
 #include "engine.h"
+#include "scene_view_state.h"
 #include "texture.h"
 #include "ext/log.h"
 
@@ -619,11 +620,11 @@ void ibl_prefilter_cubemap(IBLResources* ibl, ShaderProgram* program, GLuint src
                             through_medium);
 }
 
-// What the reflection chains see the environment through, from PostFX's global fog as it
-// stands at this bake. No medium unless the environment asks for one AND the fog exists.
+// What the reflection chains see the environment through, from the focus view's global fog as
+// it stands at this bake. No medium unless the environment asks for one AND the fog exists.
 static void ibl_resolve_medium(IBLResources* ibl, const Engine* engine) {
     ibl->medium = (IBLMedium){0};
-    const PostFX* fx = engine->postfx;
+    const PostFX* fx = engine->focus_view ? engine->focus_view->state->postfx : NULL;
     if (!ibl->reflect_fog || !fx || !fx->settings->fog_enabled || fx->settings->fog_density <= 0.0f)
         return;
     ibl->medium.density = fx->settings->fog_density;
