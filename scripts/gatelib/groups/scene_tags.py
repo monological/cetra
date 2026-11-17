@@ -89,8 +89,9 @@ def run_scene_tags_gate(workdir):
                            alone without tags, 0 px -- the captures see the wall's bounce -- and
                            the left differs.
       scene-tag-outline    part0 outlined: a ring outside it 2 to 4 pixels wide (1.5 points at 2
-                           pixels a point), the outline's colour exactly where it is whole; looking
-                           down the row of parts, part2 outlined behind part3 rings at the view's
+                           pixels a point), the outline's colour exactly where it is whole; strip
+                           2, a piece of the mesh tagged by vertex, ringed too; looking down the
+                           row of parts, part2 outlined behind part3 rings at the view's
                            hidden strength (0.35, within 0.05) over part3's face, and part3
                            outlined rings at 1.
       scene-tag-outline-still  an outline written at frame 40 onto a view that rested at 17 draws
@@ -394,6 +395,12 @@ def run_scene_tags_gate(workdir):
         while x > 0 and changed[x]:
             width, x = width + 1, x - 1
         exact = bool(np.any(np.all(ringed == np.array(purple), axis=2)))
+        # A strip, one piece of the mesh tagged by vertex: its ring comes through the mask's test
+        # of the mesh's tags against those outlined.
+        strip, _ = run("outline_strip", TAGS_FLAGS + ["--tag", f"2={ring_flag}"])
+        if strip is None:
+            return False, "a run failed"
+        strip_ringed = bool(np.any(np.all(strip == np.array(purple), axis=2)))
         # Down the row of parts from +x: part3 nearest, part2 wholly behind it.
         side = ["--cam-eye", "2.0,0.16,0.3", "--cam-target", "0,0.16,0.3", "--fov", "30"]
         bare, _ = run("outline_side", TAGS_FLAGS + side)
@@ -416,9 +423,11 @@ def run_scene_tags_gate(workdir):
             return float(np.nanmax(np.nanmedian(a, axis=1)))
 
         a_hid, a_seen = strength(hid), strength(seen)
-        ok = 2 <= width <= 4 and exact and abs(a_hid - 0.35) <= 0.05 and a_seen >= 0.95
-        return ok, (f"a ring {width} px wide (want 2 to 4), the colour exact somewhere: {exact}; "
-                    f"behind part3 at {a_hid:.2f} (want 0.35), in front at {a_seen:.2f} (want 1)")
+        ok = (2 <= width <= 4 and exact and strip_ringed and abs(a_hid - 0.35) <= 0.05 and
+              a_seen >= 0.95)
+        return ok, (f"a ring {width} px wide (want 2 to 4), the colour exact somewhere: {exact}, "
+                    f"round a strip of the mesh tagged by vertex: {strip_ringed}; behind part3 at "
+                    f"{a_hid:.2f} (want 0.35), in front at {a_seen:.2f} (want 1)")
 
     @arm("scene-tag-outline-still")
     @needs_fixture
