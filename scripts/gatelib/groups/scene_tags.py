@@ -57,9 +57,10 @@ def run_scene_tags_gate(workdir):
                            average and rested: the view draws again from that frame; written to
                            the value it holds, it rests.
 
-    Falsified by hand at 14.39: the instance block's tag left unfilled draws the four parts
-    reach's part0 colour, each of them; the walk's change test removed, a still view never sees
-    a node's new tag and rests through frame 40.
+    Falsified by hand at 14.39: the instance block's tag left unfilled, the instanced parts read
+    whatever the block last held -- part0 and part1 black, part2 and part3 another object's colour
+    -- and instanced is 27087 px off; the walk's change test removed, the rested view never draws
+    again after frame 40.
     """
     arm = Arms(20)
     scene = asset("tags_fixture.cscn")
