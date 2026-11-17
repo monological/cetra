@@ -239,6 +239,30 @@ static void _tag_pieces(Mesh* mesh, uint32_t first, const char* name) {
            first + pieces - 1);
 }
 
+// Whether `name` matches `pattern`, where `*` stands for any run of characters.
+static bool _matches(const char* pattern, const char* name) {
+    if (*pattern == '\0')
+        return *name == '\0';
+    if (*pattern == '*')
+        return _matches(pattern + 1, name) || (*name && _matches(pattern, name + 1));
+    return *pattern == *name && _matches(pattern + 1, name + 1);
+}
+
+// Every node under `node` whose name matches `pattern` given the tag and class; how many.
+static int _tag_nodes(SceneNode* node, const char* pattern, uint32_t tag, uint8_t klass) {
+    if (!node)
+        return 0;
+    int tagged = 0;
+    if (node->name && _matches(pattern, node->name)) {
+        node->tag = tag;
+        node->tag_class = klass;
+        tagged++;
+    }
+    for (size_t i = 0; i < node->children_count; i++)
+        tagged += _tag_nodes(node->children[i], pattern, tag, klass);
+    return tagged;
+}
+
 static SceneTags* g_table = NULL;
 
 void render_tags_frame(const RenderTags* t, Engine* engine, SceneView* driver, SceneView** grid,
@@ -250,13 +274,10 @@ void render_tags_frame(const RenderTags* t, Engine* engine, SceneView* driver, S
     for (int k = 0; k < t->node_count; k++) {
         if (!(t->nodes[k].frame == frame || (t->nodes[k].frame <= 1 && first)))
             continue;
-        SceneNode* node = node_find(scene->root_node, t->nodes[k].name);
-        if (!node) {
+        const int tagged =
+            _tag_nodes(scene->root_node, t->nodes[k].name, t->nodes[k].tag, t->nodes[k].klass);
+        if (!tagged)
             fprintf(stderr, "Warning: --node-tag: no node '%s'\n", t->nodes[k].name);
-            continue;
-        }
-        node->tag = t->nodes[k].tag;
-        node->tag_class = t->nodes[k].klass;
     }
     for (int k = 0; first && k < t->piece_count; k++) {
         SceneNode* node = node_find(scene->root_node, t->pieces[k].name);

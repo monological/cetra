@@ -12,7 +12,7 @@
  * Tags from the command line (spec 14.39), for the gates and the look. A frame F: prefix makes a
  * write at that frame; without one it is made at the first.
  *
- *   --node-tag [F:]NAME=TAG[:CLASS]   the named node's tag and class
+ *   --node-tag [F:]NAME=TAG[:CLASS]   the named nodes' tag and class; `*` in NAME matches any run
  *   --piece-tags NAME=FIRST           each separate piece of the node's first mesh a tag of its
  *                                     own, FIRST, FIRST+1, ... in the order the vertices meet them
  *   --tag [F:]TAG=SPEC                a row of the table every view borrows: SPEC is `none` or a
