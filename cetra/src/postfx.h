@@ -711,6 +711,9 @@ typedef struct PostFX {
     // shader hashing or sampling on an exact texel boundary turns into a different pixel; this
     // keeps that frame the window's.
     bool writes_window;
+    // Published per frame by the engine: this frame is the average_n-th of a still view's
+    // average, from 0, resolved in TAA's place as an equal share; -1 = a TAA frame (spec 14.38).
+    int average_n;
     // The finished picture, at output size, which the engine copies into the view's rectangle.
     // Engine-owned, made on first use.
     GLColorTarget picture;
@@ -858,6 +861,9 @@ int postfx_scaled_dim(int post_dim, float render_scale);
 // allocation, or a failed lazy compile of the TAAU resolve, and in every case
 // leaves no targets behind: the chain is unusable until a later size succeeds.
 bool postfx_resize(PostFX* fx, int width, int height, int ss_scale, float render_scale);
+
+// A cut: every history the chain keeps is dropped, so the next frame starts each from itself.
+void postfx_cut(PostFX* fx);
 void free_postfx(PostFX* fx);
 
 // Every tuning length the settings default to, written as its metre default times `typical_size`

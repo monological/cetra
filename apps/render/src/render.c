@@ -124,6 +124,11 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --view-rect-at F      The rectangle from frame F on\n");
     fprintf(stderr, "      --view-lines V        Only view V draws the light lines\n");
     fprintf(stderr, "      --programs-linked     Print the programs linked, at exit\n");
+    fprintf(stderr, "      --accumulate N        Each view averages N frames once still\n");
+    fprintf(stderr, "      --change-at F:KIND[:ARG]  One change at frame F (camera:V, material,\n"
+                    "                            material-silent, node:NAME, light, settings:V,\n"
+                    "                            settings-same:V, engine, typical)\n");
+    fprintf(stderr, "      --view-probe          Print each view's frame: drawn, averaged, done\n");
     fprintf(stderr, "      --cluster-heatmap  Tint fragments by cluster light count\n");
     fprintf(stderr, "      --no-shadows       Keep key lights but disable shadow maps\n");
     fprintf(stderr,
@@ -2211,6 +2216,20 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->view_lines_view = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--programs-linked") == 0) {
             args->programs_linked = 1;
+        } else if (strcmp(argv[i], "--accumulate") == 0 && i + 1 < argc) {
+            args->accumulate = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--change-at") == 0 && i + 1 < argc) {
+            const char* spec = argv[++i];
+            int used = 0;
+            if (sscanf(spec, "%d:%31[^:]%n", &args->change_frame, args->change_kind, &used) < 2 ||
+                args->change_frame < 1) {
+                fprintf(stderr, "Error: --change-at wants F:KIND[:ARG]\n");
+                return -1;
+            }
+            if (spec[used] == ':')
+                snprintf(args->change_arg, sizeof(args->change_arg), "%s", spec + used + 1);
+        } else if (strcmp(argv[i], "--view-probe") == 0) {
+            args->view_probe = 1;
         } else if (strcmp(argv[i], "--cluster-heatmap") == 0) {
             args->cluster_heatmap = 1;
         } else if (strcmp(argv[i], "--point-light-grid") == 0) {
@@ -2706,6 +2725,9 @@ static bool g_loading_preview = false;
 static SceneView* g_grid[RENDER_VIEWS_MAX];
 static int g_grid_count = 0;
 static bool g_view_removed = false; // --views 0: the app's view is no longer the engine's
+// --change-at's lasting marks on one grid view: turned further, and its vignette stronger.
+static float g_grid_turn_extra[RENDER_VIEWS_MAX];
+static bool g_grid_vignette[RENDER_VIEWS_MAX];
 
 static void grid_make(Engine* engine, const RenderArgs* args) {
     if (!args->views)
@@ -2741,6 +2763,54 @@ static void grid_make(Engine* engine, const RenderArgs* args) {
     }
 }
 
+// --change-at's one change, made at its frame.
+static void change_at(Engine* engine, Scene* scene, const RenderArgs* args) {
+    const char* kind = args->change_kind;
+    const char* arg = args->change_arg;
+    const int v = atoi(arg);
+    const bool in_grid = v >= 0 && v < g_grid_count;
+    if (strcmp(kind, "camera") == 0 && in_grid) {
+        g_grid_turn_extra[v] += 0.2f;
+    } else if ((strcmp(kind, "material") == 0 || strcmp(kind, "material-silent") == 0) &&
+               scene->material_count > 0) {
+        scene->materials[0]->albedo[0] *= 0.5f;
+        if (strcmp(kind, "material") == 0)
+            scene_mark_changed(scene);
+    } else if (strcmp(kind, "node") == 0 || strcmp(kind, "light") == 0) {
+        const char* name =
+            strcmp(kind, "light") == 0 && scene->light_count > 0 ? scene->lights[0]->name : arg;
+        SceneNode* node = name ? node_find(scene->root_node, name) : NULL;
+        if (node)
+            node->original_transform[3][1] += 2.0f * engine->typical_size;
+        else
+            fprintf(stderr, "--change-at: no node named '%s'\n", name ? name : "");
+    } else if (strcmp(kind, "settings") == 0 && in_grid) {
+        g_grid_vignette[v] = true;
+    } else if (strcmp(kind, "settings-same") == 0 && in_grid) {
+        const float strength = g_grid[v]->settings.post.vignette_strength;
+        g_grid[v]->settings.post.vignette_strength = strength;
+    } else if (strcmp(kind, "engine") == 0) {
+        engine_mark_changed(engine);
+    } else if (strcmp(kind, "typical") == 0) {
+        engine_set_typical_size(engine, engine->typical_size);
+    } else {
+        fprintf(stderr, "--change-at: '%s:%s' changes nothing here\n", kind, arg);
+        return;
+    }
+    printf("change-at frame=%d kind=%s arg=%s\n", args->change_frame, kind, arg);
+}
+
+// --view-probe: each grid view as the frame `frame` left it -- drawn, how many frames its average
+// holds, whether it rests, and every frame it has drawn.
+static void view_probe(int frame) {
+    for (int i = 0; i < g_grid_count; i++) {
+        const SceneView* view = g_grid[i];
+        printf("view-probe frame=%d view=%d drawn=%d accumulated=%d finished=%d draws=%lld\n",
+               frame, i, view->state->draws_this_frame ? 1 : 0, view->frames_accumulated,
+               view->finished ? 1 : 0, view->state->draw_index);
+    }
+}
+
 // Grid view `i` at frame `frame`: its rectangle, its camera, its settings and the flags that
 // change one view.
 static void grid_frame(Engine* engine, const RenderArgs* args, int frame) {
@@ -2768,6 +2838,8 @@ static void grid_frame(Engine* engine, const RenderArgs* args, int frame) {
             view->height = args->view_rect[3];
         }
         view->settings = g_view->settings;
+        if (g_grid_vignette[i])
+            view->settings.post.vignette_strength += 0.25f;
         if (i == args->view_samples_view)
             view->settings.samples = args->view_samples;
         if (i == args->view_mask_view)
@@ -2783,7 +2855,8 @@ static void grid_frame(Engine* engine, const RenderArgs* args, int frame) {
         view->camera = g_view->camera;
         view->camera.name = name;
         camera_rig_apply(view_rig, &view->camera);
-        const float turn = glm_rad(args->view_turn_deg * (float)(args->view_index + i));
+        const float turn =
+            glm_rad(args->view_turn_deg * (float)(args->view_index + i)) + g_grid_turn_extra[i];
         if (turn != 0.0f) {
             vec3 arm;
             glm_vec3_sub(view->camera.position, view->camera.look_at, arm);
@@ -3497,6 +3570,9 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
     if (!engine || !root_node)
         return;
 
+    // The frame before, as the engine left it, before this one moves anything.
+    if (frame_schedule && frame_schedule->view_probe && frames_rendered > 0)
+        view_probe(frames_rendered);
     frames_rendered++; // drives the --check-stretch gate below
 
     // --rain-ask: the CPU cover query asked every frame, as a listener would ask it.
@@ -3587,8 +3663,11 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
     }
 
     // Last, so the grid takes the driver's camera as this hook leaves it.
-    if (frame_schedule)
+    if (frame_schedule) {
+        if (frame_schedule->change_frame == frames_rendered)
+            change_at(engine, current_scene, frame_schedule);
         grid_frame(engine, frame_schedule, frames_rendered);
+    }
 }
 
 void render_scene_callback(Engine* engine, Scene* current_scene, SceneView* view) {
@@ -4062,6 +4141,7 @@ int main(int argc, char** argv) {
         view_settings.ss_scale = args.ssaa;
     view_settings.render_scale = view_render_scale;
     view_settings.headless_jitter = args.headless_jitter != 0;
+    view_settings.accumulate_frames = args.accumulate;
     // The view's camera, and the one view, filling the window.
     const SceneViewDesc view_desc = {
         .camera = {.position = {0.0f, 150.0f, 100.0f},
@@ -5645,6 +5725,10 @@ int main(int argc, char** argv) {
     engine_run(engine, render_frame_update, pre_render_callback, render_scene_callback);
     if (args.programs_linked)
         printf("programs linked %zu\n", programs_linked());
+    if (args.view_probe) {
+        view_probe(frames_rendered);
+        printf("view-probe end frames=%d\n", frames_rendered);
+    }
 
     // Before free_engine, like the probes below: it reads live engine state.
     // After the loop rather than before it, because the point of a snapshot is

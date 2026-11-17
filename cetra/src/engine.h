@@ -361,6 +361,8 @@ typedef struct Engine {
     // windows follow the focus; a view's mask hid a node a kept lamp's shadow still draws.
     bool said_focus_world;
     bool said_kept_hidden;
+    // ENGINE-OWNED: how many times an engine-wide setting was said changed (engine_mark_changed).
+    uint64_t change_count;
     // ENGINE-OWNED: the one view shown this frame when it covers a window not drawn through a
     // picture, whose chain then writes the window directly rather than a picture; else NULL.
     struct SceneView* window_view;
@@ -552,6 +554,10 @@ void free_engine(Engine* engine);
 // planes stay its owner's, or the engine's under Camera.fit_clip. An app sets the size first and
 // its own values after. Refused unless positive and finite.
 void engine_set_typical_size(Engine* engine, float metres);
+// Say that an engine-wide setting that changes the picture was written -- a material feature, the
+// LOD bias, a culling or draw lever: every view resting draws again. engine_set_typical_size says
+// it itself.
+void engine_mark_changed(Engine* engine);
 // Re-centre the world on the focus view's camera, snapped to `lattice` (spec 11.62). Applies at
 // the next frame top, and only on X and Z.
 //

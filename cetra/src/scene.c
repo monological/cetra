@@ -1135,6 +1135,7 @@ void node_set_position(SceneNode* node, const vec3 position) {
 typedef struct {
     SceneNode* node;
     mat4 parent_transform;
+    uint32_t mask; // the ancestors' view masks, ANDed
 } TransformStackEntry;
 
 // Rotate an authored light axis into world space (w=0: rotation only, no
@@ -1152,7 +1153,10 @@ static void _rotate_light_axis(mat4 global_transform, const vec3 local, vec3 out
 // The traversal itself. Static since 11.96: both load-time callers went through
 // scene_propagate_transforms once the walk stopped needing an unstamped variant,
 // so "where does the root sit" has exactly one answer.
-static void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
+// `moved` gathers the view masks of the nodes whose global transform changed since the latch: a
+// node with meshes alone adds its own, and one carrying anything the mask does not hide -- a light,
+// a camera, particles -- adds every bit.
+static void apply_transform_to_nodes(SceneNode* root, mat4 transform, uint32_t* moved) {
     if (!root)
         return;
 
@@ -1168,12 +1172,14 @@ static void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
     // Push root node
     stack[stack_size].node = root;
     glm_mat4_copy(transform, stack[stack_size].parent_transform);
+    stack[stack_size].mask = ~0u;
     stack_size++;
 
     while (stack_size > 0) {
         // Pop from stack
         stack_size--;
         SceneNode* node = stack[stack_size].node;
+        const uint32_t mask = stack[stack_size].mask & node->view_mask;
 
         // Straight off the popped slot. The child pushes below overwrite it, but
         // strictly after this is the only thing that reads it -- and the
@@ -1205,6 +1211,10 @@ static void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
             mat4 inv_global;
             glm_mat4_inv(node->global_transform, inv_global);
             glm_mat4_pick3t(inv_global, node->normal_matrix);
+            if (node->light || node->camera || node->particle_system)
+                *moved = ~0u;
+            else if (node->mesh_count > 0)
+                *moved |= mask;
         }
 
         // A node reached for the first time has no previous frame, and the
@@ -1248,6 +1258,7 @@ static void apply_transform_to_nodes(SceneNode* root, mat4 transform) {
 
                 stack[stack_size].node = node->children[i - 1];
                 glm_mat4_copy(node->global_transform, stack[stack_size].parent_transform);
+                stack[stack_size].mask = mask;
                 stack_size++;
             }
         }
@@ -1267,7 +1278,13 @@ static void _latch_prev_transform(SceneNode* node) {
 void scene_latch_prev_transforms(Scene* scene) {
     if (!scene || !scene->root_node)
         return;
+    scene->moved_mask = 0u;
     _latch_prev_transform(scene->root_node);
+}
+
+void scene_mark_changed(Scene* scene) {
+    if (scene)
+        scene->change_count++;
 }
 
 void scene_propagate_transforms(Scene* scene) {
@@ -1278,7 +1295,7 @@ void scene_propagate_transforms(Scene* scene) {
     // matrix each app composed and handed in -- making "where is the scene" a
     // thing seven callers could answer differently, and five of them answered
     // it with a freshly built identity every frame.
-    apply_transform_to_nodes(scene->root_node, scene->root_transform);
+    apply_transform_to_nodes(scene->root_node, scene->root_transform, &scene->moved_mask);
 }
 
 static void _transform_probe_node(const SceneNode* node, size_t frame, int* nodes, int* named,

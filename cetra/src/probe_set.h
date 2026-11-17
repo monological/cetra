@@ -96,6 +96,8 @@ bool probe_set_add(ReflectionProbeSet* set, ReflectionProbe* probe);
 // reflects its rooms rather than the environment (spec 13.32). True with none touching it, and on
 // a set that failed, which publishes nothing it could wait for.
 bool probe_set_ready_in(const ReflectionProbeSet* set, const AABB* box);
+// A probe holding a column is still owed a capture or its kept texels: a frame changes the set.
+bool probe_set_pending(const ReflectionProbeSet* set);
 
 /*
  * Decide which probes hold columns, from the camera -- a loaded probe that leaves keeps its column

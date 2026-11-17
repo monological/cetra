@@ -38,6 +38,10 @@ typedef struct SceneViewSettings {
     bool show_bones;        // X-ray bone visualization
     bool show_lights;       // light overlay: position cross + cull-radius wireframe
     bool headless_jitter;   // TAA's sub-pixel jitter even headless (non-deterministic frames)
+    // 0 = the view draws every frame under TAA. 16..64 = once nothing it shows has changed for a
+    // frame it averages this many jittered frames, equally weighted, then rests until something
+    // does; render scale 1 only.
+    int accumulate_frames;
 } SceneViewSettings;
 
 typedef struct SceneViewDesc {
@@ -60,7 +64,9 @@ typedef struct SceneView {
     // BY FUNCTION: the camera rig (scene_view_set_rig), borrowed.
     struct CameraRig* rig;
 
-    // ENGINE-OWNED: what the engine keeps for this view.
+    // ENGINE-OWNED: read, never write.
+    int frames_accumulated; // jittered frames in the average it shows; 0 under TAA
+    bool finished;          // the average is complete: the view rests, its picture shown as it is
     struct SceneViewState* state;
 } SceneView;
 

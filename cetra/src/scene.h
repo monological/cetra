@@ -236,6 +236,11 @@ typedef struct Scene {
     // each, not where they are -- the transform is read through the node at
     // submit. Owned; the list's type is internal.
     DrawList* draw_list;
+    // What changed under the views this frame (spec 14.38): the view masks of the nodes the walk
+    // found moved since the latch -- every bit for one carrying a light, a camera or particles --
+    // and how many times the scene has been marked changed (scene_mark_changed).
+    uint32_t moved_mask;
+    uint64_t change_count;
     size_t transparent_mesh_count;  // Late-pass meshes seen in this frame's opaque pass
     size_t transmissive_mesh_count; // Subset with transmission > 0; gates the mid-frame
                                     // opaque-color resolve refraction samples from
@@ -508,6 +513,10 @@ int scene_add_sss_profile(Scene* scene, const float* color, float radius);
 // radiance, under which a material's albedo reaches the display as authored with no light at all,
 // and the shadows off. A light the app adds then adds to the flat colour rather than replacing it.
 void scene_set_2d_preset(Scene* scene);
+// Say that something the views show changed by a plain write the engine cannot see -- a material, a
+// light, a scene setting: every view resting on the scene draws again. A node moved, a mesh added
+// or uploaded and a view's own camera or settings are seen without it.
+void scene_mark_changed(Scene* scene);
 // Give up a material this scene owns, which then belongs to whichever scene registers it next:
 // how a model loaded into a scene of its own lends its materials to the one that draws it.
 // False when this scene does not own it.

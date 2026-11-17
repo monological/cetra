@@ -1677,8 +1677,13 @@ void engine_render_scene(Engine* engine, Scene* scene, SceneView* sv) {
     // Off in headless (jitter would break deterministic screenshots).
     mat4 draw_projection;
     glm_mat4_copy(*projection, draw_projection);
-    bool taa_jitter_live = render_mode == RENDER_MODE_PBR && postfx_taa_active(vs->postfx) &&
-                           (!engine->headless || sv->settings.headless_jitter);
+    // A still view's average jitters whether TAA runs or not, headless too: the jitter is what
+    // it averages over, and its sequence is the frame's place in the average, so a run repeats.
+    const bool averaging = vs->average_n >= 0 && !vs->capturing;
+    bool taa_jitter_live =
+        render_mode == RENDER_MODE_PBR &&
+        ((postfx_taa_active(vs->postfx) && (!engine->headless || sv->settings.headless_jitter)) ||
+         averaging);
     // One predicate, published on the view, so no consumer drifts onto its
     // own idea of "TAA is accumulating".
     vs->taa_jitter_this_frame = taa_jitter_live;
@@ -1688,8 +1693,10 @@ void engine_render_scene(Engine* engine, Scene* scene, SceneView* sv) {
         // cover the same subpixel area. 8 at full scale -- bit-for-bit the
         // sequence TAA has always run. Asking the same predicate the resolve
         // dispatches on is what stops the sequence and its consumer diverging.
+        //
+        // An average walks 64 phases from its first frame, one per frame it holds.
         int phases = postfx_taau_active(vs->postfx) ? 16 : 8;
-        int j = (int)(engine->total_frames % phases) + 1;
+        int j = averaging ? vs->average_n % 64 + 1 : (int)(vs->draw_index % phases) + 1;
         int rw, rh;
         scene_view_render_size(sv, &rw, &rh);
         float jx = _halton(j, 2) - 0.5f;
@@ -1747,8 +1754,7 @@ void engine_render_scene(Engine* engine, Scene* scene, SceneView* sv) {
     // hash well-conditioned over long sessions.
     if (scene->shadow_system) {
         scene->shadow_system->pcss_stochastic = taa_jitter_live;
-        scene->shadow_system->pcss_frame_index =
-            taa_jitter_live ? (int)(engine->total_frames % 4096) : 0;
+        scene->shadow_system->pcss_frame_index = taa_jitter_live ? (int)(vs->draw_index % 4096) : 0;
     }
     // Published for postfx: depth-buffer reconstruction must invert the
     // projection the depth was actually rasterized with

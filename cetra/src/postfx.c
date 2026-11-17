@@ -712,6 +712,7 @@ PostFX* create_postfx(PostFXPrograms* programs, PostFXSettings* settings, int wi
     fx->lut_size = 0;
     fx->lut_name[0] = '\0';
     fx->frame_index = 0;
+    fx->average_n = -1;
     fx->pre_exposure = 1.0f;
     fx->dof_ready = false;
     fx->flare_ready = false;
@@ -1374,6 +1375,19 @@ static bool postfx_ensure_sss_targets(PostFX* fx) {
         return false;
     fx->sss_ready = true;
     return true;
+}
+
+void postfx_cut(PostFX* fx) {
+    if (!fx)
+        return;
+    PingPong* histories[] = {&fx->ao_history,  &fx->ssgi_history,     &fx->spec_occ_history,
+                             &fx->ssr_history, &fx->taa_history,      &fx->cs_history,
+                             &fx->sss_history, &fx->fog_layer_history};
+    for (size_t i = 0; i < sizeof(histories) / sizeof(histories[0]); i++)
+        histories[i]->valid = false;
+    fx->ssr_prev.tex = 0;
+    fx->froxel_prev_frame = -1;
+    fx->fog_layer_frame = -1;
 }
 
 // Rebuild every resolution-dependent target at a new size / render scale,
@@ -3540,16 +3554,27 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         // then stabilized as one image, which is what keeps smooth metal from
         // shimmering against its own occlusion. The one input this moves:
         // SSGI's gather now samples pre-TAA color (it rides the GTAO sweep).
-        if (taa_resolving) {
-            profiler_scope_begin(fx->profiler, "taa resolve");
+        //
+        // A still view's average takes the same place, whether TAA is on or not: the history is
+        // the mean of its jittered frames so far, and this one joins it with an equal share. The
+        // engine never asks it of a view below render scale 1.
+        const bool averaging = fx->average_n >= 0 && !post_canvas;
+        if (averaging || taa_resolving) {
+            profiler_scope_begin(fx->profiler, averaging ? "average" : "taa resolve");
             // The history is post-res either way; only how this frame reaches
             // it differs -- TAAU reconstructs the smaller raster onto it, plain
             // TAA accumulates a same-size frame.
-            if (post_canvas)
+            if (post_canvas) {
                 run_taau_resolve(fx);
-            else
-                run_temporal_accum(fx, fx->programs->taa_resolve, &fx->taa_history, fx->width,
-                                   fx->height, fx->hdr_texture, TEMPORAL_FEEDBACK_DEFAULT, true);
+            } else {
+                ShaderProgram* resolve = fx->programs->taa_resolve;
+                glUseProgram(resolve->id);
+                uniform_set_int(resolve->uniforms, "accumulate", averaging ? 1 : 0);
+                uniform_set_float(resolve->uniforms, "accumulateWeight",
+                                  averaging ? 1.0f / (float)(fx->average_n + 1) : 1.0f);
+                run_temporal_accum(fx, resolve, &fx->taa_history, fx->width, fx->height,
+                                   fx->hdr_texture, TEMPORAL_FEEDBACK_DEFAULT, true);
+            }
 
             // Push the resolved frame onto the canvas (the history side is
             // kept as next frame's accumulation buffer). The copy is what

@@ -9,6 +9,11 @@ uniform vec2 texelSize;        // 1/width, 1/height of the internal resolution
 
 uniform int reset;             // 1 on the very first frame: no valid history yet
 uniform float historyScale;    // This frame's pre-exposure over the history's (spec 13.20)
+// A still view's average (spec 14.38): 1 = the history is the mean of the view's jittered frames
+// so far, and this frame joins it with an equal share -- no reprojection, nothing moved, and no
+// clamp, which would pull every sample toward this frame's neighbourhood.
+uniform int accumulate;
+uniform float accumulateWeight; // this frame's share, 1 / (frames averaged + 1)
 
 // History weight at REST vs IN MOTION. A static pixel's dominant per-frame
 // variation is the TAA jitter itself -- exactly the signal to integrate --
@@ -66,6 +71,11 @@ void main() {
 
     if (reset != 0) {
         FragColor = vec4(current, 1.0);
+        return;
+    }
+    if (accumulate == 1) {
+        vec3 mean = texture(historyTex, uv).rgb * historyScale;
+        FragColor = vec4(mix(mean, current, accumulateWeight), 1.0);
         return;
     }
 

@@ -577,6 +577,17 @@ typedef struct {
     int view_rect_frame; // --view-rect-at F; 0 = from the start
     int view_lines_view; // --view-lines V: only view V draws the light lines
     int programs_linked; // --programs-linked: print the programs linked, at exit
+    // Still views. --accumulate N: every view averages N frames once still. --change-at
+    // F:KIND[:ARG] changes one thing at frame F: camera:V (grid view V turned a little more),
+    // material and material-silent (the first material's albedo, said to the scene or not),
+    // node:NAME (moved), light (the first light's node moved), settings:V and settings-same:V (grid
+    // view V's vignette, changed or written to its own value), engine (engine_mark_changed) and
+    // typical (engine_set_typical_size at the size it has). --view-probe prints each view's frame.
+    int accumulate;
+    int change_frame; // 0 = none
+    char change_kind[32];
+    char change_arg[64];
+    int view_probe;
     int show_help;
 } RenderArgs;
 

@@ -9,6 +9,7 @@
 #include "common.h"
 #include "exposure.h"
 #include "postfx.h"
+#include "scene_view.h"
 #include "sky.h"
 
 struct Engine;
@@ -114,7 +115,42 @@ typedef struct SceneViewState {
     PostFX* postfx;    // the view's chain; its settings are the view's. NULL for a capture's
     Exposure exposure; // the view's meter; its settings are the view's
     CloudMarch clouds; // the cloud march's targets and history, from this view's camera
+
+    // The view's own frame count: what every history's parity and adjacency are kept by, so a
+    // view that rests reads the side it last wrote. Starts at the engine's frame count when the
+    // view is made and counts the frames it draws, so a view drawn every frame keeps the engine's.
+    long long draw_index;
+
+    // What the view showed last frame, compared byte for byte with what it shows this frame:
+    // anything different, or anything that animates forever, is a change (spec 14.38).
+    struct {
+        bool valid;
+        SceneViewSettings settings;
+        mat4 view;
+        mat4 projection;
+        int rect[4];
+        uint32_t mask;
+        uint64_t changes; // the scene's and the engine's change counts, summed
+        uint64_t epoch;   // the graph's
+        bool through;     // the window drawn through its picture, which sets the picture's format
+    } record;
+    // This frame, as engine_decide_views settled it: whether the view draws, and when it draws an
+    // averaged frame, which (average_n, from 0; -1 = a TAA frame).
+    bool draws_this_frame;
+    int average_n;
+    bool was_hidden; // hidden last frame: a change on showing it again is a cut
+    bool taau_said;  // accumulation below render scale 1 was said once
+    // The last TAA picture, shown while the average holds fewer than VIEW_AVERAGE_SHOWN frames.
+    GLColorTarget held;
+    bool held_valid;
 } SceneViewState;
+
+// How many frames the average holds before it is shown in place of the last TAA picture.
+#define VIEW_AVERAGE_SHOWN 4
+// The frames an average may be asked to hold: fewer leaves the jitter's pattern in it, and more
+// than the sequence's 64 phases would repeat them.
+#define VIEW_ACCUMULATE_MIN 16
+#define VIEW_ACCUMULATE_MAX 64
 
 // A view for the captures: no target or chain, its camera placed by each face.
 struct SceneView* create_capture_view(struct Engine* engine);

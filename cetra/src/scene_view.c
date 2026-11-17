@@ -124,6 +124,8 @@ static SceneView* _scene_view_alloc(Engine* engine, const SceneViewDesc* desc) {
     view->mask = desc->mask ? desc->mask : ~0u;
     view->state = vs;
     vs->engine = engine;
+    vs->draw_index = (long long)engine->total_frames;
+    vs->average_n = -1;
     vs->render_mode = view->settings.render_mode;
     exposure_init(&vs->exposure, &view->settings.exposure);
     cloud_march_init(&vs->clouds);
@@ -684,6 +686,8 @@ static void _free_targets(SceneView* view) {
         vs->postfx = NULL;
     }
     _destroy_msaa_attachments(view);
+    gl_color_target_free(&vs->held);
+    vs->held_valid = false;
     gl_delete_fbo(&vs->framebuffer);
     gl_delete_fbo(&vs->opaque_color_fbo);
     gl_delete_texture(&vs->opaque_color_texture);

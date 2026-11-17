@@ -107,6 +107,17 @@ bool probe_set_ready_in(const ReflectionProbeSet* set, const AABB* box) {
     return residency_loaded_where(&set->residency, probe_bears_on, &q);
 }
 
+bool probe_set_pending(const ReflectionProbeSet* set) {
+    if (!set || set->failed)
+        return false;
+    for (size_t i = 0; i < set->residency.count; ++i) {
+        const ResidencyState state = set->residency.items[i].state;
+        if (state == RESIDENCY_CAPTURE || state == RESIDENCY_UPLOAD)
+            return true;
+    }
+    return false;
+}
+
 // The column an item's texels take: its slot's, or for one holding none, a rectangle of the
 // size every column has.
 static AtlasRect probe_column(const LightingAtlas* atlas, const ResidencyItem* item) {

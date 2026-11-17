@@ -40,6 +40,29 @@ def _cells(img, cols, rows):
     return [img[r * h:(r + 1) * h, c * w:(c + 1) * w] for r in range(rows) for c in range(cols)]
 
 
+def _view_probe(said):
+    """--view-probe's lines: per grid view, per frame, (drawn, accumulated, finished, draws); and
+    the frames the run drew, or None."""
+    rows = {}
+    for m in re.finditer(r"^view-probe frame=(\d+) view=(\d+) drawn=(\d) accumulated=(\d+) "
+                         r"finished=(\d) draws=(\d+)", said or "", re.M):
+        frame, view, drawn, held, finished, draws = map(int, m.groups())
+        rows.setdefault(view, {})[frame] = (drawn, held, finished, draws)
+    end = re.search(r"^view-probe end frames=(\d+)", said or "", re.M)
+    return rows, int(end.group(1)) if end else None
+
+
+def _draws(rows, view):
+    """The frames a view drew over the run, from its last probe line."""
+    frames = rows.get(view, {})
+    return frames[max(frames)][3] if frames else None
+
+
+def _linear(img):
+    """Display codes back to the radiance the linear tone curve encoded, 0..1."""
+    return (img / 255.0) ** 2.2
+
+
 def run_views_gate(workdir):
     """Several views (spec 14.38): apps/render --views CxR tiles its window with views the app's
     own view drives, hidden, each the camera turned --view-turn degrees more about the target. A
@@ -79,6 +102,33 @@ def run_views_gate(workdir):
       capture-overlay   light lines drawn in one view and in the focus, and not in the other: the
                         other is its view alone without them, 0 px, though the room's reflection
                         probes are captured while the focus shows lines; the lined view differs.
+
+    Still views, under --accumulate 16 unless said: a view draws a TAA frame, averages 16, and
+    rests from its 17th; a change at frame 40 of 60 restarts it for 17 more, 34 in all.
+
+      still-converges   --accumulate 32 --idle draws 33 frames and the run ends there, and the
+                        average is nearer a 64-sample supersampled reference, in radiance, than
+                        TAA's frame 200.
+      still-rest        under --idle the view rests at 17 and the run ends there, of 200 asked.
+      still-camera      one view's camera moved: it draws 34, the other 17.
+      still-material    a material written and said with scene_mark_changed: both draw 34;
+                        written unsaid, both 17 -- the contract.
+      still-node        a node in one view's bit alone moved: that view 34, the other 17; a light
+                        moved, both 34.
+      still-settings    one view's setting changed: it draws 34, the other 17; written to its own
+                        value, both 17.
+      still-engine      engine_mark_changed, and engine_set_typical_size at the size it has: both
+                        34.
+      still-forever     over water a view never rests: 40 of 40 frames drawn.
+      still-unfinished  under an adapting meter the view rests later than the pinned 17, and at
+                        all.
+      still-ui-only     60 frames of a view resting from 17 draw it 17 times, and the last frame
+                        is the one it rested on, 0 px: the 43 after it are the window's alone.
+      still-first       frames 2 and 4, an average of 1 and of 3, show the TAA frame before them,
+                        0 px; frame 5, an average of 4, is shown.
+      still-off         accumulation off: 40 of 40 frames drawn.
+      still-taau        accumulation below render scale 1 is said once and the view keeps TAA's
+                        upscale, drawing 40 of 40.
     """
     arm = Arms(17)
     board = asset("board_fixture.cscn")
@@ -306,5 +356,157 @@ def run_views_gate(workdir):
         ok = dr == 0 and lined > 0
         return ok, (f"the view without lines {dr} px from its view alone (want 0), the lined view "
                     f"{lined} px (want > 0)")
+
+    # ---- still views: --accumulate 16 unless said, so a view rests at its 17th frame -- a TAA
+    # frame, then the 16 it averages -- and a change at frame 40 is one it has rested through.
+    def still(tag, extra, views="1x1", frames=60, scene=board, flags=None, w=400, h=300):
+        img, said = _views_run(workdir, f"still_{tag}", scene, w, h, (
+            board_flags + ["--accumulate", "16"] if flags is None else flags) + [
+            "--views", views, "--view-probe"] + extra, frames=frames)
+        rows, end = _view_probe(said)
+        return img, rows, end, said
+
+    rested = 17               # a TAA frame and 16 averaged
+    restarted = 2 * rested    # and again from the change: its TAA frame and 16 more
+
+    def two_views(tag, change, extra=()):
+        """Each of a pair's draws over 60 frames with `change` at frame 40."""
+        img, rows, _, _ = still(tag, ["--change-at", change] + list(extra), views="2x1")
+        return img, (_draws(rows, 0), _draws(rows, 1))
+
+    @arm("still-converges")
+    def _():
+        # Radiance, not display codes, is what a pixel averages, as the engine's own
+        # supersampling does: the linear curve under an exposure nothing clips at, and the
+        # reference box-filtered 8x8 after decoding. Shadows, AO and bloom off, whose kernels are
+        # sized in pixels and would differ at eight times the size for reasons of their own.
+        flags = ["--no-auto-exposure", "-E", "0.003", "--tonemap", "linear", "--no-ssao",
+                 "--no-bloom", "--no-dither", "--msaa", "1", "--no-shadows"]
+        w, h = 200, 150
+        ref, _ = _views_run(workdir, "conv_ref", board, w * 8, h * 8, flags + ["--views", "1x1"],
+                            frames=3)
+        avg, rows, end, _ = still("conv_avg", ["--idle"], flags=flags + ["--accumulate", "32"],
+                                  frames=200, w=w, h=h)
+        taa, _ = _views_run(workdir, "conv_taa", board, w, h, flags + [
+            "--views", "1x1", "--taa", "--headless-jitter"], frames=200)
+        if ref is None or avg is None or taa is None:
+            return False, "a run failed"
+        fh, fw = ref.shape[0] // 8, ref.shape[1] // 8
+        ref = _linear(ref).reshape(fh, 8, fw, 8, 3).mean(axis=(1, 3))
+        rms = [float(np.sqrt(np.mean(((_linear(img) - ref) * 255.0) ** 2))) for img in (avg, taa)]
+        draws = _draws(rows, 0)
+        ok = draws == 33 and end == 33 and rms[0] < rms[1]
+        return ok, (f"{draws} frames drawn, the run ending at {end} (want 33: a TAA frame and 32 "
+                    f"averaged); {rms[0]:.3f} RMS from a 64-sample reference against TAA's "
+                    f"{rms[1]:.3f} at frame 200 (want nearer)")
+
+    @arm("still-rest")
+    def _():
+        _, rows, end, _ = still("rest", ["--idle"], frames=200)
+        draws, frames = _draws(rows, 0), rows.get(0, {})
+        finished = frames[max(frames)][2] if frames else 0
+        ok = draws == rested and end == rested and finished == 1
+        return ok, (f"{draws} frames drawn and the run ended at {end} of 200 asked (want "
+                    f"{rested} each), resting {finished == 1}")
+
+    @arm("still-camera")
+    def _():
+        _, draws = two_views("camera", "40:camera:1")
+        ok = draws == (rested, restarted)
+        return ok, f"draws {draws} after one view's camera moved (want ({rested}, {restarted}))"
+
+    @arm("still-material")
+    def _():
+        _, said = two_views("material", "40:material")
+        _, silent = two_views("material_silent", "40:material-silent")
+        ok = said == (restarted, restarted) and silent == (rested, rested)
+        return ok, (f"draws {said} with scene_mark_changed, {silent} without (want both "
+                    f"{restarted}, then both {rested}: an unsaid write is the app's to say)")
+
+    @arm("still-node")
+    def _():
+        masks = ["--view-mask", "1:2", "--node-mask", "qfn_body:1"]
+        _, node = two_views("node", "40:node:qfn_body", masks)
+        _, light = two_views("light", "40:light", masks)
+        ok = node == (restarted, rested) and light == (restarted, restarted)
+        return ok, (f"draws {node} after a node in view 0's bit alone moved (want ({restarted}, "
+                    f"{rested})), {light} after a light moved (want both {restarted})")
+
+    @arm("still-settings")
+    def _():
+        _, changed = two_views("settings", "40:settings:1")
+        _, same = two_views("settings_same", "40:settings-same:1")
+        ok = changed == (rested, restarted) and same == (rested, rested)
+        return ok, (f"draws {changed} after one view's setting changed (want ({rested}, "
+                    f"{restarted})), {same} after it was written to its own value (want both "
+                    f"{rested})")
+
+    @arm("still-engine")
+    def _():
+        _, marked = two_views("engine", "40:engine")
+        _, typical = two_views("typical", "40:typical")
+        ok = marked == (restarted, restarted) and typical == (restarted, restarted)
+        return ok, (f"draws {marked} after engine_mark_changed, {typical} after "
+                    f"engine_set_typical_size (want both {restarted} each)")
+
+    @arm("still-forever")
+    def _():
+        _, rows, _, _ = still("forever", [], scene=asset("water_fixture.cscn"), frames=40,
+                              flags=["--no-auto-exposure", "-E", "1.0", "--accumulate", "16"])
+        frames = rows.get(0, {})
+        finished = any(f[2] for f in frames.values())
+        draws = _draws(rows, 0)
+        ok = draws == 40 and not finished
+        return ok, f"over water {draws} of 40 frames drawn, ever resting {finished} (want 40, no)"
+
+    @arm("still-unfinished")
+    def _():
+        auto = [f for f in board_flags if f not in ("--no-auto-exposure", "-E", "0.0088")]
+        _, rows, _, _ = still("unfinished", [], flags=auto + ["--accumulate", "16"], frames=200)
+        frames = rows.get(0, {})
+        done = [f for f in sorted(frames) if frames[f][2]]
+        first = done[0] if done else None
+        ok = first is not None and first > rested
+        return ok, (f"under an adapting meter the view first rested at frame {first} (want later "
+                    f"than the pinned {rested}, and at all)")
+
+    @arm("still-ui-only")
+    def _():
+        img, rows, _, _ = still("ui_only", [])
+        stop, _, _, _ = still("ui_only_stop", [], frames=rested)
+        if img is None or stop is None:
+            return False, "a run failed"
+        scenes = _draws(rows, 0)
+        d = _differ(img, stop)
+        ok = scenes == rested and d == 0
+        return ok, (f"{scenes} scene passes in 60 frames (want {rested}), the last frame {d} px "
+                    f"from the one the view rested on (want 0)")
+
+    @arm("still-first")
+    def _():
+        shots = {f: still(f"first_{f}", [], frames=f)[0] for f in (1, 2, 4, 5)}
+        if any(img is None for img in shots.values()):
+            return False, "a run failed"
+        held = [_differ(shots[f], shots[1]) for f in (2, 4)]
+        shown = _differ(shots[5], shots[1])
+        ok = held == [0, 0] and shown > 0
+        return ok, (f"frames 2 and 4 {held} px from the TAA frame before them (want 0: an average "
+                    f"of 1 and 3), frame 5 {shown} px (want > 0: an average of 4 is shown)")
+
+    @arm("still-off")
+    def _():
+        _, rows, _, _ = still("off", [], flags=board_flags, frames=40)
+        draws = _draws(rows, 0)
+        return draws == 40, f"{draws} of 40 frames drawn with accumulation off (want 40)"
+
+    @arm("still-taau")
+    def _():
+        _, rows, _, said = still("taau", ["--taa", "--headless-jitter", "--render-scale", "0.5"],
+                                 frames=40)
+        line = "A view averages only at render scale 1"
+        draws, says = _draws(rows, 0), (said or "").count(line)
+        ok = draws == 40 and says == 1
+        return ok, (f"{draws} of 40 frames drawn below render scale 1 (want 40), said {says} "
+                    f"time(s) (want 1)")
 
     return arm.failed
