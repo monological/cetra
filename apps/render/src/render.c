@@ -128,7 +128,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --accumulate N        Each view averages N frames once still\n");
     fprintf(stderr, "      --change-at F:KIND[:ARG]  One change at frame F (camera:V, material,\n"
                     "                            material-silent, node:NAME, light, light-bright,\n"
-                    "                            settings:V, engine, typical[:SIZE])\n");
+                    "                            settings:V, engine, typical[:SIZE], gi)\n");
     fprintf(stderr, "      --view-probe          Print each view's frame: drawn, averaged, done\n");
     fprintf(stderr, "      --background-exact r,g,b  The background, a display colour, exactly\n");
     fprintf(stderr, "      --hdr-memory          Load -e's environment from its bytes in memory\n");
@@ -2829,6 +2829,8 @@ static void change_at(Engine* engine, Scene* scene, const RenderArgs* args) {
         engine_mark_changed(engine);
     } else if (strcmp(kind, "typical") == 0) {
         engine_set_typical_size(engine, arg[0] ? (float)atof(arg) : engine->typical_size);
+    } else if (strcmp(kind, "gi") == 0 && scene->gi) {
+        gi_world_mark_dirty(scene->gi);
     } else {
         fprintf(stderr, "--change-at: '%s:%s' changes nothing here\n", kind, arg);
         return;

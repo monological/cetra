@@ -58,22 +58,31 @@ def run_scene_tags_gate(workdir):
                            the value it holds, it rests.
       scene-tag-hidden     part1's tag hidden is the fixture without part1, its shadow included,
                            0 px; the slab's class hidden is the fixture without the slab, 0 px.
-      scene-tag-paint      a metal strip under a class's red paint reads red, its copper gone; a
-                           part painted wholly flat is one colour on its lit top and its shaded
-                           front, which differ unpainted; a tag dimmed all the way is black.
+      scene-tag-paint      a metal strip and the dielectric slab under one red paint read within 3
+                           codes of each other, a matte coat on both; a part painted wholly flat is
+                           one colour on its lit top and its shaded front, which differ unpainted;
+                           a tag dimmed all the way is black. Ambient occlusion off for the first
+                           two, since it darkens a surface by its neighbour whatever it is.
       scene-tag-order      strip 3's own green over its class's red, the strip beside it red; a
                            tag shown in a hidden class is hidden.
       scene-tag-limit      tags 0 and 2^22 refused by name; tag 300, past the table's first 256,
                            hides part1 as tag 11 does, 0 px.
-      scene-tag-capture    two views of the rooms, the right one hiding a ceiling panel by its
-                           tags: the left is its view alone without tags, 0 px -- the reflection
-                           probes, captured after the right view drew, see the panel -- and the
-                           right one differs.
+      scene-tag-capture    two views of the rooms under a GI volume, the left one hiding the red
+                           wall and a ceiling panel by its tags, the volume dirtied at frame 10 so
+                           it captures again inside the left view's draw: the right is its view
+                           alone without tags, 0 px -- the captures see the wall's bounce -- and
+                           the left differs.
 
     Falsified by hand at 14.39: the instance block's tag left unfilled, the instanced parts read
     whatever the block last held -- part0 and part1 black, part2 and part3 another object's colour
     -- and instanced is 27087 px off; the walk's change test removed, the rested view never draws
-    again after frame 40.
+    again after frame 40; the paint's metal and gloss left on, the strip reads (139, 3, 3), red
+    metal, against the slab's (225, 10, 10).
+
+    scene-tag-capture holds the outcome, not one guard: with the capture's bind of no tags removed,
+    and with its programs resolved with the tags bit as well, it still passes. The reflection
+    probes are captured at the first frame, before any view binds its tags, and the GI captured
+    again from frame 10 reaches the other view too little to move a code.
     """
     arm = Arms(20)
     scene = asset("tags_fixture.cscn")
@@ -173,10 +182,13 @@ def run_scene_tags_gate(workdir):
         if not have:
             return None, "no tags_fixture.cscn"
         plain, _ = run("paint_plain", TAGS_FLAGS + ["--node-tag", "strips=0:2"])
-        red, _ = run("paint_red", TAGS_FLAGS + ["--node-tag", "strips=0:2",
-                                                "--tag-class", "2=colour=FF2020FF"])
-        # Flat with ambient occlusion off: it is screen space, laid over the finished pixel, and
-        # darkens the part's front by the floor whatever the surface is.
+        # The strips and the slab in one paint: a matte coat reads alike on the metal and the
+        # dielectric, which unpainted look nothing alike. This and the flat run with ambient
+        # occlusion off: it is screen space, laid over the finished pixel, and darkens the slab by
+        # the strips and the part's front by the floor whatever the surfaces are.
+        red, _ = run("paint_red", TAGS_FLAGS + ["--no-ssao", "--node-tag", "strips=0:2",
+                                                "--tag-class", "2=colour=FF2020FF",
+                                                "--tag-class", "1=colour=FF2020FF"])
         lit, _ = run("paint_lit", TAGS_FLAGS + ["--no-ssao"])
         flat, _ = run("paint_flat", TAGS_FLAGS + ["--no-ssao", "--tag-class",
                                                   "3=colour=4080C0FF,flat=1"])
@@ -185,8 +197,10 @@ def run_scene_tags_gate(workdir):
             return False, "a run failed"
         project = _projector(TAGS_CAM, plain.shape[1], plain.shape[0])
         strip = (TAGS_STRIP_XS[1], TAGS_STRIP_TOP, TAGS_STRIP_Z)
+        slab_top = (0.0, 0.1, -0.4)
         copper, painted = _code_at(plain, project, strip), _code_at(red, project, strip)
-        reds = painted[0] > 3 * max(painted[1], painted[2])
+        slab_painted = _code_at(red, project, slab_top)
+        reds = max(abs(a - b) for a, b in zip(painted, slab_painted)) <= 3
         top = (TAGS_PART_XS[3], TAGS_PART_TOP, TAGS_PART_Z)
         front = (TAGS_PART_XS[3], 0.16, TAGS_PART_Z + 0.06)
         lit_top, lit_front = _code_at(lit, project, top), _code_at(lit, project, front)
@@ -195,7 +209,8 @@ def run_scene_tags_gate(workdir):
         evened = max(abs(a - b) for a, b in zip(flat_top, flat_front))
         black = _code_at(dim, project, (TAGS_PART_XS[2], TAGS_PART_TOP, TAGS_PART_Z))
         ok = reds and shaded > 20 and evened <= 1 and max(black) <= 2
-        return ok, (f"the strip {copper} unpainted, {painted} under red (want red); part3's top "
+        return ok, (f"the strip {copper} unpainted, {painted} under red, the slab in the same red "
+                    f"{slab_painted} (want within 3 codes); part3's top "
                     f"and front {shaded} codes apart unpainted (want > 20), {evened} painted flat "
                     f"(want <= 1); part2 dimmed all the way {black} (want black)")
 
@@ -238,8 +253,19 @@ def run_scene_tags_gate(workdir):
     @arm("scene-tag-capture")
     def _():
         rooms = asset("cornell_rooms.cscn")
-        flags = ["--no-auto-exposure", "-E", "1.0"]
-        hide = ["--node-tag", "rooms_light_a=7", "--tag", "7=hidden", "--tag-views", "2"]
+        # A GI volume, converged at load before any view draws, dirtied at frame 10 so it captures
+        # again inside the views' frames, 64 probes a frame.
+        flags = ["--no-auto-exposure", "-E", "1.0", "--gi-volume", "--gi-rate", "64",
+                 "--change-at", "10:gi"]
+        # The red wall, which bounces into the GI the captures gather, and a ceiling panel the
+        # right view shows, so that view differs; the panel's own light no capture of irradiance
+        # takes, its derived area light carrying it.
+        # The LEFT view hides, the first drawn: the world's lighting work runs inside the first
+        # view's draw, after it has bound its tags, so that is where a capture would take them.
+        # Both views draw with tags, borrowing one empty table, so the programs a capture draws
+        # with carry them whichever view resolved them last; the left's class row alone hides.
+        hide = ["--tag-table", "--node-tag", "rooms_left_red=0:7", "--node-tag",
+                "rooms_light_a=0:7", "--tag-class", "0/7=hidden"]
         pair, said = _views_run(workdir, "tags_capture_pair", rooms, 800, 600,
                                 flags + hide + ["--views", "2x1", "--view-turn", "0"])
         alone, said2 = _views_run(workdir, "tags_capture_alone", rooms, 400, 600,
@@ -249,8 +275,8 @@ def run_scene_tags_gate(workdir):
         half = pair.shape[1] // 2
         left, right = pair[:, :half], pair[:, half:]
         d_left, d_right = _differ(left, alone), _differ(right, alone)
-        return d_left == 0 and d_right > 0, (
-            f"the view without tags {d_left} px from its view alone (want 0), the one hiding the "
-            f"panel {d_right} px (want > 0)")
+        return d_right == 0 and d_left > 0, (
+            f"the view without tags {d_right} px from its view alone (want 0), the one hiding the "
+            f"wall and the panel {d_left} px (want > 0)")
 
     return arm.failed

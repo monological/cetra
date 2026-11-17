@@ -584,7 +584,8 @@ typedef struct {
     // material and material-silent (the first material's albedo, said to the scene or not),
     // node:NAME (moved), light (the first light's node moved), light-bright (the first light four
     // times brighter, said), settings:V (grid view V's vignette), engine (engine_mark_changed) and
-    // typical[:SIZE] (engine_set_typical_size at SIZE, or the size it has). --view-probe prints
+    // typical[:SIZE] (engine_set_typical_size at SIZE, or the size it has) and gi (the GI volume
+    // dirtied, so it captures again from that frame). --view-probe prints
     // each view's frame.
     int accumulate;
     int change_frame; // 0 = none
