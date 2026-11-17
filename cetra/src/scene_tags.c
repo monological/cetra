@@ -14,6 +14,7 @@ struct SceneTags {
     size_t cap;
     uint64_t generation, outline_generation;
     uint32_t outlined; // tags whose outline is set
+    uint32_t hidden;   // tags hidden
     TagTable table;
 };
 
@@ -74,6 +75,7 @@ bool scene_tags_set(SceneTags* tags, uint32_t tag, SceneTagState state) {
     if ((drawn || ringed) && !tag_table_write(&tags->table, tag, texels))
         return false;
     tags->outlined += (state.outline != 0) - (was.outline != 0);
+    tags->hidden += (uint32_t)state.hidden - (uint32_t)was.hidden;
     tags->states[tag] = state;
     tags->generation += drawn;
     tags->outline_generation += ringed;
@@ -96,6 +98,10 @@ uint64_t scene_tags_outline_generation(const SceneTags* tags) {
 
 bool scene_tags_outlined(const SceneTags* tags) {
     return tags && tags->outlined > 0;
+}
+
+bool scene_tags_hides(const SceneTags* tags) {
+    return tags && tags->hidden > 0;
 }
 
 uint32_t scene_tags_bind(SceneTags* tags, int unit) {

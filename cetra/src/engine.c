@@ -3329,6 +3329,14 @@ static void _engine_say_view_limits(Engine* engine, const Scene* scene, const Sc
         log_info("A view hides a node within a kept lamp's reach, whose shadow every view takes");
         engine->said_kept_hidden = true;
     }
+    // Tags are per vertex, so which surfaces lie in a kept lamp's reach is the GPU's to know: said
+    // when the view hides or ghosts anything while any lamp's shadow is kept.
+    if (!engine->said_kept_tags && scene->shadow_system &&
+        scene->shadow_system->tile_block_count > 0 && scene_view_hides_by_tags(view)) {
+        log_info("A view hides or draws see-through by its tags while a lamp's shadow is kept, "
+                 "which every view takes and which draws every surface as it is");
+        engine->said_kept_tags = true;
+    }
     // A stage that changes a cleared texel by where it is, or past what the inverse undoes.
     // Bloom near something bright glows onto it, as a camera's would, and the dither moves it a
     // code at most: neither is said.

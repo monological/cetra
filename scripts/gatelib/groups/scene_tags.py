@@ -8,7 +8,7 @@ import os
 import numpy as np
 
 from gatelib.arms import Arms
-from gatelib.groups.views import _differ, _draws, _view_probe, _views_run
+from gatelib.groups.views import _differ, _draws, _linear, _view_probe, _views_run
 from gatelib.harness import asset
 from gatelib.scenes import _projector
 
@@ -67,6 +67,16 @@ def run_scene_tags_gate(workdir):
                            tag shown in a hidden class is hidden.
       scene-tag-limit      tags 0 and 2^22 refused by name; tag 300, past the table's first 256,
                            hides part1 as tag 11 does, 0 px.
+      scene-tag-fade       fade 1 with part2 lit is part2 alone, every other object hidden by its
+                           tags, the floor untagged in the fading run, 0 px; fade 0.5 with the slab
+                           and the floor lit draws
+                           part3's top, in radiance, within 4% of the mean of the part solid and the
+                           slab behind it, and the slab beside it as it is unfaded, 0 px. Under the
+                           weighted OIT: the moments' estimate darkens a lone layer by about 10%.
+      scene-tag-ghost-off  a view that paints but ghosts nothing runs no OIT pass in a scene with no
+                           translucent mesh; the same view fading runs one.
+      scene-tag-shadow     part3 in a class half see-through: the slab where its shadow fell is the
+                           slab with part3 removed, exactly, at every point checked.
       scene-tag-capture    two views of the rooms under a GI volume, the left one hiding the red
                            wall and a ceiling panel by its tags, the volume dirtied at frame 10 so
                            it captures again inside the left view's draw: the right is its view
@@ -249,6 +259,70 @@ def run_scene_tags_gate(workdir):
         return diff == 0 and len(refused) == 2, (
             f"tags refused by name: {refused} (want [0, {1 << 22}]); tag 300 hidden {diff} px from "
             f"part1 removed (want 0)")
+
+    @arm("scene-tag-fade")
+    def _():
+        if not have:
+            return None, "no tags_fixture.cscn"
+        gone, said = run("fade_gone", TAGS_FLAGS + ["--tag", "12=lit", "--tag-fade", "1"])
+        # The reference hides every other object by its tags: the floor, untagged in the fading
+        # run, given one here.
+        hide = ["--node-tag", "floor=30"]
+        for t in (1, 2, 3, 4, 10, 11, 13, 20, 30):
+            hide += ["--tag", f"{t}=hidden"]
+        alone, said2 = run("fade_alone", TAGS_FLAGS + hide)
+        if gone is None or alone is None:
+            return False, f"a run failed: {said if gone is None else said2}"
+        d_gone = _differ(gone, alone)
+        # Radiance: the linear curve, nothing spread across pixels; and the weighted OIT, whose one
+        # layer composites exactly, where the moments' estimate darkens a lone layer by a tenth.
+        raw = ["--tonemap", "linear", "--no-bloom", "--no-ssao", "--no-dither",
+               "--no-oit-moments"]
+        lit = TAGS_FLAGS + raw + ["--node-tag", "floor=30", "--tag", "20=lit", "--tag", "30=lit"]
+        half, _ = run("fade_half", lit + ["--tag-fade", "0.5"])
+        solid, _ = run("fade_solid", lit)
+        behind, _ = run("fade_behind", lit + ["--remove-node", "part3"])
+        if half is None or solid is None or behind is None:
+            return False, "a run failed"
+        project = _projector(TAGS_CAM, half.shape[1], half.shape[0])
+        top = (TAGS_PART_XS[3], TAGS_PART_TOP, TAGS_PART_Z)
+        ghost = _linear(np.array([[_code_at(half, project, top)]]))[0, 0]
+        want = 0.5 * (_linear(np.array([[_code_at(solid, project, top)]]))[0, 0] +
+                      _linear(np.array([[_code_at(behind, project, top)]]))[0, 0])
+        off = float(np.max(np.abs(ghost - want) / np.maximum(want, 1e-4)))
+        aside = (0.5, 0.1, -0.4)
+        spared = _code_at(half, project, aside) == _code_at(solid, project, aside)
+        ok = d_gone == 0 and off <= 0.04 and spared
+        return ok, (f"fade 1 {d_gone} px from part2 alone (want 0); fade 0.5 part3's top "
+                    f"{off * 100:.1f}% from half the part and half the slab (want <= 4%); the lit "
+                    f"slab beside it {'as' if spared else 'NOT as'} unfaded")
+
+    @arm("scene-tag-ghost-off")
+    def _():
+        if not have:
+            return None, "no tags_fixture.cscn"
+        _, painted = run("ghost_off", TAGS_FLAGS + ["--profiler", "--tag-class",
+                                                     "3=colour=4080C0FF"])
+        _, fading = run("ghost_on", TAGS_FLAGS + ["--profiler", "--tag-fade", "0.5"])
+        off, on = "oit accumulate" in painted, "oit accumulate" in fading
+        return not off and on, (f"OIT accumulate painted: {off} (want False), fading: {on} "
+                                f"(want True)")
+
+    @arm("scene-tag-shadow")
+    def _():
+        if not have:
+            return None, "no tags_fixture.cscn"
+        ghost, _ = run("shadow_ghost", TAGS_FLAGS + ["--node-tag", "part3=13:4", "--tag-class",
+                                                     "4=see=0.5"])
+        bare, _ = run("shadow_bare", TAGS_FLAGS + ["--remove-node", "part3"])
+        if ghost is None or bare is None:
+            return False, "a run failed"
+        project = _projector(TAGS_CAM, ghost.shape[1], ghost.shape[0])
+        # Where part3's shadow fell on the slab: off its far side, along the sun.
+        points = [(0.46, 0.1, 0.30), (0.49, 0.1, 0.24), (0.47, 0.1, 0.22), (0.48, 0.1, 0.28)]
+        unequal = [p for p in points if _code_at(ghost, project, p) != _code_at(bare, project, p)]
+        return not unequal, (f"{len(points) - len(unequal)} of {len(points)} points where the "
+                             f"shadow fell read as with part3 removed")
 
     @arm("scene-tag-capture")
     def _():

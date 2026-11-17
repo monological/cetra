@@ -143,6 +143,9 @@ typedef struct SceneViewState {
     // The block the view's class rows, fade and table count go up in (spec 14.39): made the first
     // frame the view draws with tags, uploaded each frame it does.
     struct Ubo* tag_block;
+    // This frame draws its see-through surfaces through the OIT passes: it ghosts, and OIT can
+    // run. Set where its scene pass starts; otherwise those surfaces stay in the opaque passes.
+    bool ghosts_this_frame;
     // This frame, as _engine_decide_view settled it: whether the view draws, and when it draws an
     // averaged frame, which (average_n, from 0; -1 = a TAA frame).
     bool draws_this_frame;
@@ -180,6 +183,9 @@ bool scene_view_draws_tags(const struct SceneView* view);
 // Whether it draws a surface see-through: a fade, or a class row less than solid. Its opaque items
 // are then drawn through the transparent passes too.
 bool scene_view_ghosts(const struct SceneView* view);
+// Whether it draws any surface otherwise than as it is solid: hidden by a tag or a class, or
+// see-through.
+bool scene_view_hides_by_tags(const struct SceneView* view);
 // The view's tags bound for its passes, its shadows' included: its block on UBO_BINDING_TAG_VIEW
 // and its table on TEXUNIT_TAGS. A view without tags, or a capture, binds the engine's block of
 // zeros, which draws every surface as it is.

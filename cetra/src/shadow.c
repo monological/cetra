@@ -1167,6 +1167,9 @@ static void _prime_caster_program(ShaderProgram* program, const Engine* engine, 
     uniform_set_mat4(u, "lightSpaceMatrix", matrix);
     uniform_set_int(u, "albedoTex", 0);
     engine_upload_displacement_uniforms(engine, scene, view ? view : engine->focus_view, u);
+    // Only what a view draws solid casts (spec 14.39): a surface it fades or draws see-through,
+    // whatever pass draws it, casts nothing, so what is lit inside it is lit.
+    uniform_set_int(u, "uTagLane", 1);
 }
 
 // One layer's casters, through `matrix`, with the depth program or with `absorb` the translucent

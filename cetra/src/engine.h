@@ -358,9 +358,11 @@ typedef struct Engine {
     bool window_through_picture;
     GLColorTarget window_picture;
     // ENGINE-OWNED: said once each -- a view other than the focus drew water or rain, whose
-    // windows follow the focus; a view's mask hid a node a kept lamp's shadow still draws.
+    // windows follow the focus; a view's mask hid a node a kept lamp's shadow still draws; a
+    // view's tags hid or ghosted a surface while a lamp's shadow, which takes them all, is kept.
     bool said_focus_world;
     bool said_kept_hidden;
+    bool said_kept_tags;
     // ENGINE-OWNED: how many times an engine-wide setting was said changed (engine_mark_changed),
     // and its sum with the current scene's when the frame's views were decided: a change said
     // after that, in a render hook or an overlay, asks for the next frame.

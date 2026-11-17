@@ -193,6 +193,17 @@ bool scene_view_ghosts(const SceneView* view) {
     return false;
 }
 
+bool scene_view_hides_by_tags(const SceneView* view) {
+    if (!scene_view_draws_tags(view))
+        return false;
+    if (scene_view_ghosts(view) || scene_tags_hides(view->tags))
+        return true;
+    for (int c = 1; c < SCENE_TAG_CLASSES; c++)
+        if (view->settings.tag_classes[c].hidden)
+            return true;
+    return false;
+}
+
 static uint32_t _unorm16(float v) {
     v = v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v;
     return (uint32_t)lroundf(v * 65535.0f);

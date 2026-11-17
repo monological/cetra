@@ -1830,6 +1830,11 @@ void main() {
     // fresnelOpacity's own comment says two copies would hide. Nothing between
     // here and the last use reassigns any input.
     float finalOpacity = fresnelOpacity(coverage, materialOpacity, iorF0, NdotV);
+#if CETRA_HAS(PBR_FEAT_TAGS)
+    // The view's see-through and fade (spec 14.39), on the moments and the accumulate alike. A
+    // surface the opaque pass keeps is solid, so this multiplies it by exactly one there.
+    finalOpacity *= TagMisc.x;
+#endif
 
     // Moment generation ends here. It needs opacity and depth and nothing else:
     // it is a summary of WHERE the opacity is, never of what colour it is, so

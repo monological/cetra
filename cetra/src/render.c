@@ -468,9 +468,10 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
     const Camera* camera = &sv->camera;
     const SceneNode* node = item->node;
     Mesh* mesh = item->mesh;
-    // Only the opaque pass submits the opaque lane, so the lane says which pass
-    // this is without the caller having to.
-    bool alpha_pass = item->lane != DRAW_LANE_OPAQUE;
+    // A pass past the opaque one: any lane but the opaque, or the OIT passes, which a view that
+    // ghosts by its tags sends its opaque items through too (spec 14.39).
+    bool alpha_pass = item->lane != DRAW_LANE_OPAQUE || pass == SUBMIT_PASS_OIT_ACCUMULATE ||
+                      pass == SUBMIT_PASS_OIT_MOMENTS;
 
     if (!node->meshes || node->mesh_count == 0)
         return;
@@ -730,6 +731,15 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             submit_item_tag(u, item);
         }
         uniform_set_float(u, "lineWidth", mesh->line_width);
+        // Which of its surfaces this draw keeps (tags.glsl's uTagLane). In a view that ghosts this
+        // frame an opaque item is drawn twice: its solid surfaces in the opaque passes, its
+        // see-through ones in the OIT passes. Any other item, and every item of a view that cannot
+        // ghost, keeps both, so a see-through surface with no OIT to go to is drawn solid.
+        const bool oit_pass = pass == SUBMIT_PASS_OIT_ACCUMULATE || pass == SUBMIT_PASS_OIT_MOMENTS;
+        uniform_set_int(u, "uTagLane",
+                        item->lane != DRAW_LANE_OPAQUE || !vs->ghosts_this_frame ? 0
+                        : oit_pass                                               ? 2
+                                                                                 : 1);
         // Wind mask bounds: per-mesh geometry (its wind range). The shader
         // uses them only when this mesh's material opted in (uWindResponse > 0).
         wind_upload_mesh(mesh, u);
@@ -1144,6 +1154,8 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
     uniform_set_mat4(u, "view", (const float*)view);
     uniform_set_mat4(u, "projection", (const float*)projection);
     engine_upload_displacement_uniforms(engine, scene, sv, u);
+    // The opaque pass's lane (_submit_item), so the two agree on which surfaces have a depth.
+    uniform_set_int(u, "uTagLane", sv->state->ghosts_this_frame ? 1 : 0);
 
     for (size_t i = 0; i < list->count; ++i) {
         const DrawItem* item = &list->items[i];
@@ -1571,6 +1583,11 @@ void engine_render_scene(Engine* engine, Scene* scene, SceneView* sv) {
 
     RenderMode render_mode = vs->render_mode;
 
+    // The view's see-through surfaces go to the OIT passes this frame if there are OIT passes
+    // for them (spec 14.39): otherwise the opaque passes keep them, drawn solid.
+    vs->ghosts_this_frame = scene_view_ghosts(sv) && engine->oit_enabled &&
+                            render_mode == RENDER_MODE_PBR && !vs->capturing;
+
     // Whatever below writes depth in a capture, _render_capture_depth must draw as well: a GI
     // probe's wall test is that depth, without the rest of this pass.
     Frustum frustum;
@@ -1976,8 +1993,8 @@ void engine_render_scene(Engine* engine, Scene* scene, SceneView* sv) {
     // Pass 2: blend-mode (translucent) and transmissive meshes, composited
     // over the real background. Depth writes off; not sorted back-to-front
     // (typical models have few translucent meshes, e.g. a visor). Skipped
-    // entirely when pass 1 saw none.
-    if (scene->transparent_mesh_count > 0) {
+    // entirely when pass 1 saw none and the view draws nothing see-through by its tags.
+    if (scene->transparent_mesh_count > 0 || vs->ghosts_this_frame) {
         submit_state_reset(&submit_state);
         glDepthMask(GL_FALSE);
         // OIT (PBR only, and only when there are alpha-blend meshes to
@@ -1989,8 +2006,12 @@ void engine_render_scene(Engine* engine, Scene* scene, SceneView* sv) {
         // on oit_this_frame, so the trailing call is correct either way.
         // Not under capture: engine_end_oit_pass re-binds engine->framebuffer at
         // the main render size, same hijack as the particle path below.
+        // A view that ghosts by its tags (spec 14.39) sends its opaque items through both OIT
+        // passes as well, each keeping only its see-through surfaces (uTagLane 2).
+        const unsigned oit_lanes =
+            (1u << DRAW_LANE_BLEND) | (vs->ghosts_this_frame ? 1u << DRAW_LANE_OPAQUE : 0u);
         if (engine->oit_enabled && !vs->capturing && render_mode == RENDER_MODE_PBR &&
-            scene->oit_mesh_count > 0) {
+            (scene->oit_mesh_count > 0 || vs->ghosts_this_frame)) {
             // Moment generation (spec 11.17), over the same mesh set and before
             // the accumulate: it summarises WHERE the opacity is along each
             // pixel's depth axis, so the accumulate can weight each fragment by
@@ -2002,7 +2023,7 @@ void engine_render_scene(Engine* engine, Scene* scene, SceneView* sv) {
             if (engine->oit_moments_enabled && scene_view_begin_moment_pass(sv)) {
                 profiler_scope_begin(engine->profiler, "oit moments");
                 _submit_lanes(engine, scene, scene->draw_list, sv, *view, draw_projection,
-                              render_mode, &submit_state, &cull, 1u << DRAW_LANE_BLEND,
+                              render_mode, &submit_state, &cull, oit_lanes,
                               SUBMIT_PASS_OIT_MOMENTS);
                 profiler_scope_end(engine->profiler);
                 scene_view_end_moment_pass(sv);
@@ -2018,7 +2039,7 @@ void engine_render_scene(Engine* engine, Scene* scene, SceneView* sv) {
                 vs->moments_this_frame = moments_ready;
                 profiler_scope_begin(engine->profiler, "oit accumulate");
                 _submit_lanes(engine, scene, scene->draw_list, sv, *view, draw_projection,
-                              render_mode, &submit_state, &cull, 1u << DRAW_LANE_BLEND,
+                              render_mode, &submit_state, &cull, oit_lanes,
                               SUBMIT_PASS_OIT_ACCUMULATE);
                 profiler_scope_end(engine->profiler);
                 scene_view_end_oit_pass(sv);
