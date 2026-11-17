@@ -922,14 +922,16 @@ float calculateShadow(int shadowIndex, int cascade, vec3 worldPos, float lightSi
 #endif
 
 // Cluster light `li`'s shadow through layer `layer`: its cached faces at the tile mark, else the
-// per-frame map, which reads the mark as lit in a variant without the tiles.
+// per-frame map, which reads the mark as lit in a variant without the tiles. `sourceRadius` is a
+// panel's half-extent for the per-frame map's penumbra, 0 for a point or a spot.
 float clusterShadow(int layer, uint li, vec3 worldPos, vec3 N, vec3 L, vec3 ddxWorld,
-                    vec3 ddyWorld) {
+                    vec3 ddyWorld, float sourceRadius) {
 #if CETRA_HAS(PBR_FEAT_SHADOW_TILES)
     if (layer >= SHADOW_TILE_MARK)
         return tileShadow(li, worldPos, N, L, ddxWorld, ddyWorld);
 #endif
-    return punctualShadow(layer, worldPos, N, L, ddxWorld, ddyWorld);
+    return punctualShadow(layer, worldPos, N, L, ddxWorld, ddyWorld, sourceRadius,
+                          normalize(Normal));
 }
 
 // Clearcoat normal: the geometric normal, perturbed by the coat normal map if
@@ -2099,20 +2101,25 @@ void main() {
                     (1.0 - metallicMap) * (1.0 - transmissionEff) * albedoMap * ff.x;
 
                 // The panel's shadow (spec 13.27), multiplied into the whole
-                // panel term. The integral it scales is over the rectangle, so
-                // this is a hard binary occlusion of a soft source: the panel's
-                // centre is either visible from the fragment or it is not, with
-                // no partial occlusion of one edge. Its face is chosen in its own
-                // frame, as a point light's is in the world's. Where ltcPanel
-                // answered zero -- past the range, or behind the panel, where its
-                // cube has no face -- there is nothing to shadow.
+                // panel term: the occlusion of the panel's centre, softened by
+                // the penumbra its size casts. Its layer is the one fitted to this
+                // view where the depth pass fitted one, else the face of its cube
+                // chosen in its own frame, as a point light's is in the world's.
+                // Where ltcPanel answered zero -- past the range, or behind the
+                // panel, where its cube has no face -- there is nothing to shadow.
                 int aLayer = int(clusterLights[li].shadowMisc.y);
                 float aShadow = 1.0;
                 if (aLayer >= 0 && alphaMasked == 0 && max(ff.x, ff.y) > 0.0) {
-                    int aFace = panelCubeFace(-toPanel, clusterLights[li].dirType.xyz,
-                                              clusterLights[li].upArea.xyz);
+                    int aFace = clusterLights[li].attenCutoff.z > 0.5
+                                    ? 0
+                                    : panelCubeFace(-toPanel, clusterLights[li].dirType.xyz,
+                                                    clusterLights[li].upArea.xyz);
+                    // Half the shorter side: the penumbra is isotropic, so the
+                    // rectangle collapses to one number, the conservative one.
+                    float aRadius = 0.5 * min(clusterLights[li].shadowMisc.z,
+                                              clusterLights[li].shadowMisc.w);
                     aShadow = clusterShadow(aLayer + aFace, li, WorldPos, N, normalize(toPanel),
-                                            ddxWorld, ddyWorld);
+                                            ddxWorld, ddyWorld, aRadius);
                 }
 
                 // Same split as the punctual clamp below: the LTC response is
@@ -2274,7 +2281,8 @@ void main() {
         // than multiplies because the two are exclusive -- dirShadowSlot is set
         // only on the directional path, punctualLayer only on the cluster one.
         if (punctualLayer >= 0 && alphaMasked == 0)
-            shadow = clusterShadow(punctualLayer, shadowLight, WorldPos, N, L, ddxWorld, ddyWorld);
+            shadow = clusterShadow(punctualLayer, shadowLight, WorldPos, N, L, ddxWorld, ddyWorld,
+                                   0.0);
 
         // Cloud deck (spec 11.41). Multiplies rather than overwrites: the deck and the
         // cascades occlude the same light independently, and a fragment can be under both.

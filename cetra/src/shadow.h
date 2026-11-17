@@ -356,6 +356,9 @@ typedef struct ShadowSystem {
     // GLSL literal the way it used to be.
     int punctual_map_size;
     mat4 punctual_matrices[MAX_PUNCTUAL_SHADOW_LAYERS]; // perspective proj * lookAt per layer
+    // By a light's base layer: a panel whose last pass drew one layer fitted to its view in place
+    // of its cube (shadow_panel_fitted).
+    bool punctual_fitted[MAX_PUNCTUAL_SHADOW_LAYERS];
     // Layers actually rendered this frame, not merely requested: it is the
     // shader's punctualShadowCount, which bounds every Light.shadow_layer the
     // UBO carries, so a pass that allocated but never drew must leave it 0
@@ -530,6 +533,9 @@ struct Light;
 // punctual_shadow.glsl puts on the lookup itself -- read the raw field and a
 // light silently keeps a map it lost.
 int shadow_live_punctual_layer(const ShadowSystem* system, const struct Light* light);
+// Whether a panel's live shadow is one layer fitted to the view the last depth pass drew for, in
+// place of its cube, so its lookup reads that layer for every direction.
+bool shadow_panel_fitted(const ShadowSystem* system, const struct Light* light);
 
 // Whether a light's shadow is cached in tiles rather than drawn into the pool every frame:
 // a shadow-casting point or area light asking for it, with the range its faces end at.

@@ -268,6 +268,12 @@ int shadow_live_punctual_layer(const ShadowSystem* system, const struct Light* l
     return light->shadow_layer;
 }
 
+bool shadow_panel_fitted(const ShadowSystem* system, const struct Light* light) {
+    const int layer = shadow_live_punctual_layer(system, light);
+    return layer >= 0 && layer < MAX_PUNCTUAL_SHADOW_LAYERS && light->type == LIGHT_AREA &&
+           system->punctual_fitted[layer];
+}
+
 int shadow_live_tile(const ShadowSystem* system, const struct Light* light) {
     if (!system || !light || !system->enabled || light->shadow_tile < 0)
         return -1;
@@ -1455,6 +1461,89 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
     }
 
     return punctual_layers_for(light);
+}
+
+// The widest a panel's fitted shadow may open, as a half-angle in radians (50 degrees): past it a
+// cube's faces spend their texels about as well, and the panel keeps them.
+#define PANEL_FIT_MAX_HALF_ANGLE 0.8727f
+
+/*
+ * A panel's per-frame shadow fitted to the view drawing it: one perspective layer from the
+ * panel's centre over what the view can see of the scene in front of the panel and within its
+ * reach, in place of the five faces of a cube that covers the whole hemisphere it lights. On a
+ * board under a tabletop panel the cube spends about one texel in seven on the board.
+ *
+ * It bounds the receivers, not the casters: whatever stands between a receiver and the panel's
+ * centre is on the segment between them, so inside any cone from the centre that holds the
+ * receiver. (Spec 10.4 refused the casters' cone, which a room's walls open to 180 degrees.) The
+ * map is widened each side by the most a penumbra reads round a receiver,
+ * PUNCTUAL_PENUMBRA_MAX_TEXELS, so its search stays on the map.
+ *
+ * False, and the panel keeps its cube, when what the view sees reaches behind the panel's plane
+ * or the cone would open past PANEL_FIT_MAX_HALF_ANGLE: a view beside the panel or inside its
+ * room.
+ */
+static bool panel_fit_to_view(const Light* light, const ShadowSystem* ss, const SceneView* view,
+                              const AABB* scene_box, float face_far, mat4 dest) {
+    // The view's frustum as a box, cut to the panel's reach and to what the scene holds.
+    const SceneViewState* vs = view->state;
+    mat4 view_proj, inverse;
+    glm_mat4_mul((vec4*)vs->projection_matrix, (vec4*)vs->view_matrix, view_proj);
+    glm_mat4_inv(view_proj, inverse);
+    vec4 corner[8];
+    glm_frustum_corners(inverse, corner);
+    AABB box;
+    aabb_empty(&box);
+    for (int c = 0; c < 8; c++)
+        aabb_add_point(&box, corner[c]);
+    const float* centre = light->global_position;
+    for (int a = 0; a < 3; a++) {
+        box.min[a] = fmaxf(fmaxf(box.min[a], scene_box->min[a]), centre[a] - face_far);
+        box.max[a] = fminf(fminf(box.max[a], scene_box->max[a]), centre[a] + face_far);
+        if (box.min[a] > box.max[a])
+            return false;
+    }
+
+    vec3 normal = GLM_VEC3_ZERO_INIT, up = GLM_VEC3_ZERO_INIT;
+    light_emission_frame(light, normal, up);
+    vec3 dirs[8];
+    vec3 axis = GLM_VEC3_ZERO_INIT;
+    for (int c = 0; c < 8; c++) {
+        vec3 p = GLM_VEC3_ZERO_INIT, d = GLM_VEC3_ZERO_INIT;
+        aabb_corner(&box, c, p);
+        glm_vec3_sub(p, (float*)centre, d);
+        const float dist = glm_vec3_norm(d);
+        if (glm_vec3_dot(d, normal) <= 0.0f || dist <= 0.0f)
+            return false;
+        glm_vec3_scale(d, 1.0f / dist, dirs[c]);
+        glm_vec3_add(axis, dirs[c], axis);
+    }
+    glm_vec3_normalize(axis);
+
+    // The square frustum down the axis that holds every direction, widened by the penumbra's
+    // reach each side of the map.
+    mat4 look = GLM_MAT4_IDENTITY_INIT;
+    vec3 roll = GLM_VEC3_ZERO_INIT;
+    light_space_up(axis, roll);
+    look_along(centre, axis, roll, look);
+    float reach = 0.0f;
+    for (int c = 0; c < 8; c++) {
+        vec3 l = GLM_VEC3_ZERO_INIT;
+        glm_mat4_mulv3(look, dirs[c], 0.0f, l);
+        if (-l[2] <= 0.0f)
+            return false;
+        reach = fmaxf(reach, fmaxf(fabsf(l[0]), fabsf(l[1])) / -l[2]);
+    }
+    const float edge = (float)ss->punctual_map_size;
+    const float inner = edge - 2.0f * PUNCTUAL_PENUMBRA_MAX_TEXELS;
+    if (inner <= 0.0f)
+        return false;
+    const float half = atanf(reach * edge / inner);
+    if (half > PANEL_FIT_MAX_HALF_ANGLE)
+        return false;
+    compute_perspective_light_space_up(centre, axis, roll, 2.0f * half, ss->near_plane, face_far,
+                                       dest);
+    return true;
 }
 
 // The mask a view casts its own shadows through; every caster outside a view's pass.
@@ -3493,6 +3582,8 @@ static void _render_shadow_depth_pass(Engine* engine, Scene* scene, const SceneV
         (punctual_needed > 0 || tiled > 0) && punctual_array_ready(ss, scene);
     if (punctual_ready && punctual_needed > 0) {
         profiler_scope_begin(engine->profiler, "shadow punctual");
+        AABB scene_box;
+        aabb_empty(&scene_box);
         for (size_t i = 0; i < scene->light_count; ++i) {
             Light* light = scene->lights[i];
             if (!light || light->shadow_layer < 0)
@@ -3501,6 +3592,21 @@ static void _render_shadow_depth_pass(Engine* engine, Scene* scene, const SceneV
             int layers = compute_punctual_matrices(
                 light, ss, ies_library_at(scene->ies_library, light->ies_profile),
                 &ss->punctual_matrices[light->shadow_layer]);
+            // A panel drawn for a view takes one layer fitted to what the view sees, where one
+            // fits; a capture, and a view a cone cannot serve, keep the cube.
+            bool fitted = false;
+            if (light->type == LIGHT_AREA && view) {
+                if (aabb_is_empty(&scene_box))
+                    scene_bounds(scene, scene_box.min, scene_box.max);
+                const float face_far =
+                    light->range > 0.0f ? fminf(ss->far_plane, light->range) : ss->far_plane;
+                fitted = panel_fit_to_view(light, ss, view, &scene_box, face_far,
+                                           ss->punctual_matrices[light->shadow_layer]);
+            }
+            if (light->shadow_layer < MAX_PUNCTUAL_SHADOW_LAYERS)
+                ss->punctual_fitted[light->shadow_layer] = fitted;
+            if (fitted)
+                layers = 1;
 
             // One scene traversal per layer -- this loop is the frame cost the
             // pool ceiling caps, and a point light pays six times a spot's.

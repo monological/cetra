@@ -17,6 +17,11 @@
 // layer. Each layer is a mat4 of pbr_frag's default uniforms.
 #define MAX_PUNCTUAL_SHADOW_LAYERS 16
 
+// The widest a panel's penumbra searches and filters round a receiver, in texels of its map: a
+// curved receiver leaves its own plane within a few texels. A panel's map fitted to a view is
+// widened by this much each side, so the search never reads off it.
+#define PUNCTUAL_PENUMBRA_MAX_TEXELS 12.0f
+
 // A cached face's tile, in texels, and the guard band inside it: the face is drawn across 90
 // degrees plus the band, so a filter reaching past the face's edge still reads this face's
 // depth and never a neighbouring tile's.

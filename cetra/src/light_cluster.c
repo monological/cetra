@@ -221,7 +221,7 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     // a distribution its shading never applies. The contact-shadow fold is
     // exactly that consumer, and a wrong denominator is invisible in the frame.
     dst->atten_cutoff[1] = light->type == LIGHT_AREA ? -1.0f : (float)light->ies_profile;
-    dst->atten_cutoff[2] = 0.0f;
+    dst->atten_cutoff[2] = !cached && shadow_panel_fitted(shadows, light) ? 1.0f : 0.0f;
     dst->atten_cutoff[3] = light->cutOff;
     dst->shadow_misc[0] = light->outerCutOff;
     // The punctual base layer, not the CSM slot: only directionals reach the

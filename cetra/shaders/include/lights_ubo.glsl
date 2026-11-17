@@ -31,7 +31,8 @@ struct PackedLight {
     vec4 colorIntensity; // xyz = color * intensity (premultiplied on CPU), w = a cached
                          //     light's body's radius as its views were drawn
     vec4 attenCutoff;    // x = 1/range^2 (0 = unbounded), y = IES profile index
-                         //     (-1 = none), z = reserved, w = cos inner cone; a cached
+                         //     (-1 = none), z = 1 when a panel's shadow is one layer
+                         //     fitted to this view, else its cube, w = cos inner cone; a cached
                          //     light's zw and shadowMisc.x are instead its body's
                          //     segment, end to end, as its views were drawn
     vec4 shadowMisc;     // x = cos outer cone, y = float(punctual shadow base layer),

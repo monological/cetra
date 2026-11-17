@@ -52,6 +52,111 @@ uniform int punctualShadowCount;
 // lose here, because its form factor carries orientation instead.
 #define PUNCTUAL_GRAZING_FADE 0.07
 
+// The penumbra's taps, in the blocker search and in the filter: a golden-angle spiral, uniform at
+// any count, rotated per pixel and per frame where TAA or a still view's average turns them.
+#define PUNCTUAL_PENUMBRA_TAPS 32
+// How far nearer the light than the receiver's own plane a tap must be to occlude it, in texels
+// at the receiver: the stored depth is its texel's centre, which on a receiver tilted to the light
+// stands off the plane at the tap by up to half a texel times the slope. A depth-buffer epsilon
+// finds the receiver blocking itself, and a share of the distance misses a part a millimetre tall
+// on a board.
+#define PUNCTUAL_BLOCKER_TEXELS 0.5
+// The steepest the receiver's slope to the light is taken as, a tangent: past it the surface is
+// edge-on, where the grazing fade already takes the shadow away.
+#define PUNCTUAL_SLOPE_MAX 8.0
+
+vec2 punctualDiskTap(int i) {
+    float r = sqrt((float(i) + 0.5) / float(PUNCTUAL_PENUMBRA_TAPS));
+    float theta = float(i) * 2.3999632;
+    return r * vec2(cos(theta), sin(theta));
+}
+
+// A layer's depth terms, read back off its light-space matrix: the view in it is rigid, so its w
+// row is the view's -z row and its z row that times A, plus B. A stored depth d is then the axial
+// distance B / ((2 d - 1) + A), for any layer's near and far.
+vec2 punctualDepthTerms(mat4 m) {
+    int j = abs(m[0][3]) > abs(m[1][3]) ? 0 : 1;
+    if (abs(m[2][3]) > abs(m[j][3]))
+        j = 2;
+    float a = -m[j][2] / m[j][3];
+    return vec2(a, m[3][2] + a * m[3][3]);
+}
+
+float punctualDistance(vec2 terms, float depth01) {
+    return terms.y / ((2.0 * depth01 - 1.0) + terms.x);
+}
+
+// The receiver's plane, through `X` with normal `n`, as the layer sees it. The matrix's rows are
+// P00 s, P11 u, the depth row and f, the light's frame scaled by its projection with its position
+// in w, so a tap at NDC (x, y) looks along f + s x / P00 + u y / P11 and meets the plane at the
+// axial distance n.(X - C) / n.(that direction): the plane's four terms, for
+// punctualPlaneDistance.
+vec4 punctualPlane(mat4 m, vec3 X, vec3 n) {
+    vec3 r0 = vec3(m[0][0], m[1][0], m[2][0]);
+    vec3 r1 = vec3(m[0][1], m[1][1], m[2][1]);
+    vec3 f = vec3(m[0][3], m[1][3], m[2][3]);
+    float p00 = length(r0), p11 = length(r1);
+    vec3 s = r0 / p00, u = r1 / p11;
+    vec3 c = -s * (m[3][0] / p00) - u * (m[3][1] / p11) - f * m[3][3];
+    return vec4(dot(n, f), dot(n, s) / p00, dot(n, u) / p11, dot(n, X - c));
+}
+
+// Where a tap's ray meets the receiver's plane, as an axial distance; far past everything where it
+// never does.
+float punctualPlaneDistance(vec4 plane, vec2 uv) {
+    float den = plane.x + plane.y * (2.0 * uv.x - 1.0) + plane.z * (2.0 * uv.y - 1.0);
+    float t = plane.w / den;
+    return abs(den) > 1e-6 && t > 0.0 ? t : 1e30;
+}
+
+// The penumbra a source `sourceUV` across in the map casts onto the receiver at `pc`, `zR` from
+// it: the blockers found over the source's footprint, their mean distance setting the filter's
+// width by similar triangles -- a source of half-width r at zR, blocked at zB, throws a penumbra
+// r (zR - zB) / zB wide -- and the filter over that width.
+//
+// A tap occludes when it stands nearer the light than the receiver's own plane does along that
+// tap's ray, by `separation`. The plane is met exactly, from the vertex normal, and not
+// extrapolated from screen-space derivatives as the 3x3's is: a fragment beside a part's
+// silhouette takes its derivatives across the part, which tilts that plane toward the light and
+// reads the part as no blocker at all, a lit speck in its shadow.
+float punctualPenumbra(int layer, vec3 pc, float zR, float sourceUV, vec2 texel,
+                       float separation, vec4 plane) {
+    vec2 terms = punctualDepthTerms(punctualShadowMatrix[layer]);
+    // Built once, so the search and the filter read the same rotated taps.
+    mat2 rot = mat2(1.0);
+    if (pcssStochastic == 1) {
+        float ang = 6.2831853 * ign(gl_FragCoord.xy + vec2(float(pcssFrameIndex) * 5.588238));
+        rot = mat2(cos(ang), sin(ang), -sin(ang), cos(ang));
+    }
+
+    float reach = PUNCTUAL_PENUMBRA_MAX_TEXELS * texel.x;
+    float searchUV = min(sourceUV, reach);
+    float blockers = 0.0;
+    float found = 0.0;
+    for (int i = 0; i < PUNCTUAL_PENUMBRA_TAPS; ++i) {
+        vec2 off = rot * punctualDiskTap(i) * searchUV;
+        vec2 uv = clamp(pc.xy + off, texel * 0.5, 1.0 - texel * 0.5);
+        float zTap = punctualDistance(terms, texture(punctualShadowMaps, vec3(uv, float(layer))).r);
+        if (zTap < punctualPlaneDistance(plane, uv) - separation) {
+            blockers += zTap;
+            found += 1.0;
+        }
+    }
+    if (found < 0.5)
+        return 1.0;
+    float zB = blockers / found;
+    float filterUV = clamp(sourceUV * max(zR - zB, 0.0) / max(zB, 1e-6 * zR), texel.x, reach);
+
+    float lit = 0.0;
+    for (int i = 0; i < PUNCTUAL_PENUMBRA_TAPS; ++i) {
+        vec2 off = rot * punctualDiskTap(i) * filterUV;
+        vec2 uv = clamp(pc.xy + off, texel * 0.5, 1.0 - texel * 0.5);
+        float zTap = punctualDistance(terms, texture(punctualShadowMaps, vec3(uv, float(layer))).r);
+        lit += zTap < punctualPlaneDistance(plane, uv) - separation ? 0.0 : 1.0;
+    }
+    return lit / float(PUNCTUAL_PENUMBRA_TAPS);
+}
+
 // Occlusion for one perspective map: 1 = lit, 0 = fully occluded. A layer
 // outside the live range, a fragment behind the light, a fragment off the map,
 // and a fragment edge-on to the light all read as lit -- the third via the
@@ -62,7 +167,13 @@ uniform int punctualShadowCount;
 // light loop, which is non-uniform control flow, where derivatives are
 // undefined. Passing them in is what lets the receiver's own plane be
 // reconstructed per light without leaving that constraint.
-float punctualShadow(int layer, vec3 worldPos, vec3 N, vec3 L, vec3 ddxWorld, vec3 ddyWorld) {
+//
+// `sourceRadius` is the emitter's world half-extent: a panel's, which then casts the penumbra its
+// size implies wherever that is wider than a texel, against the receiver's plane through
+// `worldPos` with normal `planeN`, the vertex normal, which no normal map tilts. 0, a point's or
+// a spot's, is the 3x3.
+float punctualShadow(int layer, vec3 worldPos, vec3 N, vec3 L, vec3 ddxWorld, vec3 ddyWorld,
+                     float sourceRadius, vec3 planeN) {
     if (layer < 0 || layer >= punctualShadowCount)
         return 1.0;
 
@@ -110,6 +221,22 @@ float punctualShadow(int layer, vec3 worldPos, vec3 N, vec3 L, vec3 ddxWorld, ve
     // exists; the true neighbour is a face away and unreachable without a
     // samplerCubeArray (GLSL 400, above this shader set's 330).
     vec2 texel = vec2(1.0 / punctualShadowMapSize);
+
+    // The map's world width at this receiver: the layer's x scale is 1 / tan(fov / 2) over a
+    // rigid view, so this is 2 zR tan(fov / 2).
+    if (sourceRadius > 0.0) {
+        mat4 m = punctualShadowMatrix[layer];
+        float mapWorld = 2.0 * ls.w / length(vec3(m[0][0], m[1][0], m[2][0]));
+        float sourceUV = sourceRadius / mapWorld;
+        float slope = min(sqrt(max(1.0 - ndl * ndl, 0.0)) / max(ndl, 1e-3), PUNCTUAL_SLOPE_MAX);
+        float separation = PUNCTUAL_BLOCKER_TEXELS * texel.x * mapWorld * max(slope, 1.0);
+        if (sourceUV > texel.x)
+            return mix(1.0,
+                       punctualPenumbra(layer, pc, ls.w, sourceUV, texel, separation,
+                                        punctualPlane(m, worldPos, planeN)),
+                       trust);
+    }
+
     float ref = pc.z - SHADOW_PLANE_BIAS_FLOOR;
     float sum = 0.0;
     for (int y = -1; y <= 1; ++y) {

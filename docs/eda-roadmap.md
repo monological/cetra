@@ -75,9 +75,9 @@ Running the gates).
 **Order**: 1, 2, 5, 6, 6a and 9 are built, in that order; the canvas went first because the
 schematic and the layout both stand on it, and the editor stands on 5's UTF-8, typed input,
 clipboard and input script. 3 and 4 were built together in 14.38, for pcb's 3D view (its spec
-8.1); 14.39, tags in 3D, follows on 14.38's views. A panel's shadow at a board's scale (item 7) is
-what the 3D view's look wants next. Item 8's bugs and the physical depth of field can be taken
-whenever they fit.
+8.1), with a panel's shadow fitted to the view at a board's scale (item 7); 14.39, tags in 3D,
+follows on 14.38's views. Item 8's bugs and the physical depth of field can be taken whenever they
+fit.
 
 pcb's build steps, for reference: 6 is the window (code editor, schematic, keys, palette, help,
 shared selection, diff overlays and blink); 7 the layout view; 8 the 3D view; 9 the agent; 10
@@ -380,17 +380,17 @@ for a board) scaling every tuning length, a camera's planes fitted each frame (`
 and cascade soft-shadow thresholds counted in texels. pcb's pictures render at true size through
 them, and its 3D view will make its engine at a typical size of 0.001.
 
+**A panel's shadow at a board's scale: built in spec 14.38**, phase 10 (`docs/shader-subsystems.md`,
+Area-light shadows). A tabletop panel's per-frame shadow was a cube of 1024 texels a face, about
+0.63 mm a texel at the board, and a package's shadow stepped every texel. A panel's shadow is now
+one layer fitted to the view drawing it, about 0.3 mm a texel in the board's three-quarter view,
+softened by the penumbra the panel's size casts.
+
 **Left for later:**
 
 - **A physical depth of field.** The CoC today is a look with no focal length or aperture. A
   thin-lens CoC from the camera's focal length and aperture would put a macro shot's thin focus where
   a real lens does, at any scale. Likely the next spec pcb wants, for close-ups.
-- **A panel's shadow at a board's scale**, found by 14.38's look. A tabletop panel's per-frame
-  shadow is a cube from its centre, and the punctual pool's budget (96 MB) holds a panel and a lamp
-  only at 1024 texels a face: about 0.65 mm a texel at 33 cm, so a package's shadow steps every
-  0.65 mm, several pixels apiece in a close view. And it is the hard test of the panel's centre
-  (`docs/shader-subsystems.md`, Area-light shadows), where a 20 cm panel over a chip throws a very
-  soft one. pcb's 3D view will show it on every board.
 - **The cascade penumbra estimate** is normalised by a depth range the padding dominates, so its
   softness depends on how a cascade was fitted, not on the light.
 - **Lights' default size** (50 m) and the shadow system's metre defaults stay; a small scene states

@@ -490,9 +490,36 @@ behind the panel's plane, where `ltcPanel` is already zero. In a world-axis cube
 for a tilted panel, since the face opposite the normal's dominant axis still covers directions in
 front of it; `area-tilt` is the arm that sees it.
 
-**The occlusion is a hard binary test of the panel's centre**, multiplied into the whole LTC
-integral; nothing occludes one edge of the rectangle and not the other. Unreal shadows a rect light
-the same way, from its centre, as a point light.
+**Fitted to the view that draws it** (spec 14.38, `panel_fit_to_view` in `shadow.c`). In a view's
+depth pass a panel draws one layer, the first of its five, from its centre over what that view can
+see of the scene in front of the panel and within its range, in place of the cube; the light's
+`attenCutoff.z` tells the lookup to read that layer for every direction. It bounds the receivers,
+not the casters: whatever stands between a receiver and the panel's centre is inside any cone from
+the centre that holds the receiver. A view that sees past the panel's plane, or would need a cone
+wider than 100 degrees -- one beside the panel or inside its room -- keeps the cube, as does a
+capture. A board under a tabletop panel 32 cm off gets about 0.3 mm a texel where the cube gave
+0.63; the texels a cube spreads over a hemisphere are spent on what is seen.
+
+**The penumbra is the panel's size** (`punctualPenumbra`), over the panel's centre's occlusion. A
+blocker search over the panel's footprint in the map, a filter as wide as the blockers' mean
+distance implies by similar triangles -- a panel of half-width r at zR, blocked at zB, throws a
+penumbra r (zR - zB) / zB wide -- and 32 taps rotated per pixel and per frame where TAA or a still
+view's average turns them. Four things about it are easy to get backwards:
+- **The panel is collapsed to half its shorter side**; the penumbra is isotropic.
+- **A tap occludes when it stands nearer the light than the receiver's own plane along that tap's
+  ray, by half a texel times the slope.** The plane is met exactly, from the vertex normal and the
+  light's frame read back off the layer's matrix, not extrapolated from screen-space derivatives:
+  a fragment beside a part's silhouette takes those across the part, and the part then reads as no
+  blocker, a lit speck in its shadow. A larger margin -- a texel and the slope again -- misses a
+  package a millimetre tall entirely.
+- **The search and the filter reach at most `PUNCTUAL_PENUMBRA_MAX_TEXELS` (12) round the
+  receiver**, the margin the fit widens its map by: read further, a curved receiver comes back as
+  its own blocker, grain over every lit surface. The cascades bound theirs the same way.
+- **The penumbra alone does not fix a coarse map.** A package 1.5 mm tall under a 20 cm panel 32 cm
+  off casts a penumbra about 0.9 mm wide: over the cube's 0.63 mm texels that is barely wider than
+  the 3x3, and the grid still shows. The fit is what makes it a ramp.
+
+Points and spots keep the hard 3x3 (`sourceRadius` 0).
 
 **The faces end at the panel's range**, since a panel lights nothing past it. Points and spots
 keep the scene's far plane.
@@ -500,8 +527,8 @@ keep the scene's far plane.
 **Rejected:** one perspective map down the normal with a fixed 120-degree cone.
 `punctualShadow` reads anything off a map as lit by design, so every receiver more than 60 degrees
 off the normal is unshadowed, walls included, and a ceiling tube lights the room beside it through
-the wall. Fitting the cone instead is no better: a room's walls reach the panel's own plane, so the
-conservative cone is 180 degrees.
+the wall. Fitting that cone to the casters is no better: a room's walls reach the panel's own
+plane, so the conservative cone is 180 degrees.
 
 ## Cached shadows
 
