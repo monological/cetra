@@ -253,6 +253,11 @@ starts with none.
 - **Several views in the session file**, and a view picker in the debug GUI, which acts on the
   focus view.
 - **Spreading views' draws over frames**, if a heavy board's frame asks for it.
+- **Several views' draws made cheaper**: one set of detail levels per view, which each view
+  re-chooses for every item every frame; per-frame lamp shadows drawn once per distinct mask,
+  which moves pixels, since casters draw at the drawing view's levels; and the picture's format
+  decided per view, so one view's pass after its tone map stops making every view's picture 16-bit
+  and restarting every still view. A board pays little for any of them.
 
 ---
 
