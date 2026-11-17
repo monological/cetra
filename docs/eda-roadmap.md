@@ -17,7 +17,7 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-16: 14.38, scene views, built for items 3 and 4._
+_Last updated: 2026-11-16: 14.39, tags in 3D, started for item 4a._
 
 ---
 
@@ -59,6 +59,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 2 | Idle mode: drawing only when something changed | **Built**; with 14.38 it waits on 3D views at rest too | 6 | 14.1, 14.38 |
 | 3 | Skipping the 3D scene pass when no 3D view is shown | **Built**, with a still view that averages jittered frames and rests; a TAA-only view resting and accumulating under TAAU left for later | 8, the 3D view | 14.38 |
 | 4 | Drawing the 3D scene into part of the window | **Built**: any number of views, each a camera, a rectangle, its own settings and its own buffers; world work serving every view equally, a scene per view and a second window left for later | 8 | 14.38 |
+| 4a | Tags in 3D: a surface's net or part, and its kind, drawn by a table | **Started** in 14.39 | 8 (choosing, the spotlight, see-through, a pane's layers) | 14.39 |
 | 5 | Text input and scrolling panes in the UI | **Built**; composing text in an input method, glyphs past the atlas and the rest below are left for later | 6 (the command palette and the `/` jump); 9 (the chat) | 14.2, 14.3 |
 | 6 | The text editor widget | **Built**; sideways scrolling, a regular-expression find and the rest below are left for later | 6 (the code view) | 14.4 |
 | 6a | The editor's vim mode | **Built**, held to vim 9.2 itself; named registers, macros, marks and the rest below are left for later | 6 (the code view, which is vim only) | 14.5, 14.9 |
@@ -75,8 +76,9 @@ Running the gates).
 **Order**: 1, 2, 5, 6, 6a and 9 are built, in that order; the canvas went first because the
 schematic and the layout both stand on it, and the editor stands on 5's UTF-8, typed input,
 clipboard and input script. 3 and 4 were built together in 14.38, for pcb's 3D view (its spec
-8.1), with a panel's shadow fitted to the view at a board's scale (item 7); 14.39, tags in 3D,
-follows on 14.38's views. Item 8's bugs and the physical depth of field can be taken whenever they
+8.1), with a panel's shadow fitted to the view at a board's scale (item 7); 4a, tags in 3D, is
+being built on 14.38's views in 14.39, which pcb's 8.1 asked for beside them and the nine did not
+name. Item 8's bugs and the physical depth of field can be taken whenever they
 fit.
 
 pcb's build steps, for reference: 6 is the window (code editor, schematic, keys, palette, help,
@@ -258,6 +260,33 @@ starts with none.
   which moves pixels, since casters draw at the drawing view's levels; and the picture's format
   decided per view, so one view's pass after its tone map stops making every view's picture 16-bit
   and restarting every still view. A board pays little for any of them.
+
+---
+
+## 4a. Tags in 3D
+
+**What pcb needs** (its spec 8.1, phase 8): a click choosing what is under the pointer, with an
+outline on what is chosen, shared with the layout and the schematic; Ctrl+click the spotlight,
+which lights a net or a part and fades the rest, and in 3D turns it see-through, so a lit net's
+copper shows inside the board; the board's FR4 and mask at an opacity stepped by tenths, each
+copper layer in the layout's colour below 100%; a pane's layers shown or hidden from a list; the
+part the height check finds, marked. Each is a table write: no mesh is rebuilt. Picking stays
+pcb's, on the CPU (item 1).
+
+**Started in spec 14.39.** A vertex carries its object (a net); a node carries its class (a kind of
+surface: a copper layer, the mask, the FR4) and, for a part, its object. A table borrowed by the
+views says how each tag is drawn, the canvas's fields less `raised`; each view says how each class
+is drawn and how far what is not lit fades.
+
+**Decided in its spec:**
+- **A tag says how it is drawn, not what it means**: colour, outline, dim, hidden, lit. Choosing
+  and the height check's mark stay pcb's, as its layout already writes them.
+- **One table, borrowed by every 3D view**; the class rows and the fade are per view.
+- **A fading view fades everything not lit, untagged included**, so the FR4 and mask, which carry
+  no net, fade with the rest.
+- **What is see-through or faded casts no shadow.**
+- **The outline shows through what hides it, fainter**, and is drawn after a still view's average,
+  so choosing restarts nothing.
 
 ---
 
