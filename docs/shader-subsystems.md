@@ -23,7 +23,8 @@ Sky and night: [Day/night cycle](#daynight-cycle) · [The moon](#the-moon) ·
 
 Image finishing: [Tonemap / exposure](#tonemap--exposure) ·
 [Purkinje / scotopic shift](#purkinje--scotopic-shift) · [Diffraction glare](#diffraction-glare) ·
-[Local exposure](#local-exposure) · [Film grain](#film-grain) · [The CRT](#the-crt)
+[Local exposure](#local-exposure) · [Film grain](#film-grain) · [TAA's average](#taas-average) ·
+[The CRT](#the-crt)
 
 Lighting and occlusion: [Specular occlusion](#specular-occlusion) · [IES profiles](#ies-profiles) ·
 [Contact shadows](#contact-shadows) · [Cascade soft shadows](#cascade-soft-shadows) ·
@@ -712,8 +713,9 @@ so the caustics refract through the rings as well.
 ## Diffraction glare
 
 `glare.c` plus four `glare_*_frag` passes and `include/glare_threshold.glsl` (specs 13.4 and 13.5,
-after Clearwater). **Off by default**; a `.cscn` turns it on with `post.glare`, an app with
-`postfx->settings->glare_enabled`.
+after Clearwater). **Off by default**; a `.cscn` turns it on with `post.glare`, an app with a
+view's `settings.post.glare_enabled`. Its programs are the engine's, made on first use and shared
+by every view's chain (`postfx_programs_ensure_glare`).
 
 **How it works.** The aperture's diffraction pattern is the power spectrum of a round lens with
 flattened sides, scratches and dust. It is summed over 32 wavelengths between Clearwater's eight
@@ -741,8 +743,9 @@ conserved to 1.007 (`glare-conserves`). A frame with nothing past the threshold 
 `local_exposure.c` plus seven `le_*_frag` passes, sliced in the tonemap by
 `include/local_exposure.glsl` (spec 13.19). The sources are Durand & Dorsey 2002, Chen, Paris &
 Durand 2007 and Unreal 5's Local Exposure; `docs/papers/README.md` says what each gave.
-**Off by default**; a `.cscn` turns it on with `post.local_exposure`, an app with
-`postfx->settings->local_exposure_enabled`.
+**Off by default**; a `.cscn` turns it on with `post.local_exposure`, an app with a view's
+`settings.post.local_exposure_enabled`. Its programs are the engine's, shared as glare's are
+(`postfx_programs_ensure_local_exposure`).
 
 **How it works.** The frame's luminance, in EXPOSED log2, is split into a base and a detail.
 - **The base:** a bilateral grid sliced at each pixel's own luminance, mixed with a heavily
@@ -806,6 +809,24 @@ filter averages away, and wrong for noise that is seen.
 `grain-still` reads the crawl, and `grain-amount` the spread against the uniform draw's
 1/sqrt(12). The dither is not grain: it is static on purpose (spec 11.24).
 
+## TAA's average
+
+`taa_resolve_frag`'s `accumulate` branch: a still view's average (`docs/architecture.md`, Still
+views) runs at TAA's place in the chain, in TAA's program, so everything after the seam sees the
+same frame either way.
+
+- **The mean is a running one**: `mix(history, current, 1/(n+1))`, n frames already in, where n is
+  the view's `average_n`. No reprojection, since nothing moved, and no neighbourhood clamp, since a
+  clamp is what keeps TAA's history from converging past one frame's aliasing.
+- **The jitter is the n-th of a 64-long Halton (2, 3)**, from the view's own count rather than the
+  frame's, so n frames always cover the same n sub-pixel offsets; it jitters with TAA off and
+  headless too, which is how a headless average differs from one frame.
+- **The history is TAA's**: the average's first frame mixes over the last TAA picture at weight 1,
+  so it reads only the current frame, and TAA picks up from the average's last frame when the view
+  next moves.
+- **Under TAAU there is no average**: the upscaling resolve reprojects by construction, and an
+  averaged upsampling resolve is left for later. The view keeps TAAU, said once.
+
 ## The CRT
 
 `crt.c` with `crt_resample_frag` and `crt_frag` (spec 13.28), after Lottes' CRTS (2018) and the
@@ -813,10 +834,10 @@ slot mask of his earlier crt-lottes (2014), both public domain; `docs/papers/REA
 **Off by default**; an app turns it on with `engine->crt_enabled`, the render app with `--crt`.
 The CRT and its look are the engine's, since it shows the whole window.
 
-**Where it runs.** With it on, the post chain writes the finished picture into PostFX's picture
-(`PostFX.picture`, window-sized RGBA16F, shared with an app's after-tonemap passes) instead of the
-window, and the debug tiles and the app's overlay draw into it after it. The CRT then draws that
-into the window, and the debug GUI goes on top. So a game's door prompt and menus are on the
+**Where it runs.** With it on, the window is drawn through the engine's picture
+(`Engine.window_picture`, framebuffer-sized RGBA16F): each view's undithered picture is copied into
+its rectangle there, and the debug tiles and the app's overlay draw into it after them. The CRT
+then draws that into the window, and the debug GUI goes on top. So a game's door prompt and menus are on the
 television and the developer's panel is not. The picture is window-sized exactly, because the UI
 scissors in window pixels. Everything is in linear light: the resample decodes the picture through
 `include/display.glsl`'s inverse of the tonemap's 2.2, and the CRT encodes through the same file.

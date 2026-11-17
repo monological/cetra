@@ -52,7 +52,7 @@ linked doc explains the subsystem. `cetra/src/ext/` is vendored and not listed.
 |--------|---------|
 | `light.c/h` | Directional, point, spot and area lights. See `docs/lighting.md`. |
 | `shadow.c/h` | Cascaded shadow maps, the per-frame punctual pool, and the cached point- and area-light tiles. See `docs/lighting.md`. |
-| `ibl.c/h` | Split-sum IBL: irradiance, GGX prefilter, BRDF LUT. See `docs/lighting.md`. |
+| `ibl.c/h` | Split-sum IBL: irradiance, GGX prefilter, BRDF LUT; an environment from a path or from bytes. See `docs/lighting.md`. |
 | `sky.c/h` | Hillaire's atmosphere: transmittance, multiscatter and sky-view LUTs, and the aerial-perspective volume. See `docs/lighting.md`. |
 | `sky_clouds.c` | The volumetric clouds: the noise fields baked on the CPU, the march and the cloud shadow map. See `docs/shader-subsystems.md`. |
 | `moon_surface.c/h`, `moon_map.h` | The moon's surface baked once on the CPU, over the generated maria map. See `docs/shader-subsystems.md`. |
@@ -79,6 +79,7 @@ linked doc explains the subsystem. `cetra/src/ext/` is vendored and not listed.
 | `postfx.c/h` | The HDR post chain: bloom, tonemap, exposure, TAA, GTAO, SSGI, SSR, SSS, fog, motion blur, DoF, OIT composite, app passes; what it does is its plain settings (`PostFXSettings`), borrowed. See `docs/architecture.md`. |
 | `postfx_programs.c/h` | The post chain's programs, noise tile, white stand-in and fullscreen quad, made once per engine and borrowed by every chain. |
 | `exposure.c/h` | The camera's exposure, the one place that decides it, and the metering modes; its settings (`ExposureSettings`) apart from the meter's readings. See `docs/shader-subsystems.md`. |
+| `background.c/h` | An exact background's CPU inverse: the display colour wanted, back through the 2.2 encode and a tone curve to the working-space value a view clears to. See `docs/architecture.md`, Scene views. |
 | `glare.c/h` | Diffraction glare by FFT. See `docs/shader-subsystems.md`. |
 | `local_exposure.c/h` | Local exposure's bilateral grid and blurred luminance, in one atlas the tonemap slices. See `docs/shader-subsystems.md`. |
 | `lut.c/h` | Adobe `.cube` colour-grading LUT reader; refuses a bad file by name, never truncates. |

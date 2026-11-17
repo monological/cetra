@@ -103,9 +103,44 @@ file, and a `--no-*` flag is the only way off something the file asked for.
 - `--render-scale-at <frame:scale[,...]>` — diagnostic: switch the scale mid-run, exercising the
   runtime rebuild. Same headless preconditions.
 - `--idle` (spec 14.1) — the engine's idle mode. A scene with anything in it still draws every
-  frame, so a scene loaded here draws as it does without it; the `idle-3d` arm holds that.
+  frame, so a scene loaded here draws as it does without it, unless its views rest under
+  `--accumulate`; the `idle-3d` arm holds that.
 - `--dof-max-coc` is in half-render-resolution texels, so under `--render-scale` the same value
   blurs about 1/scale wider on screen. This is not compensated.
+
+### Views
+
+The render app makes one view filling the window, which every flag above writes. These make
+others (spec 14.38, `docs/architecture.md`, Scene views). Views are numbered from 0 in the grid,
+row by row from the top left.
+- `--views CxR` tiles the window with C by R views, each the app's camera turned `--view-turn DEG`
+  (90 by default, 0 for one camera in every view) more about its target than the one before. The
+  app's own view drives them, hidden: the orbit, the scene's settings and every flag above. `--views
+  0` adds no view, and the frame draws only the window. `--view-index K` numbers the first view
+  K, so `--views 1x1 --view-index 2` is view 2 of a grid alone, at the window's size, which is how
+  an arm compares a view with itself alone.
+- `--view-picture` draws a lone view covering the window through its picture rather than straight
+  into the window. `--window-color r,g,b` is the window's own colour, a display colour, where no view
+  covers it.
+- `--view-mask V:MASK` sets view V's mask and `--node-mask NAME:MASK` the named node's, both as
+  integers; a view draws the nodes sharing a bit with it.
+- `--view-hide-at V:F` hides view V from frame F, and `--view-show-at F` shows it again from frame F.
+  `--view-samples V:N` gives view V its own sample count. `--view-rect V:x,y,w,h` moves view V to
+  that rectangle in window points, from frame `--view-rect-at F` (from the start without it).
+  `--view-lines V` turns the light lines on in view V only.
+- `--accumulate N` gives every view `accumulate_frames` N (16 to 64): still, it averages N frames
+  and rests. `--change-at F:KIND[:ARG]` makes one change at frame F: `camera:V` (view V turned a
+  little more), `material` and `material-silent` (the first material's albedo, with and without
+  `scene_mark_changed`), `node:NAME` (moved), `light` (the first light's node moved), `settings:V`
+  and `settings-same:V` (view V's vignette, changed or written to the value it has), `engine`
+  (`engine_mark_changed`) and `typical` (`engine_set_typical_size` at the size it has).
+  `--view-probe` prints a `view-probe` line per view each frame: drawn, how many frames its average
+  holds, finished, its draws so far.
+- `--background-exact r,g,b` gives every view an exact background, the display colour it shows.
+  Pass the same to `--window-color` and the two meet with no seam.
+- `--hdr-memory` reads `-e`'s file into memory and loads it from the bytes
+  (`load_hdr_environment_memory`), the way an app with embedded files does.
+- `--programs-linked` prints how many programs were linked, at exit.
 
 ### Exposure and tone
 
@@ -1530,9 +1565,14 @@ and:
 - `--split` draws two views side by side; on the board the second is the underside, mirrored,
   showing the plane, the bottom copper and the outline. `--only-view 0|1` draws one of the two
   alone, for the twin.
-- `--ui` puts a panel of the game UI over the canvas, at `UI_OVERLAY_ORDER`. `--picture` adds an
-  after-tonemap pass that changes nothing, so the overlays draw into PostFX's picture rather than
-  the window.
+- `--ui` puts a panel of the game UI over the canvas, at `UI_OVERLAY_ORDER`. `--picture` adds a
+  view filling the window, its scene empty under the 2D preset, with an after-tonemap pass that
+  changes nothing, so the window is drawn through the engine's picture and the overlays draw into
+  it rather than the window. Without it, or `--view3d`, the canvas draws with no view: no scene
+  pass and no chain, over `window_color`.
+- `--view3d` (spec 14.38) puts a scene view in the right half of the window: three spheres on a
+  floor under the window environment, with a key light and its shadows, the 2D panes in the left
+  half. It follows the window's size.
 - `--ui-borders` (spec 14.12) draws boxes of one size and radius whose borders lie over clear,
   half-alpha and opaque fills on one backdrop, which `canvas-ui-borders` holds to Porter-Duff over.
 - `--ui-seams` (spec 14.23) draws, at whole framebuffer pixels from the window's corner, quads

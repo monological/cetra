@@ -1,10 +1,11 @@
 # Cetra
 
 A C11 PBR rendering engine on OpenGL 4.1, the ceiling on macOS, so there are no compute shaders.
-It forward-renders into an HDR MSAA G-buffer and runs a screen-space post chain over it, around a
-scene graph. An optional game layer (`cetra/src/game/`) adds a fixed-timestep loop, Jolt physics,
-entities, input and audio. The 2D canvas, idle mode and the UI's text, panes and code editor are
-there for pcb, an EDA program built on cetra in its own repository.
+It draws a scene graph through any number of views, each forward-rendered into its own HDR MSAA
+G-buffer with a screen-space post chain over it, and composites them into the window. An optional
+game layer (`cetra/src/game/`) adds a fixed-timestep loop, Jolt physics, entities, input and audio.
+The 2D canvas, idle mode, still views and the UI's text, panes and code editor are there for pcb,
+an EDA program built on cetra in its own repository.
 
 This file is the rules. What the engine is and how it works is in `docs/`.
 
@@ -96,6 +97,13 @@ Each of these has rendered a plausible frame when broken, with the suite green. 
 - **What the frame's geometry depends on goes in the app's pre-render hook**: the camera, and any
   node added, removed or moved. Written in the render hook it is a frame late, shadows included.
   (`docs/architecture.md`, Render Pipeline)
+- **Nothing reads a camera off the engine.** A pass drawing a view is handed it, world work takes
+  the focus view, a tool takes the view it steers. **What a subsystem keeps per camera lives in the
+  view's state, and a history's last frame is its view's** (`draw_index`, not `total_frames`), or a
+  second view reprojects the first's frame. (`docs/architecture.md`, Scene views)
+- **A plain write the engine cannot see stops a still view seeing it**: a material, light or scene
+  setting is followed by `scene_mark_changed`, an engine-wide setting by `engine_mark_changed`, or a
+  resting view keeps the old picture. (`docs/architecture.md`, Still views)
 - **The transform walk may run again in a frame; the latch must not.** `scene_latch_prev_transforms`
   runs once, or every motion vector goes to zero. (`docs/architecture.md`)
 - **TAA is on in a window and off headless** unless `--taa`, so anything gated on `taa_resolving`
@@ -177,7 +185,7 @@ Each has a `README.md` in its directory.
 | `apps/gametest` | The game layer: physics, a character, animation, audio, menus, the UI probes | yes |
 | `apps/tree` | Procedural tree generator on an island | yes |
 | `apps/silent` | A first-person walk through a foggy night town; the engine's largest user | yes |
-| `apps/canvas` | The 2D canvas, idle mode and the UI's text input, panes and editor | yes |
+| `apps/canvas` | The 2D canvas, idle mode, the UI's text input, panes and editor, and a 3D pane | yes |
 | `apps/shapes` | Two rectangles, square and rounded | yes, no screenshot |
 | `apps/sprites` | A particle globe under the 2D preset | yes |
 | `apps/network` | A wireframe sphere with its own shaders | yes |

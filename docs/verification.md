@@ -50,6 +50,8 @@ tree's binaries: `git archive` into a scratch directory, the seven submodules li
   and how to hear it on real hardware
 - [The idle wait's real events](#the-idle-waits-real-events) — what the `idle` group does not
   cover, the early wake a hidden window gets, and how to look at a still window not drawing
+- [Views, and resting](#views-and-resting) — what the `views` group compares a view against,
+  and how to look at a still view resting
 - [The real-character path](#the-real-character-path) — what the `anim` group asserts about
   the math, and what only watching a real rig can settle
 - [The root-motion path](#the-root-motion-path) — what the root-motion arms assert, and why the
@@ -116,7 +118,7 @@ Where a new name goes, and the rules the split depends on:
   its arms one by one runs all of them, and that line says so.
 - **A chosen arm that never ran fails the run**, so it cannot pass as nothing to do.
 
-`ui`, `canvas` and `idle` choose their arms one by one (spec 14.29); the other groups run whole
+`ui`, `canvas`, `idle` and `views` choose their arms one by one (spec 14.29); the other groups run whole
 under `--arms`. In such a group:
 
 - **Each arm is a function under `@arm("name")`**, where `arm = Arms(width)` is the group's
@@ -628,6 +630,33 @@ run `./out/bin/canvas --idle --sheet board` windowed and press F. The readout's 
 drawn should stand still while nothing moves, the process should sit at 0% CPU in Activity
 Monitor, and a drag, the wheel, G's debug GUI and its clicks should each draw at once. **Done on
 macOS (2026-10-29)**, at 0.0% CPU while still. **Linux and Windows are owed** the same look.
+
+### Views, and resting
+
+The `views` group (spec 14.38) drives several views through `apps/render --views` and the canvas
+app's panes, choosing its arms one by one.
+
+- **A view is compared with itself alone**: a grid view against `--views 1x1 --view-index K` at
+  the cell's size, 0 px. The grid's views turn about one target, so no two show the same picture by
+  accident, and `--view-turn 0` gives two of one camera.
+- **A lone view covering the window writes it directly** and a grid view through its picture, and
+  the two rasterise a varying's last bits differently. So an arm comparing a grid view with a lone
+  one passes `--view-picture` to the lone one: the copy is exact, the window's rasterisation is
+  not. `views-one` holds the direct write to the goldens.
+- **What a view shows is cut from the screenshot by its rectangle**, at the framebuffer's scale.
+- **Resting is read off `--view-probe`**, a line per view per frame (drawn, the average's count,
+  finished, draws so far), never off a frame count or the profiler, whose table averages its
+  frames. `--change-at` makes one change at a frame and the arm reads which views drew after it.
+- **The average is measured in radiance**: its reference is a supersampled frame under `--tonemap
+  linear` at a pinned exposure with shadows, AO and bloom off, so a tone curve's knee cannot hide a
+  difference.
+- **An exact background is read back at its pixels** with dither, vignette and bloom off.
+
+**No suite sees a view rest in a window.** Headless, the run ends at the frame after which nothing
+asks; in a window the process should sit at 0% CPU instead. Run `./out/bin/render -m
+assets/scenes/board_fixture.cscn --views 2x2 --accumulate 32 --idle`, drag the board round and let
+go: the four views sharpen over about half a second and stop, and the process sits at 0% CPU in
+Activity Monitor. **Owed**, on every platform.
 
 ### The real-character path
 

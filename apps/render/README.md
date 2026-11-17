@@ -16,6 +16,10 @@ arms drive it.
 `-m` is required. Drag orbits, and G shows the debug GUI, X the axes, T wireframe, and 1 to 6 the
 render modes. Windowed runs have TAA on; headless runs have it off unless `--taa`.
 
+The app makes one scene view filling the window. `--views 2x2` tiles it with four, each the orbit
+turned a quarter more, and `--accumulate 32 --idle` lets a still view average and rest; the view
+flags are in `docs/cli-reference.md`, Views.
+
 Its flags, the PostFX and environment set and the headless capture set, are in
 `docs/cli-reference.md` ("PostFX and environment flags" and "Headless Mode"). A session's GUI
 state can be dumped and restored with `--config-dump` and `--config`; see `docs/verification.md`.

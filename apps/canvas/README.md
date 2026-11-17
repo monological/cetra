@@ -50,6 +50,10 @@ board, a 100 mm plate with a hole for each of 2,008 vias and balls of another ne
   `canvas-translation` holds to the same pixels.
 - `--split` draws the board as two views, the second the underside, mirrored; `--only-view` draws
   one of them alone.
+- `--view3d` puts a 3D scene view in the right half of the window, beside the 2D panes: three
+  spheres on a floor under an environment, with a key light and shadows, built in code in
+  `src/view3d.c`. Without it the app makes no scene view, so a frame draws no scene pass and no
+  post chain (`docs/architecture.md`, Scene views).
 - `--edit-thread` builds the board's edit on a thread of its own.
 - `--canvas-probe` prints where each shape landed, in framebuffer pixels, and `--budget` times the
   canvas draws. The `canvas` gate group reads both.

@@ -6,11 +6,14 @@ loading screen).
 
 ## Architecture Overview
 
-Two layers over a scene graph. Rendering subsystems are split by owner: **PostFX** is embedded on
-the `Engine`; **shadows, IBL, sky, reflection probes and particle systems** live on the `Scene`.
+Two layers over a scene graph, drawn through any number of views. Rendering subsystems are split
+by owner: each **SceneView** has its camera, its buffers and its **PostFX** chain; **shadows, IBL,
+sky, reflection probes and particle systems** live on the `Scene`; the chain's programs and the
+window's parts are the `Engine`'s.
 
 ```
-Engine (window, camera, HDR MSAA G-buffer, program cache, PostFX, matrices)
+Engine (window, program cache, the post programs, the views and the focus)
+   |__ SceneView (camera, rectangle, settings, mask; its HDR MSAA G-buffer, matrices, PostFX)
    |__ Scene (root node, lights, materials, texture pool,
    |          shadow_system, IBL + sky + reflection probe, particle_systems)
    |     |__ SceneNode (local + global transform, meshes, children,
@@ -230,10 +233,81 @@ weight reads it.
 Under TAA a step still leaves something on edges, where TAA's inverse-luma weights depend on
 absolute brightness. `--no-history-rescale` (render, silent) and `--exposure-at` are the A/B.
 
+## Scene views
+
+**A frame draws any number of views** (`scene_view.h`, spec 14.38), each a camera onto the
+engine's current scene, its own rectangle of the window, its own settings, buffers and histories.
+An app makes the views it shows -- the engine starts with none -- and adds each with
+`engine_add_view`, which owns it. Nothing reads "the camera": a pass that draws a view is handed
+it, world work takes the focus view, and a tool takes the view it steers.
+
+- **The view's settings** (`SceneViewSettings`) are plain values: the chain's (`PostFXSettings`),
+  the meter's (`ExposureSettings`), the sample count, the two scales, the background, the render
+  mode and the debug overlays, accumulation. `engine_init_view_settings` fills them at the
+  engine's typical size. What owns GPU memory stays a function: the rig, the LUT, an app's passes.
+- **The view's state** (`scene_view_state.h`, engine-owned) holds what used to be the engine's for
+  its one camera: the scene targets and resolves, the matrices and last frame's, the camera's
+  travel, the chain, the meter, the cloud march, and its own frame count, which every history's
+  parity and adjacency are kept by.
+- **The focus view** (`engine_set_focus_view`; the first added by default) is the one eye world
+  work ranks and centres on: GI and probe residency, kept lamp shadows, terrain pages and their
+  votes, the rain's cover, water's windows, the origin shift, the listener. A view other than the
+  focus drawing water or rain is said once. With no view there is no focus: caches keep their
+  ranking and the origin does not shift. The debug GUI and the session file act on the focus.
+- **Captures are a view** (`create_capture_view`, internal): no targets and no chain, its camera
+  placed by each face, its overlays off, drawn through the same per-view path into the face.
+- **The mask**: a view draws the nodes whose `view_mask`, ANDed down the tree, shares a bit with
+  its own, in its scene passes and in its own shadows. Kept lamp shadows draw every node, which is
+  said once when a view hides one in a kept lamp's reach.
+- **The window composites them** (`_engine_present_frame`): cleared to `Engine.window_color`, each
+  shown view's picture copied into its rectangle in list order, the overlays, the CRT or the
+  present pass, the GUI. A view's picture is RGBA8, dithered by its tone map, unless the window is
+  drawn through a picture of its own (the CRT, or a view with a pass after its tone map), when
+  every picture is RGBA16F and the window's one last write dithers. **A lone view covering the
+  window writes it directly** (`Engine.window_direct`): rasterising into the window and into a
+  texture interpolate a varying differently in its last bits, which a shader hashing or sampling
+  on an exact boundary turns into a different pixel.
+- **A still view rests** when its settings ask (`accumulate_frames`): see Still views below.
+- **An exact background** (`background_exact`) is the display colour wanted: the engine turns it
+  back through the view's tone curve and the display encode on the CPU (`background.c`) to the
+  value it clears to. Exposure never reaches a cleared texel. A stage that changes it by position
+  or past what the inverse undoes -- vignette, grade, LUT, local exposure, grain, Purkinje,
+  sharpen, fog, aerial -- is said once; bloom glows onto a bright one, as a camera's would.
+
+### Still views
+
+A view with `accumulate_frames` (16..64) draws a TAA frame whenever anything it shows changed since
+the frame before; once nothing has, it averages that many jittered frames and then rests, not drawn
+and asking for no frame, its picture copied each frame. A view with it 0, the default, draws every
+frame.
+
+- **A change** is: the view's record differing from last frame's (its settings byte for byte, its
+  matrices, its rectangle, its mask, whether the window is drawn through a picture), the scene's or
+  the engine's change count moving, the graph epoch moving, the scene's moved mask sharing a bit
+  with the view's, the scene animating of its own accord, the engine's own work out, or the view's
+  meter adapting.
+- **What the engine sees for itself**: a camera, a rectangle, a setting, a node moved (the walk ORs
+  the moved nodes' masks into `Scene.moved_mask`, every bit for one carrying a light, a camera or
+  particles), a mesh added or uploaded. **What the app says**: a plain write the engine cannot see
+  -- a material, a light, a scene setting -- with `scene_mark_changed`; an engine-wide setting with
+  `engine_mark_changed`. A write left unsaid is not drawn until something else changes.
+- **What animates forever** (no view showing it rests): water, rain, fire, particles, wind, the
+  sky's clock, the clouds' drift, a pose (the engine cannot see whether an animator runs it), a
+  shader hook marked animated. An app pass reading `time` is not seen.
+- **The engine's own work out**: textures loading, GI or reflection probes owed a capture, a kept
+  lamp's faces opening or a mover's held.
+- **The average** is TAA's resolve at weight 1/(n+1), no reprojection, no clamp, its jitter the
+  n-th of a 64-long Halton sequence, whether TAA is on or not and headless too. Its first frame
+  keeps the last TAA picture, shown until the average holds 4 frames. **It needs render scale 1**;
+  below it, said once, the view keeps TAA's upscale.
+- **Idle waits once every shown view rests**, and headless the run ends there.
+- **Hidden then shown**: unchanged, the kept picture is reused; changed, a cut (every history
+  dropped) and the average from 0.
+
 ## Render Pipeline
 
 The engine is a **forward renderer with a multi-target HDR G-buffer**, then a screen-space post
-chain. GL 4.1 has no compute, so every post pass is a fullscreen raster pass over
+chain, per view. GL 4.1 has no compute, so every post pass is a fullscreen raster pass over
 `post_vert.glsl`, the shared fullscreen-triangle vertex shader.
 
 ### The G-buffer
@@ -268,41 +342,46 @@ half-resolution reconstruction on fine geometry into speckle.
 
 `engine_run`, or `game_run` in the game framework:
 
-1. **Resolution sync**: apply any scheduled render-scale switch, then rebuild the scene target and
-   post chain if the derived sizes disagree with what they were last built at. The frame is
-   skipped entirely (the frame clock and the `--frames` limit keep running) when the window is
-   0x0 or a rebuild failed.
+1. **Resolution sync**: apply any scheduled render-scale switch, then rebuild each view's scene
+   target and post chain if the sizes its settings and the window ask for disagree with what they
+   were last built at. The frame is skipped entirely (the frame clock and the `--frames` limit keep
+   running) when the window is 0x0.
 2. **App update callback**: input, physics, the game framework's fixed step.
-3. **Origin shift**, then the **sky cycle tick**.
+3. **Origin shift** from the focus view's eye, then the **sky cycle tick**.
 4. **App pre-render callback, then the engine's transform walk** (`scene_latch_prev_transforms` +
-   `scene_propagate_transforms`), **then the camera rig's pose onto the camera** (a NULL rig
-   writes nothing, the normal state of an app that poses its own camera), **then the camera's
-   view and projection matrices**, derived from the pose it now holds (`_engine_derive_camera`).
-   See the rules below.
-5. **The lighting update** (`scene_update_lighting`, spec 13.24): the cached shadow tiles'
-   assignment, then the GI probe captures while a resident volume is dirty, then the reflection
-   probes, each once, after the volumes its box touches have swept. Each ranks its world list from
-   the camera once a frame and streams from it; `scene_capture_ready` is the one statement of what
-   a kept capture waits on. See `docs/lighting.md`.
-6. **Shadow depth pass** (`render_shadow_depth_pass`), gated on `scene->shadow_system->enabled`,
-   before the scene FBO is bound. Then the **rain's occlusion layer** (`shadow_render_rain_layer`)
-   whenever the scene rains, shadows on or off: switching shadows off does not put a roof over the
-   street.
-7. Bind the scene MSAA FBO, set the supersampled viewport and draw buffers, clear.
-8. Async texture uploads (at most five a frame), mask-array build, POM height resolve. **Headless,
-   everything the app's start-up asked for is already in**: `engine_run` waits for the loader
-   before frame 1 (spec 14.8), so frame N is the same picture on a busy machine as on an idle
-   one. A window draws its first frame at once, and a texture asked for after the run began still
-   streams; `textures-in` holds it.
-9. The app's render callback, which calls `engine_render_scene`, or `engine_render_scene` itself
-   when the app passed none.
-10. `engine_present_frame`: the PostFX chain, then the app's **overlays** (`engine_add_overlay`, up
-    to eight, lowest order first: general post-tonemap draws; the game UI adds itself at
-    `UI_OVERLAY_ORDER`, over a 2D canvas, and the engine never learns what a `UISystem` is), then
-    the **CRT** when it is on, then the debug GUI, a developer's overlay that belongs on top of the
-    game's and outside the television. The **loading screen**, when shown, goes over all of it but
-    the GUI (see The loading screen).
-11. An input script's `close`, asked here unless the run is ending already, so a close taken makes
+   `scene_propagate_transforms`), **then for each view its targets again** (a view laid out in
+   the hook draws at its new size this frame), **its rig's pose onto its camera** (a NULL rig
+   writes nothing, the normal state of an app that poses its own camera) **and its view and
+   projection matrices** (`_engine_derive_view`). See the rules below.
+5. **The fires**, then **the lighting update** (`scene_update_lighting`, spec 13.24): the cached
+   shadow tiles' assignment, then the GI probe captures while a resident volume is dirty, then the
+   reflection probes, each once, after the volumes its box touches have swept. Each ranks its
+   world list from the focus view's eye once a frame and streams from it; `scene_capture_ready` is
+   the one statement of what a kept capture waits on. See `docs/lighting.md`.
+6. **Which views draw**: whether the window is drawn through a picture, whether a lone view writes
+   it directly, and for each view a TAA frame, the next frame of its average, or nothing
+   (`_engine_decide_view`, Still views above).
+7. **Each view that draws, in list order**: its **shadow depth pass** (`render_shadow_depth_pass`,
+   fitted to its camera, its mask honoured), gated on `scene->shadow_system->enabled`, and the
+   **rain's occlusion layer** (`shadow_render_rain_layer`) whenever the scene rains, shadows on or
+   off; its scene MSAA FBO bound, its viewport and draw buffers set, the clear to its background;
+   then, before the first view's scene pass only, async texture uploads (at most five a frame),
+   the mask-array build, roads, the composite cache and the POM height resolve; the app's render
+   callback with the view, which calls `engine_render_scene(engine, scene, view)`, or that itself
+   when the app passed none; the VT votes (the focus view's alone); its post chain into its
+   picture. **Headless, everything the app's start-up asked for is already in**: `engine_run`
+   waits for the loader before frame 1 (spec 14.8), so frame N is the same picture on a busy
+   machine as on an idle one. A window draws its first frame at once, and a texture asked for
+   after the run began still streams; `textures-in` holds it.
+8. `_engine_present_frame`, the window's part: the clear to `window_color`, each shown view's
+   picture copied into its rectangle, the app's **overlays** (`engine_add_overlay`, up to eight,
+   lowest order first: general post-tonemap draws; the game UI adds itself at `UI_OVERLAY_ORDER`,
+   over a 2D canvas, and the engine never learns what a `UISystem` is), then the **CRT** or the
+   present pass when the window is drawn through its picture, then the debug GUI, a developer's
+   overlay that belongs on top of the game's and outside the television. The **loading screen**,
+   when shown, goes over all of it but the GUI (see The loading screen). With no view, the
+   uploads still run and only this step draws.
+9. An input script's `close`, asked here unless the run is ending already, so a close taken makes
     this frame the last (see Closing); then the screenshot (headless/CI), the buffer swap, then the
     poll for events, or under idle mode a wait until something asks for the next frame; then the
     scripted pointer's frame.
@@ -314,9 +393,9 @@ and any node it adds, removes or moves. Written in the render callback it is a f
 shadow is drawn from last frame's transforms, every LOD level chosen from stale positions, and a
 skeletal pose stepped there leaves the rig's shadow lagging its body.
 
-**The camera is read right after the hook returns.** The engine applies the installed camera rig
-and then derives the view and projection matrices, so an app writes a rig's anchor and input, or
-poses the camera itself with no rig installed, and nothing else. The rig's update stays with the
+**Each view's camera is read right after the hook returns.** The engine applies the view's rig
+and then derives its view and projection matrices, so an app writes a rig's anchor and input, or
+poses the view's camera itself with no rig on it, and nothing else. The rig's update stays with the
 app, because that is where the input is and `camera_rig.h` must not know whether it came from an
 action table, a mouse or a script. Anything reading the camera inside the hook reads last frame's
 pose, which is why `--trace-camera` prints from the render callback and the render app's near-clip
@@ -353,10 +432,10 @@ golden is a single frame with TAA off and nothing moving that TAA would reprojec
 14.1), for an app that is mostly still, as pcb's schematic and editor are; every game and every
 other app leaves it off. Five things about it are easy to get backwards.
 
-- **A scene with anything to draw keeps the loop drawing**, every frame, as without idle mode: an
-  item, an IBL, a sky, water, falling rain, a fire, a particle system. A still 3D view drawn on
-  demand, and stopping TAA's accumulation, are item 3 of `docs/eda-roadmap.md`; until then idle
-  mode only waits when no 3D scene is drawn. A game asks for every frame through `game_run`.
+- **A view drawing a scene with anything in it keeps the loop drawing**, every frame, as without
+  idle mode: an item, an IBL, a sky, water, falling rain, a fire, a particle system -- until it
+  rests (Still views above), when it asks for nothing. A view with accumulation off never rests. A
+  game asks for every frame through `game_run`.
 - **What asks.** In a window any wake draws (an event, a request), so no callback marks anything.
   Beyond that:
   - `engine_request_frame`, from any thread;
@@ -376,8 +455,8 @@ other app leaves it off. Five things about it are easy to get backwards.
   their atomics so neither misses the other.
 - **The wait is kept out of every clock.** The engine's clock is the wall clock less
   `time_waited`, so a timed change (a blink) is timed by `glfwGetTime` instead. **`total_frames`
-  does not advance across a wait**, since a gap in it is how the shadow tiles and the fog's
-  histories tell lost history.
+  does not advance across a wait**, since a gap in it is how the shadow tiles tell lost history; a
+  view's histories count its own draws.
 - **Headless, a run ends at the first frame after which nothing asks for another and no work is
   out** (an `engine_begin_work` not yet ended, a decode in flight, a timed wake), and that frame is
   its screenshot; `--frames` stays the most it draws. On macOS a hidden window is sent something in
@@ -540,14 +619,14 @@ normals G-buffer, OIT with moment weighting. Off (present, lazily allocated): SS
 motion blur, diffraction glare, local exposure, the CRT. SSS and TAA are the two exceptions below.
 
 **Diffraction glare** (`glare.c`, specs 13.4 and 13.5) is off unless asked for: `post.glare` in a
-`.cscn`, `postfx->settings->glare_enabled` in an app, `--glare` on render, forest and gametest; `apps/tree`
+`.cscn`, a view's `settings.post.glare_enabled` in an app, `--glare` on render, forest and gametest; `apps/tree`
 turns it on for its low sun. **It moves light rather than adding it**: the tonemap takes the moved
 light out of the pixel it came from, by `glare_threshold.glsl`, the rule the source pass shares.
 The rest is `docs/shader-subsystems.md`, Diffraction glare.
 
 **Local exposure** (`local_exposure.c`, spec 13.19) is an exposure per pixel on top of the
 camera's, which still sets the level; off by default (`post.local_exposure`,
-`postfx->settings->local_exposure_enabled`), and the identity at its defaults. Two rules cross into the rest
+a view's `settings.post.local_exposure_enabled`), and the identity at its defaults. Two rules cross into the rest
 of the chain:
 - **It is applied in the tonemap, to the composite with bloom, after the Purkinje shift reads the
   light as it is**, and once per pixel: the sharpen's taps reuse the centre's factor, as they reuse
@@ -559,19 +638,20 @@ of the chain:
 The rest is `docs/shader-subsystems.md`, Local exposure.
 
 **The CRT** (`crt.c`, spec 13.28) is the window's, not the chain's: off unless asked for
-(`engine->crt_enabled`, `--crt`). With it on, the post chain, the debug tiles and the app's
-overlay draw into a window-sized RGBA16F picture (`postfx_picture_fbo`, PostFX's own, which an
-after-tonemap pass also draws on), which the engine shows through the CRT; the debug GUI draws
-after it. So the overlay is on the television and the GUI is not. The picture must be exactly
-window-sized, since the UI scissors in window pixels. **Dither stays on the last write**: the
-tonemap dithers only when it writes the window, and under the CRT the CRT's pass dithers. Which
-pass writes the window (the CRT, the present pass, or the tonemap) is decided once a frame by
-`postfx_run`, from whether the engine's CRT is on and whether the chain has passes after its tone
-map. The rest is `docs/shader-subsystems.md`, The CRT.
+(`engine->crt_enabled`, `--crt`). With it on, the window is drawn through a picture of its own,
+RGBA16F at the framebuffer's size (`Engine.window_picture`): each view's undithered picture is
+copied into it, the debug tiles and the app's overlay draw into it, and the engine shows it through
+the CRT; the debug GUI draws after it. So the overlay is on the television and the GUI is not. The
+picture must be exactly window-sized, since the UI scissors in window pixels. **Dither stays on
+the last write**: a view's tone map dithers only when its picture is the 8-bit one, and when the
+window is drawn through its picture -- the CRT, or a view with a pass after its tone map -- the
+CRT or the present pass dithers it once, by the focus view's settings. The rest is
+`docs/shader-subsystems.md`, The CRT.
 
 **The chain's programs are the engine's** (`postfx_programs.c/h`): compiled once by
-`create_engine` and borrowed by the chain, so nothing a pass draws with is tied to one chain's
-size. What depends on a target's size is uploaded at the draw.
+`create_engine`, glare's and local exposure's on first use, and borrowed by every view's chain, so
+nothing a pass draws with is tied to one chain's size. What depends on a target's size is uploaded
+at the draw.
 
 **SSS is on but inert.** `engine->sss_enabled` is true, but attachment 4 goes unwritten unless a
 material carries `subsurface > 0`, and the pass is skipped when it is unwritten. So `--no-sss` on a
@@ -667,12 +747,13 @@ does to it:
   AO blur and the a-trous filters, a soft particle's fade, the cascade and GI capture near planes,
   and the streaming margins. Each is its metre value times the size, read where it is used:
   `engine->typical_size` in C, `ViewParams.typicalSize` in GLSL. The post settings' settable ones
-  are written by `postfx_settings_reset_lengths` when the size is set, so an app sets the size first
-  and its own values after. The camera rig follows the size too.
+  are written by `postfx_settings_reset_lengths` in every added view when the size is set, and in a
+  new view's by `engine_init_view_settings`, so an app sets the size first and its own values after.
+  Each view's rig follows the size too.
 - **Fitted: worked out each frame**, which is a `fit_clip` camera's near and far.
 
 **A camera's planes are its owner's, or the fit's.** `Camera.fit_clip` fits them each frame,
-inside `_engine_derive_camera` on the pose just written:
+inside `_engine_derive_view` on the pose just written:
 - **What it fits to:** the mesh boxes in front of the eye (`scene_for_each_mesh_box`), plus the
   shadow catcher's quad or a bounded water's rectangle when one draws, each box from its owner
   (`render_shadow_catcher_box`, `water_surface_box`).
@@ -705,8 +786,8 @@ Four things about it are easy to get backwards.
 
 ## The window
 
-`engine.c/h` owns the window, the render loop, the G-buffer and MSAA targets, the program cache and
-the embedded PostFX.
+`engine.c/h` owns the window, the render loop, the views and the window's composite of them, the
+program cache and the post programs; `scene_view.c/h` owns a view's targets and chain.
 
 **Window modes** (spec 12.15): windowed, exclusive fullscreen and borderless, each at the monitor's
 current video mode, so no display's resolution is ever changed and there is nothing to restore
@@ -798,9 +879,9 @@ things about it are easy to get backwards.
   off; an app starts its own fade on `shown` going false. Ready is not hiding: the engine does not
   know the game's controls, so the app hides it at a press of its own choosing, read only while it
   is prompting, and an app with no prompt hides it straight away.
-- **A frame it covers draws no picture of its own**: step 9 settles the scene's derived panels and
-  variants (which the captures read) and draws no camera pass, step 10 runs no post chain and no
-  GUI, and steps 5 to 8 (the captures, every upload) go on. Whether a frame is covered is decided by
+- **A frame it covers draws no picture of its own**: each view's scene pass in step 7 settles the
+  scene's derived panels and variants (which the captures read) and draws nothing, no view runs its
+  post chain, step 8 draws no view and no GUI, and the captures and every upload go on. Whether a frame is covered is decided by
   the frame's own last draw, so the scene pass and the present cannot disagree within one frame.
 - **It moves inside a long frame.** `capture_budget_take` draws it between capture units,
   `engine_pbr_variant` after each new compile, and `draw_tile_cell` after every cached shadow tile

@@ -17,7 +17,7 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-16: 14.38, scene views, started for items 3 and 4._
+_Last updated: 2026-11-16: 14.38, scene views, built for items 3 and 4._
 
 ---
 
@@ -56,9 +56,9 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | # | Item | Status | First needed by pcb's step | Spec |
 |---|------|--------|----------------------------|------|
 | 1 | The 2D canvas | **Built**, with caps, joins and dashes; images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0, 14.22, 14.36, 14.37 |
-| 2 | Idle mode: drawing only when something changed | **Built**, for frames that draw no 3D scene | 6 | 14.1 |
-| 3 | Skipping the 3D scene pass when no 3D view is shown | Started on `14.38-scene-views`; includes a still 3D view drawn on demand | 8, the 3D view | 14.38 |
-| 4 | Drawing the 3D scene into part of the window | Started on `14.38-scene-views`, with item 3: any number of views, each a camera, a rectangle, its own settings and its own buffers | 8 | 14.38 |
+| 2 | Idle mode: drawing only when something changed | **Built**; with 14.38 it waits on 3D views at rest too | 6 | 14.1, 14.38 |
+| 3 | Skipping the 3D scene pass when no 3D view is shown | **Built**, with a still view that averages jittered frames and rests; a TAA-only view resting and accumulating under TAAU left for later | 8, the 3D view | 14.38 |
+| 4 | Drawing the 3D scene into part of the window | **Built**: any number of views, each a camera, a rectangle, its own settings and its own buffers; world work serving every view equally, a scene per view and a second window left for later | 8 | 14.38 |
 | 5 | Text input and scrolling panes in the UI | **Built**; composing text in an input method, glyphs past the atlas and the rest below are left for later | 6 (the command palette and the `/` jump); 9 (the chat) | 14.2, 14.3 |
 | 6 | The text editor widget | **Built**; sideways scrolling, a regular-expression find and the rest below are left for later | 6 (the code view) | 14.4 |
 | 6a | The editor's vim mode | **Built**, held to vim 9.2 itself; named registers, macros, marks and the rest below are left for later | 6 (the code view, which is vim only) | 14.5, 14.9 |
@@ -74,9 +74,10 @@ Running the gates).
 
 **Order**: 1, 2, 5, 6, 6a and 9 are built, in that order; the canvas went first because the
 schematic and the layout both stand on it, and the editor stands on 5's UTF-8, typed input,
-clipboard and input script. 3 and 4 are being built together in 14.38, for pcb's 3D view (its spec
-8.1); 14.39, tags in 3D, follows on 14.38's views. Item 8's bugs
-and the physical depth of field can be taken whenever they fit.
+clipboard and input script. 3 and 4 were built together in 14.38, for pcb's 3D view (its spec
+8.1); 14.39, tags in 3D, follows on 14.38's views. A panel's shadow at a board's scale (item 7) is
+what the 3D view's look wants next. Item 8's bugs and the physical depth of field can be taken
+whenever they fit.
 
 pcb's build steps, for reference: 6 is the window (code editor, schematic, keys, palette, help,
 shared selection, diff overlays and blink); 7 the layout view; 8 the 3D view; 9 the agent; 10
@@ -142,7 +143,7 @@ shape's record and pixels are as they were.
 something moves (live routing). Input still reaches the screen within one frame.
 
 **Built in spec 14.1** (`docs/architecture.md`, Render Pipeline, Idle mode): `Engine.idle`, off by
-default, for frames that draw no 3D scene; a scene with anything to draw keeps the loop drawing. A
+default; a 3D view keeps the loop drawing until it rests (item 3, spec 14.38). A
 frame is asked for by any window event, `engine_request_frame` from any thread,
 `engine_request_frame_after` for a time, `engine_end_work` when a thread's result is in, and the
 engine's own work. Headless, a run ends at the first frame after which nothing asks for another and
@@ -160,66 +161,98 @@ for them.
 
 ---
 
-## 3. Skipping the 3D scene pass
+## 3. Skipping the 3D scene pass — built
 
 **What pcb needs**: when no 3D view is on screen, the 3D scene costs nothing, while everything stays
 loaded so that coming back costs one frame.
 
-**What cetra has today**: the loading screen (spec 13.34) already has a frame that draws no camera
-pass and no post chain, while uploads and captures go on. That is a precedent for skipping the scene
-and keeping the overlay.
+**Built in spec 14.38**, with item 4 (`docs/architecture.md`, Scene views and Still views). A frame
+draws the views the app has added, and with none it draws no scene pass and no post chain while
+uploads, captures and the world's work go on, as the loading screen's frame did. A hidden view
+(`SceneView.hidden`) keeps its targets and its picture: shown again with nothing it shows changed,
+the picture is reused; changed, its first frame is a cut.
 
-**To decide in its spec:**
+**A still 3D view drawn on demand.** A view with `accumulate_frames` (16 to 64) averages that many
+jittered frames once nothing it shows has changed, then rests: not drawn, asking for no frame, its
+picture copied into the window each frame. Idle mode waits once every shown view rests, and
+headless the run ends there, which is `pcb render`'s finished picture. A view with it 0, the
+default, draws every frame, as games do.
+- **Accumulating, not counting TAA's frames**: it ends in a known number of frames, and is cleaner
+  on thin traces and small text, where TAA's leftover shimmer shows. The last TAA picture is shown
+  until the average holds 4 frames.
+- **Knowing it changed**: the engine sees a view's camera, rectangle and settings (byte for byte),
+  meshes added or uploaded and nodes moved, by the views sharing the moved node's mask bit. An app
+  says a plain write the engine cannot see: `scene_mark_changed` for a material, a light or a scene
+  setting, `engine_mark_changed` for an engine-wide setting.
+- **What keeps it drawing**: the engine's own work until it finishes (loads, GI and probe captures,
+  kept shadow tiles opening, auto-exposure adapting), and what never finishes (water, rain, fire,
+  particles, wind, the sky's clock, the clouds' drift, a pose, an animated surface hook).
 
-- **The switch**: a field on the engine, or the app's render callback choosing not to draw.
-- **What still runs** while the scene is off: uploads, captures, the shadow tiles.
-- **Coming back.** The temporal histories are many frames old when the scene returns, so the first
-  frame back is treated as a cut, as a render-scale change resets them (spec 11.8).
+**pcb's part:**
+- give each 3D pane's view `accumulate_frames` 32;
+- call `scene_mark_changed` after writing a material, a light or a scene setting, and
+  `engine_mark_changed` after an engine-wide one.
 
-**A still 3D view drawn on demand.** CAD programs redraw a 3D view only when it moves or its model
-changes (KiCad, FreeCAD, Fusion); redrawing every frame is a game's habit. None of this is for a
-game, which moves every frame. Idle mode (item 2) leaves every frame with a 3D scene drawing; this
-is where that changes.
-
-- **TAA never comes to rest by itself.** Each history blends the new frame in at a fixed 3%, the
-  jitter cycles through 8 positions (16 when upscaling), and several noise seeds never repeat, so
-  "draw until frames stop changing" has no end. There are two ways to stop:
-  - **Count frames**: draw until every history has forgotten the last change to under half a colour
-    code, about 200 frames with TAA and 420 upscaling, from the histories' blend factors and the
-    chain AO and specular occlusion form into TAA. The picture is TAA's as today.
-  - **Accumulate**: while the view is still, average jittered frames equally over a longer sequence,
-    16 to 64 positions, then stop. This is supersampling spread over time, as Blender's Eevee
-    viewport does, and as Unreal's Movie Render Queue does for cinematics. It is what pcb's ARCH asks
-    for, and it is cleaner on what a board is full of, thin traces and small text, where TAA's
-    leftover shimmer shows.
-- **Accumulating needs an exact statement of when the 3D picture changed.** A false "changed" throws
-  the clean image away, and today a material, light or setting write is a plain field write that
-  nothing reports.
-- **What keeps a 3D frame alive.** The engine's own work that finishes: GI sweeps and probe captures,
-  cached shadow tiles opening and a mover's 120-frame hold, auto-exposure until it snaps. And what
-  never finishes: wind, water, rain, fire, particles, cloud drift, the sky cycle, an animated surface
-  hook, an app shader reading `time`.
+**Left for later:**
+- **A still TAA-only view resting**, by counting frames (about 200), for a view that wants TAA's
+  picture rather than the average.
+- **Accumulating under TAAU**: an averaged upsampling resolve. A view asking for both keeps TAAU,
+  said once.
+- **A pose counts as animating**: the engine cannot see whether an animator runs it, so a skinned
+  scene never rests. pcb shows none.
+- **An app pass reading `time`** is not seen; the app says so with `scene_mark_changed`.
 
 ---
 
-## 4. Drawing the 3D scene into part of the window
+## 4. Drawing the 3D scene into part of the window — built
 
 **What pcb needs**: the split showing the layout beside the 3D view. Since the chat is always
 visible, the main area is narrower than the window, so in practice every 3D view needs this, not only
-the split. The exception is the chat collapsed and no split.
+the split.
 
-**What cetra has today**: the scene targets and the whole post chain are sized from the framebuffer,
-and the frame top rebuilds them when the size changes. The present pass writes the whole window. The
-CRT's picture (spec 13.28) must be exactly window-sized because the UI's scissor is in window pixels.
+**Built in spec 14.38** (`docs/architecture.md`, Scene views). A `SceneView` is a camera, a
+rectangle in window points (the UI's units), its own settings (the post chain's, the meter's, the
+sample count, the render scale and supersampling, the background, the debug modes) and its own
+targets, histories and chain. Any number are drawn each frame, in list order, and copied into their
+rectangles over `Engine.window_color` before the overlays. The app makes every view; the engine
+starts with none.
 
-**To decide in its spec:**
+**Decided in its spec:**
+- **Views are explicit everywhere.** Nothing reads "the camera": a pass drawing a view is handed it,
+  world work takes the focus view (`engine_set_focus_view`, the first added by default), and a tool
+  takes the view it steers. Captures are views.
+- **Targets sized to the rectangle**: a changed rectangle rebuilds that view's targets alone and
+  starts it as a cut. A still view converges again in its count of frames.
+- **The sun's cascades and the per-frame lamp shadows are drawn per view**, fitted to its camera
+  and honouring its mask. Kept lamp shadows stay shared.
+- **One scene, a mask per node.** Every view shows the engine's current scene; a 32-bit mask on
+  each node, inherited down the tree, lets views show different parts of it, a part preview
+  included.
+- **An exact background**: a view's background can be the display colour wanted, which the engine
+  turns back through the view's tone curve on the CPU, so a 3D pane meets the window's colour with
+  no seam.
+- **The overlay still covers the whole window**, drawn after the views are composited.
+- **Headless**: a window at the view's size with one view filling it, as `pcb render` makes; no new
+  capture path.
+- **An environment from bytes** (`load_hdr_environment_memory`), for an HDR built into pcb's
+  binary.
 
-- **Targets sized to the rectangle**, with the camera's aspect taken from it. Toggling the split
-  changes the rectangle, which rebuilds the targets and resets the histories, a visible fraction of a
-  second of re-converging today. Whether that is acceptable, or the targets keep a fixed size and draw
-  into part of it, is the main choice.
-- **The overlay still covers the whole window**, drawn after the scene's rectangle is composited.
-- **Headless**: `pcb render` of the 3D view alone, at its own size.
+**Left for later:**
+- **Every view served equally by world work.** Budgeted caches (GI, probes, kept lamps, terrain
+  pages and votes) ranked from the nearest view; the rain's cover and water's caustic window drawn
+  per view, as the sun's shadow is. Wanted by split-screen or any two far-apart views with rain,
+  water or budgeted lighting; each reaches the eye through the focus view, so the change is local.
+- **A scene per view**: the world's once-a-frame work run for each scene shown. One scene with the
+  mask covers pcb's panes.
+- **Kept lamp shadows per hidden set**, one copy per distinct mask among the views. A view hiding a
+  node in a kept lamp's reach is said once.
+- **A see-through view** (item 1's transparent background): coverage carried through the chain.
+- **A second window**: a Window object gathering the window's parts.
+- **A dither per view** when the window is drawn through its picture (a CRT, or a pass after the
+  tone map); it takes the focus view's settings.
+- **Several views in the session file**, and a view picker in the debug GUI, which acts on the
+  focus view.
+- **Spreading views' draws over frames**, if a heavy board's frame asks for it.
 
 ---
 
@@ -347,6 +380,12 @@ them, and its 3D view will make its engine at a typical size of 0.001.
 - **A physical depth of field.** The CoC today is a look with no focal length or aperture. A
   thin-lens CoC from the camera's focal length and aperture would put a macro shot's thin focus where
   a real lens does, at any scale. Likely the next spec pcb wants, for close-ups.
+- **A panel's shadow at a board's scale**, found by 14.38's look. A tabletop panel's per-frame
+  shadow is a cube from its centre, and the punctual pool's budget (96 MB) holds a panel and a lamp
+  only at 1024 texels a face: about 0.65 mm a texel at 33 cm, so a package's shadow steps every
+  0.65 mm, several pixels apiece in a close view. And it is the hard test of the panel's centre
+  (`docs/shader-subsystems.md`, Area-light shadows), where a 20 cm panel over a chip throws a very
+  soft one. pcb's 3D view will show it on every board.
 - **The cascade penumbra estimate** is normalised by a depth range the padding dominates, so its
   softness depends on how a cascade was fitted, not on the light.
 - **Lights' default size** (50 m) and the shadow system's metre defaults stay; a small scene states
