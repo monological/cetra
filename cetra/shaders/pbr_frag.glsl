@@ -2101,23 +2101,26 @@ void main() {
                     (1.0 - metallicMap) * (1.0 - transmissionEff) * albedoMap * ff.x;
 
                 // The panel's shadow (spec 13.27), multiplied into the whole
-                // panel term: the occlusion of the panel's centre, softened by
-                // the penumbra its size casts. Its layer is the one fitted to this
-                // view where the depth pass fitted one, else the face of its cube
-                // chosen in its own frame, as a point light's is in the world's.
-                // Where ltcPanel answered zero -- past the range, or behind the
-                // panel, where its cube has no face -- there is nothing to shadow.
+                // panel term: the occlusion of the panel's centre. On the layer the
+                // depth pass fitted to this view it is softened by the penumbra the
+                // panel's size casts; on its cube, a face chosen in its own frame as a
+                // point light's is in the world's, it keeps a point light's hard 3x3:
+                // the penumbra cannot read across a face's edge, and a face's texels
+                // are too coarse for it to be a ramp. Where ltcPanel answered zero --
+                // past the range, or behind the panel, where its cube has no face --
+                // there is nothing to shadow.
                 int aLayer = int(clusterLights[li].shadowMisc.y);
                 float aShadow = 1.0;
                 if (aLayer >= 0 && alphaMasked == 0 && max(ff.x, ff.y) > 0.0) {
-                    int aFace = clusterLights[li].attenCutoff.z > 0.5
-                                    ? 0
-                                    : panelCubeFace(-toPanel, clusterLights[li].dirType.xyz,
-                                                    clusterLights[li].upArea.xyz);
+                    bool aFitted = clusterLights[li].attenCutoff.z > 0.5;
+                    int aFace = aFitted ? 0
+                                        : panelCubeFace(-toPanel, clusterLights[li].dirType.xyz,
+                                                        clusterLights[li].upArea.xyz);
                     // Half the shorter side: the penumbra is isotropic, so the
                     // rectangle collapses to one number, the conservative one.
-                    float aRadius = 0.5 * min(clusterLights[li].shadowMisc.z,
-                                              clusterLights[li].shadowMisc.w);
+                    float aRadius = aFitted ? 0.5 * min(clusterLights[li].shadowMisc.z,
+                                                        clusterLights[li].shadowMisc.w)
+                                            : 0.0;
                     aShadow = clusterShadow(aLayer + aFace, li, WorldPos, N, normalize(toPanel),
                                             ddxWorld, ddyWorld, aRadius);
                 }
