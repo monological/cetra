@@ -13,6 +13,8 @@ linked doc explains the subsystem. `cetra/src/ext/` is vendored and not listed.
 | `engine_internal.h` | Private: the pass brackets and frame plumbing the renderer, shadows, captures and post chain call between them, and the lit-surface variant cache. |
 | `input.c/h` | The engine's input state: keys, the ordered typed-key list, the pointer and its latched press and release, and the platform's shortcut modifiers. |
 | `scene.c/h` | The scene graph and its transform walk, and what a scene owns: lights, materials and their skin profiles, particles, shadows, IBL, sky, probes, GI, water, rain. See `docs/architecture.md`. |
+| `scene_tags.c/h` | A table of tags for 3D views, borrowed by any: per object a colour, an outline, a dim, hidden and lit, and the counts that say what restarts a view. See `docs/architecture.md`, Tags. |
+| `tag_table.c/h` | The buffer texture a tag table lives in, three texels a tag, written by range; the canvas's tags and a scene's both go through it. |
 | `camera.c/h` | A camera's pose, its projection, the same pose as an orbit, and `fit_clip`. See `docs/architecture.md`. |
 | `render.c/h` | The ordered scene passes (opaque, skybox, catcher, water, transparent and OIT, particles) and the variant resolver. See `docs/architecture.md`. |
 | `draw_list.c/h` | One frame's drawable meshes flattened out of the graph once, in the walk's order, with their bounds, LOD and cull bits, for every pass. |

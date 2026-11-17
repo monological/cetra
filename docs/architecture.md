@@ -289,7 +289,8 @@ frame.
   meter adapting.
 - **What the engine sees for itself**: a camera, a rectangle, a setting, a node moved (the walk ORs
   the moved nodes' masks into `Scene.moved_mask`, every bit for one carrying a light, a camera or
-  particles), a mesh added or uploaded. **What the app says**: a plain write the engine cannot see
+  particles), a mesh added or uploaded, a node's tag or class written, a write to the table the
+  view borrows that changes how a tag is drawn (an outline's alone restarts nothing). **What the app says**: a plain write the engine cannot see
   -- a material, a light, a scene setting -- with `scene_mark_changed`; an engine-wide setting with
   `engine_mark_changed`. A write left unsaid is not drawn until something else changes.
 - **What animates forever** (no view showing it rests): water, rain, fire, particles, wind, the
@@ -304,6 +305,24 @@ frame.
 - **Idle waits once every shown view rests**, and headless the run ends there.
 - **Hidden then shown**: unchanged, the kept picture is reused; changed, a cut (every history
   dropped) and the average from 0.
+
+### Tags
+
+A surface carries an object and a class (spec 14.39): the object a vertex's (`Mesh.tags`), else
+its node's (`SceneNode.tag`), else an ancestor's; the class its node's (`SceneNode.tag_class`), else
+an ancestor's. A view draws them by two things:
+- **The table it borrows** (`SceneView.tags`, a `SceneTags`, shareable by any views): per object a
+  colour, an outline, a dim, hidden and lit. It says how a tag is drawn, never what it means: the
+  app's chosen, found or marked is a colour or an outline of its own. Tag 0 has no row; keep tags
+  dense, since the table is as long as the largest set, 2^22 at most.
+- **Its own settings**: a row a class (`SceneViewSettings.tag_classes`: colour, see-through, flat,
+  hidden), the fade (`tag_fade`, what is not lit, untagged surfaces included, fades and turns
+  see-through), and the outline's width and hidden strength.
+
+What every view shares draws no view's tags: captures, kept lamp faces and the rain's cover take
+every surface as it is (the engine says once when a view's tags hide or ghost something while a
+lamp's shadow is kept). The mechanism -- the drop, the lanes, the paint, the outline -- is in
+`docs/shader-subsystems.md`, Tags.
 
 ## Render Pipeline
 

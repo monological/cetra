@@ -17,7 +17,7 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-16: 14.39, tags in 3D, started for item 4a._
+_Last updated: 2026-11-17: 14.39, tags in 3D, built for item 4a._
 
 ---
 
@@ -59,7 +59,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 2 | Idle mode: drawing only when something changed | **Built**; with 14.38 it waits on 3D views at rest too | 6 | 14.1, 14.38 |
 | 3 | Skipping the 3D scene pass when no 3D view is shown | **Built**, with a still view that averages jittered frames and rests; a TAA-only view resting and accumulating under TAAU left for later | 8, the 3D view | 14.38 |
 | 4 | Drawing the 3D scene into part of the window | **Built**: any number of views, each a camera, a rectangle, its own settings and its own buffers; world work serving every view equally, a scene per view and a second window left for later | 8 | 14.38 |
-| 4a | Tags in 3D: a surface's net or part, and its kind, drawn by a table | **Started** in 14.39 | 8 (choosing, the spotlight, see-through, a pane's layers) | 14.39 |
+| 4a | Tags in 3D: a surface's net or part, and its kind, drawn by a table | **Built**: hidden, painted, dimmed, faded see-through and outlined, per tag and per class; transmissive and late surfaces faded and painted, and a halo round what is lit, left for later | 8 (choosing, the spotlight, see-through, a pane's layers) | 14.39 |
 | 5 | Text input and scrolling panes in the UI | **Built**; composing text in an input method, glyphs past the atlas and the rest below are left for later | 6 (the command palette and the `/` jump); 9 (the chat) | 14.2, 14.3 |
 | 6 | The text editor widget | **Built**; sideways scrolling, a regular-expression find and the rest below are left for later | 6 (the code view) | 14.4 |
 | 6a | The editor's vim mode | **Built**, held to vim 9.2 itself; named registers, macros, marks and the rest below are left for later | 6 (the code view, which is vim only) | 14.5, 14.9 |
@@ -76,9 +76,9 @@ Running the gates).
 **Order**: 1, 2, 5, 6, 6a and 9 are built, in that order; the canvas went first because the
 schematic and the layout both stand on it, and the editor stands on 5's UTF-8, typed input,
 clipboard and input script. 3 and 4 were built together in 14.38, for pcb's 3D view (its spec
-8.1), with a panel's shadow fitted to the view at a board's scale (item 7); 4a, tags in 3D, is
-being built on 14.38's views in 14.39, which pcb's 8.1 asked for beside them and the nine did not
-name. Item 8's bugs and the physical depth of field can be taken whenever they
+8.1), with a panel's shadow fitted to the view at a board's scale (item 7); 4a, tags in 3D, was
+built on 14.38's views in 14.39, which pcb's 8.1 asked for beside them and the nine did not name.
+Item 8's bugs and the physical depth of field can be taken whenever they
 fit.
 
 pcb's build steps, for reference: 6 is the window (code editor, schematic, keys, palette, help,
@@ -263,7 +263,7 @@ starts with none.
 
 ---
 
-## 4a. Tags in 3D
+## 4a. Tags in 3D — built
 
 **What pcb needs** (its spec 8.1, phase 8): a click choosing what is under the pointer, with an
 outline on what is chosen, shared with the layout and the schematic; Ctrl+click the spotlight,
@@ -273,10 +273,14 @@ copper layer in the layout's colour below 100%; a pane's layers shown or hidden 
 part the height check finds, marked. Each is a table write: no mesh is rebuilt. Picking stays
 pcb's, on the CPU (item 1).
 
-**Started in spec 14.39.** A vertex carries its object (a net); a node carries its class (a kind of
-surface: a copper layer, the mask, the FR4) and, for a part, its object. A table borrowed by the
-views says how each tag is drawn, the canvas's fields less `raised`; each view says how each class
-is drawn and how far what is not lit fades.
+**Built in spec 14.39** (`docs/architecture.md`, Tags; `docs/shader-subsystems.md`, Tags). A vertex
+carries its object (`Mesh.tags`, a net); a node carries its class (`SceneNode.tag_class`, a kind of
+surface: a copper layer, the mask, the FR4) and, for a part, its object (`SceneNode.tag`), inherited
+down its tree. A `SceneTags` table borrowed by the views says how each tag is drawn, the canvas's
+fields less `raised`; each view's settings say how each class is drawn and how far what is not lit
+fades. Choosing, the spotlight, see-through, a pane's layers and the layout's colours are table
+and setting writes; a write that changes a drawing restarts the views drawing it, an outline's
+restarts none.
 
 **Decided in its spec:**
 - **A tag says how it is drawn, not what it means**: colour, outline, dim, hidden, lit. Choosing
@@ -287,6 +291,32 @@ is drawn and how far what is not lit fades.
 - **What is see-through or faded casts no shadow.**
 - **The outline shows through what hides it, fainter**, and is drawn after a still view's average,
   so choosing restarts nothing.
+- **The class is the node's, not the vertex's**: pcb builds one mesh a class a cell already, and a
+  shared part model's vertices cannot say which part they are.
+
+**What pcb has to know:**
+- **Keep tags dense, from one count.** The table is as long as the largest tag set, 2^22 at most;
+  `BOARD_3D_PART`'s bit 23 on part tags would ask for 8 million rows. Number nets and parts from
+  one count.
+- **Classes start at 1**: class 0 is none, its row never read.
+- **A triangle's three corners carry one object**: a surface a pass drops is collapsed per vertex,
+  so a triangle spanning two would stretch. pcb's surfaces are per-net regions.
+- **A colour is a matte paint**, metal and gloss off with it; a class's `flat` is the share drawn
+  unlit, so copper below 100% reads in shadow. A clearcoat stays over the paint.
+- **Under the moment-based OIT a lone see-through layer reads about a tenth dark**: the moments'
+  bias on every translucent surface. A board's many layers are what the moments are for.
+- **Untagged surfaces fade with a view's fade**: the FR4, mask and silk need no tag to.
+
+**Left for later**, each with a need named:
+- **Transmissive and late surfaces faded and painted**; they honour hidden alone. No board surface
+  is either.
+- **A halo round what is lit**, the canvas's `fade_room`; a distance on screen means little in 3D.
+- **Kept lamp shadows and captures that honour a view's tags**: both take every surface as it is.
+  pcb's studio keeps no lamp and captures nothing.
+- **A smoother outline**: the mask is one sample a pixel, so the ring's inner edge is stepped at
+  close range, and round a QFN's lands it follows each land. A mask at the view's samples would
+  smooth it, at its memory.
+- **A per-tag offset**, so a dragged part moves without its node; pcb moves the node.
 
 ---
 

@@ -86,6 +86,10 @@ Each of these has rendered a plausible frame when broken, with the suite green. 
 - **Anything that moves vertices in `cetra_local_position`** needs a CPU bound in the draw list and
   must reach all five programs that include the chunk, through
   `engine_upload_displacement_uniforms`. (`docs/shaders.md`, Vertex Attributes)
+- **A surface a view drops by its tags is dropped in every program that draws it**, through
+  `tags.glsl`'s one function, with the prepass and the opaque pass on the same lane. A surface the
+  prepass dropped and the shading pass kept is shaded behind no depth; the reverse leaves a depth
+  with nothing shaded on it. (`docs/shader-subsystems.md`, Tags)
 - **`pbr_frag` declares 16 samplers, the most it can have.** Read the sampler model before adding
   one; there is usually a way that costs no unit. (`docs/shaders.md`, Texture / Sampler Model)
 - **The lit shader's variant mask is subtractive**: no define means every feature, so a mask never

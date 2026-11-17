@@ -131,8 +131,9 @@ row by row from the top left.
   little more), `material` and `material-silent` (the first material's albedo, with and without
   `scene_mark_changed`), `node:NAME` (moved), `light` (the first light's node moved),
   `light-bright` (the first light four times brighter, said), `settings:V` (view V's vignette),
-  `engine` (`engine_mark_changed`) and `typical[:SIZE]` (`engine_set_typical_size` at SIZE, or at
-  the size it has). `--view-focus V` makes view V the focus in place of the hidden driver.
+  `engine` (`engine_mark_changed`), `typical[:SIZE]` (`engine_set_typical_size` at SIZE, or at
+  the size it has) and `gi` (the GI volume dirtied, so it captures again from that frame).
+  `--view-focus V` makes view V the focus in place of the hidden driver.
   `--view-probe` prints a `view-probe` line per view each frame: drawn, how many frames its average
   holds, finished, its draws so far.
 - `--background-exact r,g,b` gives every view an exact background, the display colour it shows.
@@ -140,6 +141,25 @@ row by row from the top left.
 - `--hdr-memory` reads `-e`'s file into memory and loads it from the bytes
   (`load_hdr_environment_memory`), the way an app with embedded files does.
 - `--programs-linked` prints how many programs were linked, at exit.
+
+### Tags
+
+Tags in 3D (spec 14.39, `docs/architecture.md`, Tags), from `render_tags.c`. A `F:` prefix on a
+flag's argument makes the write at frame F, so one run can change things as it goes; without one
+it is made at the first frame.
+- `--node-tag [F:]NAME=TAG[:CLASS]` gives the named nodes a tag and a class; `*` in NAME matches any
+  run of characters, so `"qfn_*=50:5"` tags a part's every node.
+- `--piece-tags NAME=FIRST` tags each separate piece of the node's first mesh by vertex, FIRST,
+  FIRST+1, ..., in the order its vertices meet them; corners at one place are one piece.
+- `--tag [F:]TAG=SPEC` writes a row of the table every view borrows: `none`, or a comma list of
+  `colour=RRGGBBAA`, `outline=RRGGBBAA`, `dim=D`, `hidden`, `lit`. Tags 0 and 2^22 up are refused by
+  name. `--tag-table` makes the table with nothing written; `--tag-views MASK` lends it to the grid
+  views whose bits are set, every view without it.
+- `--tag-class [F:][V/]CLASS=SPEC` writes a class row, every view's or grid view V's: `none`, or
+  `colour=RRGGBBAA`, `see=S`, `flat=F`, `hidden`. `--tag-fade [F:][V/]S` sets how far what is not
+  lit fades.
+- `--render-mode 15` is the tags render mode: each object a colour from its number, the untagged
+  black.
 
 ### Exposure and tone
 

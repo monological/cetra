@@ -43,11 +43,13 @@ The lit surface is not one program but a family of variants (spec 11.93); know t
 - **The mask.** `program.c` splices `#define CETRA_PBR_FEATURES <mask>` in after the `#version`
   line (`shader_source_with_defines`, followed by `#line 2` so every body line number survives).
   The bits are in `include/pbr_features.glsl`: decals 1, area lights 2, sheen 4, anisotropy 8,
-  parallax 16, layers 32, rain 64, puddle relief 128, cached shadow tiles 256, fur 512. Fur is the
-  one bit the vertex stage reads, so the mask is spliced into both stages.
+  parallax 16, layers 32, rain 64, puddle relief 128, cached shadow tiles 256, fur 512, tags 1024.
+  Fur and tags are the bits the vertex stage reads, so the mask is spliced into both stages.
 - **The resolver.** `render.c` recomputes each material's mask every frame. The mask is a pure
   function of the material's fields and the scene's facts (decals, area panels, rain, cached
-  lights), any of which a GUI slider can change with nothing marked dirty.
+  lights), any of which a GUI slider can change with nothing marked dirty, and of the view about to
+  draw: tags are the view's (`docs/shader-subsystems.md`, Tags), resolved with each view and never
+  for a capture, so a view without them keeps the program it had.
   `engine_pbr_variant` compiles and caches one program per distinct mask; `apps/forest`, for
   example, resolves to `pbr-32` for its layered terrain and `pbr-0` for everything else.
 - **Two families share the fragment source**, `pbr` and `pbr_skinned` (spec 11.95), differing only
@@ -322,7 +324,7 @@ From `common.h`:
 #define GL_ATTR_NORMAL        1    // vec3
 #define GL_ATTR_TEXCOORD      2    // vec2  (UV0)
 #define GL_ATTR_TANGENT       3    // vec4  (xyz tangent, w = bitangent handedness)
-//                            4       free for mesh VAOs, see below
+#define GL_ATTR_TAG           4    // uint  (the object a vertex is of, spec 14.39)
 #define GL_ATTR_COLOR         5    // vec4  (vertex colour)
 #define GL_ATTR_BONE_IDS      6    // ivec4 (skinning)
 #define GL_ATTR_BONE_WEIGHTS  7    // vec4  (skinning)
@@ -337,11 +339,13 @@ From `common.h`:
 - **A tangent is `d(position)/du` and nothing else.** A frame that looks natural for the mesh (a
   circular tangent on an island) is wrong when the UVs are planar: the normal map runs through a
   basis that disagrees with the map it indexes, and creases along every triangle edge.
-- **Slot 4 is free for mesh VAOs, but not unclaimed.** `particle_sim_vert.glsl` binds location 4 as
-  `iLife` on the GPU-sim VAO, and the billboard renderer uses 9-11 for per-instance centre, params
-  and colour as bare literals. Those are separate VAOs, so nothing conflicts at runtime, but mesh
-  geometry on 4 or 9-11 would collide with the convention. 14 and 15 are unclaimed; GL 4.1
-  guarantees at least 16.
+- **Slot 4 is a mesh's tags**, one `uint` a vertex (`Mesh.tags`). A mesh without them leaves the
+  array off and reads the generic value, which the engine sets to 0 once as an integer: a disabled
+  attribute otherwise reads a float default an integer input cannot be given. `particle_sim_vert`
+  binds 4 as `iLife` on the GPU-sim VAO, and the billboard renderer uses 9-11 for per-instance
+  centre, params and colour as bare literals; separate VAOs, so nothing conflicts, but mesh
+  geometry on 9-11 would collide with the convention. 14 and 15 are unclaimed; GL 4.1 guarantees at
+  least 16.
 - **The morph attributes are optional, and absent is off.** An unbound attribute reads (0,0,0), so
   the span reciprocal and the morph factor are 0 and every mesh outside a terrain quadtree is an
   exact identity, with no flag to set. The morph window rides the attribute rather than a
@@ -460,6 +464,14 @@ program leaves alone.
 `ltcTex` (7), `charliePrefilteredMap` (9), `shadowMaps` (10), `irradianceMap`, `prefilteredMap`,
 `brdfLUT` (11-13), `giAtlasTex` (14), `punctualShadowMaps` (15).
 
+**Unit 16 is the tag table's, in the vertex stage** (`TEXUNIT_TAGS`, spec 14.39), outside that
+ledger: every unit below it is a fragment sampler's in the full variant, and a buffer sampler on
+one of them would be two sampler types on a unit. A unit's number is bounded by
+`GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS`, not by a stage's sixteen, and the engine checks it at init.
+Every program including `tags.glsl` -- pbr and pbr_skinned under the tags bit, the prepass, the
+shadow programs, the late lane, the outline mask -- has the sampler set to 16 once, at link
+(`setup_program_uniforms`), so no pass can forget it. The full variant declares 17.
+
 **A variant is not full** (spec 11.95). Four declarations are gated on the mask with
 `#if CETRA_HAS(...)`: `sheenTex` and `charliePrefilteredMap` on sheen, `ltcTex` on area lights (in
 `ltc.glsl`), and `heightTex` on parallax, layers or relief. `pbr-0` declares 12. Ask which units a
@@ -477,7 +489,9 @@ The units come back per variant, not globally: a scene using every feature still
 win is the unit, not the clock (freeing `heightTex` measured 0 ms; the code bodies gated with it
 were where the milliseconds were).
 
-`pbr_frag` also uses ten uniform blocks of GL 4.1's guaranteed twelve, so two remain.
+`pbr_frag` also uses ten uniform blocks of GL 4.1's guaranteed twelve, so two remain. The vertex
+stage's are its own: `InstanceBlock` (13312 bytes, the tags in its last array) and, under the tags
+bit, `TagViewBlock` on binding 11.
 
 ### Fitting a new texture in
 

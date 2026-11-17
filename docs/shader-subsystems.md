@@ -33,7 +33,8 @@ Lighting and occlusion: [Specular occlusion](#specular-occlusion) · [IES profil
 [Clustered specular probes](#clustered-specular-probes)
 
 Surfaces: [Water](#water) · [Clustered decals](#clustered-decals) ·
-[Layered surfaces](#layered-surfaces) · [Roads](#roads) · [Composite cache](#composite-cache)
+[Layered surfaces](#layered-surfaces) · [Roads](#roads) · [Composite cache](#composite-cache) ·
+[Tags](#tags)
 
 Weather: [Rain](#rain)
 
@@ -912,6 +913,49 @@ first use and latched off if that fails, as `glare.c` is.
   of the picture's fine detail, and the window's 8-bit write would have banded.
 - **It costs about 0.65 ms** at silent's 3200x1800 and is not why a heavy frame is slow; measure
   `--profiler`'s `crt` row before blaming it.
+
+## Tags
+
+A surface carries an object, the net or part it is of, and a class, the kind of surface it is
+(spec 14.39; the API is `scene_tags.h`, the frame `docs/architecture.md`, Tags). A view says how
+each is drawn: a table it borrows, a state a tag (colour, outline, dim, hidden, lit), and its own
+class rows (colour, see-through, flat, hidden) and fade. `include/tags.glsl` turns them into what a
+vertex does, in every program that draws a scene's meshes.
+
+- **The object is the vertex's, else the instance's, else the node's.** Location 4 carries it per
+  vertex; `InstanceBlock.uInstTag` per instance of a batched run, `uNodeTag` for a draw of one; a
+  node's is its own or its nearest ancestor's. The class is the node's alone: a mesh is drawn with
+  one material, so one class, and a vertex carrying it would repeat one number over the mesh.
+- **A surface a pass does not draw is collapsed in the vertex stage**, to a point outside every
+  side of the clip volume: no fragment, and nothing under depth clamp either. One function decides
+  for every program, the depth-only ones included, because a drop the prepass made and the shading
+  pass did not leaves a depth with nothing shaded on it. A triangle's corners carry one object, or a
+  dropped corner stretches it.
+- **The lane** (`uTagLane`): a view that ghosts -- a fade, or a class below solid -- and can run OIT
+  draws an opaque item twice, its solid surfaces in the opaque pass and the prepass (1) and its
+  see-through ones in the OIT moments and accumulate (2). Every other item keeps both (0). The
+  shadow passes keep the solid alone (1) always, so what is see-through or faded casts nothing,
+  whatever pass draws it.
+- **The paint** is a matte coat, settled last in `pbr_frag` after decals and wetness: the colour in
+  place of the material's by its share, metal and gloss taken off with it, so copper painted a
+  layer's colour reads as that colour. The flat share mixes the paint's own value into the
+  working-space colour -- the scale the tone curve reads -- so a class drawn flat is one colour on
+  every face whatever lights it; the dim then darkens toward black. The ambient specular and the
+  skin's diffuse, which the chain adds back into the pixel, lose both alike. A clearcoat stays over
+  the paint.
+- **Opacity** multiplies `finalOpacity` for the moments and the accumulate alike; a surface the
+  opaque pass keeps is solid, so it multiplies by one there. Under the moment-based OIT a lone
+  see-through layer comes out about a tenth dark, the moments' estimate counting it against itself;
+  the weighted OIT composites one layer exactly.
+- **The outline** is not drawn into the scene. After a view's chain, at its picture's size and from
+  its unjittered camera: the depth of its solid surfaces through the prepass; its outlined surfaces
+  into a mask, everywhere at the view's hidden strength, then over that at full where the depth lets
+  them through; and a ring outside each silhouette (`outline_ring_frag`), `outline_points` wide, its
+  outer edge antialiased by distance, the nearest covered pixel deciding colour and strength, the
+  stronger among equals so a seen silhouette rings over a hidden one. The ring is an overlay the
+  view's copy into the window lays over the picture (`present_frag`), so an outline changes no
+  frame a still view averaged. The mask is one sample a pixel: the ring's inner edge is stepped
+  where the picture under it is smooth.
 
 ## Shader hooks
 
