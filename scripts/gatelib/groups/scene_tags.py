@@ -56,6 +56,19 @@ def run_scene_tags_gate(workdir):
       scene-tag-node       a node's tag written at frame 40, after a still view has finished its
                            average and rested: the view draws again from that frame; written to
                            the value it holds, it rests.
+      scene-tag-hidden     part1's tag hidden is the fixture without part1, its shadow included,
+                           0 px; the slab's class hidden is the fixture without the slab, 0 px.
+      scene-tag-paint      a metal strip under a class's red paint reads red, its copper gone; a
+                           part painted wholly flat is one colour on its lit top and its shaded
+                           front, which differ unpainted; a tag dimmed all the way is black.
+      scene-tag-order      strip 3's own green over its class's red, the strip beside it red; a
+                           tag shown in a hidden class is hidden.
+      scene-tag-limit      tags 0 and 2^22 refused by name; tag 300, past the table's first 256,
+                           hides part1 as tag 11 does, 0 px.
+      scene-tag-capture    two views of the rooms, the right one hiding a ceiling panel by its
+                           tags: the left is its view alone without tags, 0 px -- the reflection
+                           probes, captured after the right view drew, see the panel -- and the
+                           right one differs.
 
     Falsified by hand at 14.39: the instance block's tag left unfilled, the instanced parts read
     whatever the block last held -- part0 and part1 black, part2 and part3 another object's colour
@@ -135,5 +148,109 @@ def run_scene_tags_gate(workdir):
         return ok, (f"a new tag at frame 40 draws the rested view again from frame "
                     f"{drawn_moved[0] if drawn_moved else None} (want 40 or 41); the same tag "
                     f"written draws {len(drawn_same)} frames after it (want 0)")
+
+    @functools.cache
+    def without(name):
+        return run(f"without_{name}", ["--remove-node", name])
+
+    @arm("scene-tag-hidden")
+    def _():
+        if not have:
+            return None, "no tags_fixture.cscn"
+        tag_hidden, said = run("hidden_tag", TAGS_FLAGS + ["--tag", "11=hidden"])
+        class_hidden, said2 = run("hidden_class", TAGS_FLAGS + ["--tag-class", "1=hidden"])
+        no_part, _ = without("part1")
+        no_slab, _ = without("slab")
+        if any(x is None for x in (tag_hidden, class_hidden, no_part, no_slab)):
+            return False, f"a run failed: {said if tag_hidden is None else said2}"
+        d_tag, d_class = _differ(tag_hidden, no_part), _differ(class_hidden, no_slab)
+        return d_tag == 0 and d_class == 0, (
+            f"part1's tag hidden {d_tag} px from part1 removed, the slab's class hidden {d_class} "
+            f"px from the slab removed (want 0, 0)")
+
+    @arm("scene-tag-paint")
+    def _():
+        if not have:
+            return None, "no tags_fixture.cscn"
+        plain, _ = run("paint_plain", TAGS_FLAGS + ["--node-tag", "strips=0:2"])
+        red, _ = run("paint_red", TAGS_FLAGS + ["--node-tag", "strips=0:2",
+                                                "--tag-class", "2=colour=FF2020FF"])
+        # Flat with ambient occlusion off: it is screen space, laid over the finished pixel, and
+        # darkens the part's front by the floor whatever the surface is.
+        lit, _ = run("paint_lit", TAGS_FLAGS + ["--no-ssao"])
+        flat, _ = run("paint_flat", TAGS_FLAGS + ["--no-ssao", "--tag-class",
+                                                  "3=colour=4080C0FF,flat=1"])
+        dim, _ = run("paint_dim", TAGS_FLAGS + ["--tag", "12=dim=1"])
+        if any(x is None for x in (plain, red, lit, flat, dim)):
+            return False, "a run failed"
+        project = _projector(TAGS_CAM, plain.shape[1], plain.shape[0])
+        strip = (TAGS_STRIP_XS[1], TAGS_STRIP_TOP, TAGS_STRIP_Z)
+        copper, painted = _code_at(plain, project, strip), _code_at(red, project, strip)
+        reds = painted[0] > 3 * max(painted[1], painted[2])
+        top = (TAGS_PART_XS[3], TAGS_PART_TOP, TAGS_PART_Z)
+        front = (TAGS_PART_XS[3], 0.16, TAGS_PART_Z + 0.06)
+        lit_top, lit_front = _code_at(lit, project, top), _code_at(lit, project, front)
+        flat_top, flat_front = _code_at(flat, project, top), _code_at(flat, project, front)
+        shaded = max(abs(a - b) for a, b in zip(lit_top, lit_front))
+        evened = max(abs(a - b) for a, b in zip(flat_top, flat_front))
+        black = _code_at(dim, project, (TAGS_PART_XS[2], TAGS_PART_TOP, TAGS_PART_Z))
+        ok = reds and shaded > 20 and evened <= 1 and max(black) <= 2
+        return ok, (f"the strip {copper} unpainted, {painted} under red (want red); part3's top "
+                    f"and front {shaded} codes apart unpainted (want > 20), {evened} painted flat "
+                    f"(want <= 1); part2 dimmed all the way {black} (want black)")
+
+    @arm("scene-tag-order")
+    def _():
+        if not have:
+            return None, "no tags_fixture.cscn"
+        img, _ = run("order", TAGS_FLAGS + ["--node-tag", "strips=0:2", "--tag-class",
+                                            "2=colour=FF2020FF", "--tag", "3=colour=20C040FF",
+                                            "--tag-class", "1=hidden", "--tag", "20=colour=FFFFFFFF"])
+        no_slab, _ = without("slab")
+        if img is None or no_slab is None:
+            return False, "a run failed"
+        project = _projector(TAGS_CAM, img.shape[1], img.shape[0])
+        own = _code_at(img, project, (TAGS_STRIP_XS[2], TAGS_STRIP_TOP, TAGS_STRIP_Z))
+        beside = _code_at(img, project, (TAGS_STRIP_XS[1], TAGS_STRIP_TOP, TAGS_STRIP_Z))
+        slab_at = (0.5, 0.1, -0.4)
+        slab, bare = _code_at(img, project, slab_at), _code_at(no_slab, project, slab_at)
+        ok = own[1] > 2 * max(own[0], own[2]) and beside[0] > 3 * max(beside[1], beside[2]) and \
+            slab == bare
+        return ok, (f"strip 3 {own} (want green), strip 2 {beside} (want red); the slab, tagged "
+                    f"white in a hidden class, {slab} where the floor shows {bare} (want equal)")
+
+    @arm("scene-tag-limit")
+    def _():
+        if not have:
+            return None, "no tags_fixture.cscn"
+        far = TAGS_FLAGS + ["--node-tag", "part1=300:3", "--tag", "300=hidden", "--tag",
+                            "0=hidden", "--tag", f"{1 << 22}=hidden"]
+        img, said = run("limit", far)
+        no_part, _ = without("part1")
+        if img is None or no_part is None:
+            return False, f"a run failed: {said}"
+        refused = [t for t in (0, 1 << 22) if f"tag {t} is refused" in said]
+        diff = _differ(img, no_part)
+        return diff == 0 and len(refused) == 2, (
+            f"tags refused by name: {refused} (want [0, {1 << 22}]); tag 300 hidden {diff} px from "
+            f"part1 removed (want 0)")
+
+    @arm("scene-tag-capture")
+    def _():
+        rooms = asset("cornell_rooms.cscn")
+        flags = ["--no-auto-exposure", "-E", "1.0"]
+        hide = ["--node-tag", "rooms_light_a=7", "--tag", "7=hidden", "--tag-views", "2"]
+        pair, said = _views_run(workdir, "tags_capture_pair", rooms, 800, 600,
+                                flags + hide + ["--views", "2x1", "--view-turn", "0"])
+        alone, said2 = _views_run(workdir, "tags_capture_alone", rooms, 400, 600,
+                                  flags + ["--views", "1x1", "--view-turn", "0"])
+        if pair is None or alone is None:
+            return False, f"a run failed: {said if pair is None else said2}"
+        half = pair.shape[1] // 2
+        left, right = pair[:, :half], pair[:, half:]
+        d_left, d_right = _differ(left, alone), _differ(right, alone)
+        return d_left == 0 and d_right > 0, (
+            f"the view without tags {d_left} px from its view alone (want 0), the one hiding the "
+            f"panel {d_right} px (want > 0)")
 
     return arm.failed

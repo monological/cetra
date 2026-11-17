@@ -2799,6 +2799,7 @@ void render_late_items(Engine* engine, const Scene* scene, const SceneView* view
         }
         uniform_set_mat4(u, "model", (const float*)item->node->global_transform);
         uniform_set_mat3(u, "uNormalMatrix", (const float*)item->node->normal_matrix);
+        submit_item_tag(u, item);
         uniform_set_int(u, "vertexColorExists", item->mesh->colors ? 1 : 0);
         submit_draw_run(&state, u, item, 1, (item->flags & DRAW_DOUBLE_SIDED) != 0, stats);
     }

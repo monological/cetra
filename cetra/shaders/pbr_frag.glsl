@@ -1726,6 +1726,18 @@ void main() {
     vec3 ddxWorld = dFdx(WorldPos);
     vec3 ddyWorld = dFdy(WorldPos);
 
+#if CETRA_HAS(PBR_FEAT_TAGS)
+    // A tag's or its class's paint (spec 14.39), last of everything that settles the surface, so
+    // it covers decals and wetness as a coat of paint would: the colour in place of the material's,
+    // and the metal and the gloss taken off with it, by its share. Copper painted a layer's colour
+    // then reads as that colour and not as metal tinted by it. A clearcoat stays over the paint.
+    if (TagPaint.a > 0.0) {
+        albedoMap = mix(albedoMap, sRGBToLinear(TagPaint.rgb), TagPaint.a);
+        metallicMap = mix(metallicMap, 0.0, TagPaint.a);
+        roughnessMap = mix(roughnessMap, 1.0, TagPaint.a);
+    }
+#endif
+
     // Render modes that need texture data
     if (renderMode == 7) {
         // Simple Diffuse Lighting (same fused dir+cluster fetch as the PBR loop)
@@ -2747,6 +2759,19 @@ void main() {
     vec3 color =
         min((Lo + ambient + emissiveMap) * preExposure + transmitted, vec3(WS_SCENE_MAX));
 
+#if CETRA_HAS(PBR_FEAT_TAGS)
+    // The paint's flat share, unlit (spec 14.39). `color` is working space, the scale the tone
+    // curve reads, so the paint's own value stands for a surface lit to read as its colour,
+    // whatever lights it here: a class drawn mostly flat reads in shadow. Then the tag's dim,
+    // toward black. The two outputs the chain adds back into this pixel below -- its ambient
+    // specular and its skin's diffuse -- are lit, so they lose the flat share and the dim alike.
+    float tagFlat = TagPaint.a > 0.0 ? TagMisc.y * TagPaint.a : 0.0;
+    float tagKeep = 1.0 - TagMisc.z;
+    if (tagFlat > 0.0)
+        color = mix(color, sRGBToLinear(TagPaint.rgb), tagFlat);
+    color *= tagKeep;
+#endif
+
     // Cascade acceptance view: tint by the fragment's selected cascade so
     // split geometry and snap stability are visible (dead when csmDebug 0)
     if (csmDebug > 0 && cascadeCount > 1) {
@@ -2904,6 +2929,10 @@ void main() {
     // be on the same scale). Zero on the inline path -- the attachment is only
     // bound when splitting, but every bound attachment must be written.
     SpecOut = vec4(min(ambSpec * preExposure, vec3(WS_SCENE_MAX)), finalOpacity);
+#if CETRA_HAS(PBR_FEAT_TAGS)
+    DiffuseOut.rgb *= tagKeep * (1.0 - tagFlat);
+    SpecOut.rgb *= tagKeep * (1.0 - tagFlat);
+#endif
 
     // The OIT accumulate (guarded so passMode 0 leaves FragColor and the opaque/
     // alpha-blend paths byte-identical): premultiplied colour times how much of

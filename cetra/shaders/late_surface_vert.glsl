@@ -22,6 +22,10 @@ out vec2 vUv;
 out vec4 vColor;
 out float vViewDepth;
 
+// A view's tags (spec 14.39): a late surface is dropped where its tag is hidden or it has faded
+// away, and is otherwise drawn as it is, its fragment stage being the app's.
+#include "tags.glsl"
+
 void main()
 {
     vec4 world = model * vec4(aPos, 1.0);
@@ -31,5 +35,5 @@ void main()
     vUv = aTexCoords;
     vColor = vertexColorExists ? aColor : vec4(1.0);
     vViewDepth = -eye.z;
-    gl_Position = projection * eye;
+    gl_Position = cetraTag(uNodeTag).drop ? CETRA_TAG_DROPPED : projection * eye;
 }

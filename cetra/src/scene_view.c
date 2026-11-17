@@ -231,6 +231,16 @@ void scene_view_bind_tags(SceneView* view) {
     glBindBufferBase(GL_UNIFORM_BUFFER, UBO_BINDING_TAG_VIEW, vs->tag_block->id);
 }
 
+void engine_bind_no_tags(const Engine* engine) {
+    glBindBufferBase(GL_UNIFORM_BUFFER, UBO_BINDING_TAG_VIEW, engine->tag_block_none->id);
+}
+
+void scene_view_rebind_tags(const Engine* engine, const SceneView* view) {
+    const bool own = view && scene_view_draws_tags(view) && view->state->tag_block;
+    glBindBufferBase(GL_UNIFORM_BUFFER, UBO_BINDING_TAG_VIEW,
+                     own ? view->state->tag_block->id : engine->tag_block_none->id);
+}
+
 void free_scene_view(SceneView* view) {
     if (!view)
         return;

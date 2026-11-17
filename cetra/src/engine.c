@@ -3375,8 +3375,10 @@ static void _engine_draw_view(Engine* engine, Scene* scene, SceneView* view, Eng
     // centred on the focus view and drawn with every node, so each view would draw the same layer,
     // and its readback ring steps a frame at a time. Outside the `enabled` gate on purpose: that
     // switches shadows off, not roofs.
-    if (scene && !*settled)
+    if (scene && !*settled) {
         shadow_render_rain_layer(engine, scene);
+        scene_view_rebind_tags(engine, view);
+    }
 
     glBindFramebuffer(GL_FRAMEBUFFER, vs->framebuffer);
     // The scene target is supersampled; the present pass left the viewport

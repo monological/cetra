@@ -184,6 +184,11 @@ bool scene_view_ghosts(const struct SceneView* view);
 // and its table on TEXUNIT_TAGS. A view without tags, or a capture, binds the engine's block of
 // zeros, which draws every surface as it is.
 void scene_view_bind_tags(struct SceneView* view);
+// For a pass every view shares -- a kept shadow face, the rain's cover -- that must draw every
+// surface as it is: the block of zeros bound; then the view's own bound again, as it was uploaded
+// (NULL = the block of zeros).
+void engine_bind_no_tags(const struct Engine* engine);
+void scene_view_rebind_tags(const struct Engine* engine, const struct SceneView* view);
 
 // The view's rectangle in framebuffer pixels, GL's origin (bottom-left): x, y, width, height. Each
 // edge rounds to the nearest pixel, so two views sharing an edge share a pixel boundary.
