@@ -20,7 +20,7 @@
 #include "cetra/util.h"
 #include "cetra/internal/async_loader.h"
 #include "cetra/internal/render.h"
-#include "cetra/internal/scene_view_state.h"
+#include "cetra/internal/scene_view_state.h" // the view's chain, for the rain probe's medium
 #include "cetra/cook.h"
 #include "cetra/engine.h"
 #include "cetra/loading_screen.h"
@@ -110,6 +110,20 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --point-light-grid N[,radius,intensity]  NxN point-light test grid\n");
     fprintf(stderr, "      --area-light px,py,pz,dx,dy,dz,w,h,I[,r,g,b]  LTC area panel\n");
     fprintf(stderr, "      --show-lights      Light gizmos (position + cull radius)\n");
+    fprintf(stderr, "      --views CxR        Tile the window with CxR views, or 0 for none\n");
+    fprintf(stderr, "      --view-turn DEG    Each view's camera turned DEG more than the last\n");
+    fprintf(stderr, "      --view-index K     Number the views from K (a lone view K)\n");
+    fprintf(stderr, "      --view-picture     A lone view covering the window draws a picture\n");
+    fprintf(stderr, "      --window-color r,g,b  The window where no view covers it\n");
+    fprintf(stderr, "      --view-mask V:MASK    View V's mask\n");
+    fprintf(stderr, "      --node-mask NAME:MASK The named node's view mask\n");
+    fprintf(stderr, "      --view-hide-at V:F    Hide view V from frame F\n");
+    fprintf(stderr, "      --view-show-at F      Show it again from frame F\n");
+    fprintf(stderr, "      --view-samples V:N    View V's sample count\n");
+    fprintf(stderr, "      --view-rect V:x,y,w,h View V's rectangle, window points\n");
+    fprintf(stderr, "      --view-rect-at F      The rectangle from frame F on\n");
+    fprintf(stderr, "      --view-lines V        Only view V draws the light lines\n");
+    fprintf(stderr, "      --programs-linked     Print the programs linked, at exit\n");
     fprintf(stderr, "      --cluster-heatmap  Tint fragments by cluster light count\n");
     fprintf(stderr, "      --no-shadows       Keep key lights but disable shadow maps\n");
     fprintf(stderr,
@@ -698,6 +712,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->motion_blur_scale = -1.0f;
     args->light_size = -1.0f;   // -1 = scene-radius default
     args->point_light_grid = 0; // off
+    args->view_turn_deg = 90.0f;
+    args->view_mask_view = args->view_hide_view = args->view_samples_view = -1;
+    args->view_rect_view = args->view_lines_view = -1;
+    args->view_hide_frame = args->view_show_frame = -1;
     args->plg_radius = 10.0f;
     args->plg_intensity = 5.0f;
     args->shadows_off_at = -1;       // -1 = never; the transition is the diagnostic
@@ -2129,6 +2147,70 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->area_light = 1;
         } else if (strcmp(argv[i], "--show-lights") == 0) {
             args->show_lights = 1;
+        } else if (strcmp(argv[i], "--views") == 0 && i + 1 < argc) {
+            args->views = 1;
+            if (strcmp(argv[++i], "0") == 0) {
+                args->views_cols = args->views_rows = 0;
+            } else if (sscanf(argv[i], "%dx%d", &args->views_cols, &args->views_rows) != 2 ||
+                       args->views_cols < 1 || args->views_rows < 1 ||
+                       args->views_cols * args->views_rows > RENDER_VIEWS_MAX) {
+                fprintf(stderr, "Error: --views wants CxR, at most %d views, or 0\n",
+                        RENDER_VIEWS_MAX);
+                return -1;
+            }
+        } else if (strcmp(argv[i], "--view-turn") == 0 && i + 1 < argc) {
+            args->view_turn_deg = (float)atof(argv[++i]);
+        } else if (strcmp(argv[i], "--view-index") == 0 && i + 1 < argc) {
+            args->view_index = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--view-picture") == 0) {
+            args->view_picture = 1;
+        } else if (strcmp(argv[i], "--window-color") == 0 && i + 1 < argc) {
+            if (sscanf(argv[++i], "%f,%f,%f", &args->window_color[0], &args->window_color[1],
+                       &args->window_color[2]) != 3) {
+                fprintf(stderr, "Error: --window-color wants r,g,b in 0..1\n");
+                return -1;
+            }
+            args->window_color_set = 1;
+        } else if (strcmp(argv[i], "--view-mask") == 0 && i + 1 < argc) {
+            if (sscanf(argv[++i], "%d:%i", &args->view_mask_view, (int*)&args->view_mask) != 2) {
+                fprintf(stderr, "Error: --view-mask wants V:MASK\n");
+                return -1;
+            }
+        } else if (strcmp(argv[i], "--node-mask") == 0 && i + 1 < argc) {
+            const char* spec = argv[++i];
+            const char* colon = strrchr(spec, ':');
+            if (!colon || colon == spec) {
+                fprintf(stderr, "Error: --node-mask wants NAME:MASK\n");
+                return -1;
+            }
+            static char name[256];
+            snprintf(name, sizeof(name), "%.*s", (int)(colon - spec), spec);
+            args->node_mask_name = name;
+            args->node_mask = (unsigned)strtoul(colon + 1, NULL, 0);
+        } else if (strcmp(argv[i], "--view-hide-at") == 0 && i + 1 < argc) {
+            if (sscanf(argv[++i], "%d:%d", &args->view_hide_view, &args->view_hide_frame) != 2) {
+                fprintf(stderr, "Error: --view-hide-at wants V:F\n");
+                return -1;
+            }
+        } else if (strcmp(argv[i], "--view-show-at") == 0 && i + 1 < argc) {
+            args->view_show_frame = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--view-samples") == 0 && i + 1 < argc) {
+            if (sscanf(argv[++i], "%d:%d", &args->view_samples_view, &args->view_samples) != 2) {
+                fprintf(stderr, "Error: --view-samples wants V:N\n");
+                return -1;
+            }
+        } else if (strcmp(argv[i], "--view-rect") == 0 && i + 1 < argc) {
+            if (sscanf(argv[++i], "%d:%f,%f,%f,%f", &args->view_rect_view, &args->view_rect[0],
+                       &args->view_rect[1], &args->view_rect[2], &args->view_rect[3]) != 5) {
+                fprintf(stderr, "Error: --view-rect wants V:x,y,w,h in window points\n");
+                return -1;
+            }
+        } else if (strcmp(argv[i], "--view-rect-at") == 0 && i + 1 < argc) {
+            args->view_rect_frame = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--view-lines") == 0 && i + 1 < argc) {
+            args->view_lines_view = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--programs-linked") == 0) {
+            args->programs_linked = 1;
         } else if (strcmp(argv[i], "--cluster-heatmap") == 0) {
             args->cluster_heatmap = 1;
         } else if (strcmp(argv[i], "--point-light-grid") == 0) {
@@ -2614,6 +2696,105 @@ static CameraDrag* view_drag = NULL;
 static SceneView* g_view = NULL;
 // --loading-screen: the keys that change the screen's palette and play it again.
 static bool g_loading_preview = false;
+
+/*
+ * --views: a grid of views the app's own view drives. That view stays the focus, hidden, so a
+ * lone grid view (--views 1x1 --view-index K) and the same view among others rank the world from
+ * one eye and differ only in what is being measured. Each grid view takes its settings, and the
+ * rig's pose turned about the target by its number times --view-turn, every frame.
+ */
+static SceneView* g_grid[RENDER_VIEWS_MAX];
+static int g_grid_count = 0;
+static bool g_view_removed = false; // --views 0: the app's view is no longer the engine's
+
+static void grid_make(Engine* engine, const RenderArgs* args) {
+    if (!args->views)
+        return;
+    if (args->window_color_set)
+        glm_vec3_copy((float*)args->window_color, engine->window_color);
+    engine->window_direct = !args->view_picture;
+    const int count = args->views_cols * args->views_rows;
+    if (count == 0) {
+        engine_remove_view(engine, g_view);
+        g_view_removed = true;
+        return;
+    }
+    g_view->hidden = true;
+    const float cols = (float)args->views_cols, rows = (float)args->views_rows;
+    for (int i = 0; i < count; i++) {
+        // In its cell from the start, which grid_frame keeps it in.
+        const int col = i % args->views_cols, row = i / args->views_cols;
+        const SceneViewDesc desc = {.camera = {.fov = g_view->camera.fov_radians},
+                                    .settings = &g_view->settings,
+                                    .x = (float)engine->win_width * (float)col / cols,
+                                    .y = (float)engine->win_height * (float)row / rows,
+                                    .width = (float)engine->win_width / cols,
+                                    .height = (float)engine->win_height / rows};
+        g_grid[i] = create_scene_view(engine, &desc);
+        if (!g_grid[i] || !engine_add_view(engine, g_grid[i])) {
+            fprintf(stderr, "Error: --views could not make view %d\n", i);
+            free_scene_view(g_grid[i]);
+            g_grid[i] = NULL;
+            return;
+        }
+        g_grid_count = i + 1;
+    }
+}
+
+// Grid view `i` at frame `frame`: its rectangle, its camera, its settings and the flags that
+// change one view.
+static void grid_frame(Engine* engine, const RenderArgs* args, int frame) {
+    static bool node_masked = false;
+    if (args->node_mask_name && !node_masked) {
+        Scene* scene = engine_get_scene(engine);
+        SceneNode* node = scene ? node_find(scene->root_node, args->node_mask_name) : NULL;
+        if (node) {
+            node->view_mask = args->node_mask;
+            node_masked = true;
+        }
+    }
+    const float cols = (float)args->views_cols, rows = (float)args->views_rows;
+    for (int i = 0; i < g_grid_count; i++) {
+        SceneView* view = g_grid[i];
+        const int col = i % args->views_cols, row = i / args->views_cols;
+        view->x = (float)engine->win_width * (float)col / cols;
+        view->y = (float)engine->win_height * (float)row / rows;
+        view->width = (float)engine->win_width / cols;
+        view->height = (float)engine->win_height / rows;
+        if (i == args->view_rect_view && frame >= args->view_rect_frame) {
+            view->x = args->view_rect[0];
+            view->y = args->view_rect[1];
+            view->width = args->view_rect[2];
+            view->height = args->view_rect[3];
+        }
+        view->settings = g_view->settings;
+        if (i == args->view_samples_view)
+            view->settings.samples = args->view_samples;
+        if (i == args->view_mask_view)
+            view->mask = args->view_mask;
+        if (args->view_lines_view >= 0)
+            view->settings.show_lights = i == args->view_lines_view;
+        view->hidden = i == args->view_hide_view && frame >= args->view_hide_frame &&
+                       !(args->view_show_frame >= 0 && frame >= args->view_show_frame);
+
+        // The driver's camera as the engine is about to pose it: its own fields, then the rig's
+        // pose for this frame, then the turn.
+        char* name = view->camera.name;
+        view->camera = g_view->camera;
+        view->camera.name = name;
+        camera_rig_apply(view_rig, &view->camera);
+        const float turn = glm_rad(args->view_turn_deg * (float)(args->view_index + i));
+        if (turn != 0.0f) {
+            vec3 arm;
+            glm_vec3_sub(view->camera.position, view->camera.look_at, arm);
+            const float c = cosf(turn), s = sinf(turn);
+            vec3 eye = {view->camera.look_at[0] + arm[0] * c + arm[2] * s,
+                        view->camera.look_at[1] + arm[1],
+                        view->camera.look_at[2] - arm[0] * s + arm[2] * c};
+            camera_set_position(&view->camera, eye);
+        }
+    }
+}
 
 /*
  * Adopt an explicit camera pose (--cam-eye at startup, --cam-at mid-run). The
@@ -3404,6 +3585,10 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
         g_view->camera.near_clip =
             fmaxf(fminf(0.02f * view_rig->dist, clip_near_max(engine)), clip_near_floor(engine));
     }
+
+    // Last, so the grid takes the driver's camera as this hook leaves it.
+    if (frame_schedule)
+        grid_frame(engine, frame_schedule, frames_rendered);
 }
 
 void render_scene_callback(Engine* engine, Scene* current_scene, SceneView* view) {
@@ -3918,15 +4103,15 @@ int main(int argc, char** argv) {
     check_stretch = args.check_stretch;
 
     {
-        Exposure* ex = &g_view->state->exposure;
+        ExposureSettings* ex = &g_view->settings.exposure;
         if (args.aperture > 0.0f) {
-            ex->settings->physical = true;
-            ex->settings->aperture = args.aperture;
-            ex->settings->shutter_speed = args.shutter_speed;
-            ex->settings->iso = args.iso;
+            ex->physical = true;
+            ex->aperture = args.aperture;
+            ex->shutter_speed = args.shutter_speed;
+            ex->iso = args.iso;
             // -E means stops under a camera, so it lands on bias_stops rather
             // than the multiplier. Absent, 0 = neutral compensation.
-            ex->settings->bias_stops = args.has_exposure ? args.exposure : 0.0f;
+            ex->bias_stops = args.has_exposure ? args.exposure : 0.0f;
             // A physical camera IS the exposure decision, so adaptation does not
             // also get a say -- they are alternative methods, not stacking ones.
             // Left on, metering compares absolute scene radiance against an
@@ -3936,110 +4121,109 @@ int main(int argc, char** argv) {
             // absolute nits. An explicit --taa-style override can still turn it
             // back on; this is only the default when a camera is authored.
             if (args.auto_exposure_override < 0)
-                ex->settings->automatic = false;
-            printf("Physical exposure: f/%.1f %.4gs ISO%.0f -> EV100 %.2f\n",
-                   ex->settings->aperture, ex->settings->shutter_speed, ex->settings->iso,
-                   exposure_ev100(ex));
+                ex->automatic = false;
+            printf("Physical exposure: f/%.1f %.4gs ISO%.0f -> EV100 %.2f\n", ex->aperture,
+                   ex->shutter_speed, ex->iso, exposure_ev100(&g_view->state->exposure));
         } else if (args.has_exposure) {
             // Positive by construction: the check above rejects any other value
             // once we know no camera is in play.
-            ex->settings->multiplier = args.exposure;
+            ex->multiplier = args.exposure;
         }
         // An explicit override wins; failing that, naming an exposure pins the
         // frame, which is what every scene authored before the key existed.
         if (args.auto_exposure_override >= 0)
-            ex->settings->automatic = args.auto_exposure_override != 0;
+            ex->automatic = args.auto_exposure_override != 0;
         else if (args.has_exposure)
-            ex->settings->automatic = false;
+            ex->automatic = false;
         // Set last, and deliberately NOT gated on `automatic`: the probe reports
         // only from frames the meter actually ran, so asking for it on a pinned
         // frame prints nothing. That silence is the honest answer -- there is no
         // measurement on a pinned frame -- and it is worth being able to observe
         // rather than having the flag refuse.
-        ex->settings->probe = args.exposure_probe != 0;
+        ex->probe = args.exposure_probe != 0;
         if (args.meter_low >= 0.0f)
-            ex->settings->meter_low = args.meter_low;
+            ex->meter_low = args.meter_low;
         if (args.meter_high >= 0.0f)
-            ex->settings->meter_high = args.meter_high;
+            ex->meter_high = args.meter_high;
         if (args.meter_mode >= 0)
-            ex->settings->meter_mode = (MeteringMode)args.meter_mode;
+            ex->meter_mode = (MeteringMode)args.meter_mode;
         if (args.meter_radius >= 0.0f)
-            ex->settings->meter_radius = args.meter_radius;
+            ex->meter_radius = args.meter_radius;
         if (args.adapt_up >= 0.0f)
-            ex->settings->adapt_rate_up = args.adapt_up;
+            ex->adapt_rate_up = args.adapt_up;
         if (args.adapt_down >= 0.0f)
-            ex->settings->adapt_rate_down = args.adapt_down;
+            ex->adapt_rate_down = args.adapt_down;
     }
-    if (args.no_history_rescale && g_view->state->postfx)
+    if (args.no_history_rescale)
         g_view->settings.post.rescale_histories = false;
-    if (args.no_ssao && g_view->state->postfx) {
+    if (args.no_ssao) {
         g_view->settings.post.ssao_enabled = false;
     }
-    if (args.spec_occ_mode >= 0 && g_view->state->postfx) {
+    if (args.spec_occ_mode >= 0) {
         g_view->settings.post.spec_occlusion_mode = (PostFXSpecOccMode)args.spec_occ_mode;
     }
-    if (args.no_ao_edge_filter && g_view->state->postfx) {
+    if (args.no_ao_edge_filter) {
         g_view->settings.post.ao_edge_filter_enabled = false;
     }
-    if (args.ssao_debug && g_view->state->postfx) {
+    if (args.ssao_debug) {
         g_view->settings.post.debug_view = POSTFX_DEBUG_AO;
     }
-    if (args.spec_occ_debug && g_view->state->postfx) {
+    if (args.spec_occ_debug) {
         g_view->settings.post.debug_view = POSTFX_DEBUG_SPEC_OCC;
     }
-    if (args.bent_debug && g_view->state->postfx) {
+    if (args.bent_debug) {
         g_view->settings.post.debug_view = POSTFX_DEBUG_BENT;
     }
-    if (args.debug_purkinje && g_view->state->postfx) {
+    if (args.debug_purkinje) {
         g_view->settings.post.debug_view = POSTFX_DEBUG_PURKINJE;
     }
-    if (args.ssgi && g_view->state->postfx) {
+    if (args.ssgi) {
         g_view->settings.post.ssgi_enabled = true;
     }
-    if (args.ssgi_debug && g_view->state->postfx) {
+    if (args.ssgi_debug) {
         g_view->settings.post.debug_view = POSTFX_DEBUG_SSGI;
     }
-    if (args.fog && g_view->state->postfx) {
+    if (args.fog) {
         g_view->settings.post.fog_enabled = true;
     }
-    if (args.contact_shadows && g_view->state->postfx) {
+    if (args.contact_shadows) {
         g_view->settings.post.contact_shadows_enabled = true;
         if (args.cs_strength >= 0.0f)
             g_view->settings.post.cs_strength = args.cs_strength;
         // The reach (args.cs_distance, incl. 0 = off) is applied in the
         // scene-scaling block below, which owns the world-space post params.
     }
-    if (args.contact_shadows_debug && g_view->state->postfx) {
+    if (args.contact_shadows_debug) {
         g_view->settings.post.debug_view = POSTFX_DEBUG_CONTACT;
     }
-    if (args.albedo_debug && g_view->state->postfx) {
+    if (args.albedo_debug) {
         g_view->settings.post.debug_view = POSTFX_DEBUG_ALBEDO;
     }
-    if (args.no_normals_mrt && g_view->state->postfx) {
+    if (args.no_normals_mrt) {
         g_view->settings.post.normals_enabled = false;
     }
-    if (args.normals_debug && g_view->state->postfx) {
+    if (args.normals_debug) {
         g_view->settings.post.debug_view = POSTFX_DEBUG_NORMALS;
     }
-    if (args.no_ssr && g_view->state->postfx) {
+    if (args.no_ssr) {
         g_view->settings.post.ssr_enabled = false;
     }
-    if (args.no_ssr_full_res && g_view->state->postfx) {
+    if (args.no_ssr_full_res) {
         g_view->settings.post.ssr_full_res = false;
     }
-    if (args.no_ssr_temporal && g_view->state->postfx) {
+    if (args.no_ssr_temporal) {
         g_view->settings.post.ssr_temporal = false;
     }
-    if (args.no_ssr_denoise && g_view->state->postfx) {
+    if (args.no_ssr_denoise) {
         g_view->settings.post.ssr_denoise = false;
     }
-    if (args.ssr_jitter >= 0.0f && g_view->state->postfx) {
+    if (args.ssr_jitter >= 0.0f) {
         g_view->settings.post.ssr_jitter = args.ssr_jitter;
     }
-    if (args.ssr_debug && g_view->state->postfx) {
+    if (args.ssr_debug) {
         g_view->settings.post.debug_view = POSTFX_DEBUG_SSR;
     }
-    if (args.ssr_strength >= 0.0f && g_view->state->postfx) {
+    if (args.ssr_strength >= 0.0f) {
         g_view->settings.post.ssr_strength = args.ssr_strength;
     }
     if (args.specular_aa >= 0.0f) {
@@ -4107,78 +4291,78 @@ int main(int argc, char** argv) {
     if (args.parallax_scale >= 0.0f) {
         import_set_parallax_default_scale(args.parallax_scale);
     }
-    if (g_view->state->postfx) {
-        PostFX* fx = g_view->state->postfx;
+    {
+        PostFXSettings* fx = &g_view->settings.post;
         if (args.glare_enable >= 0)
-            fx->settings->glare_enabled = args.glare_enable != 0;
+            fx->glare_enabled = args.glare_enable != 0;
         if (args.glare_strength >= 0.0f)
-            fx->settings->glare_strength = args.glare_strength;
+            fx->glare_strength = args.glare_strength;
         if (args.glare_threshold >= 0.0f)
-            fx->settings->glare_threshold = args.glare_threshold;
-        fx->settings->glare_probe = args.glare_probe != 0;
+            fx->glare_threshold = args.glare_threshold;
+        fx->glare_probe = args.glare_probe != 0;
         if (args.le_enable >= 0)
-            fx->settings->local_exposure_enabled = args.le_enable != 0;
+            fx->local_exposure_enabled = args.le_enable != 0;
         if (args.le_highlights >= 0.0f)
-            fx->settings->local_exposure_highlights = args.le_highlights;
+            fx->local_exposure_highlights = args.le_highlights;
         if (args.le_shadows >= 0.0f)
-            fx->settings->local_exposure_shadows = args.le_shadows;
+            fx->local_exposure_shadows = args.le_shadows;
         if (args.le_detail >= 0.0f)
-            fx->settings->local_exposure_detail = args.le_detail;
+            fx->local_exposure_detail = args.le_detail;
         if (args.le_blend >= 0.0f)
-            fx->settings->local_exposure_blend = args.le_blend;
+            fx->local_exposure_blend = args.le_blend;
         if (args.le_kernel >= 0.0f)
-            fx->settings->local_exposure_kernel = args.le_kernel;
+            fx->local_exposure_kernel = args.le_kernel;
         if (args.le_grey_bias_set)
-            fx->settings->local_exposure_grey_bias = args.le_grey_bias;
-        fx->settings->local_exposure_probe = args.le_probe != 0;
-        fx->settings->negative_probe = args.negative_probe != 0;
+            fx->local_exposure_grey_bias = args.le_grey_bias;
+        fx->local_exposure_probe = args.le_probe != 0;
+        fx->negative_probe = args.negative_probe != 0;
         if (args.no_bloom) {
-            fx->settings->bloom_enabled = false;
+            fx->bloom_enabled = false;
         } else if (args.bloom_enable >= 0) {
-            fx->settings->bloom_enabled = args.bloom_enable != 0;
+            fx->bloom_enabled = args.bloom_enable != 0;
         }
         if (args.bloom_strength >= 0.0f) {
-            fx->settings->bloom_strength = args.bloom_strength;
+            fx->bloom_strength = args.bloom_strength;
         }
         if (args.bloom_threshold >= 0.0f) {
-            fx->settings->bloom_threshold = args.bloom_threshold;
+            fx->bloom_threshold = args.bloom_threshold;
         }
         if (args.fog_anisotropy > -900.0f) {
-            fx->settings->fog_anisotropy = args.fog_anisotropy;
+            fx->fog_anisotropy = args.fog_anisotropy;
         }
         if (args.fog_near >= 0.0f) {
-            fx->settings->fog_near = args.fog_near;
+            fx->fog_near = args.fog_near;
         }
         if (args.fog_far > 0.0f) {
-            fx->settings->fog_far = args.fog_far;
+            fx->fog_far = args.fog_far;
         }
         if (args.fog_depth_dist > 0.0f) {
-            fx->settings->fog_depth_dist = args.fog_depth_dist;
+            fx->fog_depth_dist = args.fog_depth_dist;
         }
         if (args.fog_miss_samples > 0)
-            fx->settings->fog_history_miss_samples = args.fog_miss_samples;
-        fx->settings->fog_miss_probe = args.fog_miss_probe != 0;
+            fx->fog_history_miss_samples = args.fog_miss_samples;
+        fx->fog_miss_probe = args.fog_miss_probe != 0;
         if (args.tonemap_mode != 0) {
-            fx->settings->tonemap_mode = (PostFXTonemapMode)args.tonemap_mode;
+            fx->tonemap_mode = (PostFXTonemapMode)args.tonemap_mode;
         }
         // --film applies the whole finishing look first, so individual
         // finishing flags below can still override any part of it.
         if (args.film_preset) {
-            postfx_settings_apply_film_look(fx->settings);
+            postfx_settings_apply_film_look(fx);
         }
         if (args.no_vignette) {
-            fx->settings->vignette_enabled = false;
+            fx->vignette_enabled = false;
         }
         if (args.vignette >= 0.0f) {
-            fx->settings->vignette_enabled = true;
-            fx->settings->vignette_strength = args.vignette;
+            fx->vignette_enabled = true;
+            fx->vignette_strength = args.vignette;
         }
         if (args.no_dither) {
-            fx->settings->dither_enabled = false;
+            fx->dither_enabled = false;
         }
         if (args.dither >= 0.0f) {
-            fx->settings->dither_enabled = true;
-            fx->settings->dither_strength = args.dither;
+            fx->dither_enabled = true;
+            fx->dither_strength = args.dither;
         }
         if (args.crt)
             engine->crt_enabled = true;
@@ -4198,58 +4382,58 @@ int main(int argc, char** argv) {
             g_loading_preview = true;
         }
         if (args.grain >= 0.0f) {
-            fx->settings->grain_enabled = true;
-            fx->settings->grain_strength = args.grain;
+            fx->grain_enabled = true;
+            fx->grain_strength = args.grain;
         }
         if (args.flare >= 0.0f) {
-            fx->settings->flare_enabled = true;
-            fx->settings->flare_strength = args.flare;
+            fx->flare_enabled = true;
+            fx->flare_strength = args.flare;
         }
         if (args.chromatic >= 0.0f) {
-            fx->settings->ca_enabled = true;
-            fx->settings->ca_strength = args.chromatic;
+            fx->ca_enabled = true;
+            fx->ca_strength = args.chromatic;
         }
         if (args.sharpen >= 0.0f) {
-            fx->settings->sharpen_enabled = true;
-            fx->settings->sharpen_strength = args.sharpen;
+            fx->sharpen_enabled = true;
+            fx->sharpen_strength = args.sharpen;
         }
         if (args.grade_set) {
-            fx->settings->grade_enabled = true;
-            glm_vec3_copy(args.grade_lift, fx->settings->grade_lift);
-            glm_vec3_copy(args.grade_gamma, fx->settings->grade_gamma);
-            glm_vec3_copy(args.grade_gain, fx->settings->grade_gain);
+            fx->grade_enabled = true;
+            glm_vec3_copy(args.grade_lift, fx->grade_lift);
+            glm_vec3_copy(args.grade_gamma, fx->grade_gamma);
+            glm_vec3_copy(args.grade_gain, fx->grade_gain);
         }
         if (args.lut_strength >= 0.0f)
-            fx->settings->lut_strength = args.lut_strength;
+            fx->lut_strength = args.lut_strength;
         if (args.lut_interp >= 0)
-            fx->settings->lut_interp = (PostFXLutInterp)args.lut_interp;
+            fx->lut_interp = (PostFXLutInterp)args.lut_interp;
         // --no-lut wins over a path from either source, which is what makes it
         // the only way to stop a scene-authored LUT from loading.
         if (args.no_lut)
-            postfx_clear_lut(fx);
+            scene_view_clear_lut(g_view);
         else if (args.lut_path)
-            postfx_load_lut(fx, args.lut_path);
+            scene_view_load_lut(g_view, args.lut_path);
 
         if (args.purkinje >= 0)
-            fx->settings->purkinje_enabled = args.purkinje != 0;
+            fx->purkinje_enabled = args.purkinje != 0;
         if (args.purkinje_strength >= 0.0f)
-            fx->settings->purkinje_strength = args.purkinje_strength;
+            fx->purkinje_strength = args.purkinje_strength;
         if (args.purkinje_bias_ev > -900.0f)
-            fx->settings->purkinje_bias_ev = args.purkinje_bias_ev;
+            fx->purkinje_bias_ev = args.purkinje_bias_ev;
         if (args.purkinje_acuity >= 0.0f)
-            fx->settings->purkinje_acuity = args.purkinje_acuity;
+            fx->purkinje_acuity = args.purkinje_acuity;
         if (args.purkinje_noise >= 0.0f)
-            fx->settings->purkinje_noise = args.purkinje_noise;
+            fx->purkinje_noise = args.purkinje_noise;
         if (args.no_purkinje_acuity)
-            fx->settings->purkinje_acuity = 0.0f;
+            fx->purkinje_acuity = 0.0f;
         if (args.no_purkinje_noise)
-            fx->settings->purkinje_noise = 0.0f;
+            fx->purkinje_noise = 0.0f;
         // Sticky, and LAST. Every value flag above arms the feature, so a plain
         // `purkinje = 0` would be order-dependent -- --no-purkinje followed by
         // --purkinje-strength 0.5 would render a shifted frame. The --no-moon
         // lesson, where every off leg of a gate twin was silently on.
         if (args.no_purkinje)
-            fx->settings->purkinje_enabled = false;
+            fx->purkinje_enabled = false;
     }
     if (args.render_mode > 0) {
         g_view->settings.render_mode = (RenderMode)args.render_mode;
@@ -4908,33 +5092,32 @@ int main(int argc, char** argv) {
     // Depth of field focuses on the subject (camera-to-model distance) unless
     // overridden. --film turns it on too; --no-dof forces it off. Range scales
     // with the scene so the model stays sharp and the backdrop falls away.
-    if ((args.dof || args.film_preset) && !args.no_dof && g_view->state->postfx) {
-        PostFX* fx = g_view->state->postfx;
-        fx->settings->dof_enabled = true;
+    if ((args.dof || args.film_preset) && !args.no_dof) {
+        PostFXSettings* fx = &g_view->settings.post;
+        fx->dof_enabled = true;
         if (args.dof_focus > 0.0f) {
             // A pinned manual focus plane turns autofocus off
-            fx->settings->dof_focus_distance = args.dof_focus;
-            fx->settings->dof_autofocus = false;
+            fx->dof_focus_distance = args.dof_focus;
+            fx->dof_autofocus = false;
         } else {
             // Autofocus (the default) tracks the subject each frame; seed it
             // with the initial camera-to-model distance for frame zero
-            fx->settings->dof_focus_distance = glm_vec3_distance(auto_cam_pos, scene_center);
-            fx->settings->dof_autofocus = true;
+            fx->dof_focus_distance = glm_vec3_distance(auto_cam_pos, scene_center);
+            fx->dof_autofocus = true;
         }
-        fx->settings->dof_focus_range =
-            args.dof_range > 0.0f ? args.dof_range : scene_radius * 1.5f;
+        fx->dof_focus_range = args.dof_range > 0.0f ? args.dof_range : scene_radius * 1.5f;
         if (args.dof_max_coc > 0.0f)
-            fx->settings->dof_max_coc = args.dof_max_coc;
+            fx->dof_max_coc = args.dof_max_coc;
         if (args.dof_blades >= 0)
-            fx->settings->dof_blades = args.dof_blades;
+            fx->dof_blades = args.dof_blades;
         if (args.dof_rotation >= 0.0f)
-            fx->settings->dof_rotation = args.dof_rotation;
+            fx->dof_rotation = args.dof_rotation;
     }
 
     // Motion blur: off unless requested. Velocity comes from the aux buffer
     // (already produced for TAA/SSAO), so this is a toggle plus an optional
     // shutter scale.
-    if (args.motion_blur && g_view->state->postfx) {
+    if (args.motion_blur) {
         g_view->settings.post.motion_blur_enabled = true;
         if (args.motion_blur_scale >= 0.0f)
             g_view->settings.post.motion_blur_scale = args.motion_blur_scale;
@@ -4972,7 +5155,7 @@ int main(int argc, char** argv) {
     // bounce); much larger and the sparse 8-step march ring-aliases distant
     // geometry into concentric bands. Small scenes keep the tuned default, which
     // the typical size has already scaled; --ao-radius pins an explicit reach.
-    if (g_view->state->postfx) {
+    {
         if (args.ao_radius > 0.0f) {
             g_view->settings.post.ssao_radius = args.ao_radius;
         } else if (scene_radius > 0.0f) {
@@ -5458,7 +5641,10 @@ int main(int argc, char** argv) {
     }
 
     frame_schedule = &args;
+    grid_make(engine, &args);
     engine_run(engine, render_frame_update, pre_render_callback, render_scene_callback);
+    if (args.programs_linked)
+        printf("programs linked %zu\n", programs_linked());
 
     // Before free_engine, like the probes below: it reads live engine state.
     // After the loop rather than before it, because the point of a snapshot is
@@ -5729,6 +5915,9 @@ int main(int argc, char** argv) {
     }
     free_camera_drag(view_drag);
     free_camera_rig(view_rig);
+    // Handed back by --views 0; the engine frees the views it still holds.
+    if (g_view_removed)
+        free_scene_view(g_view);
     free_engine(engine);
     cook_shutdown();
 

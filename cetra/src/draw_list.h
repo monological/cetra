@@ -108,6 +108,12 @@ typedef struct DrawItem {
     // selection that set min_projected, so once a probe, and read only through a CullView that
     // set `size`. Zero under any other selection.
     uint8_t small;
+    // The nearest draw distance over the node, 0 = none: what `beyond` is measured against
+    // whenever a view's selection settles it again.
+    float reach;
+    // The node's view_mask ANDed with every ancestor's: the views that draw this item share a
+    // bit with it.
+    uint32_t view_mask;
 } DrawItem;
 
 typedef struct DrawList {
@@ -176,10 +182,11 @@ void scene_graph_touched(void);
 bool draw_list_build(DrawList* list, struct Scene* scene, uint64_t stamp, const LodSelect* lod,
                      bool gizmos);
 
-// Every item's level, and whether it is `small`, chosen again from `lod`, leaving the list
-// otherwise as built: for a capture, which draws from its own eye at its own resolution, and to
-// give the camera's levels back after. Nothing is walked when `lod` is the selection they were last
-// chosen by. Whether an item gives off light is asked here, so a capture asks it at rest.
+// Every item's level, whether it is `small` and whether it is `beyond` its draw distance, chosen
+// again from `lod`, leaving the list otherwise as built: for a capture, which draws from its own
+// eye at its own resolution, for each view from its own eye, and to give the camera's levels back
+// after. Nothing is walked when `lod` is the selection they were last chosen by. Whether an item
+// gives off light is asked here, so a capture asks it at rest.
 void draw_list_select_lod(DrawList* list, const LodSelect* lod);
 
 // A bias of `bias` for a view of `pixels_per_tan` pixels to a unit of tan: the levels that view's
@@ -222,6 +229,9 @@ typedef struct CullView {
     // item->small. A light's pass drawn while the capture runs takes every caster, so a shadow
     // does not lose what the capture left out.
     bool size;
+    // A scene view's mask: an item sharing no bit with it is not drawn. 0 = every item, which is
+    // a pass not drawn for one view (a capture, a kept lamp's tile).
+    uint32_t mask;
 } CullView;
 
 // Whether this item survives the frustum.

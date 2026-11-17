@@ -2,6 +2,7 @@
 #define _LOCAL_EXPOSURE_H_
 
 #include <GL/glew.h>
+#include <stdbool.h>
 
 #include "uniform.h"
 
@@ -18,9 +19,19 @@
  */
 
 typedef struct LocalExposure LocalExposure;
+struct ShaderProgram;
 
-// Compiles the passes. NULL on failure, reported, which leaves the frame without local exposure.
-LocalExposure* create_local_exposure(void);
+// Local exposure's passes, made once per engine and borrowed by every chain's LocalExposure.
+typedef struct LocalExposurePrograms {
+    struct ShaderProgram *half, *bins, *grid, *grid_blur, *block_sum, *block, *blur;
+} LocalExposurePrograms;
+// False, logged, when one cannot be made; `programs` is then empty.
+bool local_exposure_programs_init(LocalExposurePrograms* programs);
+void local_exposure_programs_release(LocalExposurePrograms* programs);
+
+// Over `programs`, borrowed. NULL on failure, reported, which leaves the frame without local
+// exposure.
+LocalExposure* create_local_exposure(const LocalExposurePrograms* programs);
 void free_local_exposure(LocalExposure* le);
 
 /*

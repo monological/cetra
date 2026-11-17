@@ -518,7 +518,7 @@ static void postfx_invalidate_targets(PostFX* fx) {
     // One-shot latch: without clearing it, a transient failure at the old size
     // would permanently disable temporal fog at every later one.
     fx->fog_layer_failed = false;
-    // The same for the picture, which the CRT and every pass after the tone map draw into.
+    // The same for the picture, which the chain finishes into.
     fx->picture_failed = false;
     fx->fog_layer_frame = -1;
     fx->cs_ready = false;
@@ -2061,27 +2061,30 @@ static unsigned _postfx_live_locations(const PostFX* fx, bool depth) {
     return live;
 }
 
-// Who writes the window this frame: the CRT whenever it is on, the present pass when a frame the
-// tone map draws has passes after it, and otherwise the tone map, or the copy a passthrough frame
-// takes instead -- a debug view's, or a display-ready frame's -- which is never dithered and runs
-// no pass. Whatever is not the window draws into the picture, made here at output size.
-static PostFXShow _postfx_show(PostFX* fx, bool tone_mapped) {
-    const bool passes =
-        tone_mapped && (_postfx_live_locations(fx, false) & (1u << POSTFX_AT_AFTER_TONEMAP));
-    const PostFXShow show = fx->crt_on ? POSTFX_SHOW_CRT
-                            : passes   ? POSTFX_SHOW_PRESENT
-                                       : POSTFX_SHOW_WINDOW;
-    if (show == POSTFX_SHOW_WINDOW || fx->picture_failed)
-        return POSTFX_SHOW_WINDOW;
-    if (!gl_color_target_ensure(&fx->picture, fx->out_width, fx->out_height, "picture")) {
-        fx->picture_failed = true;
-        return POSTFX_SHOW_WINDOW;
-    }
-    return show;
+bool postfx_draws_after_tone_map(const PostFX* fx, bool frame_is_hdr) {
+    if (!fx || !frame_is_hdr || fx->settings->tonemap_mode == POSTFX_TONEMAP_PASSTHROUGH)
+        return false;
+    return (_postfx_live_locations(fx, false) & (1u << POSTFX_AT_AFTER_TONEMAP)) != 0;
 }
 
-GLuint postfx_picture_fbo(const PostFX* fx) {
-    return fx && fx->show != POSTFX_SHOW_WINDOW ? fx->picture.fbo : 0;
+// The picture this frame draws into, made here at output size: RGBA16F when the window is drawn
+// through a picture of its own, whose last write dithers, else RGBA8. 0, the window, when the
+// chain writes it directly, or when the picture cannot be made, which is retried only at another
+// size or format.
+static GLuint _postfx_picture(PostFX* fx) {
+    if (fx->writes_window)
+        return 0;
+    const GLenum format = fx->window_through_picture ? GL_RGBA16F : GL_RGBA8;
+    if (fx->picture_failed && fx->picture_failed_format == format)
+        return 0;
+    if (!gl_color_target_ensure_format(&fx->picture, fx->out_width, fx->out_height, format,
+                                       "picture")) {
+        fx->picture_failed = true;
+        fx->picture_failed_format = format;
+        return 0;
+    }
+    fx->picture_failed = false;
+    return fx->picture.fbo;
 }
 
 PostFXPass* postfx_add_pass(PostFX* fx, PostFXLocation at, ShaderProgram* program) {
@@ -3103,10 +3106,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
     postfx_sync_ssr_res(fx);
 
     PostFXTonemapMode mode = frame_is_hdr ? fx->settings->tonemap_mode : POSTFX_TONEMAP_PASSTHROUGH;
-    // What writes the window, settled once for the frame: everything below and the present that
-    // follows the overlay read this rather than asking again.
-    fx->show = _postfx_show(fx, mode != POSTFX_TONEMAP_PASSTHROUGH);
-    const GLuint target_fbo = postfx_picture_fbo(fx);
+    // The picture the frame finishes into, which the engine copies into the view's rectangle.
+    const GLuint target_fbo = _postfx_picture(fx);
 
     // Fullscreen composite passes need blending and depth testing off
     GLboolean depth_was_on = glIsEnabled(GL_DEPTH_TEST);
@@ -3783,8 +3784,10 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         GLuint glare_tex = 0;
         if (fx->settings->glare_enabled && fx->settings->glare_strength > 0.0f &&
             !fx->glare_failed) {
-            if (!fx->glare)
-                fx->glare = create_glare();
+            if (!fx->glare) {
+                const GlarePrograms* programs = postfx_programs_ensure_glare(fx->programs);
+                fx->glare = programs ? create_glare(programs) : NULL;
+            }
             if (fx->glare) {
                 profiler_scope_begin(fx->profiler, "glare");
                 glare_tex = glare_run(fx->glare, scene_tex, fx->out_width, fx->out_height,
@@ -3802,8 +3805,11 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         const float le_grey = log2f(fx->exposure ? fx->exposure->settings->key : 0.18f) +
                               fx->settings->local_exposure_grey_bias;
         if (fx->settings->local_exposure_enabled && !fx->local_exposure_failed) {
-            if (!fx->local_exposure)
-                fx->local_exposure = create_local_exposure();
+            if (!fx->local_exposure) {
+                const LocalExposurePrograms* programs =
+                    postfx_programs_ensure_local_exposure(fx->programs);
+                fx->local_exposure = programs ? create_local_exposure(programs) : NULL;
+            }
             if (fx->local_exposure) {
                 profiler_scope_begin(fx->profiler, "local exposure");
                 le_tex = local_exposure_run(
@@ -3974,11 +3980,11 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         uniform_set_float(tm, "lutSize", (float)fx->lut_size);
         uniform_set_float(tm, "lutStrength", fx->settings->lut_strength);
         uniform_set_int(tm, "lutInterp", (int)fx->settings->lut_interp);
-        // No frame term here, deliberately -- see the shader's dither block. Only when this pass
-        // writes the window: whatever writes it after this one dithers instead, or the dither is
-        // resampled into its picture.
+        // No frame term here, deliberately -- see the shader's dither block. Only when this is
+        // the 8-bit write: when the window is drawn through a picture, its last write dithers
+        // instead, or the dither is resampled by the CRT.
         uniform_set_int(tm, "ditherEnabled",
-                        fx->settings->dither_enabled && fx->show == POSTFX_SHOW_WINDOW ? 1 : 0);
+                        fx->settings->dither_enabled && !fx->window_through_picture ? 1 : 0);
         uniform_set_float(tm, "ditherStrength", fx->settings->dither_strength);
         draw_fullscreen_quad(fx->programs->quad_vao);
         profiler_scope_end(fx->profiler);
@@ -3986,9 +3992,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
         glUseProgram(0);
         glActiveTexture(GL_TEXTURE0);
 
-        // An app's passes after the tone map (spec 13.29), on the picture, which is where the
-        // tone map wrote whenever one is enabled.
-        if (fx->show != POSTFX_SHOW_WINDOW)
+        // An app's passes after the tone map (spec 13.29), on the picture, which is RGBA16F
+        // whenever one is enabled: the engine draws the window through a picture then.
+        if (fx->window_through_picture && target_fbo)
             postfx_run_passes(fx, POSTFX_AT_AFTER_TONEMAP, fx->picture.fbo, fx->picture.tex,
                               fx->picture.w, fx->picture.h, projection, view);
     }

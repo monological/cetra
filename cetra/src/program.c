@@ -329,6 +329,8 @@ void attach_shader_to_program(ShaderProgram* program, Shader* shader) {
     }
 }
 
+static size_t s_programs_linked = 0;
+
 GLboolean link_program(ShaderProgram* program) {
     int success;
 
@@ -360,7 +362,12 @@ GLboolean link_program(ShaderProgram* program) {
         return GL_FALSE;
     }
 
+    s_programs_linked++;
     return GL_TRUE;
+}
+
+size_t programs_linked(void) {
+    return s_programs_linked;
 }
 
 GLboolean validate_program(ShaderProgram* program) {

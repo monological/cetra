@@ -344,6 +344,27 @@ typedef struct Engine {
     struct Crt* crt;     // engine-owned; made on first use
     bool crt_failed;     // engine-owned: could not be made; never retried
 
+    // The window: cleared to `window_color` where no view covers it, a display colour (0..1)
+    // the window takes exactly, then each shown view's picture copied into its rectangle in list
+    // order, the overlays over them and the GUI last.
+    vec3 window_color;
+    // true = a lone view covering a window not drawn through a picture writes the window
+    // directly, without a picture or a copy; false = through its picture like any other view.
+    bool window_direct;
+    // ENGINE-OWNED: the window is drawn this frame through a picture of its own, RGBA16F at the
+    // framebuffer's size, which the CRT or the present pass then shows -- whenever the CRT is on
+    // or a shown view draws after its tone map. The views and the overlays draw into it.
+    bool window_through_picture;
+    GLColorTarget window_picture;
+    bool window_picture_failed; // could not be made at this size; retried at another
+    // ENGINE-OWNED: said once each -- a view other than the focus drew water or rain, whose
+    // windows follow the focus; a view's mask hid a node a kept lamp's shadow still draws.
+    bool said_focus_world;
+    bool said_kept_hidden;
+    // ENGINE-OWNED: the one view shown this frame when it covers a window not drawn through a
+    // picture, whose chain then writes the window directly rather than a picture; else NULL.
+    struct SceneView* window_view;
+
     // The overlays, plain writes: the engine re-applies each from its field at
     // the frame top, so nothing has to run when one changes.
     bool show_gui;

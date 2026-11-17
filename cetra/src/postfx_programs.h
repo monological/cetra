@@ -4,6 +4,8 @@
 #include <GL/glew.h>
 #include <stdbool.h>
 
+#include "glare.h"
+#include "local_exposure.h"
 #include "program.h"
 
 // DoF tile size (half-res texels per tile texel): the tile pass reduces the
@@ -57,7 +59,11 @@ typedef struct PostFXPrograms {
     ShaderProgram* sss_pyr_seed;
     ShaderProgram* sss_pyr_down;
     ShaderProgram* oit_resolve;
-    ShaderProgram* present; // the picture into the window, dithered, when no CRT is on
+    ShaderProgram* present; // a picture copied 1:1 into a framebuffer, the window's dithered
+    GlarePrograms glare;    // postfx_programs_ensure_glare
+    bool glare_failed;      // could not be made; never retried
+    LocalExposurePrograms local_exposure; // postfx_programs_ensure_local_exposure
+    bool local_exposure_failed;           // could not be made; never retried
 
     GLuint noise_texture; // 4x4 random slice rotations, tiled
     // 1x1 white R16F, for a sampler whose real texture is absent this frame. Binding name 0
@@ -78,5 +84,9 @@ void free_postfx_programs(PostFXPrograms* programs);
 bool postfx_programs_ensure_taau(PostFXPrograms* programs);
 // The fog-miss probe's count, made on first use; NULL, logged once, when it cannot be.
 ShaderProgram* postfx_programs_ensure_miss_count(PostFXPrograms* programs);
+// Glare's and local exposure's programs, made the first time a chain wants them and kept after;
+// NULL, logged once, when they cannot be.
+const GlarePrograms* postfx_programs_ensure_glare(PostFXPrograms* programs);
+const LocalExposurePrograms* postfx_programs_ensure_local_exposure(PostFXPrograms* programs);
 
 #endif // _POSTFX_PROGRAMS_H_

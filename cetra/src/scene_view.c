@@ -218,6 +218,8 @@ SceneView* engine_remove_view(Engine* engine, SceneView* view) {
         view->state->added = false;
         if (engine->focus_view == view)
             engine->focus_view = engine->view_count > 0 ? engine->views[0] : NULL;
+        if (engine->window_view == view)
+            engine->window_view = NULL;
         return view;
     }
     return NULL;

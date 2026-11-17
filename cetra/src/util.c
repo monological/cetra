@@ -209,18 +209,24 @@ void gl_color_target_free(GLColorTarget* t) {
     t->w = t->h = 0;
 }
 
-bool gl_color_target_ensure(GLColorTarget* t, int w, int h, const char* what) {
-    if (t->fbo && t->w == w && t->h == h)
+bool gl_color_target_ensure_format(GLColorTarget* t, int w, int h, GLenum format,
+                                   const char* what) {
+    if (t->fbo && t->w == w && t->h == h && t->format == format)
         return true;
     gl_color_target_free(t);
-    if (w <= 0 || h <= 0 || !gl_color_fbo_create(w, h, GL_RGBA16F, &t->fbo, &t->tex)) {
+    if (w <= 0 || h <= 0 || !gl_color_fbo_create(w, h, format, &t->fbo, &t->tex)) {
         log_error("the %dx%d %s target could not be made", w, h, what);
         gl_color_target_free(t);
         return false;
     }
     t->w = w;
     t->h = h;
+    t->format = format;
     return true;
+}
+
+bool gl_color_target_ensure(GLColorTarget* t, int w, int h, const char* what) {
+    return gl_color_target_ensure_format(t, w, h, GL_RGBA16F, what);
 }
 
 void print_indentation(int depth) {

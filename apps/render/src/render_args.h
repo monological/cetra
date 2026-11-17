@@ -9,6 +9,9 @@
 
 #define MAX_ANIM_FILES 32
 
+// The most views --views makes.
+#define RENDER_VIEWS_MAX 16
+
 // Entries in the --render-scale-at diagnostic schedule
 #define RENDER_SCALE_AT_MAX 64
 
@@ -548,6 +551,32 @@ typedef struct {
     // --input-script: replay a mouse and typing from a file, which is how a
     // drag reaches the camera in a headless run. Borrowed argv.
     const char* input_script;
+    // Several views (spec 14.38). --views CxR tiles the window with C by R views, each the
+    // camera turned --view-turn degrees more about its target than the one before, numbered from
+    // --view-index; the app's own view then drives them, hidden. --views 0 adds no view at all.
+    int views;      // 1 = --views given
+    int views_cols; // 0 with views = no view
+    int views_rows;
+    float view_turn_deg; // default 90; 0 = every view the same camera
+    int view_index;      // the first grid view's number, which sets its turn
+    int view_picture;    // --view-picture: a lone view covering the window still draws a picture
+    float window_color[3];
+    int window_color_set;
+    // One view's or node's change each, by grid number; -1 = none.
+    int view_mask_view; // --view-mask V:MASK
+    unsigned view_mask;
+    const char* node_mask_name; // --node-mask NAME:MASK
+    unsigned node_mask;
+    int view_hide_view; // --view-hide-at V:F, hidden from frame F
+    int view_hide_frame;
+    int view_show_frame;   // --view-show-at F, the same view shown again from frame F
+    int view_samples_view; // --view-samples V:N
+    int view_samples;
+    int view_rect_view; // --view-rect V:x,y,w,h, in window points, from --view-rect-at
+    float view_rect[4];
+    int view_rect_frame; // --view-rect-at F; 0 = from the start
+    int view_lines_view; // --view-lines V: only view V draws the light lines
+    int programs_linked; // --programs-linked: print the programs linked, at exit
     int show_help;
 } RenderArgs;
 

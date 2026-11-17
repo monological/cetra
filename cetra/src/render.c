@@ -1478,6 +1478,8 @@ static CullView _scene_pass_prepare(Engine* engine, Scene* scene, SceneView* sv,
     // A GI probe leaves out what its selection marked too small to see (spec 13.42); the shaded
     // faces and the wall test both come through here, so they leave out the same.
     cull.size = vs->capturing && engine->capture_kind == SCENE_CAPTURE_IRRADIANCE;
+    // A view draws the nodes sharing a bit with its mask; a capture draws them all.
+    cull.mask = vs->capturing ? 0u : sv->mask;
 
     // Flatten once. Cube captures re-enter here once a face with their own
     // camera; the stamp makes those reuses rather than rebuilds, which is right

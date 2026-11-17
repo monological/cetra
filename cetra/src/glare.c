@@ -41,7 +41,7 @@
 
 struct Glare {
     float* psf; // GLARE_PSF_RES^2 RGB, relative within each channel
-    ShaderProgram *source, *fft, *multiply, *output;
+    ShaderProgram *source, *fft, *multiply, *output; // borrowed from the engine's set
     int frame_w, frame_h;    // what the grid and kernel were built for; 0 = not yet
     int grid_w, grid_h;      // the transform's grid
     int fill_w, fill_h;      // the frame's corner of it
@@ -261,17 +261,38 @@ static float* _glare_build_psf(void) {
     return out;
 }
 
-Glare* create_glare(void) {
+bool glare_programs_init(GlarePrograms* p) {
+    p->source = create_glare_source_program();
+    p->fft = create_glare_fft_program();
+    p->multiply = create_glare_multiply_program();
+    p->output = create_glare_output_program();
+    if (!p->source || !p->fft || !p->multiply || !p->output) {
+        log_error("Glare: programs unavailable");
+        glare_programs_release(p);
+        return false;
+    }
+    return true;
+}
+
+void glare_programs_release(GlarePrograms* p) {
+    free_program(p->source);
+    free_program(p->fft);
+    free_program(p->multiply);
+    free_program(p->output);
+    *p = (GlarePrograms){0};
+}
+
+Glare* create_glare(const GlarePrograms* programs) {
     Glare* g = calloc(1, sizeof(Glare));
     if (!g)
         return NULL;
     g->psf = _glare_build_psf();
-    g->source = create_glare_source_program();
-    g->fft = create_glare_fft_program();
-    g->multiply = create_glare_multiply_program();
-    g->output = create_glare_output_program();
-    if (!g->psf || !g->source || !g->fft || !g->multiply || !g->output) {
-        log_error("Glare: aperture pattern or programs unavailable");
+    g->source = programs->source;
+    g->fft = programs->fft;
+    g->multiply = programs->multiply;
+    g->output = programs->output;
+    if (!g->psf) {
+        log_error("Glare: aperture pattern unavailable");
         free_glare(g);
         return NULL;
     }
@@ -293,10 +314,6 @@ void free_glare(Glare* g) {
     if (!g)
         return;
     _glare_free_targets(g);
-    free_program(g->source);
-    free_program(g->fft);
-    free_program(g->multiply);
-    free_program(g->output);
     free(g->psf);
     free(g);
 }

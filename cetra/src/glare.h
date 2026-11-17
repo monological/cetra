@@ -19,10 +19,19 @@
  */
 
 typedef struct Glare Glare;
+struct ShaderProgram;
 
-// Builds the aperture's pattern. NULL on failure, reported with its reason, which leaves the
-// frame without glare.
-Glare* create_glare(void);
+// The glare's programs, made once per engine and borrowed by every chain's Glare.
+typedef struct GlarePrograms {
+    struct ShaderProgram *source, *fft, *multiply, *output;
+} GlarePrograms;
+// False, logged, when one cannot be made; `programs` is then empty.
+bool glare_programs_init(GlarePrograms* programs);
+void glare_programs_release(GlarePrograms* programs);
+
+// Builds the aperture's pattern over `programs`, borrowed. NULL on failure, reported with its
+// reason, which leaves the frame without glare.
+Glare* create_glare(const GlarePrograms* programs);
 void free_glare(Glare* glare);
 
 /*

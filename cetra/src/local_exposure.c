@@ -31,6 +31,7 @@
 #define LE_RADIUS_MAX 64
 
 struct LocalExposure {
+    // Borrowed from the engine's set.
     ShaderProgram *half, *bins, *grid, *grid_blur, *block_sum, *block, *blur;
     int frame_w, frame_h; // what the targets were built for; 0 = not yet
     int half_w, half_h;
@@ -48,23 +49,45 @@ struct LocalExposure {
     GLuint atlas[2], atlas_fbo[2];
 };
 
-LocalExposure* create_local_exposure(void) {
+bool local_exposure_programs_init(LocalExposurePrograms* p) {
+    p->half = create_le_half_program();
+    p->bins = create_le_bins_program();
+    p->grid = create_le_grid_program();
+    p->grid_blur = create_le_grid_blur_program();
+    p->block_sum = create_le_block_sum_program();
+    p->block = create_le_block_program();
+    p->blur = create_le_blur_program();
+    if (!p->half || !p->bins || !p->grid || !p->grid_blur || !p->block_sum || !p->block ||
+        !p->blur) {
+        log_error("Local exposure: programs unavailable");
+        local_exposure_programs_release(p);
+        return false;
+    }
+    return true;
+}
+
+void local_exposure_programs_release(LocalExposurePrograms* p) {
+    free_program(p->half);
+    free_program(p->bins);
+    free_program(p->grid);
+    free_program(p->grid_blur);
+    free_program(p->block_sum);
+    free_program(p->block);
+    free_program(p->blur);
+    *p = (LocalExposurePrograms){0};
+}
+
+LocalExposure* create_local_exposure(const LocalExposurePrograms* programs) {
     LocalExposure* le = calloc(1, sizeof(LocalExposure));
     if (!le)
         return NULL;
-    le->half = create_le_half_program();
-    le->bins = create_le_bins_program();
-    le->grid = create_le_grid_program();
-    le->grid_blur = create_le_grid_blur_program();
-    le->block_sum = create_le_block_sum_program();
-    le->block = create_le_block_program();
-    le->blur = create_le_blur_program();
-    if (!le->half || !le->bins || !le->grid || !le->grid_blur || !le->block_sum || !le->block ||
-        !le->blur) {
-        log_error("Local exposure: programs unavailable");
-        free_local_exposure(le);
-        return NULL;
-    }
+    le->half = programs->half;
+    le->bins = programs->bins;
+    le->grid = programs->grid;
+    le->grid_blur = programs->grid_blur;
+    le->block_sum = programs->block_sum;
+    le->block = programs->block;
+    le->blur = programs->blur;
     return le;
 }
 
@@ -90,13 +113,6 @@ void free_local_exposure(LocalExposure* le) {
     if (!le)
         return;
     _le_free_targets(le);
-    free_program(le->half);
-    free_program(le->bins);
-    free_program(le->grid);
-    free_program(le->grid_blur);
-    free_program(le->block_sum);
-    free_program(le->block);
-    free_program(le->blur);
     free(le);
 }
 

@@ -228,6 +228,7 @@ static Engine* _engine_alloc(const EngineConfig* cfg) {
     engine->crt_mask = 0.3f;
     engine->crt_curvature = 0.35f;
     engine->crt_bleed = 0.5f;
+    engine->window_direct = true;
     engine->show_gui = false;
     engine->show_fps = false;
     engine->show_camera_hud = false;
@@ -351,6 +352,7 @@ void free_engine(Engine* engine) {
         free_scene_view(engine->capture_view);
         free_postfx_programs(engine->postfx_programs);
         free_crt(engine->crt);
+        gl_color_target_free(&engine->window_picture);
         free_loading_screen(engine->loading_screen);
 
         free_light_cluster_context(engine->light_cluster);
@@ -2594,49 +2596,125 @@ static bool _engine_crt_on(Engine* engine) {
 // The window's last write, when the chain drew this frame into its picture rather than the window:
 // the picture through the CRT, or as it is through the present pass. That write is the 8-bit one,
 // so it is the one that dithers (spec 11.24).
-static void _engine_present_window(Engine* engine, const PostFX* fx) {
-    switch (fx->show) {
-        case POSTFX_SHOW_WINDOW:
-            return;
-        case POSTFX_SHOW_CRT: {
-            const CrtLook look = {.lines = engine->crt_lines,
-                                  .scanlines = engine->crt_scanlines,
-                                  .mask = engine->crt_mask,
-                                  .curvature = engine->crt_curvature,
-                                  .bleed = engine->crt_bleed,
-                                  .dither = fx->settings->dither_enabled,
-                                  .dither_strength = fx->settings->dither_strength};
-            profiler_scope_begin(engine->profiler, "crt");
-            crt_present(engine->crt, fx->picture.tex, fx->picture.w, fx->picture.h,
-                        engine->postfx_programs->quad_vao, &look);
-            profiler_scope_end(engine->profiler);
-            return;
-        }
-        case POSTFX_SHOW_PRESENT: {
-            profiler_scope_begin(engine->profiler, "present");
-            const GLPassState pass = gl_pass_begin();
-            ShaderProgram* present = engine->postfx_programs->present;
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            glViewport(0, 0, fx->picture.w, fx->picture.h);
-            glUseProgram(present->id);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, fx->picture.tex);
-            uniform_set_int(present->uniforms, "ditherEnabled",
-                            fx->settings->dither_enabled ? 1 : 0);
-            uniform_set_float(present->uniforms, "ditherStrength", fx->settings->dither_strength);
-            draw_fullscreen_quad(engine->postfx_programs->quad_vao);
-            glUseProgram(0);
-            gl_pass_end(&pass);
-            profiler_scope_end(engine->profiler);
-            return;
-        }
+static void _engine_present_window(Engine* engine) {
+    const GLColorTarget* picture = &engine->window_picture;
+    // One dither for the whole window, the focus view's: it is the window's last write.
+    const SceneView* focus = engine->focus_view;
+    const bool dither = focus && focus->settings.post.dither_enabled;
+    const float dither_strength = focus ? focus->settings.post.dither_strength : 0.0f;
+    if (_engine_crt_on(engine)) {
+        const CrtLook look = {.lines = engine->crt_lines,
+                              .scanlines = engine->crt_scanlines,
+                              .mask = engine->crt_mask,
+                              .curvature = engine->crt_curvature,
+                              .bleed = engine->crt_bleed,
+                              .dither = dither,
+                              .dither_strength = dither_strength};
+        profiler_scope_begin(engine->profiler, "crt");
+        crt_present(engine->crt, picture->tex, picture->w, picture->h,
+                    engine->postfx_programs->quad_vao, &look);
+        profiler_scope_end(engine->profiler);
+        return;
     }
+    profiler_scope_begin(engine->profiler, "present");
+    const GLPassState pass = gl_pass_begin();
+    ShaderProgram* present = engine->postfx_programs->present;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, picture->w, picture->h);
+    glUseProgram(present->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, picture->tex);
+    uniform_set_vec2(present->uniforms, "pictureOrigin", (const float[]){0.0f, 0.0f});
+    uniform_set_int(present->uniforms, "ditherEnabled", dither ? 1 : 0);
+    uniform_set_float(present->uniforms, "ditherStrength", dither_strength);
+    draw_fullscreen_quad(engine->postfx_programs->quad_vao);
+    glUseProgram(0);
+    gl_pass_end(&pass);
+    profiler_scope_end(engine->profiler);
 }
 
-// A view's post chain, from its scene target into the window or its picture, after what the
+// Whether the window is drawn through its picture this frame: the CRT is on, or a view that draws
+// would run passes after its tone map. Settled before any view's chain runs, since it decides the
+// format every view's picture takes.
+static bool _engine_window_through_picture(Engine* engine) {
+    if (_engine_crt_on(engine))
+        return true;
+    for (size_t i = 0; i < engine->view_count; i++) {
+        const SceneView* view = engine->views[i];
+        if (_view_drawable(view) &&
+            postfx_draws_after_tone_map(view->state->postfx,
+                                        view->settings.render_mode == RENDER_MODE_PBR))
+            return true;
+    }
+    return false;
+}
+
+// The view whose chain writes the window directly this frame: the only one that draws, when it
+// covers the whole window and the window is not drawn through a picture. NULL otherwise, when
+// every view draws into its picture and the window copies them.
+static SceneView* _engine_window_view(const Engine* engine) {
+    if (engine->window_through_picture || !engine->window_direct)
+        return NULL;
+    SceneView* only = NULL;
+    for (size_t i = 0; i < engine->view_count; i++) {
+        if (!_view_drawable(engine->views[i]))
+            continue;
+        if (only)
+            return NULL;
+        only = engine->views[i];
+    }
+    if (!only)
+        return NULL;
+    int rect[4];
+    scene_view_fb_rect(only, rect);
+    const bool covers =
+        rect[0] == 0 && rect[1] == 0 && rect[2] == engine->fb_width && rect[3] == engine->fb_height;
+    return covers ? only : NULL;
+}
+
+// The framebuffer the window's frame is composed in: the window's picture when it is drawn
+// through one, at the framebuffer's size, else the window. 0 also when the picture cannot be
+// made, the window then taking what would have gone into it, undithered.
+static GLuint _engine_window_target(Engine* engine) {
+    if (!engine->window_through_picture)
+        return 0;
+    GLColorTarget* picture = &engine->window_picture;
+    if (engine->window_picture_failed && picture->w == engine->fb_width &&
+        picture->h == engine->fb_height)
+        return 0;
+    if (!gl_color_target_ensure(picture, engine->fb_width, engine->fb_height, "window picture")) {
+        engine->window_picture_failed = true;
+        picture->w = engine->fb_width;
+        picture->h = engine->fb_height;
+        return 0;
+    }
+    engine->window_picture_failed = false;
+    return picture->fbo;
+}
+
+// A view's finished picture into its rectangle in the bound framebuffer, as it is.
+static void _engine_copy_view(Engine* engine, const SceneView* view) {
+    const PostFX* fx = view->state->postfx;
+    if (!fx || !fx->picture.fbo || fx->picture_failed)
+        return;
+    int rect[4];
+    scene_view_fb_rect(view, rect);
+    ShaderProgram* present = engine->postfx_programs->present;
+    glViewport(rect[0], rect[1], fx->picture.w, fx->picture.h);
+    glUseProgram(present->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->picture.tex);
+    uniform_set_vec2(present->uniforms, "pictureOrigin",
+                     (const float[]){(float)rect[0], (float)rect[1]});
+    uniform_set_int(present->uniforms, "ditherEnabled", 0);
+    draw_fullscreen_quad(engine->postfx_programs->quad_vao);
+    glUseProgram(0);
+}
+
+// A view's post chain, from its scene target into its picture, after what the
 // current scene publishes to it. Only PBR frames are linear HDR and get SSAO + bloom + exposure +
 // tone mapping; debug render modes emit display-ready colors and are copied unchanged.
-static void _engine_run_view_chain(Engine* engine, SceneView* view) {
+static void _engine_run_view_chain(const Engine* engine, SceneView* view) {
     SceneViewState* vs = view->state;
     PostFX* fx = vs->postfx;
     const RenderMode frame_mode = vs->render_mode;
@@ -2644,7 +2722,8 @@ static void _engine_run_view_chain(Engine* engine, SceneView* view) {
     // deterministic across equal --frames runs.
     fx->frame_index = (int)engine->total_frames;
     fx->time = (float)engine->render_time;
-    fx->crt_on = _engine_crt_on(engine);
+    fx->window_through_picture = engine->window_through_picture;
+    fx->writes_window = view == engine->window_view;
     // Depth-of-field autofocus: keep the subject sharp as the camera orbits or
     // zooms by refocusing on the point the camera looks at (the orbit target),
     // unless a manual focus distance was pinned.
@@ -2695,11 +2774,11 @@ static void _engine_run_view_chain(Engine* engine, SceneView* view) {
                vs->view_matrix);
 }
 
-// The window's part of the frame, once the views have drawn: the debug views over `shown`, the
-// view whose chain wrote the window this frame (NULL for none), then the app's overlays, the CRT
-// or the present pass, the loading screen and the GUI. All draw after tone mapping, and the GUI
-// is never tone mapped.
-static void _engine_present_frame(Engine* engine, SceneView* shown) {
+// The window's part of the frame, once the views have drawn: cleared to its colour, each shown
+// view's picture copied into its rectangle in list order, the debug views, the app's overlays, the
+// CRT or the present pass when the window was drawn through its picture, the loading screen and
+// the GUI. All draw after tone mapping, and the GUI is never tone mapped.
+static void _engine_present_frame(Engine* engine) {
     // Under a loading screen that hides the whole frame (spec 13.34) the window is the screen's
     // alone: no picture under it, and no GUI over it, which a frame drawn between two of this
     // frame's pieces would show and hide by turns.
@@ -2710,14 +2789,21 @@ static void _engine_present_frame(Engine* engine, SceneView* shown) {
         return;
     }
 
-    // Everything up to the overlay draws over the frame where the chain drew it: the window, or
-    // the picture _engine_present_window shows after them. With no view the window is cleared.
-    const PostFX* fx = shown ? shown->state->postfx : NULL;
-    glBindFramebuffer(GL_FRAMEBUFFER, fx ? postfx_picture_fbo(fx) : 0);
-    if (!fx) {
-        glViewport(0, 0, engine->fb_width, engine->fb_height);
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    // Everything up to the overlay draws into the window, or into the picture
+    // _engine_present_window shows after them. A view that wrote the window directly covers it.
+    const GLuint target = _engine_window_target(engine);
+    glBindFramebuffer(GL_FRAMEBUFFER, target);
+    glViewport(0, 0, engine->fb_width, engine->fb_height);
+    if (!engine->window_view) {
+        glClearColor(engine->window_color[0], engine->window_color[1], engine->window_color[2],
+                     1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        const GLPassState pass = gl_pass_begin();
+        for (size_t i = 0; i < engine->view_count; i++)
+            if (_view_drawable(engine->views[i]))
+                _engine_copy_view(engine, engine->views[i]);
+        gl_pass_end(&pass);
+        glViewport(0, 0, engine->fb_width, engine->fb_height);
     }
 
     const Scene* fx_scene = engine_get_scene(engine);
@@ -2755,8 +2841,8 @@ static void _engine_present_frame(Engine* engine, SceneView* shown) {
 
     // The picture into the window, if it went into one; the GUI is the developer's and goes over
     // the television, sharp.
-    if (fx)
-        _engine_present_window(engine, fx);
+    if (target)
+        _engine_present_window(engine);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     loading_screen_frame(engine);
 
@@ -2991,6 +3077,53 @@ static void _engine_settle_world(Engine* engine, Scene* scene) {
 
 // One view's part of the frame, from its shadows to its post chain. `*settled` says whether the
 // world has settled this frame; the first view to reach its scene pass settles it.
+// Whether a node `view` hides stands within reach of a kept lamp, whose shadow takes every node.
+static bool _view_hides_kept_caster(const Scene* scene, const SceneView* view) {
+    const ShadowSystem* ss = scene->shadow_system;
+    const DrawList* list = scene->draw_list;
+    if (!ss || !list || ss->tile_block_count == 0)
+        return false;
+    const CullView swaying = {.wind = scene->wind};
+    for (size_t i = 0; i < list->count; i++) {
+        const DrawItem* item = &list->items[i];
+        if (item->view_mask & view->mask)
+            continue;
+        AABB box;
+        if (!draw_item_bounds(item, &swaying, &box))
+            continue;
+        vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f};
+        aabb_transform(box.min, box.max, item->node->global_transform, lo, hi);
+        for (int b = 0; b < ss->tile_block_count; b++) {
+            const ShadowTileBlock* block = &ss->tile_blocks[b];
+            if (!block->light)
+                continue;
+            vec3 nearest;
+            for (int a = 0; a < 3; a++)
+                nearest[a] = glm_clamp(block->centre[a], lo[a], hi[a]);
+            const float reach = light_cull_radius(block->light) + block->radius;
+            if (glm_vec3_distance(nearest, (float*)block->centre) <= reach)
+                return true;
+        }
+    }
+    return false;
+}
+
+// What one view draws that the engine only half serves, said once each: water or rain in a view
+// other than the focus, whose caustic, ripple and cover windows are centred on the focus; and a
+// node the view hides within a kept lamp's reach, whose shadow is drawn for every view.
+static void _engine_say_view_limits(Engine* engine, const Scene* scene, const SceneView* view) {
+    if (!engine->said_focus_world && view != engine->focus_view &&
+        ((scene->water && water_will_draw(scene->water, view)) || rain_draws(scene->rain))) {
+        log_info("A view other than the focus draws water or rain, whose windows follow the "
+                 "focus view's eye");
+        engine->said_focus_world = true;
+    }
+    if (!engine->said_kept_hidden && view->mask != ~0u && _view_hides_kept_caster(scene, view)) {
+        log_info("A view hides a node within a kept lamp's reach, whose shadow every view takes");
+        engine->said_kept_hidden = true;
+    }
+}
+
 static void _engine_draw_view(Engine* engine, Scene* scene, SceneView* view, EngineRenderFunc draw,
                               bool* settled) {
     SceneViewState* vs = view->state;
@@ -3047,6 +3180,8 @@ static void _engine_draw_view(Engine* engine, Scene* scene, SceneView* view, Eng
     // scene_add_material, so its registry was empty and every consumer
     // silently saw a scene with no materials at all.
     engine_build_draw_list(engine, scene, view);
+    if (scene)
+        _engine_say_view_limits(engine, scene, view);
     if (_engine_scene_draws(scene))
         engine_request_frame(engine);
     // SSS writes attachment 4 (skin diffuse) only when it has real work: the
@@ -3322,8 +3457,11 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // stays with the app, which is where the input is -- an action table, a
         // mouse or a script, and the rig is not allowed to know which. A view
         // with no rig is untouched.
+        // Each view's targets again too: the hook may have laid the views out, and a rectangle
+        // or a setting changed there is drawn at its new size this frame, not the next.
         for (size_t i = 0; i < engine->view_count; i++) {
             SceneView* view = engine->views[i];
+            scene_view_ensure_targets(view);
             camera_rig_apply(view->rig, &view->camera);
             _engine_derive_view(engine, view);
         }
@@ -3356,20 +3494,21 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // difference.
         Scene* current_scene = shadow_scene;
 
-        // Every shown view that can draw, in list order, each from its shadows to its chain.
+        // Every shown view that can draw, in list order, each from its shadows to its chain into
+        // its picture, in the format the window's frame decides.
+        engine->window_through_picture = _engine_window_through_picture(engine);
+        engine->window_view = _engine_window_view(engine);
         bool settled = false;
-        SceneView* shown = NULL;
         for (size_t i = 0; i < engine->view_count; i++) {
             SceneView* view = engine->views[i];
             if (!_view_drawable(view))
                 continue;
             _engine_draw_view(engine, current_scene, view, draw, &settled);
-            shown = view;
         }
         if (!settled)
             _engine_settle_world(engine, current_scene);
 
-        _engine_present_frame(engine, shown);
+        _engine_present_frame(engine);
         _engine_frame_end_requests(engine);
         profiler_end_frame(engine->profiler);
 

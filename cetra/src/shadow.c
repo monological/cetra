@@ -1457,17 +1457,24 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
     return punctual_layers_for(light);
 }
 
+// The mask the view being drawn casts its shadows through: its own, or 0, every caster, outside a
+// view's pass.
+static uint32_t drawing_mask(const ShadowSystem* ss) {
+    return ss->drawing_view ? ss->drawing_view->mask : 0u;
+}
+
 // The body both depth-pass loops share, once a layer is bound: walk the scene into it through
-// one light-space matrix.
+// one light-space matrix, drawing the casters that share a bit with `mask` (0 = all).
 static void draw_shadow_layer(ShadowSystem* ss, const Scene* scene, const DrawList* list,
                               mat4 matrix, SubmitState* state, ShadowCasterSet set,
-                              const Engine* engine) {
+                              const Engine* engine, uint32_t mask) {
     // The matrix IS the layer's coverage volume, and Gribb-Hartmann does not
     // care whether it is ortho or perspective -- so cascades and punctual faces
     // cull through the same six planes.
     Frustum layer_frustum;
     frustum_extract_from_vp(matrix, &layer_frustum);
     CullView cull = render_cull_view(engine, scene, &layer_frustum);
+    cull.mask = mask;
     // Culled by the box of the pose drawn, which in these sets no wind moves.
     if (caster_set_at_rest(set))
         cull.wind = NULL;
@@ -2575,7 +2582,7 @@ static bool draw_tile_cell(ShadowSystem* ss, const Engine* engine, const Scene* 
     tile_cell_at(cell, ss->punctual_map_size, &layer, &x, &y);
     if (!begin_depth_tile(ss->punctual_fbo, ss->punctual_map_array, layer, x, y, clear))
         return false;
-    draw_shadow_layer(ss, scene, scene->draw_list, matrix, state, set, engine);
+    draw_shadow_layer(ss, scene, scene->draw_list, matrix, state, set, engine, 0u);
     end_depth_tile();
     loading_screen_tick(engine);
     return true;
@@ -3047,6 +3054,7 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, const Scene
         Frustum tsm_frustum;
         frustum_extract_from_vp(ss->cascade_matrices[c], &tsm_frustum);
         CullView tsm_cull = render_cull_view(engine, scene, &tsm_frustum);
+        tsm_cull.mask = drawing_mask(ss);
         SubmitState state = {0};
 
         // --- accumulate absorbance -----------------------------------------
@@ -3439,7 +3447,7 @@ static void _render_shadow_depth_pass(Engine* engine, Scene* scene, const SceneV
             size_t layer = i * (size_t)cc + (size_t)c;
             begin_shadow_pass(ss, layer);
             draw_shadow_layer(ss, scene, scene->draw_list, ss->cascade_matrices[layer], &state, set,
-                              engine);
+                              engine, drawing_mask(ss));
         }
     }
     profiler_scope_end(engine->profiler);
@@ -3471,7 +3479,7 @@ static void _render_shadow_depth_pass(Engine* engine, Scene* scene, const SceneV
                 // second lookup), so withholding translucent casters here
                 // would take away the solid shadow without replacing it.
                 draw_shadow_layer(ss, scene, scene->draw_list, ss->punctual_matrices[layer], &state,
-                                  SHADOW_CASTERS_OPAQUE, engine);
+                                  SHADOW_CASTERS_OPAQUE, engine, drawing_mask(ss));
                 // Layers are handed out in increasing order, so the last one
                 // drawn is the bound the shader needs
                 ss->punctual_layer_count = layer + 1;
@@ -3681,7 +3689,7 @@ void shadow_render_rain_layer(Engine* engine, Scene* scene) {
         glViewport(0, 0, RAIN_OCCLUSION_SIZE, RAIN_OCCLUSION_SIZE);
         // Glass is in the opaque set, and should be: a glass roof keeps the rain off.
         draw_shadow_layer(ss, scene, scene->draw_list, ss->rain_matrix, &state, SHADOW_CASTERS_RAIN,
-                          engine);
+                          engine, 0u);
         ss->rain_layer = layer;
     }
     glDisable(GL_POLYGON_OFFSET_FILL);

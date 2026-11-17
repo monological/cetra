@@ -218,13 +218,6 @@ typedef struct PostFXPass {
     ShaderParams params;
 } PostFXPass;
 
-// What writes the window this frame, decided once by postfx_run.
-typedef enum PostFXShow {
-    POSTFX_SHOW_WINDOW = 0, // the tone map, or a debug frame's copy, writes it directly
-    POSTFX_SHOW_PRESENT,    // the picture, through the present pass, after the app's passes
-    POSTFX_SHOW_CRT,        // the picture, through the CRT
-} PostFXShow;
-
 // What the post chain does, as plain values an app writes at any time, in feature order. Nothing
 // here is written by the engine or holds a GPU object, so a copy is a whole description and two
 // are compared byte for byte; the chain reacts to a change at its next run (postfx_run).
@@ -707,16 +700,22 @@ typedef struct PostFX {
     GLuint fog_punctual_shadow_maps;
     int fog_spot_shadow_layer; // Which layer of it holds this spot
 
-    // Published per frame by the engine, whose the CRT is (spec 13.28): it shows this frame's
-    // picture, so the tone map draws into the picture rather than the window.
-    bool crt_on;
-    // The finished picture, at output size and RGBA16F, when anything draws after the tone map
-    // -- the CRT, an app's pass there -- rather than the tone map writing the window. Nothing is
-    // quantized before the last pass, and an overlay's window-pixel scissor lands where it would
-    // in the window. Engine-owned, made on first use.
+    // Published per frame by the engine: the window is drawn through a picture of its own this
+    // frame (the CRT, or a view's passes after its tone map), whose last write dithers. The chain
+    // then draws undithered into an RGBA16F picture; otherwise into an RGBA8 one its tone map
+    // dithers, the 8-bit write.
+    bool window_through_picture;
+    // Published per frame by the engine: this chain's view is the only one shown and fills a
+    // window not drawn through a picture, so it writes the window directly. Rasterizing into the
+    // window and into a texture interpolate a varying differently in its last bits, which a
+    // shader hashing or sampling on an exact texel boundary turns into a different pixel; this
+    // keeps that frame the window's.
+    bool writes_window;
+    // The finished picture, at output size, which the engine copies into the view's rectangle.
+    // Engine-owned, made on first use.
     GLColorTarget picture;
-    bool picture_failed; // could not be made at this size; retried at the next
-    PostFXShow show;     // engine-owned: what writes the window this frame
+    bool picture_failed;          // could not be made at this size and format
+    GLenum picture_failed_format; // the format that failed; retried at another, or a new size
 
     // App passes at named points (spec 13.29). Each pass's `enabled` and params are settings.
     PostFXPass passes[POSTFX_PASS_MAX];
@@ -929,10 +928,9 @@ typedef struct PostFXGBufferWrites {
 void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBufferWrites* writes,
                 mat4 projection, mat4 view);
 
-// The framebuffer postfx_run drew this frame's picture into: the picture's when the CRT is on
-// (spec 13.28) or a pass runs after the tone map (spec 13.29), else the window, 0. What draws
-// over the picture before it is shown -- debug tiles, the app's overlay -- draws into it.
-GLuint postfx_picture_fbo(const PostFX* fx);
+// Whether a frame drawn now would run passes after its tone map (spec 13.29): a tone-mapped frame
+// with one enabled there. `frame_is_hdr` as postfx_run takes it.
+bool postfx_draws_after_tone_map(const PostFX* fx, bool frame_is_hdr);
 
 // Run `program` at `at` from the next frame on, enabled, with no params (spec 13.29). The
 // program is borrowed, and its owner registers it with engine_add_program. NULL, logged, past

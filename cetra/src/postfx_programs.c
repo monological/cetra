@@ -305,6 +305,8 @@ void free_postfx_programs(PostFXPrograms* p) {
     free_program(p->bloom_up);
     free_program(p->flare);
     free_program(p->present);
+    glare_programs_release(&p->glare);
+    local_exposure_programs_release(&p->local_exposure);
     free_program(p->tonemap);
     free_program(p->spec_occ_composite);
     free_program(p->gtao);
@@ -362,6 +364,18 @@ bool postfx_programs_ensure_taau(PostFXPrograms* p) {
     uniform_set_int(p->taau_resolve->uniforms, "velocityTex", 1);
     uniform_set_int(p->taau_resolve->uniforms, "historyTex", 2);
     return true;
+}
+
+const GlarePrograms* postfx_programs_ensure_glare(PostFXPrograms* p) {
+    if (!p->glare.source && !p->glare_failed)
+        p->glare_failed = !glare_programs_init(&p->glare);
+    return p->glare_failed ? NULL : &p->glare;
+}
+
+const LocalExposurePrograms* postfx_programs_ensure_local_exposure(PostFXPrograms* p) {
+    if (!p->local_exposure.half && !p->local_exposure_failed)
+        p->local_exposure_failed = !local_exposure_programs_init(&p->local_exposure);
+    return p->local_exposure_failed ? NULL : &p->local_exposure;
 }
 
 ShaderProgram* postfx_programs_ensure_miss_count(PostFXPrograms* p) {

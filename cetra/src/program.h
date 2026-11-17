@@ -120,6 +120,8 @@ GLboolean reload_program_from_paths(ShaderProgram* program, const char* vert_pat
  */
 void attach_shader_to_program(ShaderProgram* program, Shader* shader);
 GLboolean link_program(ShaderProgram* program);
+// Programs linked in this process so far, every engine's together.
+size_t programs_linked(void);
 GLboolean validate_program(ShaderProgram* program);
 void setup_program_uniforms(ShaderProgram* program);
 

@@ -364,14 +364,15 @@ static void settle(DrawItem* item, const LodSelect* lod) {
 // the order the two recursive walks produced between them. `inherited` is the
 // nearest ancestor's pose, which a node without one takes, `hidden` whether
 // an ancestor is left out of captures, `always` whether one is drawn into every
-// GI capture, and `reach` the nearest draw distance.
+// GI capture, `reach` the nearest draw distance and `mask` the ancestors' view masks ANDed.
 static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const LodSelect* lod,
                         bool gizmos, const AnimationState* inherited, bool hidden, bool always,
-                        float reach) {
+                        float reach, uint32_t mask) {
     if (!node)
         return true;
 
     const AnimationState* pose = node->pose ? node->pose : inherited;
+    mask &= node->view_mask;
     hidden = hidden || node->capture_hidden;
     always = always || node->capture_always;
     if (node->draw_distance > 0.0f)
@@ -406,7 +407,9 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
                          .node = node,
                          .pose = mesh->is_skinned ? pose : NULL,
                          .beyond = past_reach(mesh, node, lod, reach),
-                         .capture_always = always};
+                         .capture_always = always,
+                         .reach = reach,
+                         .view_mask = mask};
         settle(&item, lod);
         classify(mesh, scene->wind, &item.lane, &item.flags);
         // A pose, or a node said to move: either way a capture would freeze it into a
@@ -427,7 +430,8 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
     }
 
     for (size_t i = 0; i < node->children_count; ++i) {
-        if (!append_node(list, scene, node->children[i], lod, gizmos, pose, hidden, always, reach))
+        if (!append_node(list, scene, node->children[i], lod, gizmos, pose, hidden, always, reach,
+                         mask))
             return false;
     }
     return true;
@@ -445,7 +449,7 @@ bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp, const LodSele
     memset(list->lane_count, 0, sizeof(list->lane_count));
     list->occluder_flag_count = 0;
     list->valid = false;
-    if (!append_node(list, scene, scene->root_node, lod, gizmos, NULL, false, false, 0.0f))
+    if (!append_node(list, scene, scene->root_node, lod, gizmos, NULL, false, false, 0.0f, ~0u))
         return false;
 
     list->stamp = stamp;
@@ -464,8 +468,11 @@ static bool _lod_select_equal(const LodSelect* a, const LodSelect* b) {
 void draw_list_select_lod(DrawList* list, const LodSelect* lod) {
     if (!list || !lod || (list->lod_from_valid && _lod_select_equal(&list->lod_from, lod)))
         return;
-    for (size_t i = 0; i < list->count; ++i)
-        settle(&list->items[i], lod);
+    for (size_t i = 0; i < list->count; ++i) {
+        DrawItem* item = &list->items[i];
+        settle(item, lod);
+        item->beyond = past_reach(item->mesh, item->node, lod, item->reach);
+    }
     list->lod_from = *lod;
     list->lod_from_valid = true;
 }
@@ -555,6 +562,8 @@ bool draw_item_visible(const DrawItem* item, const CullView* view) {
     // Settled once per frame by the occlusion pass, read here O(items x
     // passes): one load against the frustum test's arithmetic, and valid
     // independently of it.
+    if (view->mask && !(item->view_mask & view->mask))
+        return false;
     if (view->occlusion && item->occluded)
         return false;
     if (view->capture && (item->flags & DRAW_CAPTURE_HIDDEN))

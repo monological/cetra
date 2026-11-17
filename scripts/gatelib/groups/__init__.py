@@ -96,6 +96,7 @@ from gatelib.groups.transform import run_transform_walk_gate
 from gatelib.groups.translucent import run_translucent_offpath_gate, run_translucent_shadow_gate
 from gatelib.groups.ui import run_ui_gate
 from gatelib.groups.varying import run_varying_gate
+from gatelib.groups.views import run_views_gate
 from gatelib.groups.water import run_beach_gate, run_water_gate, run_water_night_gate
 from gatelib.groups.wind_uv import run_wind_uv_gate
 
@@ -263,6 +264,8 @@ GATE_GROUPS = [
      run_canvas_gate),
     ("idle", "idle mode (a frame only when something asks: still, timed, thread, input; 14.1):",
      run_idle_gate),
+    ("views", "several views in one window (cameras, rectangles, masks, hidden; spec 14.38):",
+     run_views_gate),
     ("gait", "a walker's gait (stride, footfalls, the eye's lag and bob, a climb; spec 13.47):",
      run_gait_gate),
     ("character", "a character's capsule changed while it stands (crouch, stand, feet; spec 13.48):",

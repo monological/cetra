@@ -82,14 +82,18 @@ GLenum gl_transfer_format(GLenum internal_format);
 bool gl_color_fbo_create(int width, int height, GLenum internal_format, GLuint* out_fbo,
                          GLuint* out_texture);
 
-// An RGBA16F colour target kept between frames and remade only when its size changes: the post
-// chain's picture and the scratch a pass draws into before copying it back, or the CRT's signal.
+// A colour target kept between frames and remade only when its size or format changes: a view's
+// picture, the window's, the scratch a pass draws into before copying it back, or the CRT's signal.
 typedef struct GLColorTarget {
     GLuint fbo, tex;
     int w, h;
+    GLenum format; // the internal format it was made with
 } GLColorTarget;
-// `t` at `w` by `h`. False, reported by `what`, when it cannot be made, and `t` is then empty.
+// `t` at `w` by `h`, RGBA16F. False, reported by `what`, when it cannot be made, and `t` is then
+// empty.
 bool gl_color_target_ensure(GLColorTarget* t, int w, int h, const char* what);
+// The same in `format`.
+bool gl_color_target_ensure_format(GLColorTarget* t, int w, int h, GLenum format, const char* what);
 void gl_color_target_free(GLColorTarget* t);
 
 /*

@@ -109,6 +109,10 @@ typedef struct SceneNode {
     // under it, measured to each mesh's bound (spec 13.38); 0 = no limit of its own, so a node
     // takes its nearest ancestor's. Shadows and captures still take them.
     float draw_distance;
+    // The views that draw this node's meshes and their shadows: those whose mask shares a bit
+    // with it, ANDed with every ancestor's. All bits. Lights, particles, decals and the rest are
+    // drawn in every view, and kept lamp shadows take every node.
+    uint32_t view_mask;
 } SceneNode;
 
 // A node at the origin, with no parent, no meshes and a serial of its own.

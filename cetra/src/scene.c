@@ -869,6 +869,7 @@ SceneNode* create_node() {
     }
     static uint64_t next_serial = 1;
     node->serial = next_serial++;
+    node->view_mask = ~0u;
 
     glm_mat4_identity(node->original_transform);
     glm_mat4_identity(node->global_transform);

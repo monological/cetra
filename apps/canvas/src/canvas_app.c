@@ -41,7 +41,6 @@
 #include "cetra/internal/thread.h"
 #include "cetra/internal/triangulate_hooks.h" // bridges by grid or walk, for the probe's check
 #include "cetra/internal/ui_editor_hooks.h"   // where the editor drew a range, for the probe
-#include "cetra/internal/scene_view_state.h"  // the view's chain, for the frame-target probe
 #include "cetra/postfx.h"
 #include "cetra/program.h"
 #include "cetra/scene.h"
@@ -59,6 +58,7 @@
 #include "cimgui.h"
 
 #include "canvas_fonts.h" // the fonts built into the program, by cetra_embed_files
+#include "view3d.h"
 
 #define MM(v) ((int64_t)llround((v) * 1e6))
 
@@ -85,8 +85,9 @@ static CanvasPaint butt(CanvasPaint paint) {
 }
 
 static Canvas* g_canvas;
-static CanvasView g_views[2];   // the window's views, side by side under --split
-static SceneView* g_scene_view; // the empty scene's view, under the canvas
+static CanvasView g_views[2]; // the window's views, side by side under --split
+static SceneView*
+    g_scene_view; // --picture: the view whose chain carries the pass, under the canvas
 static int g_view_count = 1;
 static int g_only_view = -1;     // under --only-view, the one of the split drawn
 static int g_drag_view = -1;     // the view a drag pans
@@ -2211,14 +2212,29 @@ static const Sheet* find_sheet(const char* name) {
 // The column --history keeps at the window's right, in points; 0 without it.
 static float g_side_width;
 
-// The window's views, each an equal share of its width less the side column.
+// --view3d: a scene view of a small lit scene, in a pane of its own at the canvas's right, before
+// the side column. The canvas's frames are otherwise drawn with no scene view at all.
+static SceneView* g_view3d;
+
+// The 3D pane's share of the window's width, less the side column.
+#define VIEW3D_SHARE 0.5f
+
+// The window's views, each an equal share of its width less the side column and the 3D pane.
 static void lay_out_views(const Engine* engine) {
-    const float part = ((float)engine->win_width - g_side_width) / (float)g_view_count;
+    const float across = (float)engine->win_width - g_side_width;
+    const float pane = g_view3d ? across * VIEW3D_SHARE : 0.0f;
+    const float part = (across - pane) / (float)g_view_count;
     for (int i = 0; i < g_view_count; i++) {
         g_views[i].x = part * (float)i;
         g_views[i].y = 0.0f;
         g_views[i].width = part;
         g_views[i].height = (float)engine->win_height;
+    }
+    if (g_view3d) {
+        g_view3d->x = across - pane;
+        g_view3d->y = 0.0f;
+        g_view3d->width = pane;
+        g_view3d->height = (float)engine->win_height;
     }
 }
 
@@ -2233,8 +2249,7 @@ static void draw_view(Engine* engine, void* user) {
     (void)user;
     lay_out_views(engine);
     if (g_probe_target) {
-        printf("canvas frame target %s\n",
-               postfx_picture_fbo(g_scene_view->state->postfx) ? "picture" : "window");
+        printf("canvas frame target %s\n", engine->window_through_picture ? "picture" : "window");
         fflush(stdout);
         g_probe_target = false;
     }
@@ -4385,7 +4400,7 @@ int main(int argc, char** argv) {
     bool headless = false, mirror = false, probe = false, picture = false, edit_thread = false;
     bool split = false, with_ui = false, budget = false, idle = false, ui_enter = false,
          borders = false, seams = false, lines = false, table = false, table_pane = false;
-    bool history = false, palette = false, font_sheet = false, vim = false;
+    bool history = false, palette = false, font_sheet = false, vim = false, view3d = false;
     const char* editor_files[EDITOR_FILES_MAX];
     int editor_count = 0;
     int frames = 0, width = 960, height = 600, tile_shift = 0, only_view = -1;
@@ -4431,6 +4446,8 @@ int main(int argc, char** argv) {
             g_work_delay_ms = ms > 0 ? (unsigned)ms : 0u;
         } else if (strcmp(argv[i], "--split") == 0) {
             split = true;
+        } else if (strcmp(argv[i], "--view3d") == 0) {
+            view3d = true;
         } else if (strcmp(argv[i], "--only-view") == 0 && more) {
             only_view = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--ui") == 0) {
@@ -4559,30 +4576,39 @@ int main(int argc, char** argv) {
         return 1;
     }
     g_idle_say = idle && headless;
-    // An empty scene and a view of it: the canvas draws over the frame, and
-    // the frame wants a scene to be the frame of.
+    // The canvas draws over the window, whose own colour is the frame under it: no scene view, so
+    // no scene pass and no chain. A view only where something is drawn through one: --picture's
+    // pass after the tone map, which needs a chain to run in, and --view3d's pane.
     Scene* scene = create_scene();
     engine_add_scene(engine, scene);
-    g_scene_view = create_scene_view(
-        engine, &(SceneViewDesc){.camera = {.position = {0.0f, 0.0f, 1.0f}}, .fills_window = true});
-    if (!g_scene_view || !engine_add_view(engine, g_scene_view)) {
-        free_scene_view(g_scene_view);
-        free_engine(engine);
-        return 1;
-    }
-    scene_view_set_2d_preset(g_scene_view);
-    scene_set_2d_preset(scene);
-    glm_vec3_zero(g_scene_view->settings.background);
     // A scene not loaded from a file has no texture directory: --idle-load names its file from
     // the working directory.
     if (g_idle_load)
         set_texture_pool_directory(scene->tex_pool, ".");
     engine->show_gui = g_gui_click;
     if (picture) {
+        g_scene_view =
+            create_scene_view(engine, &(SceneViewDesc){.camera = {.position = {0.0f, 0.0f, 1.0f}},
+                                                       .fills_window = true});
+        if (!g_scene_view || !engine_add_view(engine, g_scene_view)) {
+            free_scene_view(g_scene_view);
+            free_engine(engine);
+            return 1;
+        }
+        scene_view_set_2d_preset(g_scene_view);
+        scene_set_2d_preset(scene);
+        glm_vec3_zero(g_scene_view->settings.background);
         ShaderProgram* pass = create_post_pass_program("canvas_identity", IDENTITY_PASS);
         if (pass) {
             engine_add_program(engine, pass);
             scene_view_add_pass(g_scene_view, POSTFX_AT_AFTER_TONEMAP, pass);
+        }
+    }
+    if (view3d) {
+        g_view3d = view3d_build(engine, scene);
+        if (!g_view3d) {
+            free_engine(engine);
+            return 1;
         }
     }
 
@@ -4601,8 +4627,10 @@ int main(int argc, char** argv) {
     const double cw = isnan(view_w) ? sheet->width_mm : view_w;
     CanvasView* view = &g_views[0];
     g_side_width = history ? HISTORY_WIDTH : 0.0f;
-    *view = (CanvasView){.points_per_unit =
-                             ((double)width - g_side_width) / (double)g_view_count / (cw * 1e6),
+    // The canvas's share of the width: less the side column, and less the 3D pane's share.
+    const double across =
+        ((double)width - g_side_width) * (g_view3d ? 1.0 - (double)VIEW3D_SHARE : 1.0);
+    *view = (CanvasView){.points_per_unit = across / (double)g_view_count / (cw * 1e6),
                          .mirror_x = mirror,
                          .background = sheet->background,
                          .fade = g_fade,
