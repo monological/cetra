@@ -500,8 +500,8 @@ wider than 100 degrees -- one beside the panel or inside its room -- keeps the c
 capture. A board under a tabletop panel 32 cm off gets about 0.3 mm a texel where the cube gave
 0.63; the texels a cube spreads over a hemisphere are spent on what is seen.
 
-**The penumbra is the panel's size** (`punctualPenumbra`), over the panel's centre's occlusion. A
-blocker search over the panel's footprint in the map, a filter as wide as the blockers' mean
+**The penumbra is the panel's size** (`punctualPenumbra`), over the panel's centre's occlusion, on
+the fitted layer alone. A blocker search over the panel's footprint in the map, a filter as wide as the blockers' mean
 distance implies by similar triangles -- a panel of half-width r at zR, blocked at zB, throws a
 penumbra r (zR - zB) / zB wide -- and 32 taps rotated per pixel and per frame where TAA or a still
 view's average turns them. Four things about it are easy to get backwards:
@@ -519,7 +519,15 @@ view's average turns them. Four things about it are easy to get backwards:
   off casts a penumbra about 0.9 mm wide: over the cube's 0.63 mm texels that is barely wider than
   the 3x3, and the grid still shows. The fit is what makes it a ramp.
 
-Points and spots keep the hard 3x3 (`sourceRadius` 0).
+Points, spots and a panel on its cube keep the hard 3x3 (`sourceRadius` 0). On a cube the
+penumbra cannot read across a face's edge, and a face's texels are too coarse for it to be a ramp:
+a box's shadow on a room's wall comes out a haze spreading from its tip, its softness jumping
+where the floor meets the wall.
+
+**Its width stops at the reach.** Past 12 texels the penumbra is the reach's, not the panel's, and
+it narrows as the view, and so the fitted map, closes in. A 1.5 mm package under the board's key
+throws about three texels of penumbra in its three-quarter view; the penumbra fixture's 0.3 band
+is past the reach of any map fitted to a view of it.
 
 **The faces end at the panel's range**, since a panel lights nothing past it. Points and spots
 keep the scene's far plane.

@@ -118,7 +118,7 @@ Where a new name goes, and the rules the split depends on:
   its arms one by one runs all of them, and that line says so.
 - **A chosen arm that never ran fails the run**, so it cannot pass as nothing to do.
 
-`ui`, `canvas`, `idle` and `views` choose their arms one by one (spec 14.29); the other groups run whole
+`ui`, `canvas`, `idle`, `views` and `panel-fit` choose their arms one by one (spec 14.29); the other groups run whole
 under `--arms`. In such a group:
 
 - **Each arm is a function under `@arm("name")`**, where `arm = Arms(width)` is the group's
