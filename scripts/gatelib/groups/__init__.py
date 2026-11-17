@@ -80,7 +80,7 @@ from gatelib.groups.scale import run_scale_gates
 from gatelib.groups.scale_twin import run_scale_twin_gate
 from gatelib.groups.shader_hooks import run_shader_hooks_gate
 from gatelib.groups.shadow_lag import run_shadow_lag_gate
-from gatelib.groups.shadows import run_penumbra_gate, run_shadow_tiles_gate
+from gatelib.groups.shadows import run_panel_fit_gate, run_penumbra_gate, run_shadow_tiles_gate
 from gatelib.groups.skin import (
     run_skin_area_gate, run_skin_curvature_gate, run_skin_handoff_gate, run_skin_offpath_gate,
     run_sss_banding_gate, run_sss_invariance_gate,
@@ -110,6 +110,7 @@ GATE_GROUPS = [
     ("fit-clip", "a fitted camera's near and far planes (spec 13.57):", run_fit_clip_gate),
     ("pcss", "a short occluder keeps its soft shadow (spec 13.58):", run_pcss_gate),
     ("penumbra", "area shadow (analytic penumbra):", run_penumbra_gate),
+    ("panel-fit", "a panel's shadow fitted to the view (spec 14.38):", run_panel_fit_gate),
     ("grazing", "punctual grazing (leak wall base):", run_grazing_gate),
     ("dir-shadow", "cascade shadow (analytic ellipse):", run_dir_shadow_gate),
     ("catcher", "catcher over a real ground (contact fixture):", run_catcher_gate),

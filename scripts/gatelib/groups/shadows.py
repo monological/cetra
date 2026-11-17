@@ -1,14 +1,17 @@
-"""The penumbra and shadow-tiles groups:
+"""The penumbra, panel-fit and shadow-tiles groups:
 
   penumbra            area shadow (analytic penumbra)
+  panel-fit           a panel's shadow fitted to the view (spec 14.38)
   shadow-tiles        cached point-light shadows (tiles, views, movers; spec 13.16)
 """
 
 import json
+import math
 import re
 import os
 import random
 
+from gatelib.arms import Arms
 from gatelib.harness import RENDER, _run, _shared_constant, asset
 from gatelib.images import (
     _DISPLAY_TO_LINEAR, _SRGB_TO_LINEAR, _box_luma_dense, _linear_luma, _pixels_past, _read_ppm,
@@ -124,6 +127,54 @@ def _penumbra_edges():
     return inner, outer
 
 
+def _penumbra_band(shadowed, bare, cam):
+    """The penumbra fixture's shadow term along +X at z=0 on the ground, from well inside the
+    umbra to well past the band, seen by `cam`: (umbra, lit, and where it crosses 10, 50 and 90
+    percent of the way between them)."""
+    w, h, pix = shadowed
+    _, _, ref = bare
+    project = _projector(cam, w, h)
+    inner, outer = _penumbra_edges()
+    xs = [inner - 0.3 + i * 0.002 for i in range(int((outer - inner + 0.6) / 0.002))]
+    vals = []
+    for x in xs:
+        px, py = project((x, 0.0, 0.0))
+        lit_here = _linear_luma(ref, w, h, px, py)
+        vals.append(_linear_luma(pix, w, h, px, py) / lit_here if lit_here > 1e-4 else 1.0)
+    umbra, lit = min(vals), max(vals)
+    return (umbra, lit) + tuple(_crossing(xs, vals, umbra, lit, f) for f in (0.10, 0.50, 0.90))
+
+
+def _edge_wobble(shadowed, bare, cam, xs, zs, y):
+    """A shadow's edge on the plane at height `y`, crossed along x on each row z: where each row's
+    shadow term crosses half its range, how far those crossings stand from their least-squares
+    line (RMS and largest), and the shallowest row's range -- a texel grid showing through the
+    edge is the wobble, and an edge lost where the grid is coarse is the range."""
+    w, h, pix = shadowed
+    _, _, ref = bare
+    project = _projector(cam, w, h)
+    rows, shallowest = [], 1.0
+    for z in zs:
+        vals = []
+        for x in xs:
+            px, py = project((x, y, z))
+            lit_here = _linear_luma(ref, w, h, px, py)
+            vals.append(_linear_luma(pix, w, h, px, py) / lit_here if lit_here > 1e-5 else 1.0)
+        lo, hi = min(vals), max(vals)
+        shallowest = min(shallowest, hi - lo)
+        c = _crossing(xs, vals, lo, hi, 0.5)
+        if not math.isnan(c):
+            rows.append((z, c))
+    if len(rows) < len(zs) // 2:
+        return float("nan"), float("nan"), shallowest
+    mz = sum(z for z, _ in rows) / len(rows)
+    mc = sum(c for _, c in rows) / len(rows)
+    slope = (sum((z - mz) * (c - mc) for z, c in rows)
+             / sum((z - mz) ** 2 for z, _ in rows))
+    off = [c - (mc + slope * (z - mz)) for z, c in rows]
+    return math.sqrt(sum(o * o for o in off) / len(off)), max(abs(o) for o in off), shallowest
+
+
 def run_penumbra_gate(workdir):
     """Area-light shadows.
 
@@ -158,26 +209,12 @@ def run_penumbra_gate(workdir):
             print("  penumbra     ERROR while rendering the fixture")
             failures.append("penumbra")
     if shadowed is not None and ref_frame is not None:
-        w, h, pix = shadowed
-        _, _, ref = ref_frame
-        project = _projector(PENUMBRA, w, h)
+        umbra, lit, lo, mid, hi = _penumbra_band(shadowed, ref_frame, PENUMBRA)
         inner, outer = _penumbra_edges()
-
-        # Scan world x along +X at z=0 on the ground, well outside the band both ways.
-        xs = [inner - 0.3 + i * 0.002 for i in range(int((outer - inner + 0.6) / 0.002))]
-        vals = []
-        for x in xs:
-            px, py = project((x, 0.0, 0.0))
-            lit_here = _linear_luma(ref, w, h, px, py)
-            vals.append(_linear_luma(pix, w, h, px, py) / lit_here if lit_here > 1e-4 else 1.0)
-        umbra, lit = min(vals), max(vals)
         if lit - umbra < 0.5:
             print(f"  penumbra     ERROR no shadow edge found (umbra {umbra:.3f}, lit {lit:.3f})")
             failures.append("penumbra")
         else:
-            lo = _crossing(xs, vals, umbra, lit, 0.10)
-            mid = _crossing(xs, vals, umbra, lit, 0.50)
-            hi = _crossing(xs, vals, umbra, lit, 0.90)
             want_centre = 0.5 * (inner + outer)
             ok = abs(mid - want_centre) <= PENUMBRA_CENTRE_TOL
             print(f"  penumbra     {'PASS' if ok else 'FAIL'}  centre {mid:.4f} "
@@ -231,6 +268,118 @@ def run_penumbra_gate(workdir):
         if not ok:
             failures.append("area-tilt")
     return failures
+
+
+# A panel's shadow fitted to the view (spec 14.38). A narrow camera over the penumbra fixture's
+# band, its planes fitted to the scene, sees a region a cone of about 40 degrees from the panel
+# holds; the fixture's own camera sees to the ground's edge, past the 100 degrees a fit takes.
+PANEL_FIT_CAM = {"eye": (0.75, 2.0, 0.4), "target": (0.75, 0.0, 0.0), "fovy_deg": 30.0}
+PANEL_SOFT_MIN = 2.0         # the fitted band's 10-90 width over the cube's, at least
+PANEL_CUBE_WIDTH_MAX = 0.015  # a 10-90 width the cube's hard 3x3 stays under
+# The board's BGA from just above its +X side, where the key panel's shadow of it falls: the
+# board's top at y = 1.6 mm, the substrate's side at x = 25.5 mm from z = -15.5 to -8.5 mm, and
+# the shadow of that side near x = 26.2 mm from z = -16.2 to -9.2 mm. The rows stop short of the
+# shadow's corner, where the edge turns, and the scan starts past the substrate, which hides the
+# board beneath it from this eye.
+MM = 0.001
+BGA_EDGE_CAM = {"eye": (26.0 * MM, 20.0 * MM, -10.0 * MM),
+                "target": (26.0 * MM, 1.6 * MM, -12.0 * MM), "fovy_deg": 30.0}
+BGA_EDGE_ZS = [(-15.0 + 0.05 * i) * MM for i in range(101)]
+BGA_EDGE_XS = [(25.6 + 0.002 * i) * MM for i in range(800)]
+BGA_EDGE_WOBBLE_MAX = 22.0 * 1e-6   # the crossings' RMS about their line
+BGA_EDGE_STEP_MAX = 55.0 * 1e-6     # and the farthest of them
+BGA_EDGE_DEPTH_MIN = 0.28           # the shallowest row's shadow-term range
+
+
+def run_panel_fit_gate(workdir):
+    """A panel's shadow fitted to the view drawing it (spec 14.38).
+
+      panel-fitted     the penumbra fixture under a narrow camera over its band: the panel's
+                       shadow is one layer fitted to that view, its band soft -- a 10-90 width at
+                       least twice the cube's under the fixture's own camera -- and centred where
+                       the analytic penumbra's centre is. The width is the 12 texels the
+                       penumbra reaches, not the panel's 0.24: no map fitted to a view of the
+                       fixture is coarse enough for the panel's to fit inside them.
+      panel-cube       under the fixture's own camera, which would need a cone wider than 100
+                       degrees, the panel keeps its cube and a point light's hard 3x3: a 10-90
+                       width under 0.015, centred where the analytic penumbra's centre is.
+      panel-staircase  the board's BGA seen from just above, lit by the key panel without the lamp:
+                       along the substrate's side the shadow's edge crosses half its depth within
+                       22 um RMS of a straight line and 55 um at most, and is at least 0.28 deep
+                       on every row.
+
+    Falsified by hand at 14.38: with every panel kept on its cube, panel-fitted's band is 0.0067
+    wide against the cube's 0.0087, and panel-staircase's crossings stand 32.0 um RMS off their
+    line and 80.1 at most, the edge 0.20 deep at its shallowest (14.1, 35.7 and 0.34 fitted); with
+    the penumbra on the cube too, panel-cube's band is 0.0478 wide.
+    """
+    arm = Arms(15)
+    fixture = "area_shadow_fixture.gltf"
+    inner, outer = _penumbra_edges()
+    want_centre = 0.5 * (inner + outer)
+
+    def band(tag, cam, extra):
+        shadowed = _dir_render(workdir, fixture, f"panel_{tag}", extra)
+        bare = _dir_render(workdir, fixture, f"panel_{tag}_bare", extra + ["--no-shadows"])
+        if shadowed is None or bare is None:
+            return None
+        return _penumbra_band(shadowed, bare, cam)
+
+    fit_flags = ["--cam-eye", ",".join(map(str, PANEL_FIT_CAM["eye"])),
+                 "--cam-target", ",".join(map(str, PANEL_FIT_CAM["target"])),
+                 "--fov", str(PANEL_FIT_CAM["fovy_deg"]), "--fit-clip"]
+    cube = band("cube", PENUMBRA, []) if os.path.exists(asset(fixture)) else None
+
+    @arm("panel-fitted")
+    def _():
+        fitted = band("fitted", PANEL_FIT_CAM, fit_flags)
+        if cube is None or fitted is None:
+            return False, "a render failed"
+        _, _, lo, mid, hi = fitted
+        width, cube_width = hi - lo, cube[4] - cube[2]
+        ok = (abs(mid - want_centre) <= PENUMBRA_CENTRE_TOL
+              and width >= PANEL_SOFT_MIN * cube_width)
+        return ok, (f"centre {mid:.4f} (want {want_centre:.4f} +/-{PENUMBRA_CENTRE_TOL}), 10-90 "
+                    f"width {width:.4f} (want >= {PANEL_SOFT_MIN} x the cube's {cube_width:.4f})")
+
+    @arm("panel-cube")
+    def _():
+        if cube is None:
+            return False, "a render failed"
+        _, _, lo, mid, hi = cube
+        ok = abs(mid - want_centre) <= PENUMBRA_CENTRE_TOL and hi - lo < PANEL_CUBE_WIDTH_MAX
+        return ok, (f"centre {mid:.4f} (want {want_centre:.4f} +/-{PENUMBRA_CENTRE_TOL}), 10-90 "
+                    f"width {hi - lo:.4f} (want < {PANEL_CUBE_WIDTH_MAX})")
+
+    @arm("panel-staircase")
+    def _():
+        def key_alone(d):
+            d["lights"] = [light for light in d["lights"] if light["name"] != "lamp"]
+        scene = cscn_copy(asset("board_fixture.cscn"),
+                          os.path.join(workdir, "panel_board_key.cscn"), key_alone)
+        frames = []
+        for tag, extra in (("shadowed", []), ("bare", ["--no-shadows"])):
+            out = os.path.join(workdir, f"panel_bga_{tag}.ppm")
+            cam = BGA_EDGE_CAM
+            r = _run([RENDER, "-m", scene, "-x", "-f", "30", "-W", "800", "-H", "600",
+                      "--no-auto-exposure", "-E", "0.0088",
+                      "--cam-eye", ",".join(f"{c:.6f}" for c in cam["eye"]),
+                      "--cam-target", ",".join(f"{c:.6f}" for c in cam["target"]),
+                      "--fov", str(cam["fovy_deg"]), "-S", out] + extra,
+                     capture_output=True, text=True)
+            if r.returncode != 0 or not os.path.exists(out):
+                return False, f"render failed: {(r.stdout + r.stderr).strip()[-200:]}"
+            frames.append(_read_ppm(out))
+        rms, worst, shallowest = _edge_wobble(frames[0], frames[1], BGA_EDGE_CAM, BGA_EDGE_XS,
+                                              BGA_EDGE_ZS, 1.6 * MM)
+        ok = (rms <= BGA_EDGE_WOBBLE_MAX and worst <= BGA_EDGE_STEP_MAX
+              and shallowest >= BGA_EDGE_DEPTH_MIN)
+        return ok, (f"crossings {rms * 1e6:.1f} um RMS off their line (want <= "
+                    f"{BGA_EDGE_WOBBLE_MAX * 1e6:.0f}), {worst * 1e6:.1f} at most (want <= "
+                    f"{BGA_EDGE_STEP_MAX * 1e6:.0f}); the edge {shallowest:.2f} deep at its "
+                    f"shallowest (want >= {BGA_EDGE_DEPTH_MIN})")
+
+    return arm.failed
 
 
 # Cached shadows (spec 13.16). Every fixture is mutated in memory from a committed one, so the
