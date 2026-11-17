@@ -44,6 +44,13 @@ vec4 cetraTagRgba(uint c) {
                 float(c & 255u)) / 255.0;
 }
 
+// An object's outline, display sRGB with its strength in alpha; 0 for none or no object.
+vec4 cetraTagOutline(uint object) {
+    if (object == 0u || object >= uTagHead.y)
+        return vec4(0.0);
+    return texelFetch(uTagTable, int(object) * 3 + 1);
+}
+
 // `node` is the instance's or the node's object and class: cetra_instance_tag(uNodeTag) where the
 // program reads the instance block, uNodeTag where it does not.
 CetraTag cetraTag(uvec2 node) {

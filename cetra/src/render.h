@@ -317,4 +317,9 @@ bool render_shadow_catcher_box(const Engine* engine, const Scene* scene,
 void render_late_items(Engine* engine, const Scene* scene, const struct SceneView* view,
                        const PostFXLateDraw* late);
 
+// The view's outlines (spec 14.39) into its overlay, which its copy into the window lays over its
+// picture: drawn again when the view drew this frame or its table's outlines changed, kept
+// otherwise, and dropped while it outlines nothing. Called for every shown view each frame.
+void render_view_outline(Engine* engine, Scene* scene, struct SceneView* view);
+
 #endif // _RENDER_H_

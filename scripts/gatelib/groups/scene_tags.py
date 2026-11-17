@@ -82,6 +82,18 @@ def run_scene_tags_gate(workdir):
                            it captures again inside the left view's draw: the right is its view
                            alone without tags, 0 px -- the captures see the wall's bounce -- and
                            the left differs.
+      scene-tag-outline    part0 outlined: a ring outside it 2 to 4 pixels wide (1.5 points at 2
+                           pixels a point), the outline's colour exactly where it is whole; looking
+                           down the row of parts, part2 outlined behind part3 rings at the view's
+                           hidden strength (0.35, within 0.05) over part3's face, and part3
+                           outlined rings at 1.
+      scene-tag-outline-still  an outline written at frame 40 onto a view that rested at 17 draws
+                           no scene frame after it, and the last frame is the one where the outline
+                           was there from the start, 0 px.
+      scene-tag-restart    two resting views, the left borrowing the table and the right none: a
+                           row written at frame 40 draws the left again from 40 and not the right.
+      scene-tag-shared     two resting views borrowing one table: a row written at frame 40 draws
+                           both again, and both show it.
 
     Falsified by hand at 14.39: the instance block's tag left unfilled, the instanced parts read
     whatever the block last held -- part0 and part1 black, part2 and part3 another object's colour
@@ -94,7 +106,7 @@ def run_scene_tags_gate(workdir):
     probes are captured at the first frame, before any view binds its tags, and the GI captured
     again from frame 10 reaches the other view too little to move a code.
     """
-    arm = Arms(20)
+    arm = Arms(23)
     scene = asset("tags_fixture.cscn")
     have = os.path.exists(scene)
 
@@ -352,5 +364,103 @@ def run_scene_tags_gate(workdir):
         return d_right == 0 and d_left > 0, (
             f"the view without tags {d_right} px from its view alone (want 0), the one hiding the "
             f"wall and the panel {d_left} px (want > 0)")
+
+    purple = (0xB3, 0x88, 0xFF)
+    ring_flag = "outline=B388FFFF"
+
+    @arm("scene-tag-outline")
+    def _():
+        if not have:
+            return None, "no tags_fixture.cscn"
+        plain, _ = run("outline_plain", TAGS_FLAGS)
+        ringed, _ = run("outline_ringed", TAGS_FLAGS + ["--tag", f"10={ring_flag}"])
+        if plain is None or ringed is None:
+            return False, "a run failed"
+        project = _projector(TAGS_CAM, plain.shape[1], plain.shape[0])
+        # Leftward from inside part0's left face at its middle: the run of changed pixels just past
+        # its silhouette is the ring.
+        x0, y0 = project((TAGS_PART_XS[0] - 0.04, 0.16, TAGS_PART_Z + 0.06))
+        row, x = int(round(y0)), int(round(x0))
+        changed = np.any(ringed[row] != plain[row], axis=1)
+        while x > 0 and not changed[x]:
+            x -= 1
+        width = 0
+        while x > 0 and changed[x]:
+            width, x = width + 1, x - 1
+        exact = bool(np.any(np.all(ringed == np.array(purple), axis=2)))
+        # Down the row of parts from +x: part3 nearest, part2 wholly behind it.
+        side = ["--cam-eye", "2.0,0.16,0.3", "--cam-target", "0,0.16,0.3", "--fov", "30"]
+        bare, _ = run("outline_side", TAGS_FLAGS + side)
+        hid, _ = run("outline_hidden", TAGS_FLAGS + side + ["--tag", f"12={ring_flag}"])
+        seen, _ = run("outline_seen", TAGS_FLAGS + side + ["--tag", f"13={ring_flag}"])
+        if bare is None or hid is None or seen is None:
+            return False, "a run failed"
+
+        def strength(img):
+            """The ring's alpha where it is strongest: (img - bare) / (purple - bare)."""
+            b = bare.astype(np.float64)
+            c = np.array(purple, dtype=np.float64)
+            moved = np.any(img != bare, axis=2)
+            if not moved.any():
+                return 0.0
+            span = c - b[moved]
+            ok = np.abs(span) > 40
+            a = np.where(ok, (img[moved].astype(np.float64) - b[moved]) / np.where(ok, span, 1),
+                         np.nan)
+            return float(np.nanmax(np.nanmedian(a, axis=1)))
+
+        a_hid, a_seen = strength(hid), strength(seen)
+        ok = 2 <= width <= 4 and exact and abs(a_hid - 0.35) <= 0.05 and a_seen >= 0.95
+        return ok, (f"a ring {width} px wide (want 2 to 4), the colour exact somewhere: {exact}; "
+                    f"behind part3 at {a_hid:.2f} (want 0.35), in front at {a_seen:.2f} (want 1)")
+
+    @arm("scene-tag-outline-still")
+    def _():
+        if not have:
+            return None, "no tags_fixture.cscn"
+        still = ["--views", "1x1", "--view-turn", "0", "--accumulate", "16", "--view-probe"]
+        late, said = run("outline_late", TAGS_FLAGS + still + ["--tag", f"40:10={ring_flag}"], 60)
+        early, _ = run("outline_early", TAGS_FLAGS + still + ["--tag", f"10={ring_flag}"], 60)
+        if late is None or early is None:
+            return False, "a run failed"
+        rows, _ = _view_probe(said)
+        after = [f for f, row in rows.get(0, {}).items() if row[0] and f >= 40]
+        diff = _differ(late, early)
+        return not after and diff == 0, (
+            f"{len(after)} scene frames drawn after the outline at 40 (want 0); the last frame "
+            f"{diff} px from the outline there from the start (want 0)")
+
+    still2 = ["--views", "2x1", "--view-turn", "0", "--accumulate", "16", "--view-probe"]
+
+    def drawn_from(said, view, frame):
+        rows, _ = _view_probe(said)
+        return sorted(f for f, row in rows.get(view, {}).items() if row[0] and f >= frame)
+
+    @arm("scene-tag-restart")
+    def _():
+        if not have:
+            return None, "no tags_fixture.cscn"
+        _, said = run("restart", TAGS_FLAGS + still2 + ["--tag-table", "--tag-views", "1",
+                                                        "--tag", "40:11=colour=FF2020FF"], 60)
+        left, right = drawn_from(said, 0, 40), drawn_from(said, 1, 40)
+        ok = bool(left) and left[0] <= 41 and not right
+        return ok, (f"the borrowing view draws again from {left[0] if left else None} (want 40 "
+                    f"or 41), the other {len(right)} frames after 40 (want 0)")
+
+    @arm("scene-tag-shared")
+    def _():
+        if not have:
+            return None, "no tags_fixture.cscn"
+        img, said = run("shared", TAGS_FLAGS + still2 + ["--tag", "40:11=colour=FF2020FF"], 60)
+        before, _ = run("shared_before", TAGS_FLAGS + still2 + ["--tag-table"], 60)
+        if img is None or before is None:
+            return False, "a run failed"
+        left, right = drawn_from(said, 0, 40), drawn_from(said, 1, 40)
+        half = img.shape[1] // 2
+        changed = [_differ(img[:, :half], before[:, :half]),
+                   _differ(img[:, half:], before[:, half:])]
+        ok = bool(left) and bool(right) and min(changed) > 0
+        return ok, (f"both views draw again (left from {left[0] if left else None}, right from "
+                    f"{right[0] if right else None}), each shows the row: {changed} px (want > 0)")
 
     return arm.failed

@@ -258,6 +258,10 @@ ShaderProgram* create_shadow_hook_program(const struct ShaderHook* hook, bool ab
 // chunk with pbr_vert so the two agree to the bit, which GL_LEQUAL against its
 // output depends on.
 ShaderProgram* create_depth_prepass_program();
+// A view's outlines (spec 14.39): its outlined surfaces into a mask, at the prepass's position;
+// and the ring drawn from the mask, a fullscreen pass.
+ShaderProgram* create_outline_mask_program();
+ShaderProgram* create_outline_ring_program();
 // Water surface (spec 11.32). Its own program rather than a pbr_frag feature
 // because it samples the resolved scene depth, and pbr_frag has declared all
 // sixteen fragment samplers the driver allows.

@@ -51,6 +51,7 @@
 #include "wind.h"
 #include "profiler.h"
 #include "postfx_programs.h"
+#include "scene_tags.h"
 #include "scene_view_state.h"
 #include "crt.h"
 #include "uniform.h"
@@ -2626,9 +2627,11 @@ static bool _engine_crt_on(Engine* engine) {
 }
 
 // `picture` texel for texel into the bound framebuffer with its corner at `origin`, through the
-// present pass: dithered by `strength` when this is the window's last write.
+// present pass: dithered by `strength` when this is the window's last write, and under `overlay`,
+// premultiplied and of the picture's size, when that is not 0 -- a view's outlines.
 static void _engine_present_picture(const Engine* engine, const GLColorTarget* picture,
-                                    const int origin[2], bool dither, float strength) {
+                                    const int origin[2], bool dither, float strength,
+                                    GLuint overlay) {
     ShaderProgram* present = engine->postfx_programs->present;
     glViewport(origin[0], origin[1], picture->w, picture->h);
     glUseProgram(present->id);
@@ -2638,7 +2641,17 @@ static void _engine_present_picture(const Engine* engine, const GLColorTarget* p
                      (const float[]){(float)origin[0], (float)origin[1]});
     uniform_set_int(present->uniforms, "ditherEnabled", dither ? 1 : 0);
     uniform_set_float(present->uniforms, "ditherStrength", strength);
+    uniform_set_int(present->uniforms, "overlayOn", overlay ? 1 : 0);
+    if (overlay) {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, overlay);
+        uniform_set_int(present->uniforms, "overlayTex", 1);
+    }
     draw_fullscreen_quad(engine->postfx_programs->quad_vao);
+    if (overlay) {
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glActiveTexture(GL_TEXTURE0);
+    }
     glUseProgram(0);
 }
 
@@ -2668,7 +2681,7 @@ static void _engine_present_window(Engine* engine) {
     profiler_scope_begin(engine->profiler, "present");
     const GLPassState pass = gl_pass_begin();
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    _engine_present_picture(engine, picture, (const int[]){0, 0}, dither, dither_strength);
+    _engine_present_picture(engine, picture, (const int[]){0, 0}, dither, dither_strength, 0);
     gl_pass_end(&pass);
     profiler_scope_end(engine->profiler);
 }
@@ -2710,7 +2723,8 @@ static void _engine_copy_view(const Engine* engine, const SceneView* view) {
     // A young average is shown as the TAA picture it began from, until it holds enough frames.
     const GLColorTarget* picture =
         vs->held_valid && view->frames_accumulated < VIEW_AVERAGE_SHOWN ? &vs->held : &fx->picture;
-    _engine_present_picture(engine, picture, vs->picture_rect, false, 0.0f);
+    _engine_present_picture(engine, picture, vs->picture_rect, false, 0.0f,
+                            vs->overlay_valid ? vs->overlay.tex : 0);
 }
 
 // A view's post chain, from its scene target into its picture, after what the
@@ -3204,6 +3218,10 @@ static bool _view_changed(const Engine* engine, const Scene* scene, SceneView* v
     const uint64_t epoch = scene_graph_epoch();
     const uint64_t chain = _view_chain_digest(view);
     const bool covered = loading_screen_covers(engine);
+    // The table the view draws with, and its writes that change how a tag is drawn: an outline's
+    // alone are laid over the picture and restart nothing (spec 14.39).
+    const SceneTags* tags = scene_view_draws_tags(view) ? view->tags : NULL;
+    const uint64_t tag_generation = scene_tags_generation(tags);
     const bool changed =
         !vs->record.valid || world_moving || covered != vs->record.covered ||
         scene != vs->record.scene ||
@@ -3212,8 +3230,9 @@ static bool _view_changed(const Engine* engine, const Scene* scene, SceneView* v
         memcmp(vs->record.projection, vs->projection_matrix, sizeof(mat4)) != 0 ||
         memcmp(vs->record.rect, rect, sizeof(rect)) != 0 || vs->record.mask != mask ||
         vs->record.changes != changes || vs->record.epoch != epoch || vs->record.chain != chain ||
-        vs->record.through != engine->window_through_picture ||
-        (scene && (scene->moved_mask & mask)) || exposure_adapting(&vs->exposure);
+        vs->record.through != engine->window_through_picture || vs->record.tags != tags ||
+        vs->record.tag_generation != tag_generation || (scene && (scene->moved_mask & mask)) ||
+        exposure_adapting(&vs->exposure);
     vs->record.valid = true;
     vs->record.scene = scene;
     vs->record.settings = view->settings;
@@ -3226,6 +3245,8 @@ static bool _view_changed(const Engine* engine, const Scene* scene, SceneView* v
     vs->record.chain = chain;
     vs->record.covered = covered;
     vs->record.through = engine->window_through_picture;
+    vs->record.tags = tags;
+    vs->record.tag_generation = tag_generation;
     return changed;
 }
 
@@ -3781,6 +3802,11 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         engine->views_drawing = false;
         if (!settled)
             _engine_settle_world(engine, current_scene);
+        // Every shown view's outlines, over the picture it drew or rests on: a resting view's are
+        // drawn again only when its table's outlines changed, which restarts no average.
+        for (size_t i = 0; current_scene && i < engine->view_count; i++)
+            if (_view_drawable(engine->views[i]))
+                render_view_outline(engine, current_scene, engine->views[i]);
 
         _engine_present_frame(engine);
         _engine_frame_end_requests(engine);

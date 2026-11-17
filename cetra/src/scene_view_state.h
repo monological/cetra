@@ -146,6 +146,15 @@ typedef struct SceneViewState {
     // This frame draws its see-through surfaces through the OIT passes: it ghosts, and OIT can
     // run. Set where its scene pass starts; otherwise those surfaces stay in the opaque passes.
     bool ghosts_this_frame;
+    // Its outlines (spec 14.39): the mask of outlined surfaces and the depth of its solid ones,
+    // at its picture's size, and the ring drawn from them, which the copy into the window lays
+    // over the picture. Valid while the view outlines something; drawn again when the view
+    // draws, or the table's outlines changed since `outline_generation`.
+    GLuint outline_fbo, outline_mask_tex, outline_depth_tex;
+    int outline_w, outline_h;
+    GLColorTarget overlay;
+    bool overlay_valid;
+    uint64_t outline_generation;
     // This frame, as _engine_decide_view settled it: whether the view draws, and when it draws an
     // averaged frame, which (average_n, from 0; -1 = a TAA frame).
     bool draws_this_frame;

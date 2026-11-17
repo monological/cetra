@@ -459,6 +459,11 @@ typedef struct Engine {
     // first frame the pass runs so an engine that never enables it pays nothing.
     ShaderProgram* depth_prepass_program;
     bool depth_prepass_failed; // true = compile was tried and failed; do not retry
+    // A view's outlines (spec 14.39): the mask of outlined surfaces and the ring drawn from it,
+    // built the first time a view outlines anything; latched on failure as the prepass's is.
+    ShaderProgram* outline_mask_program;
+    ShaderProgram* outline_ring_program;
+    bool outline_failed;
 
     // Shadow catcher (ground plane that receives shadows over the skybox)
     ShaderProgram* shadow_catcher_program;

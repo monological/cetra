@@ -261,6 +261,11 @@ void free_scene_view(SceneView* view) {
     _free_targets(view);
     cloud_march_release(&vs->clouds);
     free_ubo(vs->tag_block);
+    if (vs->outline_fbo)
+        glDeleteFramebuffers(1, &vs->outline_fbo);
+    gl_delete_texture(&vs->outline_mask_tex);
+    gl_delete_texture(&vs->outline_depth_tex);
+    gl_color_target_free(&vs->overlay);
     free(vs);
     camera_release(&view->camera);
     free(view);

@@ -1024,6 +1024,18 @@ ShaderProgram* create_depth_prepass_program() {
     return program;
 }
 
+ShaderProgram* create_outline_mask_program() {
+    ShaderProgram* program = create_program_from_source(
+        "outline_mask", outline_mask_vert_shader_str, outline_mask_frag_shader_str, NULL);
+    if (!program)
+        log_error("Failed to initialize the outline mask shader program");
+    return program;
+}
+
+ShaderProgram* create_outline_ring_program() {
+    return create_post_program("outline_ring", outline_ring_frag_shader_str);
+}
+
 ShaderProgram* create_water_program() {
     ShaderProgram* program = NULL;
 

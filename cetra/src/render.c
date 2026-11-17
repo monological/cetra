@@ -32,6 +32,8 @@
 #include "engine.h"
 #include "engine_internal.h"
 #include "scene_view_state.h"
+#include "scene_tags.h"
+#include "postfx_programs.h"
 #include "ltc.h"
 #include "render.h"
 #include "profiler.h"
@@ -2833,4 +2835,191 @@ void render_late_items(Engine* engine, const Scene* scene, const SceneView* view
     free(order);
     check_gl_error("late surfaces");
     profiler_scope_end(engine->profiler);
+}
+
+/*
+ * A view's outlines (spec 14.39).
+ *
+ * Drawn over its picture rather than into the scene, so an outline added or moved changes no frame
+ * a still view averaged: the picture stays as it is and the ring is laid over it at the copy into
+ * the window. Three passes, at the picture's size and from the view's unjittered camera, since the
+ * picture is an average of jittered frames and the ring belongs to none of them:
+ *   - the depth of what the view draws solid, through the prepass;
+ *   - the outlined surfaces into the mask, everywhere at the view's hidden strength, then again
+ *     where that depth lets them through at full strength;
+ *   - the ring, outside each silhouette in the mask, into the overlay.
+ */
+
+// The outlined surfaces of the view: every item that can carry an outline -- a node tagged with
+// one, or a mesh tagged by vertex -- through the mask program, which drops what has none.
+static void _submit_outline_items(Engine* engine, const Scene* scene, const SceneView* sv,
+                                  ShaderProgram* program, mat4 view, mat4 projection,
+                                  const CullView* cull, float strength) {
+    const DrawList* list = scene->draw_list;
+    UniformManager* u = program->uniforms;
+    SubmitState state = {0};
+    InstanceChunk chunk;
+    submit_use_program(&state, program->id);
+    uniform_set_mat4(u, "view", (const float*)view);
+    uniform_set_mat4(u, "projection", (const float*)projection);
+    engine_upload_displacement_uniforms(engine, scene, sv, u);
+    uniform_set_int(u, "uTagLane", 0);
+    uniform_set_float(u, "uStrength", strength);
+    const unsigned lanes =
+        (1u << DRAW_LANE_OPAQUE) | (1u << DRAW_LANE_BLEND) | (1u << DRAW_LANE_TRANSMISSIVE);
+    for (size_t i = 0; i < list->count; ++i) {
+        const DrawItem* item = &list->items[i];
+        if (!(lanes & (1u << item->lane)) || !draw_item_visible(item, cull))
+            continue;
+        if (!item->mesh->tags && scene_tags_get(sv->tags, item->tag).outline == 0)
+            continue;
+        size_t run = 1;
+        if (engine->instancing_enabled && engine->instance_ubo && program->instanced)
+            run = _visible_run(list, i, 1u << item->lane, cull);
+        if (run > 1)
+            instance_chunk_upload(engine->instance_ubo, &chunk, list, i, run, false);
+        Mesh* mesh = item->mesh;
+        if (run == 1) {
+            uniform_set_mat4(u, "model", (const float*)item->node->global_transform);
+            submit_item_tag(u, item);
+        }
+        wind_upload_mesh(mesh, u);
+        if (submit_take_material(&state, mesh->material)) {
+            uniform_set_float(u, "uWindResponse", mesh->material->wind_response);
+            uniform_set_float(u, "uWindFlutter", mesh->material->wind_flutter);
+            uniform_set_int(u, "uWindMode", mesh->material->wind_mode);
+        }
+        render_update_skinning_uniforms(program, mesh, item->pose);
+        submit_draw_run(&state, u, item, run, (item->flags & DRAW_DOUBLE_SIDED) != 0, NULL);
+        i += run - 1;
+    }
+    submit_state_reset(&state);
+    glBindVertexArray(0);
+}
+
+// The mask and its depth at w x h, made or remade; false, logged, when they cannot be.
+static bool _outline_targets(SceneViewState* vs, int w, int h) {
+    if (vs->outline_fbo && vs->outline_w == w && vs->outline_h == h)
+        return true;
+    if (!vs->outline_fbo)
+        glGenFramebuffers(1, &vs->outline_fbo);
+    gl_delete_texture(&vs->outline_mask_tex);
+    gl_delete_texture(&vs->outline_depth_tex);
+    glGenTextures(1, &vs->outline_mask_tex);
+    glBindTexture(GL_TEXTURE_2D, vs->outline_mask_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenTextures(1, &vs->outline_depth_tex);
+    glBindTexture(GL_TEXTURE_2D, vs->outline_depth_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, w, h, 0, GL_DEPTH_COMPONENT, GL_FLOAT,
+                 NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, vs->outline_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           vs->outline_mask_tex, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
+                           vs->outline_depth_tex, 0);
+    const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        log_error("A view's outline mask cannot be made at %dx%d (0x%x)", w, h, status);
+        return false;
+    }
+    vs->outline_w = w;
+    vs->outline_h = h;
+    return true;
+}
+
+void render_view_outline(Engine* engine, Scene* scene, SceneView* sv) {
+    SceneViewState* vs = sv->state;
+    const PostFX* fx = vs->postfx;
+    const bool wanted = scene && fx && fx->picture.fbo && scene_view_draws_tags(sv) &&
+                        scene_tags_outlined(sv->tags) && !engine->outline_failed;
+    if (!wanted) {
+        vs->overlay_valid = false;
+        return;
+    }
+    const int w = fx->picture.w, h = fx->picture.h;
+    const uint64_t generation = scene_tags_outline_generation(sv->tags);
+    if (vs->overlay_valid && !vs->draws_this_frame && vs->outline_generation == generation &&
+        vs->overlay.w == w && vs->overlay.h == h)
+        return;
+    if (!engine->outline_mask_program) {
+        engine->outline_mask_program = create_outline_mask_program();
+        engine->outline_ring_program = create_outline_ring_program();
+        engine->outline_failed = !engine->outline_mask_program || !engine->outline_ring_program;
+        if (engine->outline_mask_program)
+            engine_add_program(engine, engine->outline_mask_program);
+        if (engine->outline_ring_program)
+            engine_add_program(engine, engine->outline_ring_program);
+        if (engine->outline_failed)
+            return;
+    }
+    if (!engine->depth_prepass_program && !engine->depth_prepass_failed) {
+        engine->depth_prepass_program = create_depth_prepass_program();
+        engine->depth_prepass_failed = engine->depth_prepass_program == NULL;
+        if (engine->depth_prepass_program)
+            engine_add_program(engine, engine->depth_prepass_program);
+    }
+    if (!_outline_targets(vs, w, h) ||
+        !gl_color_target_ensure_format(&vs->overlay, w, h, GL_RGBA8, "outline overlay")) {
+        vs->overlay_valid = false;
+        return;
+    }
+    profiler_scope_begin(engine->profiler, "outline");
+    const GLPassState pass = gl_pass_begin();
+    scene_view_bind_tags(sv);
+    Frustum frustum;
+    const CullView cull = _scene_pass_prepare(engine, scene, sv, &frustum);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, vs->outline_fbo);
+    glViewport(0, 0, w, h);
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClearDepth(1.0);
+    glDepthMask(GL_TRUE);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    // What the view draws solid, the depth only; the prepass masks colour itself.
+    _submit_depth_prepass(engine, scene, scene->draw_list, sv, vs->view_matrix,
+                          vs->projection_matrix, &cull);
+    // Every outlined surface at the hidden strength, then over it, where the solid depth lets it
+    // through, at full: what is left at the hidden strength is what something hides.
+    glDepthMask(GL_FALSE);
+    glDisable(GL_DEPTH_TEST);
+    _submit_outline_items(engine, scene, sv, engine->outline_mask_program, vs->view_matrix,
+                          vs->projection_matrix, &cull, sv->settings.outline_hidden);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    _submit_outline_items(engine, scene, sv, engine->outline_mask_program, vs->view_matrix,
+                          vs->projection_matrix, &cull, 1.0f);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_DEPTH_TEST);
+
+    // The ring, from the mask into the overlay.
+    ShaderProgram* ring = engine->outline_ring_program;
+    const float per_point =
+        engine->win_width > 0 ? (float)engine->fb_width / (float)engine->win_width : 1.0f;
+    glBindFramebuffer(GL_FRAMEBUFFER, vs->overlay.fbo);
+    glViewport(0, 0, w, h);
+    glUseProgram(ring->id);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, vs->outline_mask_tex);
+    uniform_set_int(ring->uniforms, "maskTex", 0);
+    uniform_set_float(ring->uniforms, "uRadius", sv->settings.outline_points * per_point);
+    draw_fullscreen_quad(engine->postfx_programs->quad_vao);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    gl_pass_end(&pass);
+    profiler_scope_end(engine->profiler);
+    check_gl_error("outline");
+    vs->outline_generation = generation;
+    vs->overlay_valid = true;
 }
