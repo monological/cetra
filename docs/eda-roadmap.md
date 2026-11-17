@@ -317,6 +317,15 @@ restarts none.
   close range, and round a QFN's lands it follows each land. A mask at the view's samples would
   smooth it, at its memory.
 - **A per-tag offset**, so a dragged part moves without its node; pcb moves the node.
+- **An item's lanes decided on the CPU.** A view that ghosts draws every opaque item in both lanes,
+  each dropping the other's surfaces in the vertex stage, and a hidden surface is vertex-shaded in
+  every pass to be dropped. For an item not tagged by vertex the CPU could skip the lane, but only
+  by keeping a second copy of `tags.glsl`'s rule; left until a profile of pcb's board says the
+  vertex work matters.
+- **The ring scissored** to the outlined surfaces' boxes: it searches the whole picture, on the
+  frames it is drawn.
+- **The flat share after ambient occlusion**, which is applied later and darkens a flat surface by
+  its neighbour; the gates measure the flat share with occlusion off.
 
 ---
 

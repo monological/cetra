@@ -676,9 +676,9 @@ The `scene-tags` group (spec 14.39) runs `tags_fixture` through `apps/render`'s 
   estimate darkens a lone see-through layer by about a tenth. Each arm says which it turns off.
 - **Resting is read off `--view-probe`**, as the `views` group reads it, and a write's frame from
   its `F:` prefix.
-- **The capture arm holds an outcome, not a guard.** Its reflection probes are captured at the
-  first frame, before any view binds its tags, and the GI captured again from frame 10 moves the
-  other view by no code, so removing the capture's bind of no tags fails nothing there.
+- **The capture arm holds an outcome, not a guard.** A capture binds no tags as every pass binds
+  its own view's, so there is no one line to take out; and the GI captured again from frame 10
+  moves the other view by no code even where a hidden surface would cast no shadow in it.
 
 ### The real-character path
 
