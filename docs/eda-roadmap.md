@@ -17,7 +17,7 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-17: 14.40, text that reads from either side, started for item 1 (its spec);
+_Last updated: 2026-11-17: 14.40, text that reads from either side, built for item 1 (its spec);
 before it the same day, 14.39, tags in 3D, built for item 4a._
 
 ---
@@ -56,7 +56,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 
 | # | Item | Status | First needed by pcb's step | Spec |
 |---|------|--------|----------------------------|------|
-| 1 | The 2D canvas | **Built**, with caps, joins and dashes; text that reads from either side started in 14.40; images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0, 14.22, 14.36, 14.37, 14.40 |
+| 1 | The 2D canvas | **Built**, with caps, joins, dashes and text that reads from either side; images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0, 14.22, 14.36, 14.37, 14.40 |
 | 2 | Idle mode: drawing only when something changed | **Built**; with 14.38 it waits on 3D views at rest too | 6 | 14.1, 14.38 |
 | 3 | Skipping the 3D scene pass when no 3D view is shown | **Built**, with a still view that averages jittered frames and rests; a TAA-only view resting and accumulating under TAAU left for later | 8, the 3D view | 14.38 |
 | 4 | Drawing the 3D scene into part of the window | **Built**: any number of views, each a camera, a rectangle, its own settings and its own buffers; world work serving every view equally, a scene per view and a second window left for later | 8 | 14.38 |
@@ -114,10 +114,13 @@ polyline's points and across tile cuts and stretched round a closed shape, its c
 a dash runs through them; under `Canvas.dash_min_px` a pattern is drawn as its average. A solid
 shape's record and pixels are as they were.
 
-**Started in spec 14.40**: text that reads from either side. A `CanvasText` flagged
-`reads_either_side` is flipped back in a view seen from the other side (`mirror_x`), so it reads
-the right way round there, along its line as the view shows it; its bound covers both. pcb 8.2.1
-needs it to turn its layout over without making every label twice.
+**Built in spec 14.40** (`docs/canvas.md`, Ten things, 9): text that reads from either side. A
+`CanvasText` flagged `reads_either_side` is flipped back in a view seen from the other side
+(`mirror_x`), so it reads the right way round there, along its line as the view shows it; its bound
+covers both ways. A string without the flag draws as before in every view. pcb 8.2.1 sets it on its
+part paths, copper labels and marks when it takes this master, and deletes the second set of every
+string it made for a view from below, with the twin layers, the evaluation the first flip waited
+on, and the two bugs where the second set was missing.
 
 **What pcb has to know:**
 - **Where shapes of one layer overlap in different colours, which colour shows is not defined**,
@@ -131,6 +134,10 @@ needs it to turn its layout over without making every label twice.
 - **A stroke's cap, join and dash are the paint's**, baked into the records when the shape is added:
   a ghost is dashed by its paint, a dashed rectangle is one `canvas_edit_box` whose pattern runs
   round it, and changing a stroke is an edit.
+- **A string that reads from either side, seen mirrored, reads from its anchor as the plain view
+  reads it**: it is the string with `mirrored` toggled. A centred string keeps its place; a left-
+  or right-aligned one lies on the other side of its anchor from where it lies in the plain view,
+  so a label aligned to an edge crosses it.
 
 **Left for later**, each with a need named:
 - **Images and datasheet pages**, with the texture residency they need, for pcb's step 10. A record
@@ -142,6 +149,9 @@ needs it to turn its layout over without making every label twice.
   codepoints, though the font's atlas holds more since item 5.
 - **A transparent view background**, for the canvas over the 3D view (items 3 and 4).
 - **One target shared by several canvases**, should pcb draw two canvases in one window.
+- **A string read from either side flipped about its own middle**, so an aligned one keeps the
+  place its layout gave it in a mirrored view, should pcb flag one that is not centred. The record
+  would carry that middle: a long record's two spare lanes, or the anchor moved to it.
 
 ---
 

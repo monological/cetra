@@ -136,7 +136,14 @@ net and its parts and fades the rest.
    zoom** (`CanvasText.shown_from`, `shown_until`, spec 14.36) is drawn only once a string of the
    first em in its font would be and until one of the second would, each judged by that floor: a
    pad's number centred gives way to its number over its net in the frame the net comes to be
-   drawn. A banded glyph carries its band in the vec4 after its record, in the long store.
+   drawn. A banded glyph carries its band in the vec4 after its record, in the long store. **A
+   string that reads from either side** (`CanvasText.reads_either_side`, spec 14.40) is flipped
+   across its anchor's line in a mirrored view as well as by its own `mirrored`
+   (`CANVAS_FLAG_EITHER_SIDE`), so after the view's mirror it reads the right way round, from its
+   anchor along its line as that view shows it: it is the string with `mirrored` toggled, and a
+   left- or right-aligned one lies on the other side of its anchor there. Its bound is taken both
+   ways, since the view decides at draw time; taken one way, a mirrored view culls the tile of a
+   string anchored past its edge whose ink it flips onto it.
 10. **A stroke is baked into its records.** The edit lays the paint's cap, join and dash along the
     shape in double, so changing one is an edit of the shape, not a write to a table as a tag's
     colour is.
