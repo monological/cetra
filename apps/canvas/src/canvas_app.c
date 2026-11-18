@@ -84,13 +84,15 @@ static CanvasPaint butt(CanvasPaint paint) {
     return paint;
 }
 
-// --either-side: every string a sheet makes reads from either side.
-static bool g_either_side;
+// --either-side: every string a sheet makes reads from either side. --flip-text: every string's
+// mirrored is toggled, which in a mirrored view draws what --either-side draws.
+static bool g_either_side, g_flip_text;
 
 // Every string a sheet makes goes through here, so a switch reaches them all.
 static void edit_text(CanvasEdit* edit, const CanvasText* text) {
     CanvasText t = *text;
     t.reads_either_side = t.reads_either_side || g_either_side;
+    t.mirrored = t.mirrored != g_flip_text;
     canvas_edit_text(edit, &t);
 }
 
@@ -1397,6 +1399,25 @@ static void sheet_band(SheetContext* ctx) {
 }
 
 /*
+ * The margin sheet: one string, anchored 0.3 mm past the view's right edge and
+ * alone in its tile, so its ink runs on past the edge, wholly off a plain view.
+ * Under --either-side a mirrored view flips it back across its anchor, onto the
+ * view, and draws it only if its bound held that side too.
+ */
+static void sheet_margin(SheetContext* ctx) {
+    Canvas* canvas = ctx->canvas;
+    CanvasLayer* layer = canvas_add_layer(canvas, "margin");
+    const uint16_t white = canvas_add_style(canvas, 0xffffffffu);
+    const CanvasView* v = ctx->view;
+    const int64_t edge = v->centre.x + (int64_t)ceil(v->width * 0.5 / v->points_per_unit);
+    edit_text(ctx->edit, &(CanvasText){.paint = paint_of(layer, white, 0, 0),
+                                       .font = ctx->font,
+                                       .string = "Past the edge",
+                                       .anchor = {edge + MM(0.3), v->centre.y},
+                                       .size = MM(1.0)});
+}
+
+/*
  * The board sheet: a dense two-layer board, made the way pcb would make one.
  * Its layers, styles and tags are set on the main thread, and its shapes are
  * filled into the edit by board_fill, which touches nothing else and so runs
@@ -2203,6 +2224,7 @@ static const Sheet SHEETS[] = {
     {"tags", sheet_tags, {0.0, 0.0}, 9.0, 0x000000ffu},
     {"fade", sheet_fade, {0.0, 0.0}, 9.0, 0xffffffffu},
     {"band", sheet_band, {0.0, 0.0}, 20.0, 0x000000ffu},
+    {"margin", sheet_margin, {0.0, 0.0}, 8.0, 0x000000ffu},
     {"board", sheet_board, {0.0, 0.0}, 66.0, 0x001023ffu},
     {"strokes", sheet_strokes, {0.0, 0.0}, 8.0, 0x000000ffu},
     {"dashes", sheet_dashes, {0.0, 0.0}, 8.0, 0x000000ffu},
@@ -4386,7 +4408,7 @@ static void usage(const char* argv0) {
         stderr,
         "usage: %s [-x] [-f frames] [-S out.ppm] [-W points] [-H points]\n"
         "          [--sheet NAME] [--view X,Y,WIDTH (mm)] [--offset UNITS] [--mirror]\n"
-        "          [--either-side]\n"
+        "          [--either-side] [--flip-text]\n"
         "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread] [--work-delay "
         "MS]\n"
         "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
@@ -4452,6 +4474,8 @@ int main(int argc, char** argv) {
             mirror = true;
         } else if (strcmp(argv[i], "--either-side") == 0) {
             g_either_side = true;
+        } else if (strcmp(argv[i], "--flip-text") == 0) {
+            g_flip_text = true;
         } else if (strcmp(argv[i], "--tile-shift") == 0 && more) {
             tile_shift = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--canvas-probe") == 0) {

@@ -276,6 +276,18 @@ def run_canvas_gate(workdir):
                      plain and the until H drawn and the from H not, zoomed in the plain and the
                      from H and not the until. A band is judged by the floor as a string's own em
                      is.
+      canvas-reads-plain the symbol sheet with every string reading from either side (spec
+                     14.40) against it without, in a view not mirrored: 0 px. The flag flips
+                     nothing there, and its wider bound only keeps more tiles.
+      canvas-reads-mirror the symbol sheet mirrored, every string reading from either side,
+                     against it mirrored with every string's mirrored toggled instead: 0 px, the
+                     same flip of the same numbers. And against it mirrored as it is, which it
+                     must differ from, or a flag flipping nothing would pass.
+      canvas-reads-bound the margin sheet's string, anchored past the view's right edge and
+                     alone in its tile: reading from either side, no ink in a plain view, and in
+                     a mirrored view, flipped back onto it, over 200 px of ink and 0 px from the
+                     string with mirrored toggled. Its bound taken one way alone, the mirrored
+                     view culls its tile and draws nothing.
       canvas-uploads the board sheet over eight frames, what each uploaded: a tag written and a
                      style written upload nothing, a segment added one range and removed the same
                      range, and a transient layer of fifty lines, cleared and filled again, one
@@ -422,6 +434,12 @@ def run_canvas_gate(workdir):
     @functools.cache
     def sheet_run(sheet):
         return _canvas_run(workdir, sheet, "--sheet", sheet)
+
+    @functools.cache
+    def switched_run(sheet, *switches):
+        # A sheet under switches, its picture alone, named by them.
+        tag = "_".join([sheet, *(s.lstrip("-").replace("-", "_") for s in switches)])
+        return _canvas_run(workdir, tag, "--sheet", sheet, *switches)[0]
 
     @functools.cache
     def board_run():
@@ -932,6 +950,44 @@ def run_canvas_gate(workdir):
                   f"from {f['from']} (want 0), until {f['until']} px of ink; 5 mm across, read: "
                   f"plain {n['plain']}, from {n['from']}, until {n['until']} (want 0)")
         return ok, detail
+
+    # ---- text that reads from either side
+    @arm("canvas-reads-plain")
+    def _():
+        plain, either = sheet_run("symbol")[0], switched_run("symbol", "--either-side")
+        if not plain or not either:
+            return False, "a run failed"
+        differ, _ = compare(plain, either)
+        return differ == 0, f"{differ} px from the sheet without the field (want 0)"
+
+    @arm("canvas-reads-mirror")
+    def _():
+        either = switched_run("symbol", "--mirror", "--either-side")
+        flipped = switched_run("symbol", "--mirror", "--flip-text")
+        mirrored = switched_run("symbol", "--mirror")
+        if not either or not flipped or not mirrored:
+            return False, "a run failed"
+        differ, _ = compare(either, flipped)
+        changed, _ = compare(either, mirrored)
+        return differ == 0 and changed > 0, (
+            f"{differ} px from every string's mirrored toggled (want 0); {changed} px from the "
+            f"sheet mirrored as it is (want some)")
+
+    @arm("canvas-reads-bound")
+    def _():
+        plain = switched_run("margin", "--either-side")
+        either = switched_run("margin", "--mirror", "--either-side")
+        flipped = switched_run("margin", "--mirror", "--flip-text")
+        if not plain or not either or not flipped:
+            return False, "a run failed"
+
+        def ink(path):
+            return int((_ppm_array(path).max(axis=2) > 0.5).sum())
+        plain_ink, either_ink = ink(plain), ink(either)
+        differ, _ = compare(either, flipped)
+        ok = plain_ink == 0 and either_ink > 200 and differ == 0
+        return ok, (f"plain {plain_ink} px of ink (want 0); mirrored {either_ink} (want over 200), "
+                    f"{differ} px from the string with mirrored toggled (want 0)")
 
     @arm("canvas-uploads")
     def _():
