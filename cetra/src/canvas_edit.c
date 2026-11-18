@@ -1163,11 +1163,11 @@ void canvas_edit_text(CanvasEdit* edit, const CanvasText* text) {
         lo[1] = fmin(lo[1], -ay - g->y1 * em), hi[1] = fmax(hi[1], -ay - g->y0 * em);
     }
     // A text a mirrored view flips back is drawn one way or the other as the
-    // view decides, so its ink is taken both ways: across the anchor's line too.
+    // view decides, so its ink's x range is made symmetric about the anchor:
+    // the union of both ways, which any mirroring below leaves as it is.
     if (text->reads_either_side) {
-        const double left = lo[0];
-        lo[0] = fmin(lo[0], -hi[0]);
-        hi[0] = fmax(hi[0], -left);
+        const double reach = fmax(hi[0], -lo[0]);
+        lo[0] = -reach, hi[0] = reach;
     }
     // Its bound: the ink's four corners mirrored and turned about the anchor.
     // Every glyph is in the anchor's tile, so each takes the whole string's.

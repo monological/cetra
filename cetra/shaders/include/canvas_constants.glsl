@@ -23,7 +23,7 @@
 #define CANVAS_FLAG_MIRROR 16u       // a glyph of mirrored text, flipped across its anchor's line
 #define CANVAS_FLAG_DASHED 32u       // the record carries a dash pattern after it
 #define CANVAS_FLAG_BANDED 64u       // a glyph's record carries its band of zoom after it
-#define CANVAS_FLAG_EITHER_SIDE 128u // a glyph a mirrored view flips back across that line
+#define CANVAS_FLAG_EITHER_SIDE 128u // a glyph a mirrored view flips back across its anchor's line
 
 // A segment's joins, in its fourth measure (canvas_record.h): the join at a, at b, and which ends
 // are joined; a box's join, in its fourth point. The codes are canvas.h's CanvasCap and

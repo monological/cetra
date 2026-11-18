@@ -35,7 +35,7 @@ two-layer `board` with a ground plane, a highlighted net, a picked pad and a rem
 faded box on a lit one, for a view that fades, and `plane`, the ground pour of pcb's speed gate
 board, a 100 mm plate with a hole for each of 2,008 vias and balls of another net, whose edit
 `--canvas-probe` times; the probe also triangulates eight seeded plates it does not draw; and
-`margin`, one string anchored just past the view's right edge, off a plain view and flipped back
+`margin`, three strings anchored just past the view's edges, off a plain view and flipped back
 onto a mirrored one under `--either-side`.
 
 - `--fade STRENGTH,ROOM` makes the view fade (`docs/canvas.md`, Dimming by light): its tagged

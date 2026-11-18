@@ -1399,22 +1399,39 @@ static void sheet_band(SheetContext* ctx) {
 }
 
 /*
- * The margin sheet: one string, anchored 0.3 mm past the view's right edge and
- * alone in its tile, so its ink runs on past the edge, wholly off a plain view.
- * Under --either-side a mirrored view flips it back across its anchor, onto the
- * view, and draws it only if its bound held that side too.
+ * The margin sheet: three strings anchored 0.3 mm past the view's edges, each
+ * alone in its tile at the default tiles, their ink running on past the edge,
+ * wholly off a plain view: one plain and one mirrored and right-aligned past
+ * the right edge, one turned a quarter past the top. Under --either-side a
+ * mirrored view flips each back across its anchor, onto the view, and draws it
+ * only if its bound held that side too.
  */
 static void sheet_margin(SheetContext* ctx) {
+    const double QUARTER_TURN = 1.5707963267948966;
     Canvas* canvas = ctx->canvas;
     CanvasLayer* layer = canvas_add_layer(canvas, "margin");
-    const uint16_t white = canvas_add_style(canvas, 0xffffffffu);
+    const CanvasPaint white = paint_of(layer, canvas_add_style(canvas, 0xffffffffu), 0, 0);
     const CanvasView* v = ctx->view;
-    const int64_t edge = v->centre.x + (int64_t)ceil(v->width * 0.5 / v->points_per_unit);
-    edit_text(ctx->edit, &(CanvasText){.paint = paint_of(layer, white, 0, 0),
+    const int64_t right = v->centre.x + (int64_t)ceil(v->width * 0.5 / v->points_per_unit);
+    const int64_t top = v->centre.y + (int64_t)ceil(v->height * 0.5 / v->points_per_unit);
+    edit_text(ctx->edit, &(CanvasText){.paint = white,
                                        .font = ctx->font,
                                        .string = "Past the edge",
-                                       .anchor = {edge + MM(0.3), v->centre.y},
+                                       .anchor = {right + MM(0.3), v->centre.y + MM(1.0)},
                                        .size = MM(1.0)});
+    edit_text(ctx->edit, &(CanvasText){.paint = white,
+                                       .font = ctx->font,
+                                       .string = "Mirrored past",
+                                       .anchor = {right + MM(0.3), v->centre.y - MM(2.0)},
+                                       .size = MM(1.0),
+                                       .align_x = CANVAS_ALIGN_RIGHT,
+                                       .mirrored = true});
+    edit_text(ctx->edit, &(CanvasText){.paint = white,
+                                       .font = ctx->font,
+                                       .string = "Turned past",
+                                       .anchor = {v->centre.x - MM(3.0), top + MM(0.3)},
+                                       .size = MM(1.0),
+                                       .angle = QUARTER_TURN});
 }
 
 /*

@@ -283,11 +283,12 @@ def run_canvas_gate(workdir):
                      against it mirrored with every string's mirrored toggled instead: 0 px, the
                      same flip of the same numbers. And against it mirrored as it is, which it
                      must differ from, or a flag flipping nothing would pass.
-      canvas-reads-bound the margin sheet's string, anchored past the view's right edge and
-                     alone in its tile: reading from either side, no ink in a plain view, and in
-                     a mirrored view, flipped back onto it, over 200 px of ink and 0 px from the
-                     string with mirrored toggled. Its bound taken one way alone, the mirrored
-                     view culls its tile and draws nothing.
+      canvas-reads-bound the margin sheet's three strings, anchored past the view's edges, each
+                     alone in its tile -- one plain, one mirrored and right-aligned, one turned a
+                     quarter: reading from either side, no ink in a plain view, and in a
+                     mirrored view, flipped back onto it, over 200 px of ink and 0 px from the
+                     strings with mirrored toggled. A bound taken one way alone, the mirrored
+                     view culls that string's tile.
       canvas-uploads the board sheet over eight frames, what each uploaded: a tag written and a
                      style written upload nothing, a segment added one range and removed the same
                      range, and a transient layer of fifty lines, cleared and filled again, one
@@ -432,14 +433,10 @@ def run_canvas_gate(workdir):
 
     # The runs more than one arm reads, each made once, by the first chosen arm that asks for it.
     @functools.cache
-    def sheet_run(sheet):
-        return _canvas_run(workdir, sheet, "--sheet", sheet)
-
-    @functools.cache
-    def switched_run(sheet, *switches):
-        # A sheet under switches, its picture alone, named by them.
+    def sheet_run(sheet, *switches):
+        # A sheet, under any switches, named by them.
         tag = "_".join([sheet, *(s.lstrip("-").replace("-", "_") for s in switches)])
-        return _canvas_run(workdir, tag, "--sheet", sheet, *switches)[0]
+        return _canvas_run(workdir, tag, "--sheet", sheet, *switches)
 
     @functools.cache
     def board_run():
@@ -954,7 +951,7 @@ def run_canvas_gate(workdir):
     # ---- text that reads from either side
     @arm("canvas-reads-plain")
     def _():
-        plain, either = sheet_run("symbol")[0], switched_run("symbol", "--either-side")
+        plain, either = sheet_run("symbol")[0], sheet_run("symbol", "--either-side")[0]
         if not plain or not either:
             return False, "a run failed"
         differ, _ = compare(plain, either)
@@ -962,9 +959,9 @@ def run_canvas_gate(workdir):
 
     @arm("canvas-reads-mirror")
     def _():
-        either = switched_run("symbol", "--mirror", "--either-side")
-        flipped = switched_run("symbol", "--mirror", "--flip-text")
-        mirrored = switched_run("symbol", "--mirror")
+        either = sheet_run("symbol", "--mirror", "--either-side")[0]
+        flipped = sheet_run("symbol", "--mirror", "--flip-text")[0]
+        mirrored = sheet_run("symbol", "--mirror")[0]
         if not either or not flipped or not mirrored:
             return False, "a run failed"
         differ, _ = compare(either, flipped)
@@ -975,15 +972,14 @@ def run_canvas_gate(workdir):
 
     @arm("canvas-reads-bound")
     def _():
-        plain = switched_run("margin", "--either-side")
-        either = switched_run("margin", "--mirror", "--either-side")
-        flipped = switched_run("margin", "--mirror", "--flip-text")
+        plain = sheet_run("margin", "--either-side")[0]
+        either = sheet_run("margin", "--mirror", "--either-side")[0]
+        flipped = sheet_run("margin", "--mirror", "--flip-text")[0]
         if not plain or not either or not flipped:
             return False, "a run failed"
-
-        def ink(path):
-            return int((_ppm_array(path).max(axis=2) > 0.5).sum())
-        plain_ink, either_ink = ink(plain), ink(either)
+        # Ink: any pixel off the sheet's black.
+        plain_ink = _off_rgb(_ppm_array(plain), 0.0, 0)
+        either_ink = _off_rgb(_ppm_array(either), 0.0, 0)
         differ, _ = compare(either, flipped)
         ok = plain_ink == 0 and either_ink > 200 and differ == 0
         return ok, (f"plain {plain_ink} px of ink (want 0); mirrored {either_ink} (want over 200), "

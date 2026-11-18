@@ -117,10 +117,9 @@ shape's record and pixels are as they were.
 **Built in spec 14.40** (`docs/canvas.md`, Ten things, 9): text that reads from either side. A
 `CanvasText` flagged `reads_either_side` is flipped back in a view seen from the other side
 (`mirror_x`), so it reads the right way round there, along its line as the view shows it; its bound
-covers both ways. A string without the flag draws as before in every view. pcb 8.2.1 sets it on its
-part paths, copper labels and marks when it takes this master, and deletes the second set of every
-string it made for a view from below, with the twin layers, the evaluation the first flip waited
-on, and the two bugs where the second set was missing.
+covers both ways. A string without the flag draws as before in every view. pcb 8.2.1 needs it to
+turn its layout over without making every string twice; what it sets the flag on and deletes with
+it is the spec's "What pcb does with it".
 
 **What pcb has to know:**
 - **Where shapes of one layer overlap in different colours, which colour shows is not defined**,
@@ -135,9 +134,10 @@ on, and the two bugs where the second set was missing.
   a ghost is dashed by its paint, a dashed rectangle is one `canvas_edit_box` whose pattern runs
   round it, and changing a stroke is an edit.
 - **A string that reads from either side, seen mirrored, reads from its anchor as the plain view
-  reads it**: it is the string with `mirrored` toggled. A centred string keeps its place; a left-
-  or right-aligned one lies on the other side of its anchor from where it lies in the plain view,
-  so a label aligned to an edge crosses it.
+  reads it**: it is the string with `mirrored` toggled. A centred string stays centred on its
+  anchor (its ink moves by the difference of its ends' side bearings); a left- or right-aligned one
+  lies on the other side of its anchor from where it lies in the plain view, so a label aligned to
+  an edge crosses it.
 
 **Left for later**, each with a need named:
 - **Images and datasheet pages**, with the texture residency they need, for pcb's step 10. A record

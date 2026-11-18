@@ -1571,8 +1571,8 @@ leaves the window's multisampling off. It takes the capture set `-x`, `-f`, `-S`
 and:
 - `--sheet NAME` picks what is drawn: `shapes` (the default), `areas`, `polygons`, `ramp`, `thin`,
   `long`, `long-short`, `glyphs`, `tags`, `overlap`, `symbol`, `board`, `strokes` (caps and joins),
-  `dashes` (spec 14.22) or `margin` (spec 14.40: one string anchored just past the view's right
-  edge). Each is laid out in millimetres and drawn in nanometres, pcb's units.
+  `dashes` (spec 14.22) or `margin` (spec 14.40: three strings anchored just past the view's
+  edges). Each is laid out in millimetres and drawn in nanometres, pcb's units.
 - `--dash LENGTH,GAP` (mm), `--cap round|butt|square` and `--join round|mitre|bevel` give every
   paint a sheet makes that stroke, its fills' and its text's too, which the canvas leaves as they
   are; what a sheet sets on a paint itself stands. `--sheet symbol --dash 0.5,0.5 --cap butt --join
@@ -1584,8 +1584,8 @@ and:
   with tiles of 2^N units, 22 by default; 16 cuts nearly every shape at a tile edge.
 - `--either-side` (spec 14.40) makes every string a sheet makes read from either side
   (`CanvasText.reads_either_side`), so a mirrored view flips it back to read. `--flip-text` toggles
-  every string's `mirrored` instead, which in a mirrored view draws what `--either-side` draws: the
-  `canvas-reads-*` arms hold the two to 0 px.
+  every string's `mirrored` instead, which in a mirrored view draws what `--either-side` draws, the
+  twin the `canvas-reads-*` arms compare against.
 - `--split` draws two views side by side; on the board the second is the underside, mirrored,
   showing the plane, the bottom copper and the outline. `--only-view 0|1` draws one of the two
   alone, for the twin.
