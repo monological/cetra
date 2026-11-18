@@ -983,7 +983,7 @@ def run_canvas_gate(workdir):
         differ, _ = compare(either, flipped)
         ok = plain_ink == 0 and either_ink > 200 and differ == 0
         return ok, (f"plain {plain_ink} px of ink (want 0); mirrored {either_ink} (want over 200), "
-                    f"{differ} px from the string with mirrored toggled (want 0)")
+                    f"{differ} px from the strings with mirrored toggled (want 0)")
 
     @arm("canvas-uploads")
     def _():
