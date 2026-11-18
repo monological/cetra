@@ -17,7 +17,8 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-17: 14.39, tags in 3D, built for item 4a._
+_Last updated: 2026-11-17: 14.40, text that reads from either side, started for item 1 (its spec);
+before it the same day, 14.39, tags in 3D, built for item 4a._
 
 ---
 
@@ -55,7 +56,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 
 | # | Item | Status | First needed by pcb's step | Spec |
 |---|------|--------|----------------------------|------|
-| 1 | The 2D canvas | **Built**, with caps, joins and dashes; images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0, 14.22, 14.36, 14.37 |
+| 1 | The 2D canvas | **Built**, with caps, joins and dashes; text that reads from either side started in 14.40; images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0, 14.22, 14.36, 14.37, 14.40 |
 | 2 | Idle mode: drawing only when something changed | **Built**; with 14.38 it waits on 3D views at rest too | 6 | 14.1, 14.38 |
 | 3 | Skipping the 3D scene pass when no 3D view is shown | **Built**, with a still view that averages jittered frames and rests; a TAA-only view resting and accumulating under TAAU left for later | 8, the 3D view | 14.38 |
 | 4 | Drawing the 3D scene into part of the window | **Built**: any number of views, each a camera, a rectangle, its own settings and its own buffers; world work serving every view equally, a scene per view and a second window left for later | 8 | 14.38 |
@@ -112,6 +113,11 @@ PDF has them. Dashes are pieces of the stroke drawn per pixel, a pattern carried
 polyline's points and across tile cuts and stretched round a closed shape, its corners joined where
 a dash runs through them; under `Canvas.dash_min_px` a pattern is drawn as its average. A solid
 shape's record and pixels are as they were.
+
+**Started in spec 14.40**: text that reads from either side. A `CanvasText` flagged
+`reads_either_side` is flipped back in a view seen from the other side (`mirror_x`), so it reads
+the right way round there, along its line as the view shows it; its bound covers both. pcb 8.2.1
+needs it to turn its layout over without making every label twice.
 
 **What pcb has to know:**
 - **Where shapes of one layer overlap in different colours, which colour shows is not defined**,
