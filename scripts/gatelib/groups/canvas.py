@@ -951,7 +951,7 @@ def run_canvas_gate(workdir):
     # ---- text that reads from either side
     @arm("canvas-reads-plain")
     def _():
-        plain, either = sheet_run("symbol")[0], sheet_run("symbol", "--either-side")[0]
+        plain, either = sheet_run("symbol")[0], sheet_run("symbol", "--either-side", "all")[0]
         if not plain or not either:
             return False, "a run failed"
         differ, _ = compare(plain, either)
@@ -959,7 +959,7 @@ def run_canvas_gate(workdir):
 
     @arm("canvas-reads-mirror")
     def _():
-        either = sheet_run("symbol", "--mirror", "--either-side")[0]
+        either = sheet_run("symbol", "--mirror", "--either-side", "all")[0]
         flipped = sheet_run("symbol", "--mirror", "--flip-text")[0]
         mirrored = sheet_run("symbol", "--mirror")[0]
         if not either or not flipped or not mirrored:
@@ -972,8 +972,8 @@ def run_canvas_gate(workdir):
 
     @arm("canvas-reads-bound")
     def _():
-        plain = sheet_run("margin", "--either-side")[0]
-        either = sheet_run("margin", "--mirror", "--either-side")[0]
+        plain = sheet_run("margin", "--either-side", "all")[0]
+        either = sheet_run("margin", "--mirror", "--either-side", "all")[0]
         flipped = sheet_run("margin", "--mirror", "--flip-text")[0]
         if not plain or not either or not flipped:
             return False, "a run failed"

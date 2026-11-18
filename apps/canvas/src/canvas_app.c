@@ -84,14 +84,19 @@ static CanvasPaint butt(CanvasPaint paint) {
     return paint;
 }
 
-// --either-side: every string a sheet makes reads from either side. --flip-text: every string's
-// mirrored is toggled, which in a mirrored view draws what --either-side draws.
-static bool g_either_side, g_flip_text;
+// --either-side all|centred: every string a sheet makes reads from either side, or only its
+// centred ones, as pcb flags its text. --flip-text: every string's mirrored is toggled, which in a
+// mirrored view draws what --either-side all draws.
+typedef enum EitherSide { EITHER_SIDE_NONE, EITHER_SIDE_ALL, EITHER_SIDE_CENTRED } EitherSide;
+static EitherSide g_either_side;
+static bool g_flip_text;
 
 // Every string a sheet makes goes through here, so a switch reaches them all.
 static void edit_text(CanvasEdit* edit, const CanvasText* text) {
     CanvasText t = *text;
-    t.reads_either_side = t.reads_either_side || g_either_side;
+    if (g_either_side == EITHER_SIDE_ALL ||
+        (g_either_side == EITHER_SIDE_CENTRED && t.align_x == CANVAS_ALIGN_CENTRE))
+        t.reads_either_side = true;
     t.mirrored = t.mirrored != g_flip_text;
     canvas_edit_text(edit, &t);
 }
@@ -1402,7 +1407,7 @@ static void sheet_band(SheetContext* ctx) {
  * The margin sheet: three strings anchored 0.3 mm past the view's edges, each
  * alone in its tile at the default tiles, their ink running on past the edge,
  * wholly off a plain view: one plain and one mirrored and right-aligned past
- * the right edge, one turned a quarter past the top. Under --either-side a
+ * the right edge, one turned a quarter past the top. Under --either-side all a
  * mirrored view flips each back across its anchor, onto the view, and draws it
  * only if its bound held that side too.
  */
@@ -4425,7 +4430,7 @@ static void usage(const char* argv0) {
         stderr,
         "usage: %s [-x] [-f frames] [-S out.ppm] [-W points] [-H points]\n"
         "          [--sheet NAME] [--view X,Y,WIDTH (mm)] [--offset UNITS] [--mirror]\n"
-        "          [--either-side] [--flip-text]\n"
+        "          [--either-side all|centred] [--flip-text]\n"
         "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread] [--work-delay "
         "MS]\n"
         "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
@@ -4489,8 +4494,15 @@ int main(int argc, char** argv) {
             offset = atoll(argv[++i]);
         } else if (strcmp(argv[i], "--mirror") == 0) {
             mirror = true;
-        } else if (strcmp(argv[i], "--either-side") == 0) {
-            g_either_side = true;
+        } else if (strcmp(argv[i], "--either-side") == 0 && more) {
+            const char* which = argv[++i];
+            g_either_side = strcmp(which, "all") == 0       ? EITHER_SIDE_ALL
+                            : strcmp(which, "centred") == 0 ? EITHER_SIDE_CENTRED
+                                                            : EITHER_SIDE_NONE;
+            if (g_either_side == EITHER_SIDE_NONE) {
+                fprintf(stderr, "canvas: --either-side takes all or centred\n");
+                return 2;
+            }
         } else if (strcmp(argv[i], "--flip-text") == 0) {
             g_flip_text = true;
         } else if (strcmp(argv[i], "--tile-shift") == 0 && more) {

@@ -307,7 +307,9 @@ typedef enum CanvasAlignY {
 // A band of zoom draws it only while a string of em shown_from in its font
 // would be drawn and one of em shown_until would not, each judged as its own em
 // is, by text_min_px and its font's field: so one text gives way to another in
-// the frame a smaller one comes to be drawn.
+// the frame a smaller one comes to be drawn. A text reading from either side is
+// flipped back about its anchor in a mirrored view, so it suits centred text:
+// one aligned left or right lies on the anchor's other side there.
 typedef struct CanvasText {
     CanvasPaint paint;
     const struct Font* font;

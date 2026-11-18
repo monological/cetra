@@ -1582,10 +1582,11 @@ and:
   from the origin: `--offset 1099511627776` (2^40) is what `canvas-translation` draws at.
 - `--mirror` draws the view mirrored, as a board seen from below. `--tile-shift N` makes the canvas
   with tiles of 2^N units, 22 by default; 16 cuts nearly every shape at a tile edge.
-- `--either-side` (spec 14.40) makes every string a sheet makes read from either side
-  (`CanvasText.reads_either_side`), so a mirrored view flips it back to read. `--flip-text` toggles
-  every string's `mirrored` instead, which in a mirrored view draws what `--either-side` draws, the
-  twin the `canvas-reads-*` arms compare against.
+- `--either-side all|centred` (spec 14.40) makes every string a sheet makes read from either side
+  (`CanvasText.reads_either_side`), so a mirrored view flips it back to read, or only its centred
+  ones, as pcb flags its text. `--flip-text` toggles every string's `mirrored` instead, which in a
+  mirrored view draws what `--either-side all` draws, the twin the `canvas-reads-*` arms compare
+  against.
 - `--split` draws two views side by side; on the board the second is the underside, mirrored,
   showing the plane, the bottom copper and the outline. `--only-view 0|1` draws one of the two
   alone, for the twin.

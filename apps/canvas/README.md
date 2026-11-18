@@ -36,7 +36,7 @@ faded box on a lit one, for a view that fades, and `plane`, the ground pour of p
 board, a 100 mm plate with a hole for each of 2,008 vias and balls of another net, whose edit
 `--canvas-probe` times; the probe also triangulates eight seeded plates it does not draw; and
 `margin`, three strings anchored just past the view's edges, off a plain view and flipped back
-onto a mirrored one under `--either-side`.
+onto a mirrored one under `--either-side all`.
 
 - `--fade STRENGTH,ROOM` makes the view fade (`docs/canvas.md`, Dimming by light): its tagged
   shapes not lit fade toward its sheet's paper by STRENGTH, less within ROOM points of a lit one; a
@@ -52,9 +52,12 @@ onto a mirrored one under `--either-side`.
   `canvas-translation` holds to the same pixels.
 - `--split` draws the board as two views, the second the underside, mirrored; `--only-view` draws
   one of them alone.
-- `--either-side` makes every string a sheet makes read from either side, so a mirrored view flips
-  it back: `--sheet symbol --split --either-side` reads in both halves. `--flip-text` toggles every
-  string's `mirrored`, its twin in a mirrored view.
+- `--either-side all` makes every string a sheet makes read from either side, so a mirrored view
+  flips it back; `--either-side centred` only its centred ones, as pcb flags its text. `--sheet
+  symbol --split --either-side centred` shows what pcb gets: in the mirrored half the centred pin
+  numbers and part value read, and the aligned names stay mirrored with the board. Under `all` the
+  aligned names read too, but each on the other side of its anchor, across the pins. `--flip-text`
+  toggles every string's `mirrored`, the twin of `all` in a mirrored view.
 - `--view3d` puts a 3D scene view in the right half of the window, beside the 2D panes: three
   spheres on a floor under an environment, with a key light and shadows, built in code in
   `src/view3d.c`. Without it the app makes no scene view, so a frame draws no scene pass and no
