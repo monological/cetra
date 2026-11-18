@@ -84,6 +84,16 @@ static CanvasPaint butt(CanvasPaint paint) {
     return paint;
 }
 
+// --either-side: every string a sheet makes reads from either side.
+static bool g_either_side;
+
+// Every string a sheet makes goes through here, so a switch reaches them all.
+static void edit_text(CanvasEdit* edit, const CanvasText* text) {
+    CanvasText t = *text;
+    t.reads_either_side = t.reads_either_side || g_either_side;
+    canvas_edit_text(edit, &t);
+}
+
 static Canvas* g_canvas;
 static CanvasView g_views[2]; // the window's views, side by side under --split
 static SceneView*
@@ -892,39 +902,39 @@ static void sheet_symbol(SheetContext* ctx) {
         canvas_edit_segment(
             edit, &(CanvasSegment){
                       .paint = line, .a = AT(-hx - LEAD, y), .b = AT(-hx, y), .width = MM(0.152)});
-        canvas_edit_text(edit, &(CanvasText){.paint = name,
-                                             .font = ctx->font,
-                                             .string = LEFT[i],
-                                             .anchor = AT(-hx + 0.6, y),
-                                             .size = MM(1.27),
-                                             .align_y = CANVAS_ALIGN_MIDDLE});
+        edit_text(edit, &(CanvasText){.paint = name,
+                                      .font = ctx->font,
+                                      .string = LEFT[i],
+                                      .anchor = AT(-hx + 0.6, y),
+                                      .size = MM(1.27),
+                                      .align_y = CANVAS_ALIGN_MIDDLE});
         snprintf(digits, sizeof(digits), "%d", pin);
-        canvas_edit_text(edit, &(CanvasText){.paint = number,
-                                             .font = ctx->font,
-                                             .string = digits,
-                                             .anchor = AT(-hx - LEAD * 0.5, y + 0.25),
-                                             .size = MM(1.0),
-                                             .align_x = CANVAS_ALIGN_CENTRE});
+        edit_text(edit, &(CanvasText){.paint = number,
+                                      .font = ctx->font,
+                                      .string = digits,
+                                      .anchor = AT(-hx - LEAD * 0.5, y + 0.25),
+                                      .size = MM(1.0),
+                                      .align_x = CANVAS_ALIGN_CENTRE});
     }
     for (int i = 0; i < 6; i++, pin++) {
         const double y = -8.89 + i * PITCH;
         canvas_edit_segment(
             edit, &(CanvasSegment){
                       .paint = line, .a = AT(hx, y), .b = AT(hx + LEAD, y), .width = MM(0.152)});
-        canvas_edit_text(edit, &(CanvasText){.paint = name,
-                                             .font = ctx->font,
-                                             .string = RIGHT[i],
-                                             .anchor = AT(hx - 0.6, y),
-                                             .size = MM(1.27),
-                                             .align_x = CANVAS_ALIGN_RIGHT,
-                                             .align_y = CANVAS_ALIGN_MIDDLE});
+        edit_text(edit, &(CanvasText){.paint = name,
+                                      .font = ctx->font,
+                                      .string = RIGHT[i],
+                                      .anchor = AT(hx - 0.6, y),
+                                      .size = MM(1.27),
+                                      .align_x = CANVAS_ALIGN_RIGHT,
+                                      .align_y = CANVAS_ALIGN_MIDDLE});
         snprintf(digits, sizeof(digits), "%d", pin);
-        canvas_edit_text(edit, &(CanvasText){.paint = number,
-                                             .font = ctx->font,
-                                             .string = digits,
-                                             .anchor = AT(hx + LEAD * 0.5, y + 0.25),
-                                             .size = MM(1.0),
-                                             .align_x = CANVAS_ALIGN_CENTRE});
+        edit_text(edit, &(CanvasText){.paint = number,
+                                      .font = ctx->font,
+                                      .string = digits,
+                                      .anchor = AT(hx + LEAD * 0.5, y + 0.25),
+                                      .size = MM(1.0),
+                                      .align_x = CANVAS_ALIGN_CENTRE});
     }
     // The top row: names turned a quarter clockwise to read down into the body,
     // numbers a quarter the other way along the pin's left side.
@@ -933,59 +943,59 @@ static void sheet_symbol(SheetContext* ctx) {
         canvas_edit_segment(
             edit, &(CanvasSegment){
                       .paint = line, .a = AT(x, hy), .b = AT(x, hy + LEAD), .width = MM(0.152)});
-        canvas_edit_text(edit, &(CanvasText){.paint = name,
-                                             .font = ctx->font,
-                                             .string = TOP[i],
-                                             .anchor = AT(x, hy - 0.6),
-                                             .size = MM(1.27),
-                                             .angle = -PI * 0.5,
-                                             .align_y = CANVAS_ALIGN_MIDDLE});
+        edit_text(edit, &(CanvasText){.paint = name,
+                                      .font = ctx->font,
+                                      .string = TOP[i],
+                                      .anchor = AT(x, hy - 0.6),
+                                      .size = MM(1.27),
+                                      .angle = -PI * 0.5,
+                                      .align_y = CANVAS_ALIGN_MIDDLE});
         snprintf(digits, sizeof(digits), "%d", pin);
-        canvas_edit_text(edit, &(CanvasText){.paint = number,
-                                             .font = ctx->font,
-                                             .string = digits,
-                                             .anchor = AT(x - 0.25, hy + LEAD * 0.5),
-                                             .size = MM(1.0),
-                                             .angle = PI * 0.5,
-                                             .align_x = CANVAS_ALIGN_CENTRE});
+        edit_text(edit, &(CanvasText){.paint = number,
+                                      .font = ctx->font,
+                                      .string = digits,
+                                      .anchor = AT(x - 0.25, hy + LEAD * 0.5),
+                                      .size = MM(1.0),
+                                      .angle = PI * 0.5,
+                                      .align_x = CANVAS_ALIGN_CENTRE});
     }
-    canvas_edit_text(edit, &(CanvasText){.paint = label,
-                                         .font = ctx->font,
-                                         .string = "U1",
-                                         .anchor = AT(-hx, hy + 0.6),
-                                         .size = MM(1.27),
-                                         .align_y = CANVAS_ALIGN_BOTTOM});
-    canvas_edit_text(edit, &(CanvasText){.paint = label,
-                                         .font = ctx->font,
-                                         .string = "STM32G431K",
-                                         .anchor = AT(0.0, -hy - 0.6),
-                                         .size = MM(1.27),
-                                         .align_x = CANVAS_ALIGN_CENTRE,
-                                         .align_y = CANVAS_ALIGN_TOP});
+    edit_text(edit, &(CanvasText){.paint = label,
+                                  .font = ctx->font,
+                                  .string = "U1",
+                                  .anchor = AT(-hx, hy + 0.6),
+                                  .size = MM(1.27),
+                                  .align_y = CANVAS_ALIGN_BOTTOM});
+    edit_text(edit, &(CanvasText){.paint = label,
+                                  .font = ctx->font,
+                                  .string = "STM32G431K",
+                                  .anchor = AT(0.0, -hy - 0.6),
+                                  .size = MM(1.27),
+                                  .align_x = CANVAS_ALIGN_CENTRE,
+                                  .align_y = CANVAS_ALIGN_TOP});
 
     // Beside it: the same words mirrored, as a board's underside reads, and a
     // row of sizes halving down past the canvas's smallest.
-    canvas_edit_text(edit, &(CanvasText){.paint = label,
-                                         .font = ctx->font,
-                                         .string = "Bottom silk",
-                                         .anchor = AT(14.0, 9.5),
-                                         .size = MM(1.5)});
-    canvas_edit_text(edit, &(CanvasText){.paint = label,
-                                         .font = ctx->font,
-                                         .string = "Bottom silk",
-                                         .anchor = AT(14.0, 7.0),
-                                         .size = MM(1.5),
-                                         .align_x = CANVAS_ALIGN_RIGHT,
-                                         .mirrored = true});
+    edit_text(edit, &(CanvasText){.paint = label,
+                                  .font = ctx->font,
+                                  .string = "Bottom silk",
+                                  .anchor = AT(14.0, 9.5),
+                                  .size = MM(1.5)});
+    edit_text(edit, &(CanvasText){.paint = label,
+                                  .font = ctx->font,
+                                  .string = "Bottom silk",
+                                  .anchor = AT(14.0, 7.0),
+                                  .size = MM(1.5),
+                                  .align_x = CANVAS_ALIGN_RIGHT,
+                                  .mirrored = true});
     double y = 4.0;
     for (double size = 2.0; size > 0.02; size *= 0.5) {
         char words[32];
         snprintf(words, sizeof(words), "%.3g mm text", size);
-        canvas_edit_text(edit, &(CanvasText){.paint = label,
-                                             .font = ctx->font,
-                                             .string = words,
-                                             .anchor = AT(14.0, y),
-                                             .size = MM(size)});
+        edit_text(edit, &(CanvasText){.paint = label,
+                                      .font = ctx->font,
+                                      .string = words,
+                                      .anchor = AT(14.0, y),
+                                      .size = MM(size)});
         y -= size * 1.2 + 0.3;
     }
 #undef AT
@@ -1053,13 +1063,13 @@ static void sheet_glyphs(SheetContext* ctx) {
     for (int i = 0; GLYPHS[i]; i++) {
         const CanvasPoint centre = {MM(-3.0 + 1.5 * i) + ctx->offset, MM(1.0) + ctx->offset};
         const char one[2] = {GLYPHS[i], 0};
-        canvas_edit_text(ctx->edit, &(CanvasText){.paint = paint,
-                                                  .font = ctx->font,
-                                                  .string = one,
-                                                  .anchor = centre,
-                                                  .size = size,
-                                                  .align_x = CANVAS_ALIGN_CENTRE,
-                                                  .align_y = CANVAS_ALIGN_MIDDLE});
+        edit_text(ctx->edit, &(CanvasText){.paint = paint,
+                                           .font = ctx->font,
+                                           .string = one,
+                                           .anchor = centre,
+                                           .size = size,
+                                           .align_x = CANVAS_ALIGN_CENTRE,
+                                           .align_y = CANVAS_ALIGN_MIDDLE});
         if (!ctx->probe)
             continue;
         // stb's own coverage of the glyph at the same em: an exact-area
@@ -1086,7 +1096,7 @@ static void sheet_glyphs(SheetContext* ctx) {
                                .string = "AVATAR To Wave",
                                .anchor = {MM(-3.9) + ctx->offset, MM(-1.5) + ctx->offset},
                                .size = size};
-    canvas_edit_text(ctx->edit, &kerned);
+    edit_text(ctx->edit, &kerned);
     if (ctx->probe) {
         // The font's advances and pair adjustments in its own units, then
         // scaled to the em, all in double.
@@ -1225,13 +1235,13 @@ static void sheet_tags(SheetContext* ctx) {
                                        .size_x = MM(1.0),
                                        .size_y = MM(1.0)});
     const CanvasPoint label = {o, MM(2.1) + o};
-    canvas_edit_text(edit, &(CanvasText){.paint = paint_of(kept, white, 0, 9),
-                                         .font = ctx->font,
-                                         .string = "H",
-                                         .anchor = label,
-                                         .size = MM(0.8),
-                                         .align_x = CANVAS_ALIGN_CENTRE,
-                                         .align_y = CANVAS_ALIGN_MIDDLE});
+    edit_text(edit, &(CanvasText){.paint = paint_of(kept, white, 0, 9),
+                                  .font = ctx->font,
+                                  .string = "H",
+                                  .anchor = label,
+                                  .size = MM(0.8),
+                                  .align_x = CANVAS_ALIGN_CENTRE,
+                                  .align_y = CANVAS_ALIGN_MIDDLE});
 #undef BOX
     if (ctx->probe) {
         // The ring's inner and outer distance in framebuffer pixels, as canvas.c's
@@ -1331,13 +1341,13 @@ static void sheet_fade(SheetContext* ctx) {
                                                 .size_x = pairs[k].size,
                                                 .size_y = pairs[k].size});
     const CanvasPoint label = {MM(-3.0) + o, MM(2.0) + o};
-    canvas_edit_text(ctx->edit, &(CanvasText){.paint = paint_of(layer, red, 0, 1),
-                                              .font = ctx->font,
-                                              .string = "H",
-                                              .anchor = label,
-                                              .size = MM(1.5),
-                                              .align_x = CANVAS_ALIGN_CENTRE,
-                                              .align_y = CANVAS_ALIGN_MIDDLE});
+    edit_text(ctx->edit, &(CanvasText){.paint = paint_of(layer, red, 0, 1),
+                                       .font = ctx->font,
+                                       .string = "H",
+                                       .anchor = label,
+                                       .size = MM(1.5),
+                                       .align_x = CANVAS_ALIGN_CENTRE,
+                                       .align_y = CANVAS_ALIGN_MIDDLE});
     if (ctx->probe) {
         probe_pixel(ctx, "fade-text", "label", label, 0xff0000);
         const uint32_t faded = (uint32_t)lroundf(255.0f * g_fade);
@@ -1369,15 +1379,15 @@ static void sheet_band(SheetContext* ctx) {
     const int64_t o = ctx->offset;
     for (int k = 0; k < 3; k++) {
         const CanvasPoint at = {MM(-1.5 + 1.5 * k) + o, o};
-        canvas_edit_text(ctx->edit, &(CanvasText){.paint = paint_of(layer, styles[k], 0, 0),
-                                                  .font = ctx->font,
-                                                  .string = "H",
-                                                  .anchor = at,
-                                                  .size = MM(1.0),
-                                                  .align_x = CANVAS_ALIGN_CENTRE,
-                                                  .align_y = CANVAS_ALIGN_MIDDLE,
-                                                  .shown_from = k == 1 ? MM(0.05) : 0,
-                                                  .shown_until = k == 2 ? MM(0.05) : 0});
+        edit_text(ctx->edit, &(CanvasText){.paint = paint_of(layer, styles[k], 0, 0),
+                                           .font = ctx->font,
+                                           .string = "H",
+                                           .anchor = at,
+                                           .size = MM(1.0),
+                                           .align_x = CANVAS_ALIGN_CENTRE,
+                                           .align_y = CANVAS_ALIGN_MIDDLE,
+                                           .shown_from = k == 1 ? MM(0.05) : 0,
+                                           .shown_until = k == 2 ? MM(0.05) : 0});
         // Its box, 0.7 mm each way, and its colour as RRGGBB in decimal.
         if (ctx->probe) {
             probe_cell(ctx, "band", names[k], at, MM(0.7));
@@ -1465,13 +1475,13 @@ static void board_route(CanvasEdit* edit, const Board* b, CanvasPaint paint, int
 
 static void board_label(CanvasEdit* edit, const Board* b, const char* text, double x, double y,
                         double size) {
-    canvas_edit_text(edit, &(CanvasText){.paint = paint_of(b->silk, b->silk_s, 0, 0),
-                                         .font = b->font,
-                                         .string = text,
-                                         .anchor = board_at(b, x, y),
-                                         .size = MM(size),
-                                         .align_x = CANVAS_ALIGN_CENTRE,
-                                         .align_y = CANVAS_ALIGN_MIDDLE});
+    edit_text(edit, &(CanvasText){.paint = paint_of(b->silk, b->silk_s, 0, 0),
+                                  .font = b->font,
+                                  .string = text,
+                                  .anchor = board_at(b, x, y),
+                                  .size = MM(size),
+                                  .align_x = CANVAS_ALIGN_CENTRE,
+                                  .align_y = CANVAS_ALIGN_MIDDLE});
 }
 
 static void board_fill(CanvasEdit* edit, const Board* b) {
@@ -2070,13 +2080,13 @@ static void sheet_dashes(SheetContext* ctx) {
     // cell.
     for (int k = 0; k < 2; k++) {
         c = CELL(k, 2);
-        canvas_edit_text(edit, &(CanvasText){.paint = k ? paint : solid,
-                                             .font = ctx->font,
-                                             .string = "Dash 0.5",
-                                             .anchor = c,
-                                             .size = MM(0.25),
-                                             .align_x = CANVAS_ALIGN_CENTRE,
-                                             .align_y = CANVAS_ALIGN_MIDDLE});
+        edit_text(edit, &(CanvasText){.paint = k ? paint : solid,
+                                      .font = ctx->font,
+                                      .string = "Dash 0.5",
+                                      .anchor = c,
+                                      .size = MM(0.25),
+                                      .align_x = CANVAS_ALIGN_CENTRE,
+                                      .align_y = CANVAS_ALIGN_MIDDLE});
         dashes_box(ctx, "dashes-text", k ? "dashed" : "plain", c);
     }
 
@@ -4376,6 +4386,7 @@ static void usage(const char* argv0) {
         stderr,
         "usage: %s [-x] [-f frames] [-S out.ppm] [-W points] [-H points]\n"
         "          [--sheet NAME] [--view X,Y,WIDTH (mm)] [--offset UNITS] [--mirror]\n"
+        "          [--either-side]\n"
         "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread] [--work-delay "
         "MS]\n"
         "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
@@ -4439,6 +4450,8 @@ int main(int argc, char** argv) {
             offset = atoll(argv[++i]);
         } else if (strcmp(argv[i], "--mirror") == 0) {
             mirror = true;
+        } else if (strcmp(argv[i], "--either-side") == 0) {
+            g_either_side = true;
         } else if (strcmp(argv[i], "--tile-shift") == 0 && more) {
             tile_shift = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--canvas-probe") == 0) {

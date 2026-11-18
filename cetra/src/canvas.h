@@ -318,8 +318,9 @@ typedef struct CanvasText {
     CanvasAlignX align_x;
     CanvasAlignY align_y;
     bool mirrored;
-    int64_t shown_from;  // drawn only once a string of this em would be; 0 = its own size
-    int64_t shown_until; // drawn only until a string of this em would be; 0 = always
+    bool reads_either_side; // in a view seen from the other side, flipped back so it still reads
+    int64_t shown_from;     // drawn only once a string of this em would be; 0 = its own size
+    int64_t shown_until;    // drawn only until a string of this em would be; 0 = always
 } CanvasText;
 
 // The string's advance from its first character's pen to past its last, in

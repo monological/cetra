@@ -241,7 +241,10 @@ void main() {
         vec4 box = texelFetch(uGlyphs, base + aP.z * 2); // x0, y0, x1, y1
         vec4 cell = texelFetch(uGlyphs, base + aP.z * 2 + 1);
         vec2 local = (aF.xy + mix(box.xy, box.zw, c)) * emPx;
-        if ((flags & CANVAS_FLAG_MIRROR) != 0u)
+        // A mirrored view flips the whole picture after this, so a glyph flipped here as well
+        // reads the right way round, turned by the angle as that view shows it.
+        bool flipBack = (flags & CANVAS_FLAG_EITHER_SIDE) != 0u && uMirror < 0.0;
+        if (((flags & CANVAS_FLAG_MIRROR) != 0u) != flipBack)
             local.x = -local.x;
         vec2 u = vec2(cos(aF.w), sin(aF.w));
         pos = canvasPixels(aP.xy, tile.xy) + u * local.x + vec2(-u.y, u.x) * local.y;

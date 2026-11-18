@@ -34,7 +34,8 @@
  *   GLYPH    p = the string's      f = its pen (x, y) in ems from the anchor,
  *              anchor, codepoint,      in the string's own frame; the em in
  *              font slot               units; the string's angle
- *            FLAG_MIRROR flips it across the line through the anchor. The font
+ *            FLAG_MIRROR flips it across the line through the anchor, and
+ *            FLAG_EITHER_SIDE flips it back in a mirrored view. The font
  *            slot is the canvas's (its four fonts), filled in when applied.
  * A stroke's own ends and its dashes' take the cap in FLAG_CAP.
  * A cut end (FLAG_CUT_*) is where an edit split a shape reaching too far from

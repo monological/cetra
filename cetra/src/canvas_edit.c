@@ -1141,8 +1141,9 @@ void canvas_edit_text(CanvasEdit* edit, const CanvasText* text) {
                                                           : 0.0;
     const int shift = edit->tile_shift;
     const bool banded = text->shown_from || text->shown_until;
-    const uint32_t flags =
-        (text->mirrored ? CANVAS_FLAG_MIRROR : 0u) | (banded ? CANVAS_FLAG_BANDED : 0u);
+    const uint32_t flags = (text->mirrored ? CANVAS_FLAG_MIRROR : 0u) |
+                           (text->reads_either_side ? CANVAS_FLAG_EITHER_SIDE : 0u) |
+                           (banded ? CANVAS_FLAG_BANDED : 0u);
     // The ink of the whole string in its own frame, in ems from the anchor.
     double lo[2] = {INFINITY, INFINITY}, hi[2] = {-INFINITY, -INFINITY};
     for (size_t i = 0; i < n; i++) {
@@ -1160,6 +1161,13 @@ void canvas_edit_text(CanvasEdit* edit, const CanvasText* text) {
         const double x = glyphs[i].pen - ax;
         lo[0] = fmin(lo[0], x + g->x0 * em), hi[0] = fmax(hi[0], x + g->x1 * em);
         lo[1] = fmin(lo[1], -ay - g->y1 * em), hi[1] = fmax(hi[1], -ay - g->y0 * em);
+    }
+    // A text a mirrored view flips back is drawn one way or the other as the
+    // view decides, so its ink is taken both ways: across the anchor's line too.
+    if (text->reads_either_side) {
+        const double left = lo[0];
+        lo[0] = fmin(lo[0], -hi[0]);
+        hi[0] = fmax(hi[0], -left);
     }
     // Its bound: the ink's four corners mirrored and turned about the anchor.
     // Every glyph is in the anchor's tile, so each takes the whole string's.

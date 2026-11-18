@@ -17,12 +17,13 @@
 #define CANVAS_KIND_FILL 6u // a triangle of a filled polygon, in the layer's fill buffer
 #define CANVAS_KIND_GLYPH 7u // one character of a string
 
-#define CANVAS_FLAG_CAP 3u     // the cap of a stroke's own ends and of its dashes'
-#define CANVAS_FLAG_CUT_A 4u   // end a is where a longer shape was split: no cap, no ramp
-#define CANVAS_FLAG_CUT_B 8u   // end b likewise
-#define CANVAS_FLAG_MIRROR 16u // a glyph of mirrored text, flipped across its anchor's line
-#define CANVAS_FLAG_DASHED 32u // the record carries a dash pattern after it
-#define CANVAS_FLAG_BANDED 64u // a glyph's record carries its band of zoom after it
+#define CANVAS_FLAG_CAP 3u           // the cap of a stroke's own ends and of its dashes'
+#define CANVAS_FLAG_CUT_A 4u         // end a is where a longer shape was split: no cap, no ramp
+#define CANVAS_FLAG_CUT_B 8u         // end b likewise
+#define CANVAS_FLAG_MIRROR 16u       // a glyph of mirrored text, flipped across its anchor's line
+#define CANVAS_FLAG_DASHED 32u       // the record carries a dash pattern after it
+#define CANVAS_FLAG_BANDED 64u       // a glyph's record carries its band of zoom after it
+#define CANVAS_FLAG_EITHER_SIDE 128u // a glyph a mirrored view flips back across that line
 
 // A segment's joins, in its fourth measure (canvas_record.h): the join at a, at b, and which ends
 // are joined; a box's join, in its fourth point. The codes are canvas.h's CanvasCap and
