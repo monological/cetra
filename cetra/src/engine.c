@@ -80,6 +80,7 @@ static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int 
 static void _engine_char_callback(GLFWwindow* window, unsigned int codepoint);
 static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, int fb_height);
+static void _engine_iconify_callback(GLFWwindow* window, int iconified);
 static void _engine_close_callback(GLFWwindow* window);
 static void _engine_derive_view(const Engine* engine, SceneView* view);
 static void _engine_input_script_frame(Engine* engine);
@@ -568,10 +569,10 @@ static int _setup_engine_glfw(Engine* engine, EngineWindowMode window_mode, cons
     return 0;
 }
 
-// False when the frame cannot be drawn: a zero-area (minimized) window. A view whose targets failed
-// to build is skipped by itself.
+// False when the frame cannot be drawn: a minimized window, or one of no area. A view whose targets
+// failed to build is skipped by itself.
 static bool _engine_frame_renderable(const Engine* engine) {
-    return engine->fb_width > 0 && engine->fb_height > 0;
+    return engine->fb_width > 0 && engine->fb_height > 0 && !engine->iconified;
 }
 
 // Events arrive only inside a poll, so by the next one the frame's hooks have read this frame's
@@ -742,6 +743,31 @@ static void _engine_idle_wait(Engine* engine) {
     glfwPollEvents();
     // What asked is answered by the frame about to begin.
     atomic_store(&w->requested, false);
+}
+
+// The end of a turn of the loop on which the window could not draw: a wait, since no swap throttles
+// this path, for an event, another thread's request or a timed wake -- GLFW's iconify pattern --
+// at most a tenth of a second for a loop not idle, as before idle mode. Under idle mode a request
+// already standing, which the update hook may have made itself, starts the next turn a frame's time
+// after this one began: never sooner, so an update asking every turn cannot spin a core. A loop not
+// idle never clears its requests, so it does not read them. Headless has no events; it polls.
+static void _engine_undrawn_wait(Engine* engine, double turn_began) {
+    EngineWake* w = engine->wake;
+    atomic_store(&w->waiting, true);
+    const double now = glfwGetTime();
+    double until = engine->idle && atomic_load(&w->requested) ? turn_began + ENGINE_FIXED_FRAME_DT
+                                                              : _engine_wake_soonest(w);
+    if (!engine->idle)
+        until = fmin(until, now + 0.1);
+    if (engine->headless)
+        glfwPollEvents();
+    else if (isfinite(until))
+        glfwWaitEventsTimeout(until > now ? until - now : 0.0);
+    else
+        glfwWaitEvents();
+    atomic_store(&w->waiting, false);
+    atomic_store(&w->requested, false);
+    _engine_drop_passed_wakes(w);
 }
 
 // A loop waiting for events sees no flag: an empty event wakes it, GLFW's one call that may be made
@@ -1013,6 +1039,7 @@ static int _setup_engine_gui(Engine* engine) {
     glfwSetMouseButtonCallback(engine->window, _engine_mouse_button_callback);
     glfwSetCursorPosCallback(engine->window, _engine_cursor_position_callback);
     glfwSetFramebufferSizeCallback(engine->window, _engine_framebuffer_size_callback);
+    glfwSetWindowIconifyCallback(engine->window, _engine_iconify_callback);
     glfwSetKeyCallback(engine->window, _engine_key_callback);
     glfwSetCharCallback(engine->window, _engine_char_callback);
     glfwSetWindowCloseCallback(engine->window, _engine_close_callback);
@@ -1289,6 +1316,17 @@ static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, 
     if (engine->text_renderer)
         text_renderer_update_screen_size(engine->text_renderer, engine->win_width,
                                          engine->win_height);
+}
+
+// Minimized or restored. macOS keeps a minimized window's framebuffer, so its size alone does not
+// say it cannot be seen; this does, on every system. Restored, it draws at once.
+static void _engine_iconify_callback(GLFWwindow* window, int iconified) {
+    Engine* engine = window ? glfwGetWindowUserPointer(window) : NULL;
+    if (!engine)
+        return;
+    engine->iconified = iconified == GLFW_TRUE;
+    if (!engine->iconified)
+        engine_request_frame(engine);
 }
 
 // Window coordinates to framebuffer pixels with +Y up, from the STORED sizes.
@@ -3634,23 +3672,22 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         for (size_t i = 0; i < engine->view_count; i++)
             scene_view_ensure_targets(engine->views[i]);
         if (!_engine_frame_renderable(engine)) {
-            // Nothing to draw. There is no swap on this path, so nothing
-            // throttles it either -- block on events rather than spinning a
-            // core while a window sits minimized (GLFW's iconify pattern).
-            // Headless has no events to wake on, so it polls and relies on the
-            // frame limit to end the run.
+            // Nothing can be drawn: the window is minimized or has no area. The update hook runs,
+            // so an app still answers what its other threads ask, and reads Engine.iconified to
+            // pause; nothing else does -- no pre-render hook, no view, no overlay -- and a window
+            // read waiting is answered NULL.
             // Closes the frame the begin above opened. Skipping it would leave
             // the frame counter and the ring slot where they are for as long as
             // the window stays minimized, after which every scope is refused as
             // a repeat and the table freezes rather than emptying.
             profiler_end_frame(engine->profiler);
+            if (update)
+                update(engine,
+                       (float)(engine->headless ? ENGINE_FIXED_FRAME_DT : engine->delta_time));
+            _engine_serve_reads(engine, false);
             _engine_advance_frame(engine);
-            // No hook reads what arrives while minimized, so none of it waits for the next frame.
             _engine_clear_latches(engine);
-            if (engine->headless)
-                glfwPollEvents();
-            else
-                glfwWaitEventsTimeout(0.1);
+            _engine_undrawn_wait(engine, current_time + engine->time_waited);
             continue;
         }
 

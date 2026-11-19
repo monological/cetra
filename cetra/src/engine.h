@@ -173,6 +173,7 @@ typedef struct Engine {
     int win_height;
     int fb_width;
     int fb_height;
+    bool iconified;               // minimized: nothing is drawn, and the update hook still runs
     EngineWindowMode window_mode; // engine_set_window_mode
     bool vsync;                   // false = swap without waiting for the display; engine_set_vsync
     // The display the window was last placed on, NULL while windowed. Held so a

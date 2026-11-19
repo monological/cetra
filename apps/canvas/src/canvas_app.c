@@ -3334,6 +3334,7 @@ static void history_stream(Engine* engine);
 
 static void on_update(Engine* engine, float dt) {
     (void)dt;
+    pictures_update(engine);
     if (board_late_settle(false) && g_idle_say)
         printf("canvas idle work landed %zu\n", engine->total_frames + 1);
     if (g_idle_say) {
