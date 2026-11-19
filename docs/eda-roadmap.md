@@ -17,8 +17,9 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-17: 14.40, text that reads from either side, built for item 1 (its spec);
-before it the same day, 14.39, tags in 3D, built for item 4a._
+_Last updated: 2026-11-18: 14.41, pictures read back and an element over its parent, started for
+a new item 10 and for pcb's Space i (its spec); the day before, 14.40, text that reads from either
+side, built for item 1._
 
 ---
 
@@ -67,6 +68,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 7 | Rendering at any scale, in true units | **Built**; the physical depth of field left | Already used by pcb's pictures | 13.57, 13.58 |
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 | 9 | What the panes and the fonts need of the UI | **Built** | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
+| 10 | Pictures read back: a rectangle of the window, a canvas or 3D view drawn off the screen, and a window that cannot draw still running its update | **Started** | 9, the agents (pcb 9.1's `look`) | 14.41 |
 
 Specs 14.7, 14.9 to 14.21, 14.23 to 14.28 and 14.30 to 14.37 are the smaller changes pcb's window
 asked for, listed under "Not among the nine". Spec 14.8 was not asked for by pcb: a headless run
@@ -532,6 +534,19 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
 
 ---
 
+## 10. Pictures read back
+
+Found by pcb 9.1, which lets an agent reach the running pcb: its `look` tool answers with
+pictures -- a pane as the person sees it or the whole window, and the agent's own layout, sheet or
+3D, drawn off the screen so the person's panes do not move -- and refuses them while pcb is
+minimized, answering every other call. ARCH's headless capture (`pcb render`, through the
+screenshot path) covers none of it: it takes a whole window, at the end of a run.
+
+Started in spec 14.41: `engine_read_window` (a rectangle of the frame being made, read before it is
+shown), `canvas_read_picture` (a canvas view drawn off the screen at a chosen ratio), offscreen
+scene views and `scene_view_read_picture`, and `Engine.iconified`, a minimized window drawing
+nothing and still running the update hook, so an app's calls from other threads are answered.
+
 ## Not among the nine, but on the way
 
 - **Read-only texts, a close the app can refuse, and headless frames that wait for work** -- spec
@@ -690,6 +705,10 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
   every tile it crosses. Before, a triangle that fitted in two tiles was drawn whole beside a
   neighbour that was cut, and a pixel whose centre fell on their shared edge was left unfilled: a
   few in a plane of thousands of holes (`docs/canvas.md`).
+- **An element over its parent** -- spec 14.41, started, from pcb 9.1's Space i, which shows every
+  pane's number large in its middle over the pane dimmed: `UIElement.over`, out of the flow, laid
+  over the parent's box and painted after its other children. A second screen holding a copy of the
+  panes' splits was turned down, as it copies the window's layout.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the
