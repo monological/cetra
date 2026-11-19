@@ -2330,9 +2330,10 @@ static void draw_view(Engine* engine, void* user) {
         printf("canvas budget %d ms %.3f\n", engine->frame_count, (glfwGetTime() - start) * 1e3);
         fflush(stdout);
     }
+    // Before the sheet's script edits the canvas for the next frame, so a picture is this frame's.
+    pictures_read(engine, g_canvas, g_view_count > 0 ? &g_views[0] : NULL, g_view3d);
     if (g_after_draw)
         g_after_draw();
-    pictures_read(engine, g_canvas, g_view_count > 0 ? &g_views[0] : NULL, g_view3d);
 }
 
 // Under --idle: what is left of --idle-wake's argument, read an item a frame --
@@ -3933,7 +3934,9 @@ static void build_borders(UISystem* ui, int width, int height, double scale, boo
 /*
  * --ui-over (spec 14.41): the window split into two panes, each with a line at its top, and laid
  * over each a panel that darkens it by half with its number large in its middle, as pcb's Space i
- * shows its panes' numbers. The panes fill nothing, so the canvas shows through them, dimmed.
+ * shows its panes' numbers. The panes fill nothing, so the canvas shows through them, dimmed. Each
+ * panel is its pane's first child and its line the second, so only the rule that an element laid
+ * over its parent paints after the rest draws the line under the dimming.
  */
 #define OVER_DIM 0.5f
 static void build_over(UISystem* ui, int width, int height, double scale, bool probe) {
@@ -3949,7 +3952,6 @@ static void build_over(UISystem* ui, int width, int height, double scale, bool p
         panes[k] = ui_panel(row);
         ui_set_size(panes[k], UI_GROW, 0.0f, UI_GROW, 0.0f);
         ui_set_style(panes[k], &clear);
-        lines[k] = ui_label(panes[k], k == 0 ? "the first pane" : "the second pane");
         overs[k] = ui_panel(panes[k]);
         overs[k]->over = true;
         overs[k]->align_main = UI_ALIGN_CENTER;
@@ -3957,11 +3959,13 @@ static void build_over(UISystem* ui, int width, int height, double scale, bool p
         ui_set_style(overs[k], &(UIStyle){.bg = {0.0f, 0.0f, 0.0f, OVER_DIM}});
         numbers[k] = ui_label(overs[k], k == 0 ? "1" : "2");
         ui_set_style(numbers[k], &(UIStyle){.fg = {1.0f, 1.0f, 1.0f, 1.0f}, .font_size = 120.0f});
+        lines[k] = ui_label(panes[k], k == 0 ? "the first pane" : "the second pane");
+        ui_set_style(lines[k], &(UIStyle){.fg = {1.0f, 1.0f, 1.0f, 1.0f}});
     }
     ui_push(ui, screen);
     ui_layout(screen, (float)width, (float)height);
     for (int k = 0; probe && k < 2; k++) {
-        printf("canvas over pane %d", k + 1);
+        printf("canvas over pane-%d", k + 1);
         say_box(panes[k]->rect, scale);
         printf(" over");
         say_box(overs[k]->rect, scale);

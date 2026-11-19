@@ -367,6 +367,24 @@ def run_canvas_gate(workdir):
                      fill, from each bottom corner the backdrop; and a strip along the backdrop's
                      foot at a radius of -1, under the theme's rounded panel: a pixel in from
                      each of its corners its fill.
+      canvas-read-window a rectangle of the window read back (spec 14.41), 200 by 150 points from
+                     (300, 200) of the 400 by 300 board: clipped at the window's corner, and the
+                     same pixels as the run's screenshot there, 0 px, where 20 colours or more
+                     show. The read is served where the screenshot is taken.
+      canvas-read-canvas the board's view read off the screen at the window's ratio against its
+                     pane in the screenshot, 0 px; the screenshot against the board unread, 0 px,
+                     as the read draws into a target of its own; read at 1 pixel a point, 400 by
+                     300.
+      canvas-offscreen-view the 3D pane read back against its pane in the screenshot, 0 px; an
+                     offscreen view of its scene at its size and camera against it, 0 px; and the
+                     screenshot against one with no offscreen view, 0 px, as an offscreen view is
+                     never copied into the window. The offscreen view holds 100 colours or more.
+      canvas-ui-over two panes, each with a panel laid over it (spec 14.41) that darkens it by
+                     half and centres its number: each panel's box its pane's, its number centred
+                     within a pixel and white; the pane, away from its corners, line and number,
+                     the board's colours times a half within 2 codes; and its white line, which
+                     comes after the panel in the tree, no brighter than a half within 2 codes and
+                     20 off the dimmed board, so drawn, under the panel.
       canvas-caps    the strokes sheet (spec 14.22): a segment and an arc each capped round, butt
                      and square, their areas in closed form within 0.03 px per pixel of edge, as
                      canvas-areas. A round cap adds a disc, a square one the width squared. And a
@@ -1393,6 +1411,124 @@ def run_canvas_gate(workdir):
         row = _canvas_coverage(path)[(y0 + y1) // 2, x0:x1] > 0.75
         edges = np.flatnonzero(np.diff(np.concatenate(([0], row.astype(np.int8), [0]))))
         return [(int(a), int(b - a)) for a, b in zip(edges[0::2], edges[1::2])]
+
+    def differing(a, b):
+        # Pixels where two pictures of one size differ in any channel; -1 for two sizes.
+        return int(np.any(a != b, axis=2).sum()) if a.shape == b.shape else -1
+
+    def picture_box(probe, name):
+        # Where apps/canvas said a picture stands in the window, as x, y, width, height pixels.
+        at = probe.get(("picture", name), [])
+        return tuple(int(at[k]) for k in (1, 2, 4, 5)) if len(at) == 6 else None
+
+    @arm("canvas-read-window")
+    def _():
+        # Not canvas_<tag>.ppm, which is the run's screenshot.
+        read = os.path.join(workdir, "picture_window.ppm")
+        shot, _ = _canvas_run(workdir, "read_window", "--sheet", "board", "--read-window",
+                              f"300,200,200,150,{read}")
+        if not shot or not os.path.exists(read):
+            return False, "the run failed or wrote no picture"
+        s, r = _ppm_array(shot), _ppm_array(read)
+        # 200 by 150 points from (300, 200) in a window of 400 by 300: clipped at its corner.
+        scale = s.shape[1] / 400
+        x0, y0 = round(300 * scale), round(200 * scale)
+        cut = s[y0:, x0:]
+        differ = differing(r, cut)
+        colours = len(np.unique(cut.reshape(-1, 3), axis=0))
+        ok = differ == 0 and colours >= 20
+        detail = (f"read {r.shape[1]}x{r.shape[0]} against the window past ({x0}, {y0}), "
+                  f"{cut.shape[1]}x{cut.shape[0]}: {differ} px differ (want 0); {colours} colours "
+                  f"there (want 20 or more)")
+        return ok, detail
+
+    @arm("canvas-read-canvas")
+    def _():
+        plain, _ = board_run()
+        read = os.path.join(workdir, "picture_canvas.ppm")
+        one = os.path.join(workdir, "picture_canvas_1.ppm")
+        shot, probe = _canvas_run(workdir, "read_canvas", "--sheet", "board", "--read-canvas",
+                                  f"0,{read}")
+        shot_one, _ = _canvas_run(workdir, "read_canvas_1", "--sheet", "board", "--read-canvas",
+                                  f"1,{one}")
+        box = picture_box(probe, "canvas")
+        if not (plain and shot and shot_one and box and os.path.exists(read)
+                and os.path.exists(one)):
+            return False, "a run failed or wrote no picture"
+        x, y, w, h = box
+        s, r, small = _ppm_array(shot), _ppm_array(read), _ppm_array(one)
+        differ = differing(r, s[y:y + h, x:x + w])
+        untouched, _ = compare(shot, plain)
+        ok = differ == 0 and untouched == 0 and small.shape[:2] == (300, 400)
+        detail = (f"at the window's ratio against its pane {differ} px differ (want 0); the window "
+                  f"against the board unread {untouched} px (want 0); at 1 pixel a point "
+                  f"{small.shape[1]}x{small.shape[0]} (want 400x300)")
+        return ok, detail
+
+    @arm("canvas-offscreen-view")
+    def _():
+        alone, _ = _canvas_run(workdir, "view3d_alone", "--sheet", "board", "--view3d")
+        pane = os.path.join(workdir, "picture_view3d.ppm")
+        off = os.path.join(workdir, "picture_offscreen.ppm")
+        shot, probe = _canvas_run(workdir, "view3d_off", "--sheet", "board", "--view3d",
+                                  "--read-view3d", pane, "--offscreen-view", off)
+        box = picture_box(probe, "view3d")
+        if not (alone and shot and box and os.path.exists(pane) and os.path.exists(off)):
+            return False, "a run failed or wrote no picture"
+        x, y, w, h = box
+        s, p, o = _ppm_array(shot), _ppm_array(pane), _ppm_array(off)
+        shown = differing(p, s[y:y + h, x:x + w])
+        twin = differing(o, p)
+        untouched, _ = compare(shot, alone)
+        colours = len(np.unique(o.reshape(-1, 3), axis=0))
+        ok = shown == 0 and twin == 0 and untouched == 0 and colours >= 100
+        detail = (f"the 3D pane's picture against its pane {shown} px differ, the offscreen view's "
+                  f"against the pane's {twin}, the window against one with no offscreen view "
+                  f"{untouched} (each want 0); {colours} colours in the offscreen view (want 100 "
+                  f"or more)")
+        return ok, detail
+
+    @arm("canvas-ui-over")
+    def _():
+        plain, _ = board_run()
+        shot, probe = _canvas_run(workdir, "ui_over", "--sheet", "board", "--ui-over")
+        rows = [probe.get(("over", f"pane-{k}"), []) for k in (1, 2)]
+        if not plain or not shot or not all(len(r) == 21 for r in rows):
+            return False, "a run failed or printed no panes"
+        s, p = _ppm_array(shot), _ppm_array(plain)
+        problems = []
+        for k, r in enumerate(rows, 1):
+            pane, over, line, number = (tuple(int(v) for v in r[i:i + 4]) for i in (0, 5, 10, 15))
+            keep = 1.0 - float(r[20])
+            if over != pane:
+                problems.append(f"pane {k}'s panel {over}, not its box {pane}")
+            centre = ((pane[0] + pane[2]) / 2, (pane[1] + pane[3]) / 2)
+            middle = ((number[0] + number[2]) / 2, (number[1] + number[3]) / 2)
+            if max(abs(centre[0] - middle[0]), abs(centre[1] - middle[1])) > 1:
+                problems.append(f"pane {k}'s number centred at {middle}, its pane at {centre}")
+            # The pane dimmed by its panel, away from its rounded corners, its line and its number,
+            # whose ink reaches a pixel or two past their boxes.
+            dim = np.zeros(s.shape[:2], bool)
+            dim[pane[1] + 24:pane[3] - 24, pane[0] + 24:pane[2] - 24] = True
+            for b in (line, number):
+                dim[max(b[1] - 2, 0):b[3] + 2, max(b[0] - 2, 0):b[2] + 2] = False
+            off = int(np.abs(s - p * keep)[dim].max())
+            if off > 2:
+                problems.append(f"pane {k} dimmed {off} codes off its colours times {keep}")
+            # Its line painted under the panel, though it comes after it in the tree.
+            text = s[line[1]:line[3], line[0]:line[2]]
+            drawn = int(np.abs(text - p[line[1]:line[3], line[0]:line[2]] * keep).max())
+            if text.max() > 255 * keep + 2 or drawn < 20:
+                problems.append(f"pane {k}'s line at most {int(text.max())} (want "
+                                f"{255 * keep + 2:.0f} at most, under the panel), {drawn} codes "
+                                f"off the dimmed board (want 20 or more, drawn)")
+            if s[number[1]:number[3], number[0]:number[2]].max() < 250:
+                problems.append(f"pane {k}'s number not drawn white")
+        ok = not problems
+        detail = "; ".join(problems) if problems else (
+            "each panel its pane's box, its number centred and white, its line under it, the pane "
+            "dimmed by half within 2 codes")
+        return ok, detail
 
     @arm("canvas-caps")
     def _():
