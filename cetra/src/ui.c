@@ -1290,8 +1290,6 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
         const float scroll = ui_scroll_settle(el, r->top[r->count], in_len);
         for (size_t i = 0; i < el->child_count; i++) {
             UIElement* c = el->children[i];
-            if (c->over)
-                continue; // placed over the pane above, a row of none
             const int row = r->child_row[i] < r->count ? r->child_row[i] : r->count;
             *_pos(&c->rect, 1) = in_pos - scroll + r->top[row];
             _arrange(ui, c, screen, 1);
@@ -1870,7 +1868,8 @@ static bool _bar(const UISystem* ui, const UIElement* el, UIScrollPlace* place, 
     return _scroll_place(ui, el, place) && ui_bar_place(_bar_strip(el, place), place, track, thumb);
 }
 
-static void _emit_pane(UISystem* ui, UIElement* el, const UIStyle* s);
+static void _emit_pane(UISystem* ui, const UIElement* el, const UIStyle* s);
+static void _emit_children(UISystem* ui, const UIElement* el, const UIRect* visible);
 
 static void _emit(UISystem* ui, UIElement* el) {
     if (el->hidden)
@@ -2010,11 +2009,22 @@ static void _emit(UISystem* ui, UIElement* el) {
         _emit_pane(ui, el, &s);
         return;
     }
-    // The children in tree order, those laid over their parent after the rest.
-    for (int last = 0; last < 2; last++)
-        for (size_t i = 0; i < el->child_count; i++)
-            if (el->children[i]->over == (last == 1))
-                _emit(ui, el->children[i]);
+    _emit_children(ui, el, NULL);
+}
+
+// The children in paint order -- tree order, those laid over their parent after the rest, which
+// _deepest_at walks backwards -- and of a pane only those reaching into `visible` down the screen.
+static void _emit_children(UISystem* ui, const UIElement* el, const UIRect* visible) {
+    for (int over = 0; over < 2; over++) {
+        for (size_t i = 0; i < el->child_count; i++) {
+            UIElement* c = el->children[i];
+            if (c->over != (over == 1))
+                continue;
+            if (!visible ||
+                (c->rect.y < visible->y + visible->h && c->rect.y + c->rect.h > visible->y))
+                _emit(ui, c);
+        }
+    }
 }
 
 // What a pane in `s` lets its content show through: its rect inside its border.
@@ -2028,18 +2038,11 @@ static UIRect _pane_clip(const UIElement* el, const UIStyle* s) {
  * border or outside the pane, the children wholly out of view not emitted at all, and the bar over
  * them. The pane's fill and border were drawn before, under the content.
  */
-static void _emit_pane(UISystem* ui, UIElement* el, const UIStyle* s) {
+static void _emit_pane(UISystem* ui, const UIElement* el, const UIStyle* s) {
     UIDrawList* dl = ui->dl;
     const UIRect view = _pane_clip(el, s);
     ui_push_clip(dl, view);
-    for (int last = 0; last < 2; last++) {
-        for (size_t i = 0; i < el->child_count; i++) {
-            UIElement* c = el->children[i];
-            if (c->over == (last == 1) && c->rect.y < view.y + view.h &&
-                c->rect.y + c->rect.h > view.y)
-                _emit(ui, c);
-        }
-    }
+    _emit_children(ui, el, &view);
     ui_pop_clip(dl);
     UIScrollPlace place;
     UIRect track, thumb;
@@ -2101,9 +2104,10 @@ static UIElement* _deepest_at(UIElement* el, float x, float y, bool (*claims)(co
     // A pane's content is under the pointer only where the pane shows it.
     if (el->kind == UI_SCROLL && !in)
         return NULL;
-    for (int last = 1; last >= 0; last--) {
+    // _emit_children's order, backwards.
+    for (int over = 1; over >= 0; over--) {
         for (size_t i = el->child_count; i-- > 0;) {
-            if (el->children[i]->over != (last == 1))
+            if (el->children[i]->over != (over == 1))
                 continue;
             UIElement* got = _deepest_at(el->children[i], x, y, claims);
             if (got)

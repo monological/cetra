@@ -2298,7 +2298,7 @@ static void lay_out_views(const Engine* engine) {
 static void on_pre_render(Engine* engine, Scene* scene) {
     (void)scene;
     lay_out_views(engine);
-    pictures_lay_out(engine, g_view3d);
+    pictures_lay_out(g_view3d);
 }
 
 static int view_at(float x) {

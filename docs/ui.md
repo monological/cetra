@@ -238,9 +238,10 @@ width keeps its columns and every wrapped row.
   start at rest, since nothing hidden is hovered or focused.
 
 **An element over its parent** (`over`, spec 14.41) is out of the flow, as a `fill` backdrop is,
-and laid over its parent's whole rect -- its padding and border included, scrolled by nothing, a
-virtual row of none -- then laid out inside as any element. It paints after every other child of
-its parent, those over it in their order, whatever its place in the tree, and is hit first. A
+and laid over its parent's whole rect -- its padding and border included, scrolled by nothing --
+then laid out inside as any element; a pane's virtual rows are the pane's to build, and none is
+over it. It paints after every other child of its parent, those over it in their order, whatever
+its place in the tree (`_emit_children`), and is hit first, the same walk backwards. A
 panel or a label claims no pointer, so a click passes through one to what it covers. A pane dimmed
 with its number large in the middle is a panel over the pane, a see-through `bg`, centring a label
 of a large `font_size`. A screen holding a copy of the panes' splits was the alternative, and copies

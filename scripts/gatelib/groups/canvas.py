@@ -43,6 +43,11 @@ def _off_rgb(pixels, rgb, codes):
     return int((np.abs(pixels - rgb).max(axis=-1) > codes).sum())
 
 
+def _differing(a, b):
+    """Pixels where two pictures of one size differ in any channel; -1 for two sizes."""
+    return int(np.any(a != b, axis=2).sum()) if a.shape == b.shape else -1
+
+
 def _ink_cover(pixels, back, ink):
     """Each pixel's coverage between two colours: how far it lies from `back` toward `ink`."""
     span = ink - back
@@ -1414,10 +1419,6 @@ def run_canvas_gate(workdir):
         edges = np.flatnonzero(np.diff(np.concatenate(([0], row.astype(np.int8), [0]))))
         return [(int(a), int(b - a)) for a, b in zip(edges[0::2], edges[1::2])]
 
-    def differing(a, b):
-        # Pixels where two pictures of one size differ in any channel; -1 for two sizes.
-        return int(np.any(a != b, axis=2).sum()) if a.shape == b.shape else -1
-
     def picture_box(probe, name):
         # Where apps/canvas said a picture stands in the window, as x, y, width, height pixels.
         at = probe.get(("picture", name), [])
@@ -1436,7 +1437,7 @@ def run_canvas_gate(workdir):
         scale = s.shape[1] / 400
         x0, y0 = round(300 * scale), round(200 * scale)
         cut = s[y0:, x0:]
-        differ = differing(r, cut)
+        differ = _differing(r, cut)
         colours = len(np.unique(cut.reshape(-1, 3), axis=0))
         ok = differ == 0 and colours >= 20
         detail = (f"read {r.shape[1]}x{r.shape[0]} against the window past ({x0}, {y0}), "
@@ -1459,7 +1460,7 @@ def run_canvas_gate(workdir):
             return False, "a run failed or wrote no picture"
         x, y, w, h = box
         s, r, small = _ppm_array(shot), _ppm_array(read), _ppm_array(one)
-        differ = differing(r, s[y:y + h, x:x + w])
+        differ = _differing(r, s[y:y + h, x:x + w])
         untouched, _ = compare(shot, plain)
         ok = differ == 0 and untouched == 0 and small.shape[:2] == (300, 400)
         detail = (f"at the window's ratio against its pane {differ} px differ (want 0); the window "
@@ -1482,8 +1483,8 @@ def run_canvas_gate(workdir):
             return False, "a run failed or wrote no picture"
         x, y, w, h = box
         s, p, o = _ppm_array(shot), _ppm_array(pane), _ppm_array(off)
-        shown = differing(p, s[y:y + h, x:x + w])
-        twin = differing(o, p)
+        shown = _differing(p, s[y:y + h, x:x + w])
+        twin = _differing(o, p)
         untouched, _ = compare(shot, alone)
         colours = len(np.unique(o.reshape(-1, 3), axis=0))
         ok = shown == 0 and twin == 0 and untouched == 0 and colours >= 100

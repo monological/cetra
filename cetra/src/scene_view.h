@@ -109,12 +109,14 @@ SceneView* create_scene_view(struct Engine* engine, const SceneViewDesc* desc);
 void free_scene_view(SceneView* view);
 
 // The engine takes the view and draws it every frame, after the views already added; the first
-// added is the focus until another is named. False, logged, for a view of another engine or one
+// added is the focus until another is named, though the first shown in the window takes it from an
+// offscreen one. False, logged, for a view of another engine or one
 // already added. A view added again has missed what changed while it was out: its first frame is a
 // cut.
 bool engine_add_view(struct Engine* engine, SceneView* view);
 // Hands an added view back, still built, for the caller to free or add again. Removing the focus
-// passes it to the first view left. NULL when the view was not added, and, logged, while the frame
+// passes it to the first view left shown in the window, else the first left. NULL when the view was
+// not added, and, logged, while the frame
 // draws its views (from a render hook), which would pull a view out from under the loop.
 SceneView* engine_remove_view(struct Engine* engine, SceneView* view);
 // The view whose eye ranks and centres the world's work: the lighting caches, the terrain pages,

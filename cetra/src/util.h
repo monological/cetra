@@ -115,6 +115,14 @@ typedef struct Picture {
 // left, read now. NULL, logged, for a rectangle of no area or when it cannot be held.
 Picture* gl_read_picture(GLuint fbo, int x, int y, int width, int height);
 void free_picture(Picture* picture);
+// The picture as a binary PPM, its alpha left out. False, logged, when the file cannot be written.
+bool picture_write_ppm(const Picture* picture, const char* path);
+
+// A rectangle in points, top-left, at sx and sy pixels a point: its left, top, width and height in
+// pixels from the top left, each edge rounded alone, so rectangles that meet in points meet in
+// pixels. Every picture of a rectangle is rounded by it, so each agrees with the window's.
+void rect_points_to_pixels(double x, double y, double width, double height, double sx, double sy,
+                           int out[4]);
 
 /*
  * String

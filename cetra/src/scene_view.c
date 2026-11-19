@@ -267,7 +267,9 @@ bool engine_add_view(Engine* engine, SceneView* view) {
     // A view added again has missed whatever changed while it was out: its next frame is a cut.
     view->state->away = view->state->record.valid;
     view->state->missed = view->state->record.valid;
-    if (!engine->focus_view)
+    // The first added is the focus, though a view shown in the window takes it from an offscreen
+    // one: the world's work is ranked from the eye the person sees through.
+    if (!engine->focus_view || (engine->focus_view->offscreen && !view->offscreen))
         engine->focus_view = view;
     if (view->rig)
         view->rig->typical_size = engine->typical_size;
@@ -288,8 +290,13 @@ SceneView* engine_remove_view(Engine* engine, SceneView* view) {
                 (engine->view_count - i - 1) * sizeof(SceneView*));
         engine->view_count--;
         view->state->added = false;
-        if (engine->focus_view == view)
+        if (engine->focus_view == view) {
+            // The first view left shown in the window, else the first left.
             engine->focus_view = engine->view_count > 0 ? engine->views[0] : NULL;
+            for (size_t k = engine->view_count; k-- > 0;)
+                if (!engine->views[k]->offscreen)
+                    engine->focus_view = engine->views[k];
+        }
         return view;
     }
     return NULL;
@@ -364,6 +371,14 @@ void engine_fb_per_point(const Engine* engine, float* sx, float* sy) {
     *sy = engine->win_height > 0 ? (float)engine->fb_height / (float)engine->win_height : 1.0f;
 }
 
+void scene_view_pixels_per_point(const SceneView* view, float* sx, float* sy) {
+    if (view->offscreen && view->pixels_per_point > 0.0f) {
+        *sx = *sy = view->pixels_per_point;
+        return;
+    }
+    engine_fb_per_point(view->state->engine, sx, sy);
+}
+
 void scene_view_fb_rect(const SceneView* view, int rect[4]) {
     const Engine* engine = view->state->engine;
     if (view->fills_window) {
@@ -374,30 +389,19 @@ void scene_view_fb_rect(const SceneView* view, int rect[4]) {
         return;
     }
     float sx, sy;
-    engine_fb_per_point(engine, &sx, &sy);
-    if (view->offscreen) {
-        // Its own pixels, wherever its rectangle is: nothing places it in the window.
-        const float s = view->pixels_per_point > 0.0f ? view->pixels_per_point : sx;
-        rect[0] = 0;
-        rect[1] = 0;
-        rect[2] = view->width > 0.0f ? (int)lroundf(view->width * s) : 0;
-        rect[3] = view->height > 0.0f ? (int)lroundf(view->height * s) : 0;
-        return;
-    }
-    const int left = (int)lroundf(view->x * sx);
-    const int right = (int)lroundf((view->x + view->width) * sx);
-    const int top = (int)lroundf(view->y * sy);
-    const int bottom = (int)lroundf((view->y + view->height) * sy);
-    rect[0] = left;
-    rect[1] = engine->fb_height - bottom;
-    rect[2] = right > left ? right - left : 0;
-    rect[3] = bottom > top ? bottom - top : 0;
+    scene_view_pixels_per_point(view, &sx, &sy);
+    int px[4];
+    rect_points_to_pixels(view->x, view->y, view->width, view->height, sx, sy, px);
+    // An offscreen view's pixels are its own, rounded at its place as a pane there would be.
+    rect[0] = view->offscreen ? 0 : px[0];
+    rect[1] = view->offscreen ? 0 : engine->fb_height - (px[1] + px[3]);
+    rect[2] = px[2];
+    rect[3] = px[3];
 }
 
 void scene_view_point_from_fb(const SceneView* view, double fb_x, double fb_y, float out[2]) {
-    const Engine* engine = view->state->engine;
     float sx, sy;
-    engine_fb_per_point(engine, &sx, &sy);
+    scene_view_pixels_per_point(view, &sx, &sy);
     int rect[4];
     scene_view_fb_rect(view, rect);
     // fb_y counts up from the window's bottom edge, as the rect's origin does; the point counts
@@ -407,9 +411,8 @@ void scene_view_point_from_fb(const SceneView* view, double fb_x, double fb_y, f
 }
 
 bool scene_view_contains(const SceneView* view, const float point[2]) {
-    const Engine* engine = view->state->engine;
     float sx, sy;
-    engine_fb_per_point(engine, &sx, &sy);
+    scene_view_pixels_per_point(view, &sx, &sy);
     int rect[4];
     scene_view_fb_rect(view, rect);
     return point[0] >= 0.0f && point[1] >= 0.0f && point[0] * sx < (float)rect[2] &&
@@ -421,9 +424,8 @@ void scene_view_ray(const SceneView* view, const float point[2], vec3 origin, ve
     glm_vec3_copy((vec3){0.0f, 0.0f, -1.0f}, dir);
     if (!view)
         return;
-    const Engine* engine = view->state->engine;
     float sx, sy;
-    engine_fb_per_point(engine, &sx, &sy);
+    scene_view_pixels_per_point(view, &sx, &sy);
     int rect[4];
     scene_view_fb_rect(view, rect);
     const Camera* camera = &view->camera;

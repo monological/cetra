@@ -701,6 +701,15 @@ static void _engine_drop_passed_wakes(EngineWake* w) {
 
 static void _engine_idle_wait(Engine* engine);
 
+// Events waited for until `until`, glfwGetTime's clock, or for ever when it is infinite.
+static void _engine_wait_until(double until) {
+    const double now = glfwGetTime();
+    if (isfinite(until))
+        glfwWaitEventsTimeout(until > now ? until - now : 0.0);
+    else
+        glfwWaitEvents();
+}
+
 static void _engine_frame_events(Engine* engine) {
     engine->ending = glfwWindowShouldClose(engine->window);
     if (engine->idle)
@@ -722,11 +731,7 @@ static void _engine_idle_wait(Engine* engine) {
     while (((next = _engine_idle_next(engine)) == IDLE_WAIT || next == IDLE_WAIT_WORK) &&
            !glfwWindowShouldClose(engine->window)) {
         const double start = glfwGetTime();
-        const double until = next == IDLE_WAIT_WORK ? warn_at : _engine_wake_soonest(w);
-        if (isfinite(until))
-            glfwWaitEventsTimeout(until > start ? until - start : 0.0);
-        else
-            glfwWaitEvents();
+        _engine_wait_until(next == IDLE_WAIT_WORK ? warn_at : _engine_wake_soonest(w));
         engine->time_waited += glfwGetTime() - start;
         if (next == IDLE_WAIT_WORK && glfwGetTime() >= warn_at) {
             log_warn("headless: work begun with engine_begin_work, %d of it, has not ended in %.0f "
@@ -749,23 +754,27 @@ static void _engine_idle_wait(Engine* engine) {
 // this path, for an event, another thread's request or a timed wake -- GLFW's iconify pattern --
 // at most a tenth of a second for a loop not idle, as before idle mode. Under idle mode a request
 // already standing, which the update hook may have made itself, starts the next turn a frame's time
-// after this one began: never sooner, so an update asking every turn cannot spin a core. A loop not
-// idle never clears its requests, so it does not read them. Headless has no events; it polls.
+// after this one began: never sooner, so an update asking every turn cannot spin a core; and the
+// wait is kept out of every clock, as idle mode's is. A loop not idle never clears its requests, so
+// it reads none; the flag is cleared as idle mode clears it. Headless has no events; it polls.
 static void _engine_undrawn_wait(Engine* engine, double turn_began) {
     EngineWake* w = engine->wake;
-    atomic_store(&w->waiting, true);
-    const double now = glfwGetTime();
-    double until = engine->idle && atomic_load(&w->requested) ? turn_began + ENGINE_FIXED_FRAME_DT
-                                                              : _engine_wake_soonest(w);
-    if (!engine->idle)
-        until = fmin(until, now + 0.1);
-    if (engine->headless)
+    engine->ending = glfwWindowShouldClose(engine->window);
+    if (engine->headless) {
         glfwPollEvents();
-    else if (isfinite(until))
-        glfwWaitEventsTimeout(until > now ? until - now : 0.0);
-    else
-        glfwWaitEvents();
-    atomic_store(&w->waiting, false);
+    } else {
+        atomic_store(&w->waiting, true);
+        const double start = glfwGetTime();
+        double until = engine->idle && atomic_load(&w->requested)
+                           ? turn_began + ENGINE_FIXED_FRAME_DT
+                           : _engine_wake_soonest(w);
+        if (!engine->idle)
+            until = fmin(until, start + 0.1);
+        _engine_wait_until(until);
+        if (engine->idle)
+            engine->time_waited += glfwGetTime() - start;
+        atomic_store(&w->waiting, false);
+    }
     atomic_store(&w->requested, false);
     _engine_drop_passed_wakes(w);
 }
@@ -1972,12 +1981,24 @@ static bool _view_drawable(const SceneView* view) {
     return !view->hidden && vs->postfx && !vs->render_suspended && w > 0 && h > 0;
 }
 
+// Whether a view takes part in the window: copied into it, found under the pointer, and deciding
+// whether the window is drawn through a picture. An offscreen view is drawn and never shown.
+static bool _view_in_window(const SceneView* view) {
+    return !view->hidden && !view->offscreen;
+}
+
+// Whether a view's picture is part of the window's own picture this frame: an offscreen view's
+// never is, so it stays RGBA8 and dithered, as a pane's would be, whatever the window does.
+static bool _view_through_picture(const Engine* engine, const SceneView* view) {
+    return engine->window_through_picture && !view->offscreen;
+}
+
 SceneView* engine_view_at(const Engine* engine, double fb_x, double fb_y) {
     if (!engine)
         return NULL;
     for (size_t i = engine->view_count; i-- > 0;) {
         SceneView* view = engine->views[i];
-        if (view->hidden || view->offscreen)
+        if (!_view_in_window(view))
             continue;
         float point[2];
         scene_view_point_from_fb(view, fb_x, fb_y, point);
@@ -2537,37 +2558,14 @@ static void _numbered_screenshot_path(const char* path, size_t frame, char* out,
  * PPM file.
  */
 static void _save_framebuffer_ppm(const Engine* engine, const char* path) {
-    int w = engine->fb_width;
-    int h = engine->fb_height;
+    const int w = engine->fb_width, h = engine->fb_height;
     if (w <= 0 || h <= 0)
         return;
-
-    unsigned char* pixels = malloc((size_t)w * (size_t)h * 3);
-    if (!pixels) {
-        log_error("Failed to allocate screenshot buffer");
-        return;
-    }
-
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-    glReadBuffer(GL_BACK);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, pixels);
-
-    FILE* f = fopen(path, "wb");
-    if (!f) {
-        log_error("Failed to open screenshot file: %s", path);
-        free(pixels);
-        return;
-    }
-
-    fprintf(f, "P6\n%d %d\n255\n", w, h);
-    // GL rows are bottom-up; PPM is top-down
-    for (int y = h - 1; y >= 0; y--) {
-        fwrite(pixels + (size_t)y * (size_t)w * 3, 1, (size_t)w * 3, f);
-    }
-    fclose(f);
-    free(pixels);
-    log_info("Saved screenshot: %s (%dx%d)", path, w, h);
+    // Through the read every picture takes, so a window read is the screenshot's pixels.
+    Picture* picture = gl_read_picture(0, 0, 0, w, h);
+    if (picture && picture_write_ppm(picture, path))
+        log_info("Saved screenshot: %s (%dx%d)", path, w, h);
+    free_picture(picture);
 }
 
 bool engine_read_window(Engine* engine, float x, float y, float width, float height,
@@ -2595,8 +2593,10 @@ bool engine_read_window(Engine* engine, float x, float y, float width, float hei
 // The window reads waiting, each read from the frame just drawn, or answered NULL when `drawn` is
 // false. A read asked from a `done` waits for the next frame.
 static void _engine_serve_reads(Engine* engine, bool drawn) {
-    EngineRead reads[ENGINE_READ_MAX];
     const int count = engine->read_count;
+    if (count == 0)
+        return;
+    EngineRead reads[ENGINE_READ_MAX];
     memcpy(reads, engine->reads, sizeof(EngineRead) * (size_t)count);
     engine->read_count = 0;
     float sx, sy;
@@ -2605,15 +2605,15 @@ static void _engine_serve_reads(Engine* engine, bool drawn) {
         const EngineRead* r = &reads[i];
         Picture* picture = NULL;
         if (drawn) {
-            // As a scene view's rectangle is rounded, clipped to the framebuffer.
-            const long left = lroundf(fmaxf(r->x, 0.0f) * sx);
-            const long right = lroundf(fminf(r->x + r->width, (float)engine->win_width) * sx);
-            const long top = lroundf(fmaxf(r->y, 0.0f) * sy);
-            const long bottom = lroundf(fminf(r->y + r->height, (float)engine->win_height) * sy);
-            const long fb_right = right < engine->fb_width ? right : engine->fb_width;
-            const long fb_bottom = bottom < engine->fb_height ? bottom : engine->fb_height;
-            picture = gl_read_picture(0, (int)left, engine->fb_height - (int)fb_bottom,
-                                      (int)(fb_right - left), (int)(fb_bottom - top));
+            // Clipped to the window in points, then rounded as a view's rectangle is, so it never
+            // passes the framebuffer.
+            const float x0 = fmaxf(r->x, 0.0f),
+                        x1 = fminf(r->x + r->width, (float)engine->win_width);
+            const float y0 = fmaxf(r->y, 0.0f),
+                        y1 = fminf(r->y + r->height, (float)engine->win_height);
+            int px[4];
+            rect_points_to_pixels(x0, y0, x1 - x0, y1 - y0, sx, sy, px);
+            picture = gl_read_picture(0, px[0], engine->fb_height - (px[1] + px[3]), px[2], px[3]);
         }
         r->done(engine, picture, r->user);
     }
@@ -2781,7 +2781,7 @@ static bool _engine_window_through_picture(Engine* engine) {
         return true;
     for (size_t i = 0; i < engine->view_count; i++) {
         const SceneView* view = engine->views[i];
-        if (_view_drawable(view) &&
+        if (_view_drawable(view) && _view_in_window(view) &&
             postfx_draws_after_tone_map(view->state->postfx,
                                         view->settings.render_mode == RENDER_MODE_PBR))
             return true;
@@ -2812,12 +2812,13 @@ static const GLColorTarget* _view_shown_picture(const SceneView* view) {
                                                                            : &fx->picture;
 }
 
-// A view's finished picture into its rectangle in the bound framebuffer, as it is.
-static void _engine_copy_view(const Engine* engine, const SceneView* view) {
+// A view's finished picture, its outlines laid on, into the bound framebuffer at `origin`, as it
+// is: its rectangle in the window, or a picture's own corner.
+static void _engine_copy_view(const Engine* engine, const SceneView* view, const int origin[2]) {
     const SceneViewState* vs = view->state;
     const GLColorTarget* picture = _view_shown_picture(view);
     if (picture)
-        _engine_present_picture(engine, picture, vs->picture_rect, false, 0.0f,
+        _engine_present_picture(engine, picture, origin, false, 0.0f,
                                 vs->overlay_valid ? vs->overlay.tex : 0);
 }
 
@@ -2832,15 +2833,14 @@ Picture* scene_view_read_picture(const SceneView* view) {
         log_error("scene_view_read_picture: the view has not drawn since its targets were made");
         return NULL;
     }
-    // Copied as the window is, outlines and all, into a picture of its own size.
+    // Copied as the window is, into a picture of its own size.
     GLColorTarget target = {0};
     if (!gl_color_target_ensure_format(&target, shown->w, shown->h, GL_RGBA8, "view picture"))
         return NULL;
     const GLPassState pass = gl_pass_begin();
     glBindFramebuffer(GL_FRAMEBUFFER, target.fbo);
     glDisable(GL_BLEND);
-    _engine_present_picture(vs->engine, shown, (const int[2]){0, 0}, false, 0.0f,
-                            vs->overlay_valid ? vs->overlay.tex : 0);
+    _engine_copy_view(vs->engine, view, (const int[2]){0, 0});
     gl_pass_end(&pass);
     Picture* picture = gl_read_picture(target.fbo, 0, 0, shown->w, shown->h);
     gl_color_target_free(&target);
@@ -2859,7 +2859,7 @@ static void _engine_run_view_chain(const Engine* engine, SceneView* view) {
     // it last wrote.
     fx->frame_index = (int)vs->draw_index;
     fx->time = (float)engine->render_time;
-    fx->window_through_picture = engine->window_through_picture;
+    fx->window_through_picture = _view_through_picture(engine, view);
     fx->average_n = vs->average_n;
     // Depth-of-field autofocus: keep the subject sharp as the camera orbits or
     // zooms by refocusing on the point the camera looks at (the orbit target),
@@ -2935,8 +2935,8 @@ static void _engine_present_frame(Engine* engine) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     const GLPassState pass = gl_pass_begin();
     for (size_t i = 0; i < engine->view_count; i++)
-        if (_view_drawable(engine->views[i]) && !engine->views[i]->offscreen)
-            _engine_copy_view(engine, engine->views[i]);
+        if (_view_drawable(engine->views[i]) && _view_in_window(engine->views[i]))
+            _engine_copy_view(engine, engine->views[i], engine->views[i]->state->picture_rect);
     gl_pass_end(&pass);
     glViewport(0, 0, engine->fb_width, engine->fb_height);
 
@@ -3350,7 +3350,7 @@ static bool _view_changed(const Engine* engine, const Scene* scene, SceneView* v
         memcmp(vs->record.projection, vs->projection_matrix, sizeof(mat4)) != 0 ||
         memcmp(vs->record.rect, rect, sizeof(rect)) != 0 || vs->record.mask != mask ||
         vs->record.changes != changes || vs->record.epoch != epoch || vs->record.chain != chain ||
-        vs->record.through != engine->window_through_picture || vs->record.tags != tags ||
+        vs->record.through != _view_through_picture(engine, view) || vs->record.tags != tags ||
         vs->record.tag_generation != tag_generation || (scene && (scene->moved_mask & mask)) ||
         exposure_adapting(&vs->exposure);
     vs->record.valid = true;
@@ -3364,7 +3364,7 @@ static bool _view_changed(const Engine* engine, const Scene* scene, SceneView* v
     vs->record.epoch = epoch;
     vs->record.chain = chain;
     vs->record.covered = covered;
-    vs->record.through = engine->window_through_picture;
+    vs->record.through = _view_through_picture(engine, view);
     vs->record.tags = tags;
     vs->record.tag_generation = tag_generation;
     return changed;
@@ -3671,6 +3671,12 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // post chain agree on a size.
         for (size_t i = 0; i < engine->view_count; i++)
             scene_view_ensure_targets(engine->views[i]);
+
+        // The frame's produced dt: the wall clock live, a fixed step headless.
+        // Headless time is computed from the integer frame index rather than
+        // accumulated, so frame N is instant N/60 exactly, every run.
+        const double frame_dt = engine->headless ? ENGINE_FIXED_FRAME_DT : engine->delta_time;
+
         if (!_engine_frame_renderable(engine)) {
             // Nothing can be drawn: the window is minimized or has no area. The update hook runs,
             // so an app still answers what its other threads ask, and reads Engine.iconified to
@@ -3682,8 +3688,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             // a repeat and the table freezes rather than emptying.
             profiler_end_frame(engine->profiler);
             if (update)
-                update(engine,
-                       (float)(engine->headless ? ENGINE_FIXED_FRAME_DT : engine->delta_time));
+                update(engine, (float)frame_dt);
             _engine_serve_reads(engine, false);
             _engine_advance_frame(engine);
             _engine_clear_latches(engine);
@@ -3706,11 +3711,6 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
                 engine_request_frame(engine);
             igNewFrame();
         }
-
-        // The frame's produced dt: the wall clock live, a fixed step headless.
-        // Headless time is computed from the integer frame index rather than
-        // accumulated, so frame N is instant N/60 exactly, every run.
-        double frame_dt = engine->headless ? ENGINE_FIXED_FRAME_DT : engine->delta_time;
 
         // Snapshot the clock pointer so the two latch sites see one decision:
         // an install/uninstall from inside `update` takes effect at the next

@@ -217,10 +217,12 @@ static inline bool scene_view_outlines(const struct SceneView* view) {
     return scene_view_tags_have(view, TAG_VIEW_OUTLINED);
 }
 
-// The window's framebuffer pixels to a point, across and down: 1 where the window has no size.
-void engine_fb_per_point(const struct Engine* engine, float* sx, float* sy);
+// The view's pixels to a point, across and down: an offscreen view's own when it sets them, else
+// the window's.
+void scene_view_pixels_per_point(const struct SceneView* view, float* sx, float* sy);
 // The view's rectangle in framebuffer pixels, GL's origin (bottom-left): x, y, width, height. Each
-// edge rounds to the nearest pixel, so two views sharing an edge share a pixel boundary.
+// edge rounds to the nearest pixel (rect_points_to_pixels), so two views sharing an edge share a
+// pixel boundary. An offscreen view's stands at the origin of its own pixels.
 void scene_view_fb_rect(const struct SceneView* view, int rect[4]);
 // The view's size in framebuffer pixels, its post size (that times its supersampling), and the
 // render size its targets were last built at.

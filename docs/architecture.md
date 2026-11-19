@@ -268,10 +268,13 @@ it, world work takes the focus view, and a tool takes the view it steers.
   pixel), so a view is the same bytes wherever it is shown. That needs the tone map to take its
   coordinates from the pixel's position rather than the interpolated varying, whose last bits
   differ between targets and which the Purkinje grain hashes.
-- **An offscreen view** (`offscreen`) is drawn as any view and never copied into the window: its
-  size is its `width` and `height` at its own `pixels_per_point` (0, the window's), wherever its
-  rectangle stands, and the pointer never finds it. Its picture is read with
-  `scene_view_read_picture`: see Pictures read back below.
+- **An offscreen view** (`offscreen`) is drawn as any view and never shown: never copied into the
+  window, found by the pointer, counted toward drawing the window through a picture (so its own
+  picture stays RGBA8 and dithered), or the default focus while a shown view is there. Its pixels
+  are its rectangle rounded at its own `pixels_per_point` (0, the window's), as a pane at its place
+  would be, standing at their own origin; its rays and its outline's width take the same ratio
+  (`scene_view_pixels_per_point`). Its picture is read with `scene_view_read_picture`: see
+  Pictures read back below.
 - **A still view rests** when its settings ask (`accumulate_frames`): see Still views below.
 - **An exact background** (`background_exact`) is the display colour wanted: the engine turns it
   back through the view's tone curve and the display encode on the CPU (`background.c`) to the
@@ -313,8 +316,10 @@ frame.
 ### Pictures read back
 
 A picture comes back as a `Picture` (`util.h`): rows from the top, RGBA8 as it is shown, opaque,
-freed with `free_picture`. Every read goes through `gl_read_picture`. Three reads exist (spec
-14.41):
+freed with `free_picture`, written by `picture_write_ppm`. Every read goes through
+`gl_read_picture`, the screenshot's too, and every rectangle in points is rounded to pixels by
+`rect_points_to_pixels`, a view's too, so a picture agrees with the window by construction. Three
+reads exist (spec 14.41):
 - **A rectangle of the window** (`engine_read_window`), in points: read where the screenshot is
   taken -- after the composite, the overlays, the UI and the debug GUI, before the swap -- once the
   frame being made is drawn, so it is what that frame's screenshot holds there, and handed to a

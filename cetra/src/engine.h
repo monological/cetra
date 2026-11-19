@@ -673,6 +673,8 @@ void engine_set_window_mode(Engine* engine, EngineWindowMode mode, const char* m
 void engine_set_vsync(Engine* engine, bool vsync);
 // Where the final frame is written on exit, PPM; NULL clears it. Owned.
 void engine_set_screenshot_path(Engine* engine, const char* path);
+// The window's framebuffer pixels to a point, across and down: 1 where the window has no size.
+void engine_fb_per_point(const Engine* engine, float* sx, float* sy);
 // A rectangle of the window in points, top-left, read once the frame being made is drawn and before
 // it is shown -- what that frame's screenshot holds there -- and handed to `done`, `user` borrowed.
 // Asked from a hook, it is that frame's; it asks for a frame, so an idle loop draws one. Clipped to

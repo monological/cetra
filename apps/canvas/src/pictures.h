@@ -27,7 +27,7 @@ bool pictures_parse(int argc, char** argv, int* i);
 bool pictures_start(Engine* engine, const SceneView* view3d);
 // The offscreen view held to the 3D pane's size, camera and settings: from the pre-render hook,
 // after the panes are laid out.
-void pictures_lay_out(const Engine* engine, const SceneView* view3d);
+void pictures_lay_out(const SceneView* view3d);
 // The reads asked, from the overlay that draws `view`, the first canvas view.
 void pictures_read(Engine* engine, Canvas* canvas, const CanvasView* view, const SceneView* view3d);
 // --minimize's turn, from the update hook.

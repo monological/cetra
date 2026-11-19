@@ -2987,7 +2987,7 @@ void render_view_outline(Engine* engine, Scene* scene, SceneView* sv) {
 
     // The ring, from the mask into the overlay.
     float per_point, per_point_down;
-    engine_fb_per_point(engine, &per_point, &per_point_down);
+    scene_view_pixels_per_point(sv, &per_point, &per_point_down);
     glBindFramebuffer(GL_FRAMEBUFFER, vs->overlay.fbo);
     glViewport(0, 0, w, h);
     glUseProgram(ring->id);

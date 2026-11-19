@@ -1,6 +1,5 @@
 #include "pictures.h"
 
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,28 +21,11 @@ static struct {
     double last_update;
 } g;
 
-// A picture as a binary PPM, its alpha left out.
-static void write_ppm(const Picture* picture, const char* path) {
-    FILE* f = fopen(path, "wb");
-    if (!f) {
-        fprintf(stderr, "canvas: cannot write %s\n", path);
-        return;
-    }
-    fprintf(f, "P6\n%d %d\n255\n", picture->width, picture->height);
-    const size_t pixels = (size_t)picture->width * (size_t)picture->height;
-    for (size_t k = 0; k < pixels; k++)
-        fwrite(picture->rgba + k * 4, 1, 3, f);
-    fclose(f);
-}
-
 bool pictures_parse(int argc, char** argv, int* i) {
-    const char* flag = argv[*i];
-    const bool takes = strcmp(flag, "--read-window") == 0 || strcmp(flag, "--read-canvas") == 0 ||
-                       strcmp(flag, "--read-view3d") == 0 ||
-                       strcmp(flag, "--offscreen-view") == 0 || strcmp(flag, "--minimize") == 0;
-    if (!takes || *i + 1 >= argc)
+    if (*i + 1 >= argc)
         return false;
-    char* value = argv[++*i];
+    const char* flag = argv[*i];
+    char* value = argv[*i + 1];
     if (strcmp(flag, "--minimize") == 0) {
         g.minimize = atoi(value);
     } else if (strcmp(flag, "--read-window") == 0) {
@@ -61,9 +43,12 @@ bool pictures_parse(int argc, char** argv, int* i) {
             fprintf(stderr, "canvas: --read-canvas takes PPP,PATH\n");
     } else if (strcmp(flag, "--read-view3d") == 0) {
         g.view3d_path = value;
-    } else {
+    } else if (strcmp(flag, "--offscreen-view") == 0) {
         g.offscreen_path = value;
+    } else {
+        return false;
     }
+    ++*i;
     return true;
 }
 
@@ -84,20 +69,14 @@ bool pictures_start(Engine* engine, const SceneView* view3d) {
     return true;
 }
 
-// Framebuffer pixels a point across, as the engine takes the window's.
-static float window_ratio(const Engine* engine) {
-    return engine->win_width > 0 ? (float)engine->fb_width / (float)engine->win_width : 1.0f;
-}
-
-void pictures_lay_out(const Engine* engine, const SceneView* view3d) {
+void pictures_lay_out(const SceneView* view3d) {
     if (!g.offscreen || !view3d)
         return;
-    // Its pixels the pane's exactly: the pane's rounded width, given back in points.
-    const float s = window_ratio(engine);
-    const float w = roundf((view3d->x + view3d->width) * s) - roundf(view3d->x * s);
-    const float h = roundf((view3d->y + view3d->height) * s) - roundf(view3d->y * s);
-    g.offscreen->width = w / s;
-    g.offscreen->height = h / s;
+    // The pane's rectangle, rounded at its place as the pane is, so its pixels are the pane's.
+    g.offscreen->x = view3d->x;
+    g.offscreen->y = view3d->y;
+    g.offscreen->width = view3d->width;
+    g.offscreen->height = view3d->height;
     g.offscreen->camera = view3d->camera;
     g.offscreen->settings = view3d->settings;
 }
@@ -106,19 +85,20 @@ static void read_window_done(Engine* engine, Picture* picture, void* user) {
     (void)engine;
     (void)user;
     if (picture)
-        write_ppm(picture, g.window_path);
+        picture_write_ppm(picture, g.window_path);
     free_picture(picture);
 }
 
-// Where a rectangle of points stands in the framebuffer, said once.
+// Where a rectangle of points stands in the framebuffer, as the engine rounds it, said once.
 static void say_rect(const Engine* engine, const char* what, float x, float y, float w, float h,
                      bool* said) {
     if (*said)
         return;
-    const float s = window_ratio(engine);
-    const long left = lroundf(x * s), top = lroundf(y * s);
-    printf("canvas picture %s at %ld %ld size %ld %ld\n", what, left, top,
-           lroundf((x + w) * s) - left, lroundf((y + h) * s) - top);
+    float sx, sy;
+    engine_fb_per_point(engine, &sx, &sy);
+    int px[4];
+    rect_points_to_pixels(x, y, w, h, sx, sy, px);
+    printf("canvas picture %s at %d %d size %d %d\n", what, px[0], px[1], px[2], px[3]);
     fflush(stdout);
     *said = true;
 }
@@ -163,8 +143,7 @@ void pictures_read(Engine* engine, Canvas* canvas, const CanvasView* view,
                    const SceneView* view3d) {
     if (engine->iconified)
         g.minimized_draws++;
-    if (g.minimize > 0 && g.minimized_updates > 0 && !engine->iconified &&
-        g.minimized_updates >= g.minimize) {
+    if (g.minimize > 0 && !engine->iconified && g.minimized_updates >= g.minimize) {
         printf("canvas restored, drawn while minimized %d\n", g.minimized_draws);
         fflush(stdout);
         g.minimize = 0;
@@ -179,7 +158,7 @@ void pictures_read(Engine* engine, Canvas* canvas, const CanvasView* view,
         Picture* picture = canvas_read_picture(canvas, view, g.canvas_ppp);
         if (picture) {
             say_rect(engine, "canvas", view->x, view->y, view->width, view->height, &g.said_canvas);
-            write_ppm(picture, g.canvas_path);
+            picture_write_ppm(picture, g.canvas_path);
         }
         free_picture(picture);
     }
@@ -188,7 +167,7 @@ void pictures_read(Engine* engine, Canvas* canvas, const CanvasView* view,
         if (picture) {
             say_rect(engine, "view3d", view3d->x, view3d->y, view3d->width, view3d->height,
                      &g.said_view3d);
-            write_ppm(picture, g.view3d_path);
+            picture_write_ppm(picture, g.view3d_path);
         }
         free_picture(picture);
     }
@@ -200,7 +179,7 @@ void pictures_read(Engine* engine, Canvas* canvas, const CanvasView* view,
                 fflush(stdout);
             }
             g.said_offscreen = true;
-            write_ppm(picture, g.offscreen_path);
+            picture_write_ppm(picture, g.offscreen_path);
         }
         free_picture(picture);
     }
