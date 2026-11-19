@@ -378,7 +378,9 @@ def run_canvas_gate(workdir):
       canvas-offscreen-view the 3D pane read back against its pane in the screenshot, 0 px; an
                      offscreen view of its scene at its size and camera against it, 0 px; and the
                      screenshot against one with no offscreen view, 0 px, as an offscreen view is
-                     never copied into the window. The offscreen view holds 100 colours or more.
+                     never copied into the window: no canvas view is drawn, so the window's left
+                     half, where a copy would land, is bare. The offscreen view holds 100 colours
+                     or more.
       canvas-ui-over two panes, each with a panel laid over it (spec 14.41) that darkens it by
                      half and centres its number: each panel's box its pane's, its number centred
                      within a pixel and white; the pane, away from its corners, line and number,
@@ -1467,11 +1469,14 @@ def run_canvas_gate(workdir):
 
     @arm("canvas-offscreen-view")
     def _():
-        alone, _ = _canvas_run(workdir, "view3d_alone", "--sheet", "board", "--view3d")
+        # No canvas view drawn (--only-view of none), so the window's left half, where an
+        # offscreen view copied in would land, is bare.
+        bare = ("--sheet", "board", "--view3d", "--only-view", "9")
+        alone, _ = _canvas_run(workdir, "view3d_alone", *bare)
         pane = os.path.join(workdir, "picture_view3d.ppm")
         off = os.path.join(workdir, "picture_offscreen.ppm")
-        shot, probe = _canvas_run(workdir, "view3d_off", "--sheet", "board", "--view3d",
-                                  "--read-view3d", pane, "--offscreen-view", off)
+        shot, probe = _canvas_run(workdir, "view3d_off", *bare, "--read-view3d", pane,
+                                  "--offscreen-view", off)
         box = picture_box(probe, "view3d")
         if not (alone and shot and box and os.path.exists(pane) and os.path.exists(off)):
             return False, "a run failed or wrote no picture"
