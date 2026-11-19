@@ -58,6 +58,7 @@
 #include "cimgui.h"
 
 #include "canvas_fonts.h" // the fonts built into the program, by cetra_embed_files
+#include "minimize.h"
 #include "pictures.h"
 #include "view3d.h"
 
@@ -2332,6 +2333,7 @@ static void draw_view(Engine* engine, void* user) {
     }
     // Before the sheet's script edits the canvas for the next frame, so a picture is this frame's.
     pictures_read(engine, g_canvas, g_view_count > 0 ? &g_views[0] : NULL, g_view3d);
+    minimize_drawn(engine);
     if (g_after_draw)
         g_after_draw();
 }
@@ -3335,7 +3337,7 @@ static void history_stream(Engine* engine);
 
 static void on_update(Engine* engine, float dt) {
     (void)dt;
-    pictures_update(engine);
+    minimize_update(engine);
     if (board_late_settle(false) && g_idle_say)
         printf("canvas idle work landed %zu\n", engine->total_frames + 1);
     if (g_idle_say) {
@@ -3935,8 +3937,7 @@ static void build_borders(UISystem* ui, int width, int height, double scale, boo
  * --ui-over (spec 14.41): the window split into two panes, each with a line at its top, and laid
  * over each a panel that darkens it by half with its number large in its middle, as pcb's Space i
  * shows its panes' numbers. The panes fill nothing, so the canvas shows through them, dimmed. Each
- * panel is its pane's first child and its line the second, so only the rule that an element laid
- * over its parent paints after the rest draws the line under the dimming.
+ * panel is its pane's last child, so tree order paints it over the line.
  */
 #define OVER_DIM 0.5f
 static void build_over(UISystem* ui, int width, int height, double scale, bool probe) {
@@ -3952,15 +3953,15 @@ static void build_over(UISystem* ui, int width, int height, double scale, bool p
         panes[k] = ui_panel(row);
         ui_set_size(panes[k], UI_GROW, 0.0f, UI_GROW, 0.0f);
         ui_set_style(panes[k], &clear);
+        lines[k] = ui_label(panes[k], k == 0 ? "the first pane" : "the second pane");
+        ui_set_style(lines[k], &(UIStyle){.fg = {1.0f, 1.0f, 1.0f, 1.0f}});
         overs[k] = ui_panel(panes[k]);
-        overs[k]->over = true;
+        overs[k]->place = UI_PLACE_PARENT;
         overs[k]->align_main = UI_ALIGN_CENTER;
         overs[k]->align_cross = UI_ALIGN_CENTER;
         ui_set_style(overs[k], &(UIStyle){.bg = {0.0f, 0.0f, 0.0f, OVER_DIM}});
         numbers[k] = ui_label(overs[k], k == 0 ? "1" : "2");
         ui_set_style(numbers[k], &(UIStyle){.fg = {1.0f, 1.0f, 1.0f, 1.0f}, .font_size = 120.0f});
-        lines[k] = ui_label(panes[k], k == 0 ? "the first pane" : "the second pane");
-        ui_set_style(lines[k], &(UIStyle){.fg = {1.0f, 1.0f, 1.0f, 1.0f}});
     }
     ui_push(ui, screen);
     ui_layout(screen, (float)width, (float)height);
@@ -4569,8 +4570,8 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "--work-delay") == 0 && more) {
             const int ms = atoi(argv[++i]);
             g_work_delay_ms = ms > 0 ? (unsigned)ms : 0u;
-        } else if (pictures_parse(argc, argv, &i)) {
-            // spec 14.41's pictures, kept by pictures.c
+        } else if (pictures_parse(argc, argv, &i) || minimize_parse(argc, argv, &i)) {
+            // spec 14.41's pictures and minimized window, kept by pictures.c and minimize.c
         } else if (strcmp(argv[i], "--split") == 0) {
             split = true;
         } else if (strcmp(argv[i], "--view3d") == 0) {

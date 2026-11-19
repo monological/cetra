@@ -1,7 +1,7 @@
 #include "pictures.h"
 
+#include <math.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "cetra/util.h"
@@ -15,10 +15,6 @@ static struct {
     const char* offscreen_path;
     SceneView* offscreen;
     bool said_window, said_canvas, said_view3d, said_offscreen;
-    // --minimize: the updates it waits for while minimized, those it got, the overlays drawn
-    // meanwhile, and the last update's time.
-    int minimize, minimized_updates, minimized_draws;
-    double last_update;
 } g;
 
 bool pictures_parse(int argc, char** argv, int* i) {
@@ -26,9 +22,7 @@ bool pictures_parse(int argc, char** argv, int* i) {
         return false;
     const char* flag = argv[*i];
     char* value = argv[*i + 1];
-    if (strcmp(flag, "--minimize") == 0) {
-        g.minimize = atoi(value);
-    } else if (strcmp(flag, "--read-window") == 0) {
+    if (strcmp(flag, "--read-window") == 0) {
         float* r = g.window_rect;
         int at = 0;
         if (sscanf(value, "%f,%f,%f,%f,%n", &r[0], &r[1], &r[2], &r[3], &at) == 4 && at > 0)
@@ -72,8 +66,10 @@ bool pictures_start(Engine* engine, const SceneView* view3d) {
 void pictures_lay_out(const SceneView* view3d) {
     if (!g.offscreen || !view3d)
         return;
-    // The pane's rectangle, rounded at its place as the pane is, so its pixels are the pane's.
-    g.offscreen->x = view3d->x;
+    // The pane's size, rounded as the pane's is at the window's left edge: a whole pixel either
+    // way, so its pixels are the pane's; and were it ever copied into the window it would land on
+    // the window's left half, where a gate can see it.
+    g.offscreen->x = 0.0f;
     g.offscreen->y = view3d->y;
     g.offscreen->width = view3d->width;
     g.offscreen->height = view3d->height;
@@ -103,55 +99,14 @@ static void say_rect(const Engine* engine, const char* what, float x, float y, f
     *said = true;
 }
 
-static void minimized_read_done(Engine* engine, Picture* picture, void* user) {
-    (void)user;
-    printf("canvas minimized read %s, iconified %d\n", picture ? "a picture" : "NULL",
-           engine->iconified);
-    fflush(stdout);
-    free_picture(picture);
-}
-
-void pictures_update(Engine* engine) {
-    if (g.minimize <= 0)
-        return;
-    const double now = glfwGetTime();
-    if (!engine->iconified && g.minimized_updates == 0) {
-        // Frames asked for until the second, so an idle loop reaches it.
-        if (engine->total_frames < 2) {
-            engine_request_frame(engine);
-        } else if (engine->total_frames == 2) {
-            printf("canvas minimize after frame %zu\n", engine->total_frames);
-            fflush(stdout);
-            glfwIconifyWindow(engine->window);
-        }
-    } else if (engine->iconified) {
-        g.minimized_updates++;
-        printf("canvas minimized update %d after %.3f s, drawn %d\n", g.minimized_updates,
-               now - g.last_update, g.minimized_draws);
-        fflush(stdout);
-        if (g.minimized_updates == 1)
-            engine_read_window(engine, 0.0f, 0.0f, 10.0f, 10.0f, minimized_read_done, NULL);
-        if (g.minimized_updates >= g.minimize)
-            glfwRestoreWindow(engine->window);
-        else
-            engine_request_frame_after(engine, 0.05);
-    }
-    g.last_update = now;
-}
-
 void pictures_read(Engine* engine, Canvas* canvas, const CanvasView* view,
                    const SceneView* view3d) {
-    if (engine->iconified)
-        g.minimized_draws++;
-    if (g.minimize > 0 && !engine->iconified && g.minimized_updates >= g.minimize) {
-        printf("canvas restored, drawn while minimized %d\n", g.minimized_draws);
-        fflush(stdout);
-        g.minimize = 0;
-        glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
-    }
     if (g.window_path) {
+        // Said clipped to the window, as it is read.
         const float* r = g.window_rect;
-        say_rect(engine, "window", r[0], r[1], r[2], r[3], &g.said_window);
+        const float x0 = fmaxf(r[0], 0.0f), x1 = fminf(r[0] + r[2], (float)engine->win_width);
+        const float y0 = fmaxf(r[1], 0.0f), y1 = fminf(r[1] + r[3], (float)engine->win_height);
+        say_rect(engine, "window", x0, y0, x1 - x0, y1 - y0, &g.said_window);
         engine_read_window(engine, r[0], r[1], r[2], r[3], read_window_done, NULL);
     }
     if (g.canvas_path && canvas && view) {

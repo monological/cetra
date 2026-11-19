@@ -7,6 +7,7 @@
 #include "camera.h"
 #include "common.h"
 #include "exposure.h"
+#include "picture.h"
 #include "postfx.h"
 
 struct CameraRig;
@@ -84,7 +85,8 @@ typedef struct SceneView {
     uint32_t mask;             // draws the nodes it shares a bit with
     bool hidden;               // kept, neither drawn nor shown
     bool offscreen;         // drawn, never shown in the window: read with scene_view_read_picture
-    float pixels_per_point; // an offscreen view's resolution; 0 = the window's
+    float pixels_per_point; // an offscreen view's resolution, unless it fills the window; 0 = the
+                            // window's
     struct SceneTags* tags; // borrowed, and shared by any view; NULL = every tag as drawn
     SceneViewSettings settings;
 
@@ -109,14 +111,13 @@ SceneView* create_scene_view(struct Engine* engine, const SceneViewDesc* desc);
 void free_scene_view(SceneView* view);
 
 // The engine takes the view and draws it every frame, after the views already added; the first
-// added is the focus until another is named, though the first shown in the window takes it from an
-// offscreen one. False, logged, for a view of another engine or one
+// added is the focus until another is named -- an app that adds an offscreen view before the ones
+// it shows names its focus. False, logged, for a view of another engine or one
 // already added. A view added again has missed what changed while it was out: its first frame is a
 // cut.
 bool engine_add_view(struct Engine* engine, SceneView* view);
 // Hands an added view back, still built, for the caller to free or add again. Removing the focus
-// passes it to the first view left shown in the window, else the first left. NULL when the view was
-// not added, and, logged, while the frame
+// passes it to the first view left. NULL when the view was not added, and, logged, while the frame
 // draws its views (from a render hook), which would pull a view out from under the loop.
 SceneView* engine_remove_view(struct Engine* engine, SceneView* view);
 // The view whose eye ranks and centres the world's work: the lighting caches, the terrain pages,
@@ -133,7 +134,7 @@ void scene_view_set_rig(SceneView* view, struct CameraRig* rig);
 // offscreen view's at its own size. Read it once the view is finished, or a frame after it drew
 // for a view that does not average. From any hook outside the views' draw. NULL, logged, before
 // the view has drawn since its targets were made.
-struct Picture* scene_view_read_picture(const SceneView* view);
+Picture* scene_view_read_picture(const SceneView* view);
 
 // A flat 2D view: no bloom, glare, local exposure, AO, SSR, vignette, dither or TAA, a linear tone
 // map and unit exposure, so an authored colour reaches the screen as written. The scene half is

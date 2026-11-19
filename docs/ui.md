@@ -223,7 +223,7 @@ showing is hidden. `before` is the child of `parent` to go in front of, NULL for
   under it, and to another screen.
 
 **A hidden element is out of the tree's every walk but its own keeping** (spec 14.18). It takes no
-room and no gap (`_in_flow`, which a `fill` backdrop shares), and the layout lays it and everything
+room and no gap (`_in_flow`, which an element placed out of the flow shares), and the layout lays it and everything
 under it out 0 by 0 where it would start, so a host reading a rect sees nothing shown. It is not
 measured, its lines are not broken, a field's or an editor's place is not given, a pane's rows are
 neither built nor freed, and it is not drawn, eased, hit or gathered for Tab and the pad. Hiding
@@ -237,15 +237,17 @@ width keeps its columns and every wrapped row.
 - **Shown again, a pane of rows keeps the rows it held**, and an element's hover and focus looks
   start at rest, since nothing hidden is hovered or focused.
 
-**An element over its parent** (`over`, spec 14.41) is out of the flow, as a `fill` backdrop is,
-and laid over its parent's whole rect -- its padding and border included, scrolled by nothing --
-then laid out inside as any element; a pane's virtual rows are the pane's to build, and none is
-over it. It paints after every other child of its parent, those over it in their order, whatever
-its place in the tree (`_emit_children`), and is hit first, the same walk backwards. A
-panel or a label claims no pointer, so a click passes through one to what it covers. A pane dimmed
-with its number large in the middle is a panel over the pane, a see-through `bg`, centring a label
-of a large `font_size`. A screen holding a copy of the panes' splits was the alternative, and copies
-the window's layout.
+**Where an element stands** is its `place`: in its parent's flow (`UI_PLACE_FLOW`, the default),
+over the whole screen as a backdrop (`UI_PLACE_SCREEN`), or over its parent's whole rect
+(`UI_PLACE_PARENT`, spec 14.41) -- its padding and border included, scrolled by nothing. Out of the
+flow, an element takes no room and lays out its own children inside the rect it is given. It
+paints and is hit in tree order like any child, so an app puts one last to cover the rest; one more
+order beside the tree's, for one use, was turned down. Not under a pane with virtual rows, whose
+children are its rows; under a scrolling pane it is clipped inside the border and drawn under the
+bar, as the pane's content is. A panel or a label claims no pointer, so a click passes through one
+to what it covers. A pane dimmed with its number large in the middle is a panel placed over the
+pane as its last child, a see-through `bg`, centring a label of a large `font_size`. A screen
+holding a copy of the panes' splits was the alternative, and copies the window's layout.
 
 ## Focus, input and key routing
 

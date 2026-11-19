@@ -34,6 +34,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "picture.h"
+
 struct Engine;
 struct Font;
 
@@ -396,7 +398,7 @@ void canvas_draw(Canvas* canvas, const CanvasView* view);
 // its rectangle rounded as canvas_draw rounds it at that ratio, so a view read at the window's is
 // the pixels canvas_draw puts in the window. From any hook, minimized or headless too. NULL,
 // logged, for a view with no pixels or when its target cannot be made.
-struct Picture* canvas_read_picture(Canvas* canvas, const CanvasView* view, float pixels_per_point);
+Picture* canvas_read_picture(Canvas* canvas, const CanvasView* view, float pixels_per_point);
 
 // The unit under a window point, and the window point of a unit.
 CanvasPoint canvas_view_unit_at(const CanvasView* view, float x, float y);

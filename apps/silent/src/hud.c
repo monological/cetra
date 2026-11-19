@@ -118,7 +118,9 @@ static void save_mark_draw(UIElement* el, UIDrawList* dl, void* user) {
 
 // The gauge's draw while nothing is set: a panel with no draw of its own paints its rect.
 static void draw_nothing(UIElement* el, UIDrawList* dl, void* user) {
-    (void)el, (void)dl, (void)user;
+    (void)el;
+    (void)dl;
+    (void)user;
 }
 
 void hud_set_gauge(Hud* hud, UIDrawFn draw, void* user) {
@@ -162,11 +164,11 @@ bool hud_start(Hud* hud, Engine* engine) {
                 ui_line_height(font, HUD_SIZE, 1.0f) + 8.0f);
     // The save mark over the whole window, out of the column's flow, drawn in its corner.
     hud->save_mark = ui_panel(root);
-    hud->save_mark->fill = true;
+    hud->save_mark->place = UI_PLACE_SCREEN;
     ui_set_draw(hud->save_mark, save_mark_draw, hud);
     // A gauge over the whole window, out of the flow too, drawn by whatever set it.
     hud->gauge = ui_panel(root);
-    hud->gauge->fill = true;
+    hud->gauge->place = UI_PLACE_SCREEN;
     hud_set_gauge(hud, NULL, NULL);
     hud_clear(hud);
     hud->candles = create_ui_draw_program("save_candles", candles_frag_shader_str);
@@ -357,7 +359,7 @@ UIScreen* hud_modal_screen(UISystem* ui, const char* name, float dim, UIElement*
     (*root)->align_cross = UI_ALIGN_CENTER;
     // The world dimmed behind it, out of the flow.
     UIElement* backdrop = ui_panel(*root);
-    backdrop->fill = true;
+    backdrop->place = UI_PLACE_SCREEN;
     const UIStyle style = {.bg = {0.0f, 0.0f, 0.0f, dim}, .corner_radius = HUD_BARE};
     ui_set_style(backdrop, &style);
     return screen;

@@ -7,6 +7,7 @@
 #include <cglm/cglm.h>
 
 #include "common.h"
+#include "picture.h"
 
 /*
  * OpenGL
@@ -105,18 +106,9 @@ void gl_color_target_free(GLColorTarget* t);
 // the read and draw framebuffers.
 void gl_color_target_copy(const GLColorTarget* src, GLuint dst_fbo);
 
-// A picture read back from the GPU: rows from the top, four bytes a pixel, RGBA8 as it is shown
-// (display-encoded, alpha 255). Made by the reads that return one, freed by free_picture.
-typedef struct Picture {
-    int width, height;
-    uint8_t* rgba;
-} Picture;
 // A rectangle of the framebuffer `fbo` (0 = the window's back buffer), GL's pixels from the bottom
 // left, read now. NULL, logged, for a rectangle of no area or when it cannot be held.
 Picture* gl_read_picture(GLuint fbo, int x, int y, int width, int height);
-void free_picture(Picture* picture);
-// The picture as a binary PPM, its alpha left out. False, logged, when the file cannot be written.
-bool picture_write_ppm(const Picture* picture, const char* path);
 
 // A rectangle in points, top-left, at sx and sy pixels a point: its left, top, width and height in
 // pixels from the top left, each edge rounded alone, so rectangles that meet in points meet in

@@ -678,8 +678,9 @@ void engine_fb_per_point(const Engine* engine, float* sx, float* sy);
 // A rectangle of the window in points, top-left, read once the frame being made is drawn and before
 // it is shown -- what that frame's screenshot holds there -- and handed to `done`, `user` borrowed.
 // Asked from a hook, it is that frame's; it asks for a frame, so an idle loop draws one. Clipped to
-// the window, in pixels by the window's ratio. False, logged, for a rectangle with no area in the
-// window, or when ENGINE_READ_MAX reads already wait.
+// the window, in pixels by the window's ratio. While the window is minimized, or when engine_run
+// returns, `done` is handed NULL. False, logged, for a rectangle with no pixels in the window, or
+// when ENGINE_READ_MAX reads already wait.
 bool engine_read_window(Engine* engine, float x, float y, float width, float height,
                         EnginePictureFunc done, void* user);
 // Adds a post-tone-map draw at `order`, `user` borrowed. False, and nothing

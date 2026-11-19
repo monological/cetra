@@ -65,7 +65,7 @@ onto a mirrored one under `--either-side all`.
 - `--read-window`, `--read-canvas`, `--read-view3d` and `--offscreen-view` read pictures back
   (spec 14.41: a rectangle of the window, a canvas view off the screen, the 3D pane, a second view
   of its scene offscreen), each written as a PPM every frame; `--minimize N` minimizes the window
-  and says what runs meanwhile. `src/pictures.c` holds them.
+  and says what runs meanwhile. `src/pictures.c` and `src/minimize.c` hold them.
 - `--edit-thread` builds the board's edit on a thread of its own.
 - `--canvas-probe` prints where each shape landed, in framebuffer pixels, and `--budget` times the
   canvas draws. The `canvas` gate group reads both.

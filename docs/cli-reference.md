@@ -1612,8 +1612,9 @@ and:
 - `--ui-borders` (spec 14.12) draws boxes of one size and radius whose borders lie over clear,
   half-alpha and opaque fills on one backdrop, which `canvas-ui-borders` holds to Porter-Duff over.
 - `--ui-over` (spec 14.41) splits the window into two panes, each with a line at its top, and lays
-  over each a panel that darkens it by half and centres its number at 120 points, which
-  `canvas-ui-over` holds to its pane's box, the dimming and the line drawn under it.
+  over each, placed over its parent as the pane's last child, a panel that darkens it by half and
+  centres its number at 120 points, which `canvas-ui-over` holds to its pane's box, the dimming and
+  the line drawn under it.
 - `--ui-seams` (spec 14.23) draws, at whole framebuffer pixels from the window's corner, quads
   meeting edge to edge on pixel boundaries and part way into pixels, a quad on whole pixels, one
   whose edge halves a column of pixels and a rounded box, which `canvas-ui-seams` holds to a

@@ -220,6 +220,14 @@ static inline bool scene_view_outlines(const struct SceneView* view) {
 // The view's pixels to a point, across and down: an offscreen view's own when it sets them, else
 // the window's.
 void scene_view_pixels_per_point(const struct SceneView* view, float* sx, float* sy);
+// The picture a view shows: a young average shows the TAA picture it began from, until it holds
+// VIEW_AVERAGE_SHOWN frames. NULL before its chain is built.
+const GLColorTarget* scene_view_shown_picture(const struct SceneView* view);
+// A view's shown picture, its outlines laid on, into the bound framebuffer at `origin`, as the
+// window's copy puts it there; dithered when asked, by the view's strength. engine.c's, beside the
+// copy it shares.
+void engine_copy_view(const struct Engine* engine, const struct SceneView* view,
+                      const int origin[2], bool dither);
 // The view's rectangle in framebuffer pixels, GL's origin (bottom-left): x, y, width, height. Each
 // edge rounds to the nearest pixel (rect_points_to_pixels), so two views sharing an edge share a
 // pixel boundary. An offscreen view's stands at the origin of its own pixels.

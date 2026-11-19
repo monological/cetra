@@ -269,12 +269,14 @@ it, world work takes the focus view, and a tool takes the view it steers.
   coordinates from the pixel's position rather than the interpolated varying, whose last bits
   differ between targets and which the Purkinje grain hashes.
 - **An offscreen view** (`offscreen`) is drawn as any view and never shown: never copied into the
-  window, found by the pointer, counted toward drawing the window through a picture (so its own
-  picture stays RGBA8 and dithered), or the default focus while a shown view is there. Its pixels
-  are its rectangle rounded at its own `pixels_per_point` (0, the window's), as a pane at its place
-  would be, standing at their own origin; its rays and its outline's width take the same ratio
-  (`scene_view_pixels_per_point`). Its picture is read with `scene_view_read_picture`: see
-  Pictures read back below.
+  window, found by the pointer, or counted toward drawing the window through a picture. Its chain
+  decides that for itself, by its own passes after the tone map, so they run as they would shown.
+  Its pixels are its rectangle rounded at its own `pixels_per_point` (0, the window's; a view
+  filling the window takes the window's), as a pane at its place would be, standing at their own
+  origin; its rays and its outline's width take the same ratio (`scene_view_pixels_per_point`).
+  The focus is still the first view added: an app that adds an offscreen view before the ones it
+  shows names its focus. Its picture is read with `scene_view_read_picture`: see Pictures read back
+  below.
 - **A still view rests** when its settings ask (`accumulate_frames`): see Still views below.
 - **An exact background** (`background_exact`) is the display colour wanted: the engine turns it
   back through the view's tone curve and the display encode on the CPU (`background.c`) to the
@@ -324,12 +326,15 @@ reads exist (spec 14.41):
   taken -- after the composite, the overlays, the UI and the debug GUI, before the swap -- once the
   frame being made is drawn, so it is what that frame's screenshot holds there, and handed to a
   callback. Asked from a hook, it is that frame's; it asks for a frame, so an idle loop draws one.
-  A read waiting while the window cannot draw, or when `engine_run` returns, is answered NULL.
+  A rectangle that rounds to no pixels is refused when asked. A read waiting while the window
+  cannot draw -- asked while minimized, it is taken and waits -- or when `engine_run` returns, is
+  answered NULL.
 - **A canvas view off the screen** (`canvas_read_picture`, `docs/canvas.md`).
 - **A scene view's picture** (`scene_view_read_picture`): the one the window is shown -- the held
   TAA picture while a young average holds too few frames, the outlines laid on -- copied through
-  the window's own copy into a target of its size and read. An offscreen view's is how it is seen;
-  a resting view's is read once `finished`.
+  the window's own copy (`engine_copy_view`) into a target of its size and read; an RGBA16F
+  picture, which the window would dither as its last write, is dithered by that copy. An offscreen
+  view's is how it is seen; a resting view's is read once `finished`.
 
 Each read blocks on the GPU for one rectangle, well under a frame: pictures are asked for rarely,
 by a person or an agent, so no pixel-buffer ring stands between.
@@ -872,8 +877,10 @@ no area -- draws nothing, on every system: macOS keeps a minimized window's fram
 size alone does not say it cannot be seen. Each turn of the loop then runs the update hook alone,
 so an app still answers what its other threads ask and a game can read `iconified` to pause, and
 waits (`_engine_undrawn_wait`): for an event, another thread's request or a timed wake, at most a
-tenth of a second outside idle mode; under idle mode a request standing from the update itself
-starts the next turn a frame's time later, never sooner. Restored, it asks for a frame.
+tenth of a second outside idle mode, and never less than a frame's time from the turn's start, so
+an update asking every turn cannot spin a core. Under idle mode the wait is kept out of every
+clock, as idle mode's is. Restored, every view's next frame is a cut, as a view added again draws
+one, so nothing reprojects across what moved meanwhile, and it asks for a frame.
 
 `engine_monitor_index` is the one statement of what a stored display name means (NULL, `""` and any
 unrecognised name all give the primary), and `engine_monitor_names` is the list, so no app keeps

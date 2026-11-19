@@ -262,6 +262,15 @@ static void _free_tiles(CanvasLayerData* ld) {
     }
 }
 
+// The view target and the lit target let go, to be made again by the next draw that wants them.
+static void _targets_free(CanvasData* d) {
+    gl_delete_texture(&d->target_texture);
+    gl_delete_fbo(&d->target_fbo);
+    gl_delete_texture(&d->lit_texture);
+    gl_delete_fbo(&d->lit_fbo);
+    d->target_w = d->target_h = 0;
+}
+
 void free_canvas(Canvas* canvas) {
     if (!canvas)
         return;
@@ -307,10 +316,7 @@ void free_canvas(Canvas* canvas) {
         gl_delete_texture(&d->style_texture);
         gl_delete_texture(&d->tile_texture);
         gl_delete_texture(&d->glyph_texture);
-        gl_delete_texture(&d->target_texture);
-        gl_delete_fbo(&d->target_fbo);
-        gl_delete_texture(&d->lit_texture);
-        gl_delete_fbo(&d->lit_fbo);
+        _targets_free(d);
         free(d->coord_by_index);
         free(d->styles);
         free(d->tile_table);
@@ -928,16 +934,11 @@ static bool _target(CanvasData* d, int w, int h) {
         return true;
     const int tw = w > d->target_w ? w : d->target_w;
     const int th = h > d->target_h ? h : d->target_h;
-    gl_delete_texture(&d->target_texture);
-    gl_delete_fbo(&d->target_fbo);
     // The lit target is the view target's size, made again at the next draw fading with room.
-    gl_delete_texture(&d->lit_texture);
-    gl_delete_fbo(&d->lit_fbo);
+    _targets_free(d);
     if (!gl_color_fbo_create(tw, th, GL_RGBA8, &d->target_fbo, &d->target_texture)) {
         log_error("canvas: its %dx%d target is incomplete, so it draws nothing", tw, th);
-        gl_delete_texture(&d->target_texture);
-        gl_delete_fbo(&d->target_fbo);
-        d->target_w = d->target_h = 0;
+        _targets_free(d);
         return false;
     }
     d->target_w = tw, d->target_h = th;
@@ -1239,13 +1240,8 @@ Picture* canvas_read_picture(Canvas* canvas, const CanvasView* view, float pixel
     gl_pass_end(&pass);
     // A picture larger than any view grew the shared targets, which never shrink: let them go, so
     // the next draw makes them at its own size rather than clearing the picture's every frame.
-    if (d->target_w > had_w || d->target_h > had_h) {
-        gl_delete_texture(&d->target_texture);
-        gl_delete_fbo(&d->target_fbo);
-        gl_delete_texture(&d->lit_texture);
-        gl_delete_fbo(&d->lit_fbo);
-        d->target_w = d->target_h = 0;
-    }
+    if (d->target_w > had_w || d->target_h > had_h)
+        _targets_free(d);
     return picture;
 }
 

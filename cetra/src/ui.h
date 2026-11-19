@@ -69,6 +69,18 @@ typedef enum {
     UI_ALIGN_BASELINE = 3,
 } UIAlign;
 
+// Where an element stands. Out of the flow, it takes no room in its parent's layout and lays out
+// its own children inside the rect it is given; it paints and is hit in tree order as any child,
+// so an app puts one last to cover the rest.
+typedef enum {
+    UI_PLACE_FLOW = 0, // in its parent's flow
+    UI_PLACE_SCREEN,   // over the whole screen: a backdrop
+    // Over its parent's whole rect, padding and border included, scrolled by nothing (spec 14.41).
+    // Not under a pane with virtual rows, whose children are its rows; under a scrolling pane,
+    // inside its border and under its bar, as the pane's content is.
+    UI_PLACE_PARENT,
+} UIPlace;
+
 // A box's corners, for UIStyle.corners (spec 14.32). ALL draws as 0 does, and says so against a
 // level below that names some.
 #define UI_CORNER_TOP_LEFT     1u
@@ -500,8 +512,7 @@ struct UIElement {
     UIAlign align_main, align_cross;
     bool focusable;
     bool disabled;
-    bool fill; // ignore layout and cover the whole screen (a backdrop)
-    bool over; // out of the flow, laid over the parent's whole rect, drawn after its other children
+    UIPlace place;
     // A label's text breaks into lines at the width its parent gives it. Its own width measures
     // as its longest word, so it is given one: grown, fixed, or stretched across a column.
     bool wrap;

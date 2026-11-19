@@ -377,20 +377,21 @@ def run_canvas_gate(workdir):
                      same pixels as the run's screenshot there, 0 px, where 20 colours or more
                      show. The read is served where the screenshot is taken.
       canvas-read-canvas the board's view read off the screen at the window's ratio against its
-                     pane in the screenshot, 0 px; the screenshot against the board unread, 0 px,
-                     as the read draws into a target of its own; read at 1 pixel a point, 400 by
-                     300.
+                     pane in the screenshot, 0 px; read there and at 1 pixel a point, each
+                     run's screenshot against the board unread, 0 px, as a read leaves the
+                     window untouched -- the smaller read is the one a write into the window
+                     would show; at 1 pixel a point, 400 by 300.
       canvas-offscreen-view the 3D pane read back against its pane in the screenshot, 0 px; an
                      offscreen view of its scene at its size and camera against it, 0 px; and the
                      screenshot against one with no offscreen view, 0 px, as an offscreen view is
-                     never copied into the window: no canvas view is drawn, so the window's left
-                     half, where a copy would land, is bare. The offscreen view holds 100 colours
-                     or more.
+                     never copied into the window: no canvas view is drawn and the test bed puts
+                     the offscreen view at the window's left edge, so a copy would land on the
+                     bare left half. The offscreen view holds 100 colours or more.
       canvas-ui-over two panes, each with a panel laid over it (spec 14.41) that darkens it by
                      half and centres its number: each panel's box its pane's, its number centred
                      within a pixel and white; the pane, away from its corners, line and number,
-                     the board's colours times a half within 2 codes; and its white line, which
-                     comes after the panel in the tree, no brighter than a half within 2 codes and
+                     the board's colours times a half within 2 codes; and its white line, the
+                     panel being the pane's last child, no brighter than a half within 2 codes and
                      20 off the dimmed board, so drawn, under the panel.
       canvas-caps    the strokes sheet (spec 14.22): a segment and an arc each capped round, butt
                      and square, their areas in closed form within 0.03 px per pixel of edge, as
@@ -1461,17 +1462,19 @@ def run_canvas_gate(workdir):
         x, y, w, h = box
         s, r, small = _ppm_array(shot), _ppm_array(read), _ppm_array(one)
         differ = _differing(r, s[y:y + h, x:x + w])
-        untouched, _ = compare(shot, plain)
+        # Both windows against the board unread: a read at the window's ratio that wrote into the
+        # window would put down the pane's own pixels, so only the smaller one could show it.
+        untouched = compare(shot, plain)[0] + compare(shot_one, plain)[0]
         ok = differ == 0 and untouched == 0 and small.shape[:2] == (300, 400)
-        detail = (f"at the window's ratio against its pane {differ} px differ (want 0); the window "
-                  f"against the board unread {untouched} px (want 0); at 1 pixel a point "
+        detail = (f"at the window's ratio against its pane {differ} px differ (want 0); both "
+                  f"windows against the board unread {untouched} px (want 0); at 1 pixel a point "
                   f"{small.shape[1]}x{small.shape[0]} (want 400x300)")
         return ok, detail
 
     @arm("canvas-offscreen-view")
     def _():
-        # No canvas view drawn (--only-view of none), so the window's left half, where an
-        # offscreen view copied in would land, is bare.
+        # No canvas view drawn (--only-view of none), so the window's left half, where the test
+        # bed's offscreen view would land were it copied in, is bare.
         bare = ("--sheet", "board", "--view3d", "--only-view", "9")
         alone, _ = _canvas_run(workdir, "view3d_alone", *bare)
         pane = os.path.join(workdir, "picture_view3d.ppm")

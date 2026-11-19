@@ -267,9 +267,7 @@ bool engine_add_view(Engine* engine, SceneView* view) {
     // A view added again has missed whatever changed while it was out: its next frame is a cut.
     view->state->away = view->state->record.valid;
     view->state->missed = view->state->record.valid;
-    // The first added is the focus, though a view shown in the window takes it from an offscreen
-    // one: the world's work is ranked from the eye the person sees through.
-    if (!engine->focus_view || (engine->focus_view->offscreen && !view->offscreen))
+    if (!engine->focus_view)
         engine->focus_view = view;
     if (view->rig)
         view->rig->typical_size = engine->typical_size;
@@ -290,13 +288,8 @@ SceneView* engine_remove_view(Engine* engine, SceneView* view) {
                 (engine->view_count - i - 1) * sizeof(SceneView*));
         engine->view_count--;
         view->state->added = false;
-        if (engine->focus_view == view) {
-            // The first view left shown in the window, else the first left.
+        if (engine->focus_view == view)
             engine->focus_view = engine->view_count > 0 ? engine->views[0] : NULL;
-            for (size_t k = engine->view_count; k-- > 0;)
-                if (!engine->views[k]->offscreen)
-                    engine->focus_view = engine->views[k];
-        }
         return view;
     }
     return NULL;
@@ -365,14 +358,45 @@ PostFXPass* scene_view_add_pass(SceneView* view, PostFXLocation at, ShaderProgra
  * Points and rays
  */
 
-// Framebuffer pixels per window point, along each axis.
-void engine_fb_per_point(const Engine* engine, float* sx, float* sy) {
-    *sx = engine->win_width > 0 ? (float)engine->fb_width / (float)engine->win_width : 1.0f;
-    *sy = engine->win_height > 0 ? (float)engine->fb_height / (float)engine->win_height : 1.0f;
+const GLColorTarget* scene_view_shown_picture(const SceneView* view) {
+    const SceneViewState* vs = view->state;
+    const PostFX* fx = vs->postfx;
+    if (!fx || !fx->picture.fbo)
+        return NULL;
+    return vs->held_valid && view->frames_accumulated < VIEW_AVERAGE_SHOWN ? &vs->held
+                                                                           : &fx->picture;
+}
+
+Picture* scene_view_read_picture(const SceneView* view) {
+    if (!view) {
+        log_error("scene_view_read_picture: NULL view");
+        return NULL;
+    }
+    const SceneViewState* vs = view->state;
+    const GLColorTarget* shown = scene_view_shown_picture(view);
+    if (!shown || !vs->pictured) {
+        log_error("scene_view_read_picture: the view has not drawn since its targets were made");
+        return NULL;
+    }
+    // Copied as the window copies it, into a picture of its own size; an RGBA16F picture, which
+    // the window would dither as its last write, dithered here, its write to 8 bits.
+    const GLPassState pass = gl_pass_begin();
+    GLColorTarget target = {0};
+    Picture* picture = NULL;
+    if (gl_color_target_ensure_format(&target, shown->w, shown->h, GL_RGBA8, "view picture")) {
+        glBindFramebuffer(GL_FRAMEBUFFER, target.fbo);
+        glDisable(GL_BLEND);
+        engine_copy_view(vs->engine, view, (const int[2]){0, 0},
+                         shown->format == GL_RGBA16F && view->settings.post.dither_enabled);
+        picture = gl_read_picture(target.fbo, 0, 0, shown->w, shown->h);
+    }
+    gl_pass_end(&pass);
+    gl_color_target_free(&target);
+    return picture;
 }
 
 void scene_view_pixels_per_point(const SceneView* view, float* sx, float* sy) {
-    if (view->offscreen && view->pixels_per_point > 0.0f) {
+    if (view->offscreen && !view->fills_window && view->pixels_per_point > 0.0f) {
         *sx = *sy = view->pixels_per_point;
         return;
     }

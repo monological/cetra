@@ -9010,7 +9010,7 @@ static bool ui_install(Engine* engine) {
     // screen behind the panel. This is the layer's headline claim -- that a
     // menu is not limited to what the element vocabulary can express.
     UIElement* backdrop = ui_panel(ui_screen_root(screen_main));
-    backdrop->fill = true; // out of the flow, covering the screen
+    backdrop->place = UI_PLACE_SCREEN; // out of the flow, covering the screen
     if (ui_backdrop_program)
         ui_set_element_program(backdrop, ui_backdrop_program);
 
