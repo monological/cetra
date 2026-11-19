@@ -273,6 +273,53 @@ bool gl_color_target_ensure(GLColorTarget* t, int w, int h, const char* what) {
     return gl_color_target_ensure_format(t, w, h, GL_RGBA16F, what);
 }
 
+Picture* gl_read_picture(GLuint fbo, int x, int y, int width, int height) {
+    if (width <= 0 || height <= 0) {
+        log_error("gl_read_picture: a %dx%d rectangle has no area", width, height);
+        return NULL;
+    }
+    const size_t row = (size_t)width * 4;
+    Picture* picture = calloc(1, sizeof *picture);
+    uint8_t* rgba = malloc(row * (size_t)height);
+    uint8_t* swap = malloc(row);
+    if (!picture || !rgba || !swap) {
+        log_error("gl_read_picture: no memory for a %dx%d picture", width, height);
+        free(picture);
+        free(rgba);
+        free(swap);
+        return NULL;
+    }
+    GLint was = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &was);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    glReadBuffer(fbo ? GL_COLOR_ATTACHMENT0 : GL_BACK);
+    glReadPixels(x, y, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)was);
+    // GL's rows are from the bottom; a picture's from the top. Whatever alpha the target held, the
+    // picture is what is shown, opaque.
+    for (int r = 0; r < height / 2; r++) {
+        uint8_t* a = rgba + (size_t)r * row;
+        uint8_t* b = rgba + (size_t)(height - 1 - r) * row;
+        memcpy(swap, a, row);
+        memcpy(a, b, row);
+        memcpy(b, swap, row);
+    }
+    free(swap);
+    for (size_t i = 3; i < row * (size_t)height; i += 4)
+        rgba[i] = 255;
+    picture->width = width;
+    picture->height = height;
+    picture->rgba = rgba;
+    return picture;
+}
+
+void free_picture(Picture* picture) {
+    if (!picture)
+        return;
+    free(picture->rgba);
+    free(picture);
+}
+
 void print_indentation(int depth) {
     for (int i = 0; i < depth; i++) {
         printf("    ");

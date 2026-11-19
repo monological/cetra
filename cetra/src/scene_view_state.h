@@ -171,6 +171,7 @@ typedef struct SceneViewState {
     // The last TAA picture, shown while the average holds fewer than VIEW_AVERAGE_SHOWN frames.
     GLColorTarget held;
     bool held_valid;
+    bool pictured; // it has drawn a picture since its targets were last made, for a read
     // An exact background's working value this frame (background_working), and what has been said
     // once: a colour the curve cannot reach, a stage the inverse cannot undo.
     vec3 exact_background;

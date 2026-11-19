@@ -128,6 +128,8 @@ static SceneView* _scene_view_alloc(Engine* engine, const SceneViewDesc* desc) {
     view->width = desc->width;
     view->height = desc->height;
     view->mask = desc->mask ? desc->mask : ~0u;
+    view->offscreen = desc->offscreen;
+    view->pixels_per_point = desc->pixels_per_point;
     view->state = vs;
     vs->engine = engine;
     vs->draw_index = (long long)engine->total_frames;
@@ -373,6 +375,15 @@ void scene_view_fb_rect(const SceneView* view, int rect[4]) {
     }
     float sx, sy;
     engine_fb_per_point(engine, &sx, &sy);
+    if (view->offscreen) {
+        // Its own pixels, wherever its rectangle is: nothing places it in the window.
+        const float s = view->pixels_per_point > 0.0f ? view->pixels_per_point : sx;
+        rect[0] = 0;
+        rect[1] = 0;
+        rect[2] = view->width > 0.0f ? (int)lroundf(view->width * s) : 0;
+        rect[3] = view->height > 0.0f ? (int)lroundf(view->height * s) : 0;
+        return;
+    }
     const int left = (int)lroundf(view->x * sx);
     const int right = (int)lroundf((view->x + view->width) * sx);
     const int top = (int)lroundf(view->y * sy);
@@ -675,6 +686,8 @@ bool scene_view_ensure_targets(SceneView* view) {
     const int samples = _clamp_msaa_samples(view->settings.samples);
     if (sized && samples == vs->msaa_samples_built && (vs->postfx || vs->render_suspended))
         return !vs->render_suspended;
+    // Remade, its picture holds nothing until it draws again.
+    vs->pictured = false;
 
     // The sample count alone: the scene target is rebuilt in place, and the chain's single-sample
     // resolve targets are unaffected by it.

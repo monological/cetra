@@ -58,6 +58,7 @@
 #include "cimgui.h"
 
 #include "canvas_fonts.h" // the fonts built into the program, by cetra_embed_files
+#include "pictures.h"
 #include "view3d.h"
 
 #define MM(v) ((int64_t)llround((v) * 1e6))
@@ -2297,6 +2298,7 @@ static void lay_out_views(const Engine* engine) {
 static void on_pre_render(Engine* engine, Scene* scene) {
     (void)scene;
     lay_out_views(engine);
+    pictures_lay_out(engine, g_view3d);
 }
 
 static int view_at(float x) {
@@ -2330,6 +2332,7 @@ static void draw_view(Engine* engine, void* user) {
     }
     if (g_after_draw)
         g_after_draw();
+    pictures_read(engine, g_canvas, g_view_count > 0 ? &g_views[0] : NULL, g_view3d);
 }
 
 // Under --idle: what is left of --idle-wake's argument, read an item a frame --
@@ -4516,6 +4519,8 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "--work-delay") == 0 && more) {
             const int ms = atoi(argv[++i]);
             g_work_delay_ms = ms > 0 ? (unsigned)ms : 0u;
+        } else if (pictures_parse(argc, argv, &i)) {
+            // spec 14.41's pictures, kept by pictures.c
         } else if (strcmp(argv[i], "--split") == 0) {
             split = true;
         } else if (strcmp(argv[i], "--view3d") == 0) {
@@ -4682,6 +4687,10 @@ int main(int argc, char** argv) {
             free_engine(engine);
             return 1;
         }
+    }
+    if (!pictures_start(engine, g_view3d)) {
+        free_engine(engine);
+        return 1;
     }
 
     g_canvas = create_canvas(engine, &(CanvasDesc){.tile_shift = tile_shift});

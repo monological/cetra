@@ -1939,7 +1939,7 @@ SceneView* engine_view_at(const Engine* engine, double fb_x, double fb_y) {
         return NULL;
     for (size_t i = engine->view_count; i-- > 0;) {
         SceneView* view = engine->views[i];
-        if (view->hidden)
+        if (view->hidden || view->offscreen)
             continue;
         float point[2];
         scene_view_point_from_fb(view, fb_x, fb_y, point);
@@ -2532,6 +2532,55 @@ static void _save_framebuffer_ppm(const Engine* engine, const char* path) {
     log_info("Saved screenshot: %s (%dx%d)", path, w, h);
 }
 
+bool engine_read_window(Engine* engine, float x, float y, float width, float height,
+                        EnginePictureFunc done, void* user) {
+    if (!engine || !done) {
+        log_error("engine_read_window: NULL %s", engine ? "done" : "engine");
+        return false;
+    }
+    const float x0 = fmaxf(x, 0.0f), x1 = fminf(x + width, (float)engine->win_width);
+    const float y0 = fmaxf(y, 0.0f), y1 = fminf(y + height, (float)engine->win_height);
+    if (!(x1 > x0 && y1 > y0)) {
+        log_error("engine_read_window: %gx%g at (%g, %g) has no area in the %dx%d window", width,
+                  height, x, y, engine->win_width, engine->win_height);
+        return false;
+    }
+    if (engine->read_count >= ENGINE_READ_MAX) {
+        log_error("engine_read_window: %d reads already wait", ENGINE_READ_MAX);
+        return false;
+    }
+    engine->reads[engine->read_count++] = (EngineRead){x, y, width, height, done, user};
+    engine_request_frame(engine);
+    return true;
+}
+
+// The window reads waiting, each read from the frame just drawn, or answered NULL when `drawn` is
+// false. A read asked from a `done` waits for the next frame.
+static void _engine_serve_reads(Engine* engine, bool drawn) {
+    EngineRead reads[ENGINE_READ_MAX];
+    const int count = engine->read_count;
+    memcpy(reads, engine->reads, sizeof(EngineRead) * (size_t)count);
+    engine->read_count = 0;
+    float sx, sy;
+    engine_fb_per_point(engine, &sx, &sy);
+    for (int i = 0; i < count; i++) {
+        const EngineRead* r = &reads[i];
+        Picture* picture = NULL;
+        if (drawn) {
+            // As a scene view's rectangle is rounded, clipped to the framebuffer.
+            const long left = lroundf(fmaxf(r->x, 0.0f) * sx);
+            const long right = lroundf(fminf(r->x + r->width, (float)engine->win_width) * sx);
+            const long top = lroundf(fmaxf(r->y, 0.0f) * sy);
+            const long bottom = lroundf(fminf(r->y + r->height, (float)engine->win_height) * sy);
+            const long fb_right = right < engine->fb_width ? right : engine->fb_width;
+            const long fb_bottom = bottom < engine->fb_height ? bottom : engine->fb_height;
+            picture = gl_read_picture(0, (int)left, engine->fb_height - (int)fb_bottom,
+                                      (int)(fb_right - left), (int)(fb_bottom - top));
+        }
+        r->done(engine, picture, r->user);
+    }
+}
+
 void engine_set_user_data(Engine* engine, void* user_data) {
     if (engine)
         engine->user_data = user_data;
@@ -2714,17 +2763,50 @@ static GLuint _engine_window_target(Engine* engine) {
                : 0;
 }
 
-// A view's finished picture into its rectangle in the bound framebuffer, as it is.
-static void _engine_copy_view(const Engine* engine, const SceneView* view) {
+// The picture a view shows: a young average shows the TAA picture it began from, until it holds
+// enough frames. NULL before its chain is built.
+static const GLColorTarget* _view_shown_picture(const SceneView* view) {
     const SceneViewState* vs = view->state;
     const PostFX* fx = vs->postfx;
     if (!fx || !fx->picture.fbo)
-        return;
-    // A young average is shown as the TAA picture it began from, until it holds enough frames.
-    const GLColorTarget* picture =
-        vs->held_valid && view->frames_accumulated < VIEW_AVERAGE_SHOWN ? &vs->held : &fx->picture;
-    _engine_present_picture(engine, picture, vs->picture_rect, false, 0.0f,
+        return NULL;
+    return vs->held_valid && view->frames_accumulated < VIEW_AVERAGE_SHOWN ? &vs->held
+                                                                           : &fx->picture;
+}
+
+// A view's finished picture into its rectangle in the bound framebuffer, as it is.
+static void _engine_copy_view(const Engine* engine, const SceneView* view) {
+    const SceneViewState* vs = view->state;
+    const GLColorTarget* picture = _view_shown_picture(view);
+    if (picture)
+        _engine_present_picture(engine, picture, vs->picture_rect, false, 0.0f,
+                                vs->overlay_valid ? vs->overlay.tex : 0);
+}
+
+Picture* scene_view_read_picture(const SceneView* view) {
+    if (!view) {
+        log_error("scene_view_read_picture: NULL view");
+        return NULL;
+    }
+    const SceneViewState* vs = view->state;
+    const GLColorTarget* shown = _view_shown_picture(view);
+    if (!shown || !vs->pictured) {
+        log_error("scene_view_read_picture: the view has not drawn since its targets were made");
+        return NULL;
+    }
+    // Copied as the window is, outlines and all, into a picture of its own size.
+    GLColorTarget target = {0};
+    if (!gl_color_target_ensure_format(&target, shown->w, shown->h, GL_RGBA8, "view picture"))
+        return NULL;
+    const GLPassState pass = gl_pass_begin();
+    glBindFramebuffer(GL_FRAMEBUFFER, target.fbo);
+    glDisable(GL_BLEND);
+    _engine_present_picture(vs->engine, shown, (const int[2]){0, 0}, false, 0.0f,
                             vs->overlay_valid ? vs->overlay.tex : 0);
+    gl_pass_end(&pass);
+    Picture* picture = gl_read_picture(target.fbo, 0, 0, shown->w, shown->h);
+    gl_color_target_free(&target);
+    return picture;
 }
 
 // A view's post chain, from its scene target into its picture, after what the
@@ -2815,7 +2897,7 @@ static void _engine_present_frame(Engine* engine) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     const GLPassState pass = gl_pass_begin();
     for (size_t i = 0; i < engine->view_count; i++)
-        if (_view_drawable(engine->views[i]))
+        if (_view_drawable(engine->views[i]) && !engine->views[i]->offscreen)
             _engine_copy_view(engine, engine->views[i]);
     gl_pass_end(&pass);
     glViewport(0, 0, engine->fb_width, engine->fb_height);
@@ -3489,8 +3571,10 @@ static void _engine_draw_view(Engine* engine, Scene* scene, SceneView* view, Eng
         layers_vt_feedback_pass(engine, scene, view);
 
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-    if (!loading_screen_covers(engine))
+    if (!loading_screen_covers(engine)) {
         _engine_run_view_chain(engine, view);
+        vs->pictured = true;
+    }
     if (view->settings.show_wireframe)
         glEnable(GL_CULL_FACE);
     vs->draw_index++;
@@ -3816,6 +3900,9 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // final-frame screenshot below fires this same iteration.
         _engine_advance_frame(engine);
 
+        // The window's reads, from the frame as its screenshot holds it, before it is shown.
+        _engine_serve_reads(engine, true);
+
         // Periodic capture: numbered frames every N frames
         if (engine->screenshot_path && engine->screenshot_every > 0 &&
             engine->total_frames % (size_t)engine->screenshot_every == 0) {
@@ -3843,6 +3930,8 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // idle mode's wait, which is what makes the next frame draw its last.
         _engine_input_script_frame(engine);
     }
+    // A read asked after the last frame drew is answered: no frame will.
+    _engine_serve_reads(engine, false);
 }
 
 // The node under a press, through the view it lands in: the hit's point and distance and the

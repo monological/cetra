@@ -72,6 +72,8 @@ typedef struct SceneViewDesc {
     bool fills_window;                 // the rectangle below is then unused
     float x, y, width, height;         // window points, top-left, +Y down, as the UI
     uint32_t mask;                     // 0 = every bit
+    bool offscreen;                    // as SceneView's
+    float pixels_per_point;            // as SceneView's
 } SceneViewDesc;
 
 typedef struct SceneView {
@@ -81,7 +83,9 @@ typedef struct SceneView {
     float x, y, width, height; // window points, top-left, +Y down, as the UI
     uint32_t mask;             // draws the nodes it shares a bit with
     bool hidden;               // kept, neither drawn nor shown
-    struct SceneTags* tags;    // borrowed, and shared by any view; NULL = every tag as drawn
+    bool offscreen;         // drawn, never shown in the window: read with scene_view_read_picture
+    float pixels_per_point; // an offscreen view's resolution; 0 = the window's
+    struct SceneTags* tags; // borrowed, and shared by any view; NULL = every tag as drawn
     SceneViewSettings settings;
 
     // BY FUNCTION: the camera rig (scene_view_set_rig), borrowed.
@@ -122,6 +126,12 @@ void engine_set_focus_view(struct Engine* engine, SceneView* view);
 // The rig that poses the view's camera each frame, or NULL for none: the engine applies it after
 // the app's pre-render hook. Borrowed; given the engine's typical size.
 void scene_view_set_rig(SceneView* view, struct CameraRig* rig);
+
+// The picture the view last drew, or rests on, with its outlines, as the window is shown it: an
+// offscreen view's at its own size. Read it once the view is finished, or a frame after it drew
+// for a view that does not average. From any hook outside the views' draw. NULL, logged, before
+// the view has drawn since its targets were made.
+struct Picture* scene_view_read_picture(const SceneView* view);
 
 // A flat 2D view: no bloom, glare, local exposure, AO, SSR, vignette, dither or TAA, a linear tone
 // map and unit exposure, so an authored colour reaches the screen as written. The scene half is

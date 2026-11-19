@@ -1103,30 +1103,29 @@ static void _view_uniforms(const ShaderProgram* program, const Canvas* canvas,
     uniform_set_int(u, "uTagCount", (int)canvas->data->tags->table.count);
 }
 
-void canvas_draw(Canvas* canvas, const CanvasView* view) {
-    if (!canvas || !view || view->points_per_unit <= 0.0)
-        return;
-    const Engine* engine = canvas->engine;
-    CanvasData* d = canvas->data;
-    if (engine->win_width <= 0 || engine->win_height <= 0)
-        return;
+// The view's rectangle in pixels at sx and sy pixels a point: its left and top, from the top left,
+// and its size. Rounded at both edges, so a view's pixels at the window's ratio are the window's.
+static void _view_pixels(const CanvasView* view, double sx, double sy, int* x0, int* y0, int* w,
+                         int* h) {
+    const long left = lround(view->x * sx), right = lround((view->x + view->width) * sx);
+    const long top = lround(view->y * sy), bottom = lround((view->y + view->height) * sy);
+    *x0 = (int)left;
+    *y0 = (int)top;
+    *w = (int)(right - left);
+    *h = (int)(bottom - top);
+}
 
-    // The rectangle in framebuffer pixels, from the bottom as GL counts.
-    const double sx = (double)engine->fb_width / (double)engine->win_width;
-    const double sy = (double)engine->fb_height / (double)engine->win_height;
-    const long x0 = lround(view->x * sx), x1 = lround((view->x + view->width) * sx);
-    const long y0 = lround(view->y * sy), y1 = lround((view->y + view->height) * sy);
-    const int w = (int)(x1 - x0), h = (int)(y1 - y0);
-    if (w <= 0 || h <= 0)
-        return;
-    const int gl_y = engine->fb_height - (int)y1;
+// The view drawn w by h at sx pixels a point into the canvas's target, then copied opaque into the
+// framebuffer `fbo` with its bottom left at (dst_x, dst_y), as GL counts.
+static void _draw_view(Canvas* canvas, const CanvasView* view, double sx, int w, int h, GLuint fbo,
+                       int dst_x, int dst_y) {
+    CanvasData* d = canvas->data;
     const double ppu = view->points_per_unit * sx;
     // A ring from one point outside a shape to two and a half: at least a
     // pixel out, where the shape's own ramp has ended.
     const float gap = (float)fmax(1.0, CANVAS_RING_GAP_PT * sx);
     const float ring[2] = {gap, gap + (float)(CANVAS_RING_WIDTH_PT * sx)};
 
-    GLPassState pass = gl_pass_begin();
     if (_gl_ready(canvas) && _target(d, w, h)) {
         for (uint32_t i = 0; i < d->layer_count; i++)
             for (int s = 0; s < CANVAS_STORES; s++)
@@ -1185,12 +1184,12 @@ void canvas_draw(Canvas* canvas, const CanvasView* view) {
 
         // The view's rectangle into the frame, opaque: what the canvas drew
         // replaces what was there.
-        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)pass.fbo);
-        glViewport((GLint)x0, gl_y, w, h);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glViewport(dst_x, dst_y, w, h);
         glDisable(GL_BLEND);
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         glUseProgram(d->composite->id);
-        const int origin[4] = {(int)x0, gl_y, 0, 0};
+        const int origin[4] = {dst_x, dst_y, 0, 0};
         uniform_set_ivec4(d->composite->uniforms, "uOrigin", origin);
         uniform_set_int(d->composite->uniforms, "uView", 0);
         glActiveTexture(GL_TEXTURE0);
@@ -1200,7 +1199,53 @@ void canvas_draw(Canvas* canvas, const CanvasView* view) {
     }
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_TEXTURE_BUFFER, 0);
+}
+
+void canvas_draw(Canvas* canvas, const CanvasView* view) {
+    if (!canvas || !view || view->points_per_unit <= 0.0)
+        return;
+    const Engine* engine = canvas->engine;
+    if (engine->win_width <= 0 || engine->win_height <= 0)
+        return;
+    const double sx = (double)engine->fb_width / (double)engine->win_width;
+    const double sy = (double)engine->fb_height / (double)engine->win_height;
+    int x0, y0, w, h;
+    _view_pixels(view, sx, sy, &x0, &y0, &w, &h);
+    if (w <= 0 || h <= 0)
+        return;
+    GLPassState pass = gl_pass_begin();
+    _draw_view(canvas, view, sx, w, h, (GLuint)pass.fbo, x0, engine->fb_height - (y0 + h));
     gl_pass_end(&pass);
+}
+
+Picture* canvas_read_picture(Canvas* canvas, const CanvasView* view, float pixels_per_point) {
+    if (!canvas || !view || view->points_per_unit <= 0.0) {
+        log_error("canvas_read_picture: %s", !canvas ? "NULL canvas"
+                                             : !view ? "NULL view"
+                                                     : "a view with no points per unit");
+        return NULL;
+    }
+    const Engine* engine = canvas->engine;
+    double s = pixels_per_point;
+    if (s <= 0.0)
+        s = engine->win_width > 0 ? (double)engine->fb_width / (double)engine->win_width : 1.0;
+    int x0, y0, w, h;
+    _view_pixels(view, s, s, &x0, &y0, &w, &h);
+    if (w <= 0 || h <= 0) {
+        log_error("canvas_read_picture: a %gx%g view at %g pixels a point has no pixels",
+                  view->width, view->height, s);
+        return NULL;
+    }
+    // A target of the picture's own, so what the window shows is untouched.
+    GLColorTarget target = {0};
+    if (!gl_color_target_ensure_format(&target, w, h, GL_RGBA8, "canvas picture"))
+        return NULL;
+    GLPassState pass = gl_pass_begin();
+    _draw_view(canvas, view, s, w, h, target.fbo, 0, 0);
+    gl_pass_end(&pass);
+    Picture* picture = gl_read_picture(target.fbo, 0, 0, w, h);
+    gl_color_target_free(&target);
+    return picture;
 }
 
 /*

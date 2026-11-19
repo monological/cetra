@@ -27,6 +27,7 @@
 #include "input.h"
 #include "postfx.h"
 #include "scene_view.h"
+#include "util.h"
 
 /*
  * How the window relates to a display.
@@ -93,6 +94,20 @@ typedef void (*EngineOverlayFunc)(struct Engine* engine, void* user);
 // open and draws a frame, in which the app can say why.
 typedef bool (*EngineCloseFunc)(struct Engine* engine, void* user);
 
+// A rectangle of the window read back (engine_read_window): the picture, the callee's to free with
+// free_picture, or NULL when the window could not be read.
+typedef void (*EnginePictureFunc)(struct Engine* engine, Picture* picture, void* user);
+
+// The most window reads waiting at once; engine_read_window refuses past it.
+#define ENGINE_READ_MAX 8
+
+// One of Engine.reads: a rectangle in window points, top-left, +Y down, and who it goes to.
+typedef struct EngineRead {
+    float x, y, width, height;
+    EnginePictureFunc done;
+    void* user; // borrowed
+} EngineRead;
+
 // The most overlays an engine draws; engine_add_overlay refuses past it.
 #define ENGINE_OVERLAY_MAX 8
 
@@ -145,7 +160,8 @@ typedef struct Engine {
     // animation clock (engine_set_render_clock samples a borrowed one each
     // frame, and engine_set_render_time sets a frame's directly for a loop that
     // is not engine_run), the overlays (engine_add_overlay,
-    // engine_remove_overlay), and the close hook (engine_set_close_hook).
+    // engine_remove_overlay), the close hook (engine_set_close_hook), and the window reads
+    // waiting (engine_read_window).
     //
     // Everything else -- the feature toggles, the draw levers, the overlays,
     // the run's counts -- is written directly and read at the frame top. What a
@@ -415,6 +431,10 @@ typedef struct Engine {
     EngineOverlay overlays[ENGINE_OVERLAY_MAX];
     int overlay_count;
 
+    // The window reads waiting for the frame being made to be drawn (engine_read_window).
+    EngineRead reads[ENGINE_READ_MAX];
+    int read_count;
+
     // The loading screen (loading_screen.h): made when first shown, NULL until then.
     LoadingScreen* loading_screen;
     int loading_palette; // a LoadingPalette; its look
@@ -652,6 +672,13 @@ void engine_set_window_mode(Engine* engine, EngineWindowMode mode, const char* m
 void engine_set_vsync(Engine* engine, bool vsync);
 // Where the final frame is written on exit, PPM; NULL clears it. Owned.
 void engine_set_screenshot_path(Engine* engine, const char* path);
+// A rectangle of the window in points, top-left, read once the frame being made is drawn and before
+// it is shown -- what that frame's screenshot holds there -- and handed to `done`, `user` borrowed.
+// Asked from a hook, it is that frame's; it asks for a frame, so an idle loop draws one. Clipped to
+// the window, in pixels by the window's ratio. False, logged, for a rectangle with no area in the
+// window, or when ENGINE_READ_MAX reads already wait.
+bool engine_read_window(Engine* engine, float x, float y, float width, float height,
+                        EnginePictureFunc done, void* user);
 // Adds a post-tone-map draw at `order`, `user` borrowed. False, and nothing
 // added, when ENGINE_OVERLAY_MAX are already added or this draw and user are.
 bool engine_add_overlay(Engine* engine, EngineOverlayFunc draw, void* user, int order);
