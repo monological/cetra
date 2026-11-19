@@ -3931,6 +3931,50 @@ static void build_borders(UISystem* ui, int width, int height, double scale, boo
 }
 
 /*
+ * --ui-over (spec 14.41): the window split into two panes, each with a line at its top, and laid
+ * over each a panel that darkens it by half with its number large in its middle, as pcb's Space i
+ * shows its panes' numbers. The panes fill nothing, so the canvas shows through them, dimmed.
+ */
+#define OVER_DIM 0.5f
+static void build_over(UISystem* ui, int width, int height, double scale, bool probe) {
+    UIScreen* screen = ui_screen(ui, "over");
+    UIElement* row = ui_panel(ui_screen_root(screen));
+    row->dir = UI_ROW;
+    ui_set_size(row, UI_GROW, 0.0f, UI_GROW, 0.0f);
+    // Magenta at alpha 0: no fill, where an all-zero colour would inherit the theme's.
+    const UIStyle clear = {.bg = {1.0f, 0.0f, 1.0f, 0.0f}};
+    ui_set_style(row, &clear);
+    UIElement *panes[2], *lines[2], *overs[2], *numbers[2];
+    for (int k = 0; k < 2; k++) {
+        panes[k] = ui_panel(row);
+        ui_set_size(panes[k], UI_GROW, 0.0f, UI_GROW, 0.0f);
+        ui_set_style(panes[k], &clear);
+        lines[k] = ui_label(panes[k], k == 0 ? "the first pane" : "the second pane");
+        overs[k] = ui_panel(panes[k]);
+        overs[k]->over = true;
+        overs[k]->align_main = UI_ALIGN_CENTER;
+        overs[k]->align_cross = UI_ALIGN_CENTER;
+        ui_set_style(overs[k], &(UIStyle){.bg = {0.0f, 0.0f, 0.0f, OVER_DIM}});
+        numbers[k] = ui_label(overs[k], k == 0 ? "1" : "2");
+        ui_set_style(numbers[k], &(UIStyle){.fg = {1.0f, 1.0f, 1.0f, 1.0f}, .font_size = 120.0f});
+    }
+    ui_push(ui, screen);
+    ui_layout(screen, (float)width, (float)height);
+    for (int k = 0; probe && k < 2; k++) {
+        printf("canvas over pane %d", k + 1);
+        say_box(panes[k]->rect, scale);
+        printf(" over");
+        say_box(overs[k]->rect, scale);
+        printf(" line");
+        say_box(lines[k]->rect, scale);
+        printf(" number");
+        say_box(numbers[k]->rect, scale);
+        printf(" dim %.2f\n", OVER_DIM);
+    }
+}
+#undef OVER_DIM
+
+/*
  * --ui-seams (spec 14.23): boxes of one colour on an opaque backdrop of another, which
  * canvas-ui-seams holds to a one-pixel edge. A column of quads whole pixels high meeting on pixel
  * boundaries, as pcb's cross-section's rows, with nothing between them; a quad on whole pixels,
@@ -4464,7 +4508,8 @@ static const char* IDENTITY_PASS = "#version 330 core\n"
 int main(int argc, char** argv) {
     bool headless = false, mirror = false, probe = false, picture = false, edit_thread = false;
     bool split = false, with_ui = false, budget = false, idle = false, ui_enter = false,
-         borders = false, seams = false, lines = false, table = false, table_pane = false;
+         borders = false, seams = false, lines = false, table = false, table_pane = false,
+         over = false;
     bool history = false, palette = false, font_sheet = false, vim = false, view3d = false;
     const char* editor_files[EDITOR_FILES_MAX];
     int editor_count = 0;
@@ -4593,6 +4638,8 @@ int main(int argc, char** argv) {
             g_gui_click = true;
         } else if (strcmp(argv[i], "--ui-borders") == 0) {
             borders = true;
+        } else if (strcmp(argv[i], "--ui-over") == 0) {
+            over = true;
         } else if (strcmp(argv[i], "--ui-seams") == 0) {
             seams = true;
         } else if (strcmp(argv[i], "--ui-lines") == 0) {
@@ -4764,7 +4811,7 @@ int main(int argc, char** argv) {
     g_home_view = g_views[0];
     UISystem* ui = NULL;
     if (with_ui || history || palette || font_sheet || editor_count || borders || seams || lines ||
-        table || table_pane) {
+        table || table_pane || over) {
         ui = create_ui_system(engine);
         ui_set_font(ui, font, 18.0f);
         ui_attach(ui, engine);
@@ -4841,6 +4888,8 @@ int main(int argc, char** argv) {
     }
     if (borders)
         build_borders(ui, width, height, ctx.fb_scale, probe);
+    if (over)
+        build_over(ui, width, height, ctx.fb_scale, probe);
     if (seams)
         build_seams(ui, ctx.fb_scale, probe);
     if (lines)

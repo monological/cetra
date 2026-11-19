@@ -501,6 +501,7 @@ struct UIElement {
     bool focusable;
     bool disabled;
     bool fill; // ignore layout and cover the whole screen (a backdrop)
+    bool over; // out of the flow, laid over the parent's whole rect, drawn after its other children
     // A label's text breaks into lines at the width its parent gives it. Its own width measures
     // as its longest word, so it is given one: grown, fixed, or stretched across a column.
     bool wrap;

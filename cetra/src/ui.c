@@ -969,7 +969,7 @@ static float _share_len(const UIElement* el, int axis, float room) {
 // Whether a child takes its place in its parent's flow: a backdrop stands outside it, and a hidden
 // child is not there at all.
 static bool _in_flow(const UIElement* c) {
-    return !c->fill && !c->hidden;
+    return !c->fill && !c->over && !c->hidden;
 }
 
 // Whether a child in the flow grows along `axis` and can take more room there: it is not at its
@@ -1244,13 +1244,15 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
     const float in_pos = *_pos(&inner, axis), in_len = *_len(&inner, axis);
     const float gap = _spacing_of(ui, el);
 
-    // A fill element ignores the flow entirely and covers the screen. It is
-    // still laid out afterwards, so a backdrop can have children of its own.
+    // A fill element ignores the flow entirely and covers the screen, and one laid over its parent
+    // covers the parent, scrolled by nothing. Each is still laid out afterwards, so it can have
+    // children of its own.
     for (size_t i = 0; i < el->child_count; i++) {
         UIElement* c = el->children[i];
-        if (c->fill && !c->hidden) {
-            *_pos(&c->rect, axis) = *_pos(&screen, axis);
-            *_len(&c->rect, axis) = *_len(&screen, axis);
+        if ((c->fill || c->over) && !c->hidden) {
+            UIRect over = c->fill ? screen : el->rect;
+            *_pos(&c->rect, axis) = *_pos(&over, axis);
+            *_len(&c->rect, axis) = *_len(&over, axis);
             _arrange(ui, c, screen, axis);
         }
     }
@@ -1288,6 +1290,8 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
         const float scroll = ui_scroll_settle(el, r->top[r->count], in_len);
         for (size_t i = 0; i < el->child_count; i++) {
             UIElement* c = el->children[i];
+            if (c->over)
+                continue; // placed over the pane above, a row of none
             const int row = r->child_row[i] < r->count ? r->child_row[i] : r->count;
             *_pos(&c->rect, 1) = in_pos - scroll + r->top[row];
             _arrange(ui, c, screen, 1);
@@ -2006,8 +2010,11 @@ static void _emit(UISystem* ui, UIElement* el) {
         _emit_pane(ui, el, &s);
         return;
     }
-    for (size_t i = 0; i < el->child_count; i++)
-        _emit(ui, el->children[i]);
+    // The children in tree order, those laid over their parent after the rest.
+    for (int last = 0; last < 2; last++)
+        for (size_t i = 0; i < el->child_count; i++)
+            if (el->children[i]->over == (last == 1))
+                _emit(ui, el->children[i]);
 }
 
 // What a pane in `s` lets its content show through: its rect inside its border.
@@ -2025,10 +2032,13 @@ static void _emit_pane(UISystem* ui, UIElement* el, const UIStyle* s) {
     UIDrawList* dl = ui->dl;
     const UIRect view = _pane_clip(el, s);
     ui_push_clip(dl, view);
-    for (size_t i = 0; i < el->child_count; i++) {
-        UIElement* c = el->children[i];
-        if (c->rect.y < view.y + view.h && c->rect.y + c->rect.h > view.y)
-            _emit(ui, c);
+    for (int last = 0; last < 2; last++) {
+        for (size_t i = 0; i < el->child_count; i++) {
+            UIElement* c = el->children[i];
+            if (c->over == (last == 1) && c->rect.y < view.y + view.h &&
+                c->rect.y + c->rect.h > view.y)
+                _emit(ui, c);
+        }
     }
     ui_pop_clip(dl);
     UIScrollPlace place;
@@ -2079,10 +2089,10 @@ static bool _ease(UIElement* el, float dt) {
 /*
  * The deepest, topmost element at the point that `claims` accepts, or NULL.
  *
- * REVERSE child order: a child draws after its parent and a later sibling over
- * an earlier one, so the last match is the one actually on top and the one the
- * player believes they clicked. This is UIKit's hitTest walking subviews
- * backwards, for exactly the same reason.
+ * REVERSE paint order: a child draws after its parent and a later sibling over
+ * an earlier one, and one laid over its parent after them all, so the last match is the one
+ * actually on top and the one the player believes they clicked. This is UIKit's hitTest walking
+ * subviews backwards, for exactly the same reason.
  */
 static UIElement* _deepest_at(UIElement* el, float x, float y, bool (*claims)(const UIElement*)) {
     if (!el || el->disabled || el->hidden)
@@ -2091,10 +2101,14 @@ static UIElement* _deepest_at(UIElement* el, float x, float y, bool (*claims)(co
     // A pane's content is under the pointer only where the pane shows it.
     if (el->kind == UI_SCROLL && !in)
         return NULL;
-    for (size_t i = el->child_count; i-- > 0;) {
-        UIElement* got = _deepest_at(el->children[i], x, y, claims);
-        if (got)
-            return got;
+    for (int last = 1; last >= 0; last--) {
+        for (size_t i = el->child_count; i-- > 0;) {
+            if (el->children[i]->over != (last == 1))
+                continue;
+            UIElement* got = _deepest_at(el->children[i], x, y, claims);
+            if (got)
+                return got;
+        }
     }
     return (in && claims(el)) ? el : NULL;
 }
