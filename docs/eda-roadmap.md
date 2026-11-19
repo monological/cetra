@@ -538,8 +538,8 @@ its size, as the canvas app's `take_size` does by hand, waits until pcb's splits
 
 Found by pcb 9.1, which lets an agent reach the running pcb: its `look` tool answers with
 pictures -- a pane as the person sees it or the whole window, and the agent's own layout, sheet or
-3D, drawn off the screen so the person's panes do not move -- and refuses them while pcb is
-minimized, answering every other call. ARCH's headless capture (`pcb render`, through the
+3D, drawn off the screen so the person's panes do not move -- and, while pcb is minimized, says it
+has none, answering every other call. ARCH's headless capture (`pcb render`, through the
 screenshot path) covers none of it: it takes a whole window, at the end of a run.
 
 **Built in spec 14.41** (`docs/architecture.md`, Pictures read back and The window):
@@ -553,7 +553,10 @@ sends it as PNG.
 
 **Left for later**: a picture read in the background with no frame drawn, through a pixel-buffer
 ring (`layers_vt.c` has one); pictures in a format other than RGBA8; a view drawn off the screen
-without the window's context.
+without the window's context. And a label's text sized as a share of its parent, found by pcb
+9.1's Space i: a pane's number fills a share of the pane, and `UIStyle.font_size` takes points
+only, so pcb sizes it once from the pane's rectangle and a pane resized during the flash keeps the
+old size.
 
 ## Not among the nine, but on the way
 
