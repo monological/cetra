@@ -13,7 +13,13 @@ board (`docs/eda-roadmap.md`); `apps/canvas` is its test bed. The shaders are li
 - **A view is a plain value**: a rectangle, a pan, a zoom, a mirror, the layers it shows, and its
   active layer, which is drawn after the others but under any layer kept `above_active` (holes, a
   ratsnest).
-- **Several views share one target** the canvas owns, one framebuffer switch each.
+- **Several views share one target** the canvas owns, one framebuffer switch each. It grows to the
+  largest view or picture drawn and never shrinks.
+- **A view read off the screen** (`canvas_read_picture`, spec 14.41) is drawn now, from any hook,
+  at a chosen pixels per point (0, the window's), through `canvas_draw`'s own body: the layers into
+  the shared target, then the copy into a picture of its own instead of the frame. Its size is the
+  view's rectangle rounded as `canvas_draw` rounds it, so read at the window's ratio it is the
+  pane's pixels exactly. It works minimized and headless; the window is untouched.
 - **Shapes live in tiles**, `2^22` units on a side unless the canvas's desc sets `tile_shift`. A
   tile is a range of its layer's buffer, uploaded alone, not a buffer of its own: a buffer per tile
   was a draw per tile per layer, about 2 µs each on Apple's GL.

@@ -268,6 +268,10 @@ it, world work takes the focus view, and a tool takes the view it steers.
   pixel), so a view is the same bytes wherever it is shown. That needs the tone map to take its
   coordinates from the pixel's position rather than the interpolated varying, whose last bits
   differ between targets and which the Purkinje grain hashes.
+- **An offscreen view** (`offscreen`) is drawn as any view and never copied into the window: its
+  size is its `width` and `height` at its own `pixels_per_point` (0, the window's), wherever its
+  rectangle stands, and the pointer never finds it. Its picture is read with
+  `scene_view_read_picture`: see Pictures read back below.
 - **A still view rests** when its settings ask (`accumulate_frames`): see Still views below.
 - **An exact background** (`background_exact`) is the display colour wanted: the engine turns it
   back through the view's tone curve and the display encode on the CPU (`background.c`) to the
@@ -305,6 +309,25 @@ frame.
 - **Idle waits once every shown view rests**, and headless the run ends there.
 - **Hidden then shown**: unchanged, the kept picture is reused; changed, a cut (every history
   dropped) and the average from 0.
+
+### Pictures read back
+
+A picture comes back as a `Picture` (`util.h`): rows from the top, RGBA8 as it is shown, opaque,
+freed with `free_picture`. Every read goes through `gl_read_picture`. Three reads exist (spec
+14.41):
+- **A rectangle of the window** (`engine_read_window`), in points: read where the screenshot is
+  taken -- after the composite, the overlays, the UI and the debug GUI, before the swap -- once the
+  frame being made is drawn, so it is what that frame's screenshot holds there, and handed to a
+  callback. Asked from a hook, it is that frame's; it asks for a frame, so an idle loop draws one.
+  A read waiting while the window cannot draw, or when `engine_run` returns, is answered NULL.
+- **A canvas view off the screen** (`canvas_read_picture`, `docs/canvas.md`).
+- **A scene view's picture** (`scene_view_read_picture`): the one the window is shown -- the held
+  TAA picture while a young average holds too few frames, the outlines laid on -- copied through
+  the window's own copy into a target of its size and read. An offscreen view's is how it is seen;
+  a resting view's is read once `finished`.
+
+Each read blocks on the GPU for one rectangle, well under a frame: pictures are asked for rarely,
+by a person or an agent, so no pixel-buffer ring stands between.
 
 ### Tags
 
@@ -838,6 +861,14 @@ never seen; shown borderless and switched after, it loses focus in the switch, a
 window that loses focus is minimized. It waits borderless until then, because taking a monitor on
 Windows and X11 shows the window early. Creation asks the window system whether the window is
 visible, and says so by name when it is not.
+
+**A window that cannot draw** -- minimized (`Engine.iconified`, from GLFW's iconify callback), or of
+no area -- draws nothing, on every system: macOS keeps a minimized window's framebuffer, so its
+size alone does not say it cannot be seen. Each turn of the loop then runs the update hook alone,
+so an app still answers what its other threads ask and a game can read `iconified` to pause, and
+waits (`_engine_undrawn_wait`): for an event, another thread's request or a timed wake, at most a
+tenth of a second outside idle mode; under idle mode a request standing from the update itself
+starts the next turn a frame's time later, never sooner. Restored, it asks for a frame.
 
 `engine_monitor_index` is the one statement of what a stored display name means (NULL, `""` and any
 unrecognised name all give the primary), and `engine_monitor_names` is the list, so no app keeps

@@ -1598,8 +1598,22 @@ and:
 - `--view3d` (spec 14.38) puts a scene view in the right half of the window: three spheres on a
   floor under the window environment, with a key light and its shadows, the 2D panes in the left
   half. It follows the window's size.
+- `--read-window X,Y,W,H,PATH`, `--read-canvas PPP,PATH`, `--read-view3d PATH` and
+  `--offscreen-view PATH` (spec 14.41) read a picture back every frame and write it as a PPM, so
+  a headless run's last is its final frame's: a rectangle of the window in points, the first canvas
+  view off the screen at PPP pixels a point (0, the window's), the 3D pane's picture, and a second
+  view of its scene, offscreen, at its size and camera. Each prints once where it stands in the
+  framebuffer (`canvas picture NAME at X Y size W H`). The `canvas-read-*` and
+  `canvas-offscreen-view` arms read them.
+- `--minimize N` (spec 14.41) minimizes the window after its second frame, asks a timed wake of
+  0.05 s each update and one window read, prints each update it gets while minimized with the time
+  since the last and anything drawn meanwhile, restores it after N and ends the run once it has
+  drawn again. In a window: headless, a minimized hidden window still plays the Dock's animation.
 - `--ui-borders` (spec 14.12) draws boxes of one size and radius whose borders lie over clear,
   half-alpha and opaque fills on one backdrop, which `canvas-ui-borders` holds to Porter-Duff over.
+- `--ui-over` (spec 14.41) splits the window into two panes, each with a line at its top, and lays
+  over each a panel that darkens it by half and centres its number at 120 points, which
+  `canvas-ui-over` holds to its pane's box, the dimming and the line drawn under it.
 - `--ui-seams` (spec 14.23) draws, at whole framebuffer pixels from the window's corner, quads
   meeting edge to edge on pixel boundaries and part way into pixels, a quad on whole pixels, one
   whose edge halves a column of pixels and a rounded box, which `canvas-ui-seams` holds to a

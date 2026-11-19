@@ -237,6 +237,15 @@ width keeps its columns and every wrapped row.
 - **Shown again, a pane of rows keeps the rows it held**, and an element's hover and focus looks
   start at rest, since nothing hidden is hovered or focused.
 
+**An element over its parent** (`over`, spec 14.41) is out of the flow, as a `fill` backdrop is,
+and laid over its parent's whole rect -- its padding and border included, scrolled by nothing, a
+virtual row of none -- then laid out inside as any element. It paints after every other child of
+its parent, those over it in their order, whatever its place in the tree, and is hit first. A
+panel or a label claims no pointer, so a click passes through one to what it covers. A pane dimmed
+with its number large in the middle is a panel over the pane, a see-through `bg`, centring a label
+of a large `font_size`. A screen holding a copy of the panes' splits was the alternative, and copies
+the window's layout.
+
 ## Focus, input and key routing
 
 **`ui_input_read` fills a `UIInput` from the engine**: the pointer, its press and release and their

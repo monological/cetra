@@ -62,6 +62,10 @@ onto a mirrored one under `--either-side all`.
   spheres on a floor under an environment, with a key light and shadows, built in code in
   `src/view3d.c`. Without it the app makes no scene view, so a frame draws no scene pass and no
   post chain (`docs/architecture.md`, Scene views).
+- `--read-window`, `--read-canvas`, `--read-view3d` and `--offscreen-view` read pictures back
+  (spec 14.41: a rectangle of the window, a canvas view off the screen, the 3D pane, a second view
+  of its scene offscreen), each written as a PPM every frame; `--minimize N` minimizes the window
+  and says what runs meanwhile. `src/pictures.c` holds them.
 - `--edit-thread` builds the board's edit on a thread of its own.
 - `--canvas-probe` prints where each shape landed, in framebuffer pixels, and `--budget` times the
   canvas draws. The `canvas` gate group reads both.
@@ -91,6 +95,8 @@ first frame after which nothing asks for another.
   selection in it holds.
 - `--ui-borders` draws boxes whose borders lie over clear, half-alpha and opaque fills, which
   `canvas-ui-borders` holds to Porter-Duff over.
+- `--ui-over` lays a panel over each of two panes, darkening it by half with its number large in
+  its middle, as pcb's Space i does: the test bed for an element over its parent.
 - `--ui-seams` draws quads meeting edge to edge on whole pixels and part way into them, a quad on
   whole pixels, one whose edge halves a column of pixels and a rounded box, which
   `canvas-ui-seams` holds to a one-pixel edge.
