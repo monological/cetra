@@ -714,9 +714,10 @@ without the window's context.
   neighbour that was cut, and a pixel whose centre fell on their shared edge was left unfilled: a
   few in a plane of thousands of holes (`docs/canvas.md`).
 - **An element over its parent** -- spec 14.41, built, from pcb 9.1's Space i, which shows every
-  pane's number large in its middle over the pane dimmed: `UIElement.over`, out of the flow, laid
-  over the parent's whole rect and painted after its other children (`docs/ui.md`). A second screen
-  holding a copy of the panes' splits was turned down, as it copies the window's layout.
+  pane's number large in its middle over the pane dimmed: `UIElement.place`, `UI_PLACE_PARENT` out
+  of the flow and laid over the parent's whole rect, painted in tree order, so pcb makes each panel
+  its pane's last child (`docs/ui.md`); `UI_PLACE_SCREEN` is the backdrop `fill` was. A second
+  screen holding a copy of the panes' splits was turned down, as it copies the window's layout.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the
