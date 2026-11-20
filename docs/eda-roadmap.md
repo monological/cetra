@@ -724,8 +724,10 @@ old size.
 - **A quiet engine** -- spec 14.42, built, from pcb 9.2's `make`, which answers an agent with what
   a child `pcb render` printed: cetra's banner and some fifty INFO lines round the one the agent
   needs. `EngineConfig.quiet` makes an engine with no banner and a log of warnings and errors
-  alone, the level the process's from then on (`docs/cli-reference.md`, Headless Mode). Filtering
-  the log in pcb was turned down, as it matches on the log's format and could hide an error.
+  alone, each engine made setting the process's level (`docs/cli-reference.md`, Headless Mode).
+  Filtering the log in pcb was turned down, as it matches on the log's format and could hide an
+  error. With it, a view's exact background not shown exactly is a warning, which a quiet engine
+  still says.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the

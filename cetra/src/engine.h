@@ -566,7 +566,7 @@ typedef struct EngineConfig {
     EngineWindowMode window_mode; // 0 = windowed; the window is shown already in it
     const char* monitor;          // display name for a non-windowed mode; NULL = primary
     bool idle;                    // draw only when something asks for a frame (Engine.idle)
-    bool quiet; // true = no banner, and the log says only warnings and errors from here on
+    bool quiet; // true = no banner, and the log only warnings and errors; the latest engine decides
 } EngineConfig;
 
 // Creates the window and the GL context, and registers the built-in programs
