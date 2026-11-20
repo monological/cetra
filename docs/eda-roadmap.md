@@ -17,9 +17,9 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-18: 14.41, pictures read back and an element over its parent, built for a
-new item 10 and for pcb's Space i (its spec); the day before, 14.40, text that reads from either
-side, built for item 1._
+_Last updated: 2026-11-20: 14.42, a quiet engine, built for pcb 9.2's `make` (its spec). Before it,
+2026-11-18: 14.41, pictures read back and an element over its parent, built for a new item 10 and
+for pcb's Space i; the day before, 14.40, text that reads from either side, built for item 1._
 
 ---
 
@@ -70,7 +70,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 9 | What the panes and the fonts need of the UI | **Built** | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
 | 10 | Pictures read back: a rectangle of the window, a canvas or 3D view drawn off the screen, and a window that cannot draw still running its update | **Built**; a read in the background with no frame drawn, and formats past RGBA8, left for later | 9, the agents (pcb 9.1's `look`) | 14.41 |
 
-Specs 14.7, 14.9 to 14.21, 14.23 to 14.28 and 14.30 to 14.37 are the smaller changes pcb's window
+Specs 14.7, 14.9 to 14.21, 14.23 to 14.28, 14.30 to 14.37 and 14.42 are the smaller changes pcb
 asked for, listed under "Not among the nine". Spec 14.8 was not asked for by pcb: a headless run
 waits for the textures its start-up asked for before frame 1 (`docs/architecture.md`, Render
 Pipeline), which `pcb render` gets for free. Nor was 14.29, which splits the gate suite into files (`docs/verification.md`,
@@ -721,6 +721,11 @@ old size.
   of the flow and laid over the parent's whole rect, painted in tree order, so pcb makes each panel
   its pane's last child (`docs/ui.md`); `UI_PLACE_SCREEN` is the backdrop `fill` was. A second
   screen holding a copy of the panes' splits was turned down, as it copies the window's layout.
+- **A quiet engine** -- spec 14.42, built, from pcb 9.2's `make`, which answers an agent with what
+  a child `pcb render` printed: cetra's banner and some fifty INFO lines round the one the agent
+  needs. `EngineConfig.quiet` makes an engine with no banner and a log of warnings and errors
+  alone, the level the process's from then on (`docs/cli-reference.md`, Headless Mode). Filtering
+  the log in pcb was turned down, as it matches on the log's format and could hide an error.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the

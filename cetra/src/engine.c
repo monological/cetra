@@ -1069,12 +1069,6 @@ static int _setup_engine_gui(Engine* engine) {
  *
  */
 static int _engine_init(Engine* engine, const EngineConfig* cfg) {
-    printf("┏┓┏┓┏┳┓┳┓┏┓\n");
-    printf("┃ ┣  ┃ ┣┫┣┫\n");
-    printf("┗┛┗┛ ┻ ┛┗┛┗\n");
-
-    printf("\nInitializing Cetra Graphics Engine...\n");
-
     // cwalk picks its separator style from a compile-time global that defaults
     // to backslashes on Windows. The engine keeps paths forward-slashed
     // everywhere (Windows file APIs accept them), so pin UNIX style before any
@@ -2506,6 +2500,16 @@ Engine* create_engine(const EngineConfig* cfg) {
     static const EngineConfig none = {0};
     if (!cfg)
         cfg = &none;
+    // How loud the engine is, decided before anything is made: a quiet one, for a tool whose output
+    // another program reads, says only what went wrong, and the level stays the process's.
+    if (cfg->quiet) {
+        log_set_level(LOG_WARN);
+    } else {
+        printf("┏┓┏┓┏┳┓┳┓┏┓\n");
+        printf("┃ ┣  ┃ ┣┫┣┫\n");
+        printf("┗┛┗┛ ┻ ┛┗┛┗\n");
+        printf("\nInitializing Cetra Graphics Engine...\n");
+    }
 
     Engine* engine = _engine_alloc(cfg);
     if (!engine)

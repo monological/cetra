@@ -27,7 +27,8 @@ another, or a default that surprises on purpose and the reason for it.
 Prefer a headless run for checking behaviour: the log output (asset imports, skeleton extraction,
 bone mapping, the first frame's animation dump, GL errors) and the rendered frame are the same as
 in a window, a run takes a few seconds, and it is what CI uses. From code, set `.headless = true`
-in the `EngineConfig` handed to `create_engine`.
+in the `EngineConfig` handed to `create_engine`; a tool whose output another program reads sets
+`.quiet = true` too, for no banner and a log of warnings and errors alone (spec 14.42).
 
 **The capture set:**
 - `-x, --headless` — a hidden GLFW window with vsync off. The whole pipeline still runs (GL
