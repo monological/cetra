@@ -105,6 +105,10 @@ first frame after which nothing asks for another.
   triangles meeting on a diagonal and two shapes the UI refuses, which `canvas-ui-lines` holds to
   their areas and to the one-pixel edge. Under them is a graph staged as pcb's board modal draws
   one: gridlines, three curves, and a trace's picture with a dimension line and arrowheads.
+- `--ui-pictures` draws textures of the app's own pixels (`create_texture_rgba8`): one texel for
+  pixel, four meeting two by two, a small one drawn large, two with a rectangle written after, a
+  part of a larger one and one half opaque, which `canvas-ui-pictures` holds to their texels.
+  Under them is a card of pixel-wide checkers and lines in four textures, for looking at.
 - `--ui-table` shows a stackup's 500 rows in a table over the window: a header, an END-aligned
   number column, a drawn picture column, FIT columns, a note column narrower than its notes, a GROW
   column, and the cursor on row 3. `canvas-ui-table` holds the header's rule, the cursor's fill and

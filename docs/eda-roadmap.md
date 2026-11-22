@@ -17,9 +17,11 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-20: 14.42, a quiet engine, built for pcb 9.2's `make` (its spec). Before it,
+_Last updated: 2026-11-22: 14.43, a texture of an app's own pixels, built for pcb 10.2's datasheet
+pane; with it item 1's images are decided, a page being the UI's to draw and the canvas drawing
+none. Before it, 2026-11-20: 14.42, a quiet engine, built for pcb 9.2's `make` (its spec);
 2026-11-18: 14.41, pictures read back and an element over its parent, built for a new item 10 and
-for pcb's Space i; the day before, 14.40, text that reads from either side, built for item 1._
+for pcb's Space i._
 
 ---
 
@@ -57,7 +59,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 
 | # | Item | Status | First needed by pcb's step | Spec |
 |---|------|--------|----------------------------|------|
-| 1 | The 2D canvas | **Built**, with caps, joins, dashes and text that reads from either side; images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0, 14.22, 14.36, 14.37, 14.40 |
+| 1 | The 2D canvas | **Built**, with caps, joins, dashes and text that reads from either side; an image among its shapes, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0, 14.22, 14.36, 14.37, 14.40 |
 | 2 | Idle mode: drawing only when something changed | **Built**; with 14.38 it waits on 3D views at rest too | 6 | 14.1, 14.38 |
 | 3 | Skipping the 3D scene pass when no 3D view is shown | **Built**, with a still view that averages jittered frames and rests; a TAA-only view resting and accumulating under TAAU left for later | 8, the 3D view | 14.38 |
 | 4 | Drawing the 3D scene into part of the window | **Built**: any number of views, each a camera, a rectangle, its own settings and its own buffers; world work serving every view equally, a scene per view and a second window left for later | 8 | 14.38 |
@@ -70,8 +72,8 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 9 | What the panes and the fonts need of the UI | **Built** | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
 | 10 | Pictures read back: a rectangle of the window, a canvas or 3D view drawn off the screen, and a window that cannot draw still running its update | **Built**; a read in the background with no frame drawn, and formats past RGBA8, left for later | 9, the agents (pcb 9.1's `look`) | 14.41 |
 
-Specs 14.7, 14.9 to 14.21, 14.23 to 14.28, 14.30 to 14.37 and 14.42 are the smaller changes pcb
-asked for, listed under "Not among the nine". Spec 14.8 was not asked for by pcb: a headless run
+Specs 14.7, 14.9 to 14.21, 14.23 to 14.28, 14.30 to 14.37, 14.42 and 14.43 are the smaller changes
+pcb asked for, listed under "Not among the nine". Spec 14.8 was not asked for by pcb: a headless run
 waits for the textures its start-up asked for before frame 1 (`docs/architecture.md`, Render
 Pipeline), which `pcb render` gets for free. Nor was 14.29, which splits the gate suite into files (`docs/verification.md`,
 Running the gates).
@@ -96,8 +98,9 @@ datasheets.
 board outline and text, with exact edges at any zoom, drawn after tone mapping at display
 resolution; tiles per layer re-uploaded only where changed; precision in nanometres anywhere on the
 board; highlighting a net or flipping a diff without rebuilding geometry; layers in order with the
-active one on top; schematic symbols, group frames and datasheet pages on the same canvas; and
-diffs, two versions overlaid, blinked or side by side.
+active one on top; schematic symbols and group frames on the same canvas; and diffs, two versions
+overlaid, blinked or side by side. ARCH has datasheet pages on it too, as tiled images; they are
+the UI's to draw (Left for later, below).
 
 **Not cetra's: picking.** "What is under the cursor" is answered on the CPU by pcb, from a spatial
 index over its exact geometry, ranked by its own rules. It never reads back from the GPU.
@@ -142,8 +145,14 @@ it is the spec's "What pcb does with it".
   an edge crosses it.
 
 **Left for later**, each with a need named:
-- **Images and datasheet pages**, with the texture residency they need, for pcb's step 10. A record
-  kind is free for them.
+- **An image among a canvas's shapes**: under or between its layers, moving with the view, in a
+  view read off the screen. No user yet. It was kept for pcb's datasheet pages, and spec 14.43
+  departs from that, decided with the user (2026-11-22): a page is a pane of its own, never among
+  a canvas's shapes, and the UI drew pictures already, so pcb draws its pages' tiles by the UI's
+  textured quad from a texture of its own pixels ("Not among the nine"). Nothing in pcb's
+  roadmaps puts a picture on a sheet or a board; a logo is shapes. When something does, it wants
+  a record kind, its textures, and a pass beside a layer's coverage, an image being colours where
+  a layer paints one.
 - **A per-tag offset**, so a dragged object moves without an edit, for pcb's step 7.
 - **Triangles supplied by the caller**, such as pcb's own constrained triangulation, in place of
   the canvas's earcut.
@@ -728,6 +737,12 @@ old size.
   Filtering the log in pcb was turned down, as it matches on the log's format and could hide an
   error. With it, a view's exact background not shown exactly is a warning, which a quiet engine
   still says.
+- **A texture of an app's own pixels** -- spec 14.43, built, for pcb 10.2's datasheet pane, whose
+  pages PDFium draws on a worker in tiles: `create_texture_rgba8` and `texture_write_rgba8`
+  (`texture.h`), a texture stored as given, clamped, one level, outside the pool and the cook, a
+  rectangle of it written again. The UI's textured quad draws it texel for pixel on whole pixels,
+  and two meeting there leave nothing between them (`docs/ui.md`, The draw list). The canvas
+  drawing pages as images, item 1's plan, was turned down (item 1, Left for later).
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the

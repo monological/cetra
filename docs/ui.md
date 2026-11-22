@@ -355,6 +355,23 @@ possible. The shader is `ui_vert/frag` (`docs/shaders.md`, Game UI).
   under them shows by up to a quarter there: an app wanting a clean join puts it on a pixel. The
   UI never moves a shape onto the grid itself, which would round a hairline away and step a slow
   slide.
+- **A picture an app made** (spec 14.43): `create_texture_rgba8` (`texture.h`) makes a texture of
+  the app's own pixels -- red, green, blue and alpha, rows from the top, stored as given, clamped
+  at its edges, one level, in no pool and never cooked -- and `texture_write_rgba8` writes a
+  rectangle of it again, so a picture made on another thread is shown by a quad and changed in
+  place. A model's texture goes through the pool, which mips, cooks and keeps it.
+  - **Texel for pixel**: a rect on whole framebuffer pixels (`fb_width` over `win_width` of them a
+    point), as many across and down as the part shown has texels, draws each texel on its pixel,
+    an opaque one to the byte. The bytes are taken as display-encoded, as the UI blends; the alpha
+    is a pixel's opacity.
+  - **Pictures meeting on a pixel boundary** leave nothing between them; anywhere else theirs is
+    an image's edge, above. So tiles go on whole pixels, a stretched one's rect rounded to them,
+    and neighbours share an edge.
+  - **Stretched**, a picture is filtered linearly, its edge texels its own and not mixed with its
+    far edge's. A part of a larger texture takes in the texels beside it at its edge when
+    stretched, so parts drawn larger than they are want a texel between them.
+  - **A texture outlives the frame that draws it**: the list holds its GL name until the frame is
+    drawn, so one is freed in the update hook, not after a draw hook has drawn it.
 - **Lines and convex shapes** (spec 14.28): `ui_draw_line`, `ui_draw_polyline` and `ui_draw_convex`
   take `UIPoint`s in window points and draw in the fill's vertex format and program, batching with
   it, under the same one-pixel edge, so a graph's curves and gridlines are one draw.

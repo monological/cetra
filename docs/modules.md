@@ -39,7 +39,7 @@ linked doc explains the subsystem. `cetra/src/ext/` is vendored and not listed.
 | `lod.c/h` | A mesh's LOD chain built by meshoptimizer into one index buffer; refused for skinned meshes. |
 | `cluster.h`, `cluster_build.cpp` | Cluster LOD DAGs (meshoptimizer's `clusterlod.h` behind a C API), crack-free by construction. See `docs/architecture.md`. |
 | `aabb.h` | The axis-aligned box and its five operations, on cglm alone; states the empty-accumulator and stored-bound conventions. See `docs/architecture.md`. |
-| `texture.c/h` | Texture loading through one `TextureDesc`, and the pool that caches by resolved path. See `docs/shaders.md`. |
+| `texture.c/h` | Texture loading through one `TextureDesc`, and the pool that caches by resolved path. See `docs/shaders.md`. And a texture of an app's own pixels, outside the pool, written in place (`create_texture_rgba8`). See `docs/ui.md`, The draw list. |
 | `texture_compress.c/h` | Block compression: BC5 for normals, BC4 for masks, DXT for colour on request. See `docs/shaders.md`. |
 | `material_texture_array.c/h` | Packs a scene's per-texel material images (masks, layer maps, splats, decals) into one `sampler2DArray`. See `docs/shaders.md`. |
 | `transform.c/h`, `intersect.c/h` | Transform decomposition; ray and AABB intersection. |
