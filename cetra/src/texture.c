@@ -1068,9 +1068,9 @@ static bool texture_upload_image(GLenum internal_format, GLenum data_format, int
     return complete;
 }
 
-// GPU footprint including the chain. The 4/3 is the mip tail; a compressed level
-// is counted from its own block arithmetic, which is where the saving actually
-// shows up.
+// GPU footprint including the chain, where it has one: an app's own pixels are
+// one level. The 4/3 is the mip tail; a compressed level is counted from its own
+// block arithmetic, which is where the saving actually shows up.
 size_t texture_gpu_bytes(const Texture* texture) {
     if (!texture || texture->width <= 0 || texture->height <= 0)
         return 0;
@@ -1108,7 +1108,7 @@ size_t texture_gpu_bytes(const Texture* texture) {
                 bytes += (size_t)w * (size_t)h * 4;
                 break;
         }
-        if (w <= 1 && h <= 1)
+        if (texture->app_pixels || (w <= 1 && h <= 1))
             break;
         w = w > 1 ? w / 2 : 1;
         h = h > 1 ? h / 2 : 1;
@@ -1220,6 +1220,7 @@ Texture* create_texture() {
     // mean whenever the allocation landed on a stale truthy byte.
     texture->mean_valid = false;
     texture->distribute_from_level = -1;
+    texture->app_pixels = false;
     texture->ref_count = 1;
 
     return texture;
@@ -1330,6 +1331,64 @@ void texture_release(Texture* texture) {
             free_texture(texture);
         }
     }
+}
+
+Texture* create_texture_rgba8(int width, int height, const unsigned char* rgba) {
+    GLint most = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &most);
+    if (width < 1 || height < 1 || width > most || height > most) {
+        log_error("create_texture_rgba8: %d by %d is no size of a texture, 1 to %d a side", width,
+                  height, most);
+        return NULL;
+    }
+    unsigned char* clear = rgba ? NULL : calloc((size_t)width * (size_t)height, 4);
+    Texture* texture = rgba || clear ? create_texture() : NULL;
+    if (!texture) {
+        log_error("create_texture_rgba8: out of memory for %d by %d", width, height);
+        free(clear);
+        return NULL;
+    }
+
+    glGenTextures(1, &texture->id);
+    glBindTexture(GL_TEXTURE_2D, texture->id);
+    // A model's defaults -- tiling, trilinear over a chain -- would mix a picture's edge with its
+    // far edge and ask for levels it has not got.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                 rgba ? rgba : clear);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    check_gl_error("create_texture_rgba8");
+    free(clear);
+
+    texture->width = width;
+    texture->height = height;
+    texture->internal_format = GL_RGBA8;
+    texture->data_format = GL_RGBA;
+    texture->wrap_s = texture->wrap_t = GL_CLAMP_TO_EDGE;
+    texture->app_pixels = true;
+    return texture;
+}
+
+void texture_write_rgba8(Texture* texture, int x, int y, int width, int height,
+                         const unsigned char* rgba) {
+    if (!texture || !texture->app_pixels || !rgba) {
+        log_error("texture_write_rgba8: no pixels, or no texture create_texture_rgba8 made");
+        return;
+    }
+    if (x < 0 || y < 0 || width < 1 || height < 1 || width > texture->width - x ||
+        height > texture->height - y) {
+        log_error("texture_write_rgba8: %d by %d at %d, %d is not inside a texture %d by %d", width,
+                  height, x, y, texture->width, texture->height);
+        return;
+    }
+    glBindTexture(GL_TEXTURE_2D, texture->id);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    texture->mean_valid = false; // a mean remembered was the old pixels'
 }
 
 void set_texture_width(Texture* texture, int width) {

@@ -48,6 +48,18 @@ def _differing(a, b):
     return int(np.any(a != b, axis=2).sum()) if a.shape == b.shape else -1
 
 
+def _picture_pixels(seed, x0, y0, w, h):
+    """apps/canvas's picture of a seed (pictures_pixel), w by h pixels from (x0, y0) of it: blocks
+    of 16 pixels, by turns noise and a pixel-wide checker."""
+    y, x = np.mgrid[y0:y0 + h, x0:x0 + w]
+    light = ((x + y + seed) & 1) == 1
+    checker = np.stack([np.where(light, 255, 0), np.where(light, 255, 0),
+                        np.where(light, 255, 128)], axis=-1)
+    noise = np.stack([(x * 37 + y * 101 + seed * 53) & 255, (x * 149 + y * 29 + seed * 97) & 255,
+                      128 | ((x * 11 + y * 67 + seed * 13) & 127)], axis=-1)
+    return np.where(((((x >> 4) + (y >> 4)) & 1) == 1)[..., None], checker, noise).astype(float)
+
+
 def _ink_cover(pixels, back, ink):
     """Each pixel's coverage between two colours: how far it lies from `back` toward `ink`."""
     span = ink - back
@@ -372,6 +384,20 @@ def run_canvas_gate(workdir):
                      fill, from each bottom corner the backdrop; and a strip along the backdrop's
                      foot at a radius of -1, under the theme's rounded panel: a pixel in from
                      each of its corners its fill.
+      canvas-ui-pictures textures of an app's own pixels drawn by the UI (spec 14.43), on an
+                     opaque backdrop no picture holds, each pixel its texel to the byte: a
+                     picture drawn texel for pixel on whole pixels, the backdrop untouched 2
+                     pixels round it, which rows turned over, an sRGB decode, a mip or half a
+                     pixel's shift each break; four meeting two by two on pixel boundaries,
+                     nothing of the backdrop between them; one of 8 by 8 drawn eight times its
+                     size, the outer half texel of each side that side's colour, where a
+                     repeating wrap mixes in the far side's; one made clear and one made whole, a
+                     rectangle of each written after, the new pixels inside it and the old
+                     outside; a part of a larger one by its UVs, its own texels; and one half
+                     opaque, half way to the backdrop within 1 code. Printed: its bytes on the
+                     GPU one level's, nothing added to the pool, and a side of none, a side past
+                     GL's largest and a write into a pooled texture each refused, with no GL
+                     error.
       canvas-read-window a rectangle of the window read back (spec 14.41), 200 by 150 points from
                      (300, 200) of the 400 by 300 board: clipped at the window's corner, and the
                      same pixels as the run's screenshot there, 0 px, where 20 colours or more
@@ -1402,6 +1428,80 @@ def run_canvas_gate(workdir):
                   f"corners its fill and its bottom ones the backdrop; the square strip's four "
                   f"its fill"
                   + (f", but {'; '.join(wrong)}" if wrong else ""))
+        return ok, detail
+
+    @arm("canvas-ui-pictures")
+    def _():
+        shot, probe = _canvas_run(workdir, "pictures", "--ui-pictures")
+        said = _canvas_sheet(probe, "pictures")
+        words = {"colours": 2, "exact": 5, "stack": 5, "clamp": 9, "clear": 9, "over": 10,
+                 "part": 7, "alpha": 6, "bytes": 3, "pooled": 1, "refused": 8}
+        if not shot or any(len(said.get(n, [])) != k for n, k in words.items()):
+            return False, "the run failed or printed no pictures"
+        img = _ppm_array(shot)[..., :3].astype(float)
+        back = _hex_rgb(said["colours"][1])
+
+        def numbers(name, count):
+            return [int(v) for v in said[name][:count]]
+
+        def wrong(name, want, grow=0, codes=0):
+            # How many pixels of a picture, and of `grow` pixels round it, are over `codes` from
+            # `want`, which is that large.
+            x, y = (v - grow for v in numbers(name, 2))
+            h, w = want.shape[:2]
+            return _off_rgb(img[y:y + h, x:x + w], want, codes)
+
+        # Texel for pixel, the backdrop untouched 2 pixels round it.
+        _, _, w, h, seed = numbers("exact", 5)
+        framed = np.tile(back, (h + 4, w + 4, 1))
+        framed[2:-2, 2:-2] = _picture_pixels(seed, 0, 0, w, h)
+        exact = wrong("exact", framed, grow=2)
+        # Four meeting two by two, a seed each.
+        _, _, w, h, seed = numbers("stack", 5)
+        four = [[_picture_pixels(seed + 2 * r + c, 0, 0, w // 2, h // 2) for c in (0, 1)]
+                for r in (0, 1)]
+        stack = wrong("stack", np.concatenate([np.concatenate(row, axis=1) for row in four]))
+        # Drawn `k` times its size, a side's outer half texel is that side's colour alone: its
+        # samples lie past the last texel's centre, where clamping repeats it and a repeating wrap
+        # mixes in the far side's. Away from the corners, which are the columns'.
+        x, y, w, h, side = numbers("clamp", 5)
+        left, right, top, bottom = (_hex_rgb(c) for c in said["clamp"][5:])
+        k = w // side
+        large, half, mid = img[y:y + h, x:x + w], k // 2, slice(2 * k, -2 * k)
+        clamp = (_off_rgb(large[mid, :half], left, 0) + _off_rgb(large[mid, -half:], right, 0)
+                 + _off_rgb(large[:half, mid], top, 0) + _off_rgb(large[-half:, mid], bottom, 0))
+        # Made clear, then a rectangle written: clear draws nothing.
+        _, _, w, h, rx, ry, rw, rh, seed = numbers("clear", 9)
+        want = np.tile(back, (h, w, 1))
+        want[ry:ry + rh, rx:rx + rw] = _picture_pixels(seed, 0, 0, rw, rh)
+        clear = wrong("clear", want)
+        # Made whole, then a rectangle written over.
+        _, _, w, h, rx, ry, rw, rh, old, new = numbers("over", 10)
+        want = _picture_pixels(old, 0, 0, w, h)
+        want[ry:ry + rh, rx:rx + rw] = _picture_pixels(new, 0, 0, rw, rh)
+        over = wrong("over", want)
+        _, _, w, h, u, v, seed = numbers("part", 7)
+        part = wrong("part", _picture_pixels(seed, u, v, w, h))
+        _, _, w, h = numbers("alpha", 4)
+        share = int(said["alpha"][5]) / 255
+        alpha = wrong("alpha", np.tile(_hex_rgb(said["alpha"][4]) * share + back * (1 - share),
+                                       (h, w, 1)), codes=1)
+        stored, level = int(said["bytes"][0]), int(said["bytes"][2])
+        pooled = int(said["pooled"][0])
+        refused = _canvas_measures(said["refused"])
+        ok = (exact == 0 and stack == 0 and clamp == 0 and clear == 0 and over == 0 and part == 0
+              and alpha == 0 and stored == level and pooled == 0
+              and refused == {"none": 1, "large": 1, "pooled": 1, "glerror": 0})
+        detail = (f"{exact} px of the picture drawn texel for pixel or round it wrong, {stack} of "
+                  f"the four meeting, {clamp} of the outer half texels of the one drawn {k} times "
+                  f"its size, {clear} and {over} of the two written into, {part} of the part (want "
+                  f"0 each, to the byte), {alpha} of the half opaque one over 1 code from half "
+                  f"way (want 0); {stored} bytes "
+                  f"on the GPU (want {level}), {pooled} added to the pool (want 0); a side of none "
+                  f"refused {refused.get('none'):.0f}, one past GL's largest "
+                  f"{refused.get('large'):.0f}, a write into a pooled texture "
+                  f"{refused.get('pooled'):.0f} (want 1 each), GL errors "
+                  f"{refused.get('glerror'):.0f} (want 0)")
         return ok, detail
 
     # ---- strokes and dashes (spec 14.22)

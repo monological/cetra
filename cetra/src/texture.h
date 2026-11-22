@@ -49,6 +49,8 @@ typedef struct Texture {
     // needs it reads as "cannot say".
     uint64_t content_key;
 
+    bool app_pixels; // made by create_texture_rgba8: one level, its pixels the app's to write
+
     size_t ref_count; // Reference count for shared ownership
 
     UT_hash_handle hh; // Makes this structure hashable
@@ -80,6 +82,20 @@ void texture_apply_wrap(Texture* texture, GLenum wrap_s, GLenum wrap_t);
 // the readback happens once per texture for the life of the process, however
 // often this is called. The first call needs a live GL context.
 bool texture_mean_color(Texture* texture, float* out_rgb);
+
+// A texture of pixels an app made (spec 14.43): width * height pixels of red, green, blue and
+// alpha, a byte each, rows from the top, stored as given and not as sRGB -- so the UI, which blends
+// display-encoded values, draws display-encoded bytes as they are, the alpha a pixel's opacity.
+// Clamped at its edges, filtered linearly, one level, in no pool and never cooked. `rgba` NULL
+// makes every byte 0. The caller's to free (free_texture; texture_release once shared). NULL,
+// logged, for a side under 1 or past GL's largest. Main thread.
+Texture* create_texture_rgba8(int width, int height, const unsigned char* rgba);
+
+// Writes `rgba`, width * height pixels, over the rectangle whose top left pixel is (x, y). Logged,
+// and nothing written, for a texture create_texture_rgba8 did not make or a rectangle not inside
+// it. Main thread.
+void texture_write_rgba8(Texture* texture, int x, int y, int width, int height,
+                         const unsigned char* rgba);
 
 /*
  * Texture Pool

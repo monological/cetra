@@ -4231,6 +4231,255 @@ static void build_lines(UISystem* ui, double scale, bool probe) {
 }
 
 /*
+ * --ui-pictures (spec 14.43): textures of the app's own pixels drawn by the UI's textured quad on
+ * an opaque backdrop no picture holds, which canvas-ui-pictures holds to their texels. One drawn
+ * texel for pixel; four meeting two by two on pixel boundaries; one of 8 by 8 drawn eight times its
+ * size, its outer columns and rows each a colour of their own; one made clear and one made whole,
+ * each with a rectangle written; a part of a larger one drawn by its UVs; one half opaque. Under
+ * them a card of pixel-wide checkers and lines in four textures, for looking at, not gated. Its
+ * lengths are framebuffer pixels, from the window's corner.
+ */
+static const vec4 PICTURES_BACKDROP = {0.10f, 0.12f, 0.06f, 1.0f};
+#define PICTURES_CLAMP_SIDE 8
+static const unsigned char PICTURES_ALPHA[4] = {240, 200, 160, 128};
+static const uint32_t PICTURES_LEFT = 0xff0000, PICTURES_RIGHT = 0x0000ff, PICTURES_TOP = 0xffffff,
+                      PICTURES_BOTTOM = 0x000000, PICTURES_MIDDLE = 0x00ff00;
+
+// A texture and where it is drawn: its rect in pixels and the part of it shown.
+typedef struct {
+    Texture* texture;
+    float x, y, w, h;
+    float uv[4];
+} PicturesQuad;
+static PicturesQuad g_pictures[16];
+static size_t g_picture_count;
+
+// A picture's pixel by its seed: blocks of 16 pixels, by turns noise and a pixel-wide checker, the
+// blue never under 128, which the backdrop's is. canvas-ui-pictures makes the same.
+static void pictures_pixel(int seed, int x, int y, unsigned char rgba[4]) {
+    if (((x >> 4) + (y >> 4)) & 1) {
+        const bool light = (x + y + seed) & 1;
+        rgba[0] = rgba[1] = light ? 255 : 0;
+        rgba[2] = light ? 255 : 128;
+    } else {
+        rgba[0] = (unsigned char)((x * 37 + y * 101 + seed * 53) & 255);
+        rgba[1] = (unsigned char)((x * 149 + y * 29 + seed * 97) & 255);
+        rgba[2] = (unsigned char)(128 | ((x * 11 + y * 67 + seed * 13) & 127));
+    }
+    rgba[3] = 255;
+}
+
+// The card's: a pixel-wide checker, upright lines and level lines a pixel wide, and a checker of
+// two pixels, a quarter of its 256 pixels each.
+static void pictures_card_pixel(int seed, int x, int y, unsigned char rgba[4]) {
+    (void)seed;
+    const bool light = x < 64    ? (x + y) & 1
+                       : x < 128 ? x & 1
+                       : x < 192 ? y & 1
+                                 : ((x >> 1) + (y >> 1)) & 1;
+    rgba[0] = rgba[1] = rgba[2] = light ? 255 : 0;
+    rgba[3] = 255;
+}
+
+// The 8 by 8 picture drawn large: a colour down each outer column and along each outer row.
+static void pictures_clamp_pixel(int seed, int x, int y, unsigned char rgba[4]) {
+    (void)seed;
+    const int last = PICTURES_CLAMP_SIDE - 1;
+    const uint32_t c = x == 0      ? PICTURES_LEFT
+                       : x == last ? PICTURES_RIGHT
+                       : y == 0    ? PICTURES_TOP
+                       : y == last ? PICTURES_BOTTOM
+                                   : PICTURES_MIDDLE;
+    rgba[0] = (unsigned char)(c >> 16), rgba[1] = (unsigned char)(c >> 8),
+    rgba[2] = (unsigned char)c;
+    rgba[3] = 255;
+}
+
+static void pictures_alpha_pixel(int seed, int x, int y, unsigned char rgba[4]) {
+    (void)seed;
+    (void)x;
+    (void)y;
+    memcpy(rgba, PICTURES_ALPHA, 4);
+}
+
+typedef void (*PicturesPixel)(int seed, int x, int y, unsigned char rgba[4]);
+
+// width by height pixels of a picture from (x0, y0) of it, rows from the top; the caller's to free.
+static unsigned char* pictures_pixels(PicturesPixel pixel, int seed, int x0, int y0, int width,
+                                      int height) {
+    unsigned char* rgba = malloc((size_t)width * (size_t)height * 4);
+    for (int y = 0; rgba && y < height; y++)
+        for (int x = 0; x < width; x++)
+            pixel(seed, x0 + x, y0 + y, rgba + ((size_t)y * (size_t)width + (size_t)x) * 4);
+    return rgba;
+}
+
+// A texture of a picture's pixels from (x0, y0) of it.
+static Texture* pictures_texture(PicturesPixel pixel, int seed, int x0, int y0, int width,
+                                 int height) {
+    unsigned char* rgba = pictures_pixels(pixel, seed, x0, y0, width, height);
+    Texture* texture = rgba ? create_texture_rgba8(width, height, rgba) : NULL;
+    free(rgba);
+    return texture;
+}
+
+// Draws the part of `texture` from (u, v), w by h of its pixels, at (x, y) and `times` its size;
+// the sheet takes the texture.
+static void pictures_show(Texture* texture, float x, float y, float u, float v, float w, float h,
+                          float times) {
+    if (!texture || g_picture_count == sizeof(g_pictures) / sizeof(g_pictures[0])) {
+        free_texture(texture);
+        return;
+    }
+    const float tw = (float)texture->width, th = (float)texture->height;
+    g_pictures[g_picture_count++] = (PicturesQuad){
+        texture, x, y, w * times, h * times, {u / tw, v / th, (u + w) / tw, (v + h) / th}};
+}
+
+static void pictures_show_whole(Texture* texture, float x, float y, float times) {
+    if (texture)
+        pictures_show(texture, x, y, 0.0f, 0.0f, (float)texture->width, (float)texture->height,
+                      times);
+}
+
+static void draw_pictures(UIElement* el, UIDrawList* dl, void* user) {
+    const float px = *(const float*)user; // points a pixel
+    ui_draw_quad(dl, el->rect, (float*)PICTURES_BACKDROP);
+    for (size_t i = 0; i < g_picture_count; i++) {
+        const PicturesQuad* q = &g_pictures[i];
+        ui_draw_textured_quad_uv(dl, (UIRect){q->x * px, q->y * px, q->w * px, q->h * px},
+                                 q->texture, q->uv, (vec4){1.0f, 1.0f, 1.0f, 1.0f});
+    }
+}
+
+static void free_pictures(void) {
+    for (size_t i = 0; i < g_picture_count; i++)
+        free_texture(g_pictures[i].texture);
+    g_picture_count = 0;
+}
+
+// A texture's first level as it is stored, width by height pixels; the caller's to free.
+static unsigned char* pictures_stored(const Texture* texture) {
+    unsigned char* rgba = malloc((size_t)texture->width * (size_t)texture->height * 4);
+    if (rgba) {
+        glBindTexture(GL_TEXTURE_2D, texture->id);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    return rgba;
+}
+
+// What the two calls refuse, each 1 when refused and nothing touched: a side of none and one past
+// GL's largest; a rectangle reaching out of `whole`, whose pixels are drawn and so read by the
+// gate; and a write into a texture of the pool's.
+static void say_pictures_refused(Texture* whole, TexturePool* pool) {
+    GLint most = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &most);
+    Texture* none = create_texture_rgba8(0, 4, NULL);
+    Texture* large = create_texture_rgba8(most + 1, 1, NULL);
+    unsigned char* other = pictures_pixels(pictures_pixel, 99, 0, 0, 8, 16);
+    // The first four of its 8 columns are inside.
+    texture_write_rgba8(whole, whole->width - 4, 0, 8, 16, other);
+    Texture* pooled =
+        texture_load_memory(pool, "canvas-pictures-pooled", other, 8, 16, 4, texture_desc(false));
+    bool kept = false;
+    if (pooled) {
+        unsigned char* before = pictures_stored(pooled);
+        texture_write_rgba8(pooled, 0, 0, 4, 4, other + 64);
+        unsigned char* after = pictures_stored(pooled);
+        kept = before && after && !memcmp(before, after, 8 * 16 * 4);
+        free(before);
+        free(after);
+    }
+    printf("canvas pictures refused none %d large %d pooled %d glerror %d\n", !none, !large, kept,
+           glGetError() != GL_NO_ERROR);
+    free_texture(none);
+    free_texture(large);
+    free(other);
+}
+
+// How long a texture of 2048 pixels a side takes to make and a rectangle of 512 to write, each
+// with GL's work finished: for an app sizing what it writes a frame, not gated.
+static void say_pictures_took(void) {
+    unsigned char* rgba = pictures_pixels(pictures_pixel, 3, 0, 0, 2048, 2048);
+    if (!rgba)
+        return;
+    glFinish();
+    double t = glfwGetTime();
+    Texture* texture = create_texture_rgba8(2048, 2048, rgba);
+    glFinish();
+    const double made = glfwGetTime() - t;
+    double least = 1e9;
+    for (int i = 0; texture && i < 20; i++) {
+        t = glfwGetTime();
+        texture_write_rgba8(texture, 512, 512, 512, 512, rgba);
+        glFinish();
+        least = fmin(least, glfwGetTime() - t);
+    }
+    printf("canvas pictures took make2048_us %.0f write512_us %.0f\n", made * 1e6, least * 1e6);
+    free_texture(texture);
+    free(rgba);
+}
+
+static void build_pictures(UISystem* ui, Engine* engine, double scale, bool probe) {
+    TexturePool* pool = engine_get_scene(engine)->tex_pool;
+    const size_t pooled = pool->texture_count;
+
+    Texture* exact = pictures_texture(pictures_pixel, 1, 0, 0, 64, 48);
+    pictures_show_whole(exact, 16.0f, 16.0f, 1.0f);
+    for (int i = 0; i < 4; i++)
+        pictures_show_whole(pictures_texture(pictures_pixel, 2 + i, 0, 0, 32, 32),
+                            112.0f + 32.0f * (float)(i % 2), 16.0f + 32.0f * (float)(i / 2), 1.0f);
+    pictures_show_whole(
+        pictures_texture(pictures_clamp_pixel, 0, 0, 0, PICTURES_CLAMP_SIDE, PICTURES_CLAMP_SIDE),
+        208.0f, 16.0f, 8.0f);
+
+    // One made clear and one made whole, a rectangle of each written after.
+    Texture* clear = create_texture_rgba8(48, 48, NULL);
+    Texture* over = pictures_texture(pictures_pixel, 7, 0, 0, 48, 48);
+    unsigned char* first = pictures_pixels(pictures_pixel, 6, 0, 0, 24, 16);
+    unsigned char* second = pictures_pixels(pictures_pixel, 8, 0, 0, 20, 24);
+    if (clear && first)
+        texture_write_rgba8(clear, 8, 8, 24, 16, first);
+    if (over && second)
+        texture_write_rgba8(over, 16, 12, 20, 24, second);
+    free(first);
+    free(second);
+    pictures_show_whole(clear, 16.0f, 96.0f, 1.0f);
+    pictures_show_whole(over, 80.0f, 96.0f, 1.0f);
+
+    pictures_show(pictures_texture(pictures_pixel, 9, 0, 0, 96, 64), 144.0f, 96.0f, 24.0f, 16.0f,
+                  40.0f, 32.0f, 1.0f);
+    pictures_show_whole(pictures_texture(pictures_alpha_pixel, 0, 0, 0, 32, 32), 208.0f, 96.0f,
+                        1.0f);
+    for (int i = 0; i < 4; i++) {
+        const int x = 128 * (i % 2), y = 64 * (i / 2);
+        pictures_show_whole(pictures_texture(pictures_card_pixel, 0, x, y, 128, 64),
+                            16.0f + (float)x, 160.0f + (float)y, 1.0f);
+    }
+
+    push_pixel_sheet(ui, "pictures", draw_pictures, scale);
+    if (!probe || !exact)
+        return;
+    printf("canvas pictures colours backdrop %06x\n", probe_rgb(PICTURES_BACKDROP));
+    // Each its rect, then what it shows: a seed; the first of four; its texture's side and its
+    // colours; the rectangle written and the seeds; where its part begins; its colour and alpha.
+    printf("canvas pictures exact 16 16 64 48 1\n");
+    printf("canvas pictures stack 112 16 64 64 2\n");
+    printf("canvas pictures clamp 208 16 64 64 %d %06x %06x %06x %06x\n", PICTURES_CLAMP_SIDE,
+           PICTURES_LEFT, PICTURES_RIGHT, PICTURES_TOP, PICTURES_BOTTOM);
+    printf("canvas pictures clear 16 96 48 48 8 8 24 16 6\n");
+    printf("canvas pictures over 80 96 48 48 16 12 20 24 7 8\n");
+    printf("canvas pictures part 144 96 40 32 24 16 9\n");
+    printf("canvas pictures alpha 208 96 32 32 %02x%02x%02x %d\n", PICTURES_ALPHA[0],
+           PICTURES_ALPHA[1], PICTURES_ALPHA[2], PICTURES_ALPHA[3]);
+    printf("canvas pictures bytes %zu want %d\n", texture_gpu_bytes(exact), 64 * 48 * 4);
+    printf("canvas pictures pooled %zu\n", pool->texture_count - pooled);
+    say_pictures_refused(exact, pool);
+    say_pictures_took();
+}
+
+/*
  * --ui-table (spec 14.30): a stackup's rows in a table over the window, as pcb's board modal shows
  * them -- each layer's number, a picture of it, its name, weight and thickness, a note and its net
  * -- with the cursor on row 3. Its colours are opaque, so canvas-ui-table can hold the header's
@@ -4493,6 +4742,7 @@ static void usage(const char* argv0) {
         "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim] [--read-only]\n"
         "          [--editor-fold FIRST,LAST] [--editor-filler LINE,ROWS] [--refuse-close]\n"
         "          [--ui-borders] [--ui-seams] [--ui-lines] [--ui-table] [--ui-table-pane]\n"
+        "          [--ui-pictures]\n"
         "          [--dash LENGTH,GAP (mm)]\n"
         "          [--dash-min-px PX]\n"
         "          [--cap round|butt|square] [--join round|mitre|bevel] [--fade STRENGTH,ROOM]\n",
@@ -4514,7 +4764,7 @@ int main(int argc, char** argv) {
     bool headless = false, mirror = false, probe = false, picture = false, edit_thread = false;
     bool split = false, with_ui = false, budget = false, idle = false, ui_enter = false,
          borders = false, seams = false, lines = false, table = false, table_pane = false,
-         over = false;
+         over = false, pictures = false;
     bool history = false, palette = false, font_sheet = false, vim = false, view3d = false;
     const char* editor_files[EDITOR_FILES_MAX];
     int editor_count = 0;
@@ -4653,6 +4903,8 @@ int main(int argc, char** argv) {
             table = true;
         } else if (strcmp(argv[i], "--ui-table-pane") == 0) {
             table_pane = true;
+        } else if (strcmp(argv[i], "--ui-pictures") == 0) {
+            pictures = true;
         } else if (strcmp(argv[i], "--dash") == 0 && more) {
             double on = 0.0, off = 0.0;
             if (sscanf(argv[++i], "%lf,%lf", &on, &off) != 2) {
@@ -4816,7 +5068,7 @@ int main(int argc, char** argv) {
     g_home_view = g_views[0];
     UISystem* ui = NULL;
     if (with_ui || history || palette || font_sheet || editor_count || borders || seams || lines ||
-        table || table_pane || over) {
+        table || table_pane || over || pictures) {
         ui = create_ui_system(engine);
         ui_set_font(ui, font, 18.0f);
         ui_attach(ui, engine);
@@ -4903,6 +5155,8 @@ int main(int argc, char** argv) {
         build_table(ui, font, width, height, ctx.fb_scale, probe);
     if (table_pane)
         build_table_pane(ui, width, height, ctx.fb_scale, probe);
+    if (pictures)
+        build_pictures(ui, engine, ctx.fb_scale, probe);
     fflush(stdout);
 
     engine_add_overlay(engine, draw_view, NULL, 0);
@@ -4991,6 +5245,7 @@ int main(int argc, char** argv) {
     }
     board_late_settle(true);
     free_ui_system(ui);
+    free_pictures();
     free_ui_editor_vim(g_editor_sheet.vim);
     for (int i = 0; i < 3; i++)
         free_glyph_cache(g_font_sheet.caches[i]);
