@@ -3334,10 +3334,12 @@ static void start_late_work(Engine* engine) {
 }
 
 static void history_stream(Engine* engine);
+static void pictures_write_late(const Engine* engine);
 
 static void on_update(Engine* engine, float dt) {
     (void)dt;
     minimize_update(engine);
+    pictures_write_late(engine);
     if (board_late_settle(false) && g_idle_say)
         printf("canvas idle work landed %zu\n", engine->total_frames + 1);
     if (g_idle_say) {
@@ -4233,26 +4235,56 @@ static void build_lines(UISystem* ui, double scale, bool probe) {
 /*
  * --ui-pictures (spec 14.43): textures of the app's own pixels drawn by the UI's textured quad on
  * an opaque backdrop no picture holds, which canvas-ui-pictures holds to their texels. One drawn
- * texel for pixel; four meeting two by two on pixel boundaries; one of 8 by 8 drawn eight times its
- * size, its outer columns and rows each a colour of their own; one made clear and one made whole,
- * each with a rectangle written; a part of a larger one drawn by its UVs; one half opaque. Under
- * them a card of pixel-wide checkers and lines in four textures, for looking at, not gated. Its
- * lengths are framebuffer pixels, from the window's corner.
+ * texel for pixel; four meeting two by two on pixel boundaries; one made clear with a rectangle
+ * written before it is first drawn, and one made whole with a rectangle written after; a part of a
+ * larger one drawn by its UVs; one of 8 by 8 drawn eight times its size, its outer columns and
+ * rows each a colour of their own; one half opaque. Under them a card of pixel-wide checkers and
+ * lines in four textures, for looking at, not gated. Its lengths are framebuffer pixels, from the
+ * window's corner.
  */
-static const vec4 PICTURES_BACKDROP = {0.10f, 0.12f, 0.06f, 1.0f};
+// Whole codes, so no pixel of it rests on how a half rounds.
+static const vec4 PICTURES_BACKDROP = {26.0f / 255.0f, 31.0f / 255.0f, 15.0f / 255.0f, 1.0f};
 #define PICTURES_CLAMP_SIDE 8
 static const unsigned char PICTURES_ALPHA[4] = {240, 200, 160, 128};
 static const uint32_t PICTURES_LEFT = 0xff0000, PICTURES_RIGHT = 0x0000ff, PICTURES_TOP = 0xffffff,
                       PICTURES_BOTTOM = 0x000000, PICTURES_MIDDLE = 0x00ff00;
 
-// A texture and where it is drawn: its rect in pixels and the part of it shown.
+// A seed's picture in a texture of its own, tw by th from the picture's corner, and the part of
+// it drawn: w by h of its texels from (u, v), at (x, y). Seed 0 is a texture made clear. `written`
+// is a rectangle of the texture written after it is made with another seed's picture, from that
+// one's corner: before the first frame or, `late`, after it, into a texture already drawn. Its
+// seed 0 is none.
 typedef struct {
-    Texture* texture;
+    const char* name;
+    int seed, tw, th;
+    int x, y, u, v, w, h;
+    struct {
+        int seed, x, y, w, h;
+        bool late;
+    } written;
+} PicturesRow;
+static const PicturesRow PICTURES[] = {
+    {"exact", 1, 64, 48, 16, 16, 0, 0, 64, 48, {0}},
+    {"stack-0", 2, 32, 32, 112, 16, 0, 0, 32, 32, {0}},
+    {"stack-1", 3, 32, 32, 144, 16, 0, 0, 32, 32, {0}},
+    {"stack-2", 4, 32, 32, 112, 48, 0, 0, 32, 32, {0}},
+    {"stack-3", 5, 32, 32, 144, 48, 0, 0, 32, 32, {0}},
+    {"clear", 0, 48, 48, 16, 96, 0, 0, 48, 48, {6, 8, 8, 24, 16, false}},
+    {"over", 7, 48, 48, 80, 96, 0, 0, 48, 48, {8, 16, 12, 20, 24, true}},
+    {"part", 9, 96, 64, 144, 96, 24, 16, 40, 32, {0}},
+};
+#define PICTURES_COUNT (sizeof(PICTURES) / sizeof(PICTURES[0]))
+
+// A texture and where it is drawn: its rect in pixels and the part of it shown. The rows' come
+// first, in their order; then the 8 by 8, the half opaque one and the card's four.
+typedef struct {
+    Texture* texture; // NULL when it could not be made, and not drawn
     float x, y, w, h;
     float uv[4];
 } PicturesQuad;
-static PicturesQuad g_pictures[16];
+static PicturesQuad g_pictures[PICTURES_COUNT + 6];
 static size_t g_picture_count;
+static bool g_pictures_late; // the rows' late rectangles are still to write
 
 // A picture's pixel by its seed: blocks of 16 pixels, by turns noise and a pixel-wide checker, the
 // blue never under 128, which the backdrop's is. canvas-ui-pictures makes the same.
@@ -4269,10 +4301,11 @@ static void pictures_pixel(int seed, int x, int y, unsigned char rgba[4]) {
     rgba[3] = 255;
 }
 
-// The card's: a pixel-wide checker, upright lines and level lines a pixel wide, and a checker of
-// two pixels, a quarter of its 256 pixels each.
+// The card's, 256 by 128 in four tiles two by two, the seed its tile: a pixel-wide checker, upright
+// lines and level lines a pixel wide, and a checker of two pixels, a quarter of its width each.
 static void pictures_card_pixel(int seed, int x, int y, unsigned char rgba[4]) {
-    (void)seed;
+    x += 128 * (seed % 2);
+    y += 64 * (seed / 2);
     const bool light = x < 64    ? (x + y) & 1
                        : x < 128 ? x & 1
                        : x < 192 ? y & 1
@@ -4290,56 +4323,44 @@ static void pictures_clamp_pixel(int seed, int x, int y, unsigned char rgba[4]) 
                        : y == 0    ? PICTURES_TOP
                        : y == last ? PICTURES_BOTTOM
                                    : PICTURES_MIDDLE;
-    rgba[0] = (unsigned char)(c >> 16), rgba[1] = (unsigned char)(c >> 8),
-    rgba[2] = (unsigned char)c;
-    rgba[3] = 255;
-}
-
-static void pictures_alpha_pixel(int seed, int x, int y, unsigned char rgba[4]) {
-    (void)seed;
-    (void)x;
-    (void)y;
-    memcpy(rgba, PICTURES_ALPHA, 4);
+    rgba_bytes(c << 8 | 0xffu, rgba);
 }
 
 typedef void (*PicturesPixel)(int seed, int x, int y, unsigned char rgba[4]);
 
-// width by height pixels of a picture from (x0, y0) of it, rows from the top; the caller's to free.
-static unsigned char* pictures_pixels(PicturesPixel pixel, int seed, int x0, int y0, int width,
-                                      int height) {
+// width by height pixels of a picture from its corner, rows from the top; the caller's to free.
+static unsigned char* pictures_pixels(PicturesPixel pixel, int seed, int width, int height) {
     unsigned char* rgba = malloc((size_t)width * (size_t)height * 4);
     for (int y = 0; rgba && y < height; y++)
         for (int x = 0; x < width; x++)
-            pixel(seed, x0 + x, y0 + y, rgba + ((size_t)y * (size_t)width + (size_t)x) * 4);
+            pixel(seed, x, y, rgba + ((size_t)y * (size_t)width + (size_t)x) * 4);
     return rgba;
 }
 
-// A texture of a picture's pixels from (x0, y0) of it.
-static Texture* pictures_texture(PicturesPixel pixel, int seed, int x0, int y0, int width,
-                                 int height) {
-    unsigned char* rgba = pictures_pixels(pixel, seed, x0, y0, width, height);
+static Texture* pictures_texture(PicturesPixel pixel, int seed, int width, int height) {
+    unsigned char* rgba = pictures_pixels(pixel, seed, width, height);
     Texture* texture = rgba ? create_texture_rgba8(width, height, rgba) : NULL;
     free(rgba);
     return texture;
 }
 
-// Draws the part of `texture` from (u, v), w by h of its pixels, at (x, y) and `times` its size;
-// the sheet takes the texture.
-static void pictures_show(Texture* texture, float x, float y, float u, float v, float w, float h,
-                          float times) {
-    if (!texture || g_picture_count == sizeof(g_pictures) / sizeof(g_pictures[0])) {
+// Draws w by h texels of `texture` from (u, v) of it, at (x, y) and `times` their size; the sheet
+// takes the texture.
+static void pictures_show(Texture* texture, int x, int y, int u, int v, int w, int h, int times) {
+    if (g_picture_count == sizeof(g_pictures) / sizeof(g_pictures[0])) {
+        fprintf(stderr, "canvas: --ui-pictures shows more pictures than it has room for\n");
         free_texture(texture);
         return;
     }
-    const float tw = (float)texture->width, th = (float)texture->height;
-    g_pictures[g_picture_count++] = (PicturesQuad){
-        texture, x, y, w * times, h * times, {u / tw, v / th, (u + w) / tw, (v + h) / th}};
-}
-
-static void pictures_show_whole(Texture* texture, float x, float y, float times) {
-    if (texture)
-        pictures_show(texture, x, y, 0.0f, 0.0f, (float)texture->width, (float)texture->height,
-                      times);
+    const float tw = texture ? (float)texture->width : 1.0f,
+                th = texture ? (float)texture->height : 1.0f;
+    g_pictures[g_picture_count++] =
+        (PicturesQuad){texture,
+                       (float)x,
+                       (float)y,
+                       (float)(w * times),
+                       (float)(h * times),
+                       {(float)u / tw, (float)v / th, (float)(u + w) / tw, (float)(v + h) / th}};
 }
 
 static void draw_pictures(UIElement* el, UIDrawList* dl, void* user) {
@@ -4347,8 +4368,30 @@ static void draw_pictures(UIElement* el, UIDrawList* dl, void* user) {
     ui_draw_quad(dl, el->rect, (float*)PICTURES_BACKDROP);
     for (size_t i = 0; i < g_picture_count; i++) {
         const PicturesQuad* q = &g_pictures[i];
-        ui_draw_textured_quad_uv(dl, (UIRect){q->x * px, q->y * px, q->w * px, q->h * px},
-                                 q->texture, q->uv, (vec4){1.0f, 1.0f, 1.0f, 1.0f});
+        if (q->texture)
+            ui_draw_textured_quad_uv(dl, (UIRect){q->x * px, q->y * px, q->w * px, q->h * px},
+                                     q->texture, q->uv, (vec4){1.0f, 1.0f, 1.0f, 1.0f});
+    }
+}
+
+// Writes the rows' rectangles that are written before the first frame, or the `late` ones.
+static void pictures_write(bool late) {
+    for (size_t i = 0; i < PICTURES_COUNT; i++) {
+        const PicturesRow* p = &PICTURES[i];
+        if (!p->written.seed || p->written.late != late)
+            continue;
+        unsigned char* rgba =
+            pictures_pixels(pictures_pixel, p->written.seed, p->written.w, p->written.h);
+        texture_write_rgba8(g_pictures[i].texture, p->written.x, p->written.y, p->written.w,
+                            p->written.h, rgba);
+        free(rgba);
+    }
+}
+
+static void pictures_write_late(const Engine* engine) {
+    if (g_pictures_late && engine->total_frames >= 1) {
+        g_pictures_late = false;
+        pictures_write(true);
     }
 }
 
@@ -4369,114 +4412,91 @@ static unsigned char* pictures_stored(const Texture* texture) {
     return rgba;
 }
 
-// What the two calls refuse, each 1 when refused and nothing touched: a side of none and one past
-// GL's largest; a rectangle reaching out of `whole`, whose pixels are drawn and so read by the
-// gate; and a write into a texture of the pool's.
-static void say_pictures_refused(Texture* whole, TexturePool* pool) {
-    GLint most = 0;
-    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &most);
+// What the two calls answer: the bytes `whole` takes on the GPU and the textures the pictures
+// `added` to the pool since it held `before`; then what they refuse, each 1 when refused with
+// nothing touched -- a side of none and one past GL's largest; a rectangle reaching `outside`
+// `whole`, stopped before GL is asked, `whole`'s pixels being drawn and so read by the gate; and a
+// write into a texture of the pool's.
+static void say_pictures_calls(Texture* whole, TexturePool* pool, size_t before) {
+    const size_t added = pool->texture_count - before;
     Texture* none = create_texture_rgba8(0, 4, NULL);
-    Texture* large = create_texture_rgba8(most + 1, 1, NULL);
-    unsigned char* other = pictures_pixels(pictures_pixel, 99, 0, 0, 8, 16);
+    Texture* large = create_texture_rgba8(get_gl_max_texture_size() + 1, 1, NULL);
+    unsigned char* other = pictures_pixels(pictures_pixel, 99, 8, 16);
+    check_gl_error("before --ui-pictures writes outside"); // so an error after is that write's
     // The first four of its 8 columns are inside.
     texture_write_rgba8(whole, whole->width - 4, 0, 8, 16, other);
+    const bool outside = glGetError() == GL_NO_ERROR;
     Texture* pooled =
         texture_load_memory(pool, "canvas-pictures-pooled", other, 8, 16, 4, texture_desc(false));
     bool kept = false;
     if (pooled) {
-        unsigned char* before = pictures_stored(pooled);
+        unsigned char* held = pictures_stored(pooled);
         texture_write_rgba8(pooled, 0, 0, 4, 4, other + 64);
         unsigned char* after = pictures_stored(pooled);
-        kept = before && after && !memcmp(before, after, 8 * 16 * 4);
-        free(before);
+        kept = held && after && !memcmp(held, after, 8 * 16 * 4);
+        free(held);
         free(after);
     }
-    printf("canvas pictures refused none %d large %d pooled %d glerror %d\n", !none, !large, kept,
-           glGetError() != GL_NO_ERROR);
+    printf("canvas pictures calls bytes %zu added %zu none %d large %d outside %d pooled %d\n",
+           texture_gpu_bytes(whole), added, !none, !large, outside, kept);
     free_texture(none);
     free_texture(large);
     free(other);
 }
 
-// How long a texture of 2048 pixels a side takes to make and a rectangle of 512 to write, each
-// with GL's work finished: for an app sizing what it writes a frame, not gated.
-static void say_pictures_took(void) {
-    unsigned char* rgba = pictures_pixels(pictures_pixel, 3, 0, 0, 2048, 2048);
-    if (!rgba)
-        return;
-    glFinish();
-    double t = glfwGetTime();
-    Texture* texture = create_texture_rgba8(2048, 2048, rgba);
-    glFinish();
-    const double made = glfwGetTime() - t;
-    double least = 1e9;
-    for (int i = 0; texture && i < 20; i++) {
-        t = glfwGetTime();
-        texture_write_rgba8(texture, 512, 512, 512, 512, rgba);
-        glFinish();
-        least = fmin(least, glfwGetTime() - t);
-    }
-    printf("canvas pictures took make2048_us %.0f write512_us %.0f\n", made * 1e6, least * 1e6);
-    free_texture(texture);
-    free(rgba);
+static void say_pictures_quad(const char* name, const PicturesQuad* q) {
+    printf("canvas pictures %s %.0f %.0f %.0f %.0f", name, (double)q->x, (double)q->y, (double)q->w,
+           (double)q->h);
 }
 
 static void build_pictures(UISystem* ui, Engine* engine, double scale, bool probe) {
     TexturePool* pool = engine_get_scene(engine)->tex_pool;
     const size_t pooled = pool->texture_count;
-
-    Texture* exact = pictures_texture(pictures_pixel, 1, 0, 0, 64, 48);
-    pictures_show_whole(exact, 16.0f, 16.0f, 1.0f);
-    for (int i = 0; i < 4; i++)
-        pictures_show_whole(pictures_texture(pictures_pixel, 2 + i, 0, 0, 32, 32),
-                            112.0f + 32.0f * (float)(i % 2), 16.0f + 32.0f * (float)(i / 2), 1.0f);
-    pictures_show_whole(
-        pictures_texture(pictures_clamp_pixel, 0, 0, 0, PICTURES_CLAMP_SIDE, PICTURES_CLAMP_SIDE),
-        208.0f, 16.0f, 8.0f);
-
-    // One made clear and one made whole, a rectangle of each written after.
-    Texture* clear = create_texture_rgba8(48, 48, NULL);
-    Texture* over = pictures_texture(pictures_pixel, 7, 0, 0, 48, 48);
-    unsigned char* first = pictures_pixels(pictures_pixel, 6, 0, 0, 24, 16);
-    unsigned char* second = pictures_pixels(pictures_pixel, 8, 0, 0, 20, 24);
-    if (clear && first)
-        texture_write_rgba8(clear, 8, 8, 24, 16, first);
-    if (over && second)
-        texture_write_rgba8(over, 16, 12, 20, 24, second);
-    free(first);
-    free(second);
-    pictures_show_whole(clear, 16.0f, 96.0f, 1.0f);
-    pictures_show_whole(over, 80.0f, 96.0f, 1.0f);
-
-    pictures_show(pictures_texture(pictures_pixel, 9, 0, 0, 96, 64), 144.0f, 96.0f, 24.0f, 16.0f,
-                  40.0f, 32.0f, 1.0f);
-    pictures_show_whole(pictures_texture(pictures_alpha_pixel, 0, 0, 0, 32, 32), 208.0f, 96.0f,
-                        1.0f);
-    for (int i = 0; i < 4; i++) {
-        const int x = 128 * (i % 2), y = 64 * (i / 2);
-        pictures_show_whole(pictures_texture(pictures_card_pixel, 0, x, y, 128, 64),
-                            16.0f + (float)x, 160.0f + (float)y, 1.0f);
+    for (size_t i = 0; i < PICTURES_COUNT; i++) {
+        const PicturesRow* p = &PICTURES[i];
+        Texture* texture = p->seed ? pictures_texture(pictures_pixel, p->seed, p->tw, p->th)
+                                   : create_texture_rgba8(p->tw, p->th, NULL);
+        pictures_show(texture, p->x, p->y, p->u, p->v, p->w, p->h, 1);
     }
+    pictures_write(false);
+    g_pictures_late = true;
+
+    const PicturesQuad *clamp = &g_pictures[g_picture_count], *alpha = clamp + 1;
+    const int side = PICTURES_CLAMP_SIDE;
+    pictures_show(pictures_texture(pictures_clamp_pixel, 0, side, side), 208, 16, 0, 0, side, side,
+                  8);
+    unsigned char half[32 * 32 * 4];
+    for (size_t i = 0; i < sizeof(half); i += 4)
+        memcpy(half + i, PICTURES_ALPHA, 4);
+    pictures_show(create_texture_rgba8(32, 32, half), 208, 96, 0, 0, 32, 32, 1);
+    for (int i = 0; i < 4; i++)
+        pictures_show(pictures_texture(pictures_card_pixel, i, 128, 64), 16 + 128 * (i % 2),
+                      160 + 64 * (i / 2), 0, 0, 128, 64, 1);
 
     push_pixel_sheet(ui, "pictures", draw_pictures, scale);
+    Texture* exact = g_pictures[0].texture;
     if (!probe || !exact)
         return;
     printf("canvas pictures colours backdrop %06x\n", probe_rgb(PICTURES_BACKDROP));
-    // Each its rect, then what it shows: a seed; the first of four; its texture's side and its
-    // colours; the rectangle written and the seeds; where its part begins; its colour and alpha.
-    printf("canvas pictures exact 16 16 64 48 1\n");
-    printf("canvas pictures stack 112 16 64 64 2\n");
-    printf("canvas pictures clamp 208 16 64 64 %d %06x %06x %06x %06x\n", PICTURES_CLAMP_SIDE,
-           PICTURES_LEFT, PICTURES_RIGHT, PICTURES_TOP, PICTURES_BOTTOM);
-    printf("canvas pictures clear 16 96 48 48 8 8 24 16 6\n");
-    printf("canvas pictures over 80 96 48 48 16 12 20 24 7 8\n");
-    printf("canvas pictures part 144 96 40 32 24 16 9\n");
-    printf("canvas pictures alpha 208 96 32 32 %02x%02x%02x %d\n", PICTURES_ALPHA[0],
-           PICTURES_ALPHA[1], PICTURES_ALPHA[2], PICTURES_ALPHA[3]);
-    printf("canvas pictures bytes %zu want %d\n", texture_gpu_bytes(exact), 64 * 48 * 4);
-    printf("canvas pictures pooled %zu\n", pool->texture_count - pooled);
-    say_pictures_refused(exact, pool);
-    say_pictures_took();
+    // Each row, and the rectangle written into it, as a rect of the window and the seed's picture
+    // it shows, from where of it: "x y w h seed u v". A seed of 0 shows nothing.
+    for (size_t i = 0; i < PICTURES_COUNT; i++) {
+        const PicturesRow* p = &PICTURES[i];
+        printf("canvas pictures %s %d %d %d %d %d %d %d\n", p->name, p->x, p->y, p->w, p->h,
+               p->seed, p->u, p->v);
+        if (p->written.seed)
+            printf("canvas pictures %s-written %d %d %d %d %d 0 0\n", p->name,
+                   p->x - p->u + p->written.x, p->y - p->v + p->written.y, p->written.w,
+                   p->written.h, p->written.seed);
+    }
+    // Its rect, then its texture's side and its four sides' colours; its rect, colour and alpha.
+    say_pictures_quad("clamp", clamp);
+    printf(" %d %06x %06x %06x %06x\n", side, PICTURES_LEFT, PICTURES_RIGHT, PICTURES_TOP,
+           PICTURES_BOTTOM);
+    say_pictures_quad("alpha", alpha);
+    printf(" %02x%02x%02x %d\n", PICTURES_ALPHA[0], PICTURES_ALPHA[1], PICTURES_ALPHA[2],
+           PICTURES_ALPHA[3]);
+    say_pictures_calls(exact, pool, pooled);
 }
 
 /*

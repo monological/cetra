@@ -202,8 +202,9 @@ void ui_draw_polyline(UIDrawList* dl, const UIPoint* points, size_t count, float
 // A filled convex shape of 3 or 4 corners, in order either way round. Any other count, a shape not
 // convex or one of no area draws nothing and is logged.
 void ui_draw_convex(UIDrawList* dl, const UIPoint* corners, size_t count, vec4 color);
-// An image stretched over the rect, multiplied by `tint`. The texture must live until the frame is
-// drawn.
+// The three that draw an image keep its texture's GL name until the frame is drawn: the texture
+// must live until then.
+// An image stretched over the rect, multiplied by `tint`.
 void ui_draw_textured_quad(UIDrawList* dl, UIRect r, const Texture* tex, vec4 tint);
 // A part of an image stretched over the rect, multiplied by `tint`: `uv` is {u0, v0, u1, v1}, v0
 // at the rect's top, so a picture stored top row first is addressed as it is seen. Several

@@ -1210,8 +1210,8 @@ Texture* create_texture() {
     texture->data_format = 0;
     texture->content_key = 0;
     // Matches texture_set_default_sampler_state, which is what every upload
-    // path applies -- so the recorded value describes the texture object even
-    // for the sites that never ask for anything else.
+    // into the pool applies -- so the recorded value describes the texture
+    // object even for the sites that never ask for anything else.
     texture->wrap_s = GL_REPEAT;
     texture->wrap_t = GL_REPEAT;
     texture->mean_rgb[0] = texture->mean_rgb[1] = texture->mean_rgb[2] = 0.0f;
@@ -1254,8 +1254,9 @@ bool texture_mean_color(Texture* texture, float* out_rgb) {
         return false;
 
     // Memoized: the readback below is a pipeline stall, and its consumer
-    // evaluates candidacy for every mesh every frame. Pixels are never rewritten
-    // in place, so a hit can never be stale.
+    // evaluates candidacy for every mesh every frame. The pool's pixels are never
+    // rewritten in place and texture_write_rgba8 forgets the mean of what it
+    // rewrites, so a hit can never be stale.
     if (texture->mean_valid) {
         for (int c = 0; c < 3; c++)
             out_rgb[c] = texture->mean_rgb[c];
@@ -1334,8 +1335,7 @@ void texture_release(Texture* texture) {
 }
 
 Texture* create_texture_rgba8(int width, int height, const unsigned char* rgba) {
-    GLint most = 0;
-    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &most);
+    const GLint most = get_gl_max_texture_size();
     if (width < 1 || height < 1 || width > most || height > most) {
         log_error("create_texture_rgba8: %d by %d is no size of a texture, 1 to %d a side", width,
                   height, most);
@@ -1349,6 +1349,7 @@ Texture* create_texture_rgba8(int width, int height, const unsigned char* rgba) 
         return NULL;
     }
 
+    check_gl_error("before create_texture_rgba8"); // so an error after is this upload's
     glGenTextures(1, &texture->id);
     glBindTexture(GL_TEXTURE_2D, texture->id);
     // A model's defaults -- tiling, trilinear over a chain -- would mix a picture's edge with its
@@ -1357,12 +1358,16 @@ Texture* create_texture_rgba8(int width, int height, const unsigned char* rgba) 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
                  rgba ? rgba : clear);
+    const GLenum refused = glGetError();
     glBindTexture(GL_TEXTURE_2D, 0);
-    check_gl_error("create_texture_rgba8");
     free(clear);
+    if (refused != GL_NO_ERROR) {
+        log_error("create_texture_rgba8: GL error %u storing %d by %d", refused, width, height);
+        free_texture(texture);
+        return NULL;
+    }
 
     texture->width = width;
     texture->height = height;

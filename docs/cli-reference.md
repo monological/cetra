@@ -1621,10 +1621,8 @@ and:
   whose edge halves a column of pixels and a rounded box, which `canvas-ui-seams` holds to a
   one-pixel edge.
 - `--ui-pictures` (spec 14.43) draws, at whole framebuffer pixels from the window's corner,
-  textures of the app's own pixels: one texel for pixel, four meeting two by two, one of 8 by 8
-  drawn eight times its size, one made clear and one made whole with a rectangle of each written
-  after, a part of a larger one and one half opaque, which `canvas-ui-pictures` holds to their
-  texels; under them a card of pixel-wide checkers and lines, for looking at.
+  textures of the app's own pixels, which `canvas-ui-pictures` holds to their texels; its pictures
+  are listed in `apps/canvas/README.md`.
 - `--edit-thread` fills the board's edit on a thread of its own.
 - `--canvas-probe` prints where each shape of a sheet landed and its measures, in framebuffer pixels
   with rows from the top; on the board it also runs a script, a step a frame, printing what each

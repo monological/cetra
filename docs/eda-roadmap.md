@@ -18,8 +18,7 @@ engine feature that pcb happens to be the first user of.
 from what is written here and why, and any new item it found.
 
 _Last updated: 2026-11-22: 14.43, a texture of an app's own pixels, built for pcb 10.2's datasheet
-pane; with it item 1's images are decided, a page being the UI's to draw and the canvas drawing
-none. Before it, 2026-11-20: 14.42, a quiet engine, built for pcb 9.2's `make` (its spec);
+pane, and item 1's images decided with it (its Left for later). Before it, 2026-11-20: 14.42, a quiet engine, built for pcb 9.2's `make` (its spec);
 2026-11-18: 14.41, pictures read back and an element over its parent, built for a new item 10 and
 for pcb's Space i._
 
@@ -739,10 +738,8 @@ old size.
   still says.
 - **A texture of an app's own pixels** -- spec 14.43, built, for pcb 10.2's datasheet pane, whose
   pages PDFium draws on a worker in tiles: `create_texture_rgba8` and `texture_write_rgba8`
-  (`texture.h`), a texture stored as given, clamped, one level, outside the pool and the cook, a
-  rectangle of it written again. The UI's textured quad draws it texel for pixel on whole pixels,
-  and two meeting there leave nothing between them (`docs/ui.md`, The draw list). The canvas
-  drawing pages as images, item 1's plan, was turned down (item 1, Left for later).
+  (`texture.h`), drawn by the UI's textured quad (`docs/ui.md`, The draw list). The canvas drawing
+  pages as images, item 1's plan, was turned down (item 1, Left for later).
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the

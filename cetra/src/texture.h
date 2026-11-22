@@ -27,9 +27,10 @@ typedef struct Texture {
     GLenum wrap_s;
     GLenum wrap_t;
 
-    // The image's mean colour, LINEAR, memoized on first read. Pixels are never
-    // rewritten in place -- the async loader creates a new Texture per landed
-    // load -- so once true this can never go stale.
+    // The image's mean colour, LINEAR, memoized on first read. The pool's pixels
+    // are never rewritten in place -- the async loader creates a new Texture per
+    // landed load -- so once true this can never go stale; texture_write_rgba8,
+    // which rewrites an app's own, forgets it.
     //
     // Memoized rather than recomputed because the read is a synchronous
     // glGetTexImage, and its one consumer turned out to be calling it per mesh
@@ -41,7 +42,8 @@ typedef struct Texture {
     // First mip level whose alpha is a binary {0,255} lattice with both codes
     // present, or -1: where 11.100's distribution (or anything shaped like it)
     // begins, scanned from the level stack at publish. Set once at upload,
-    // never stale for the same reason mean_rgb is not.
+    // never stale for the same reason mean_rgb is not; an app's own pixels have
+    // no chain and keep -1.
     int distribute_from_level;
 
     // What it is, for a key that must not outlive it (spec 13.42): the cook's key for its pixels
@@ -83,17 +85,17 @@ void texture_apply_wrap(Texture* texture, GLenum wrap_s, GLenum wrap_t);
 // often this is called. The first call needs a live GL context.
 bool texture_mean_color(Texture* texture, float* out_rgb);
 
-// A texture of pixels an app made (spec 14.43): width * height pixels of red, green, blue and
-// alpha, a byte each, rows from the top, stored as given and not as sRGB -- so the UI, which blends
-// display-encoded values, draws display-encoded bytes as they are, the alpha a pixel's opacity.
-// Clamped at its edges, filtered linearly, one level, in no pool and never cooked. `rgba` NULL
-// makes every byte 0. The caller's to free (free_texture; texture_release once shared). NULL,
-// logged, for a side under 1 or past GL's largest. Main thread.
+// A texture of pixels an app made (spec 14.43), to be drawn as it is: width * height pixels of
+// red, green, blue and alpha, a byte each, rows from the top, stored as given and never decoded as
+// sRGB when sampled. Clamped at its edges, filtered linearly, one level, in no pool and never
+// cooked; a material's textures are the pool's. `rgba` NULL makes every byte 0. The caller's to
+// free (free_texture; texture_release once shared). NULL, logged, for a side under 1 or past GL's
+// largest, or when GL cannot store it. Main thread.
 Texture* create_texture_rgba8(int width, int height, const unsigned char* rgba);
 
 // Writes `rgba`, width * height pixels, over the rectangle whose top left pixel is (x, y). Logged,
-// and nothing written, for a texture create_texture_rgba8 did not make or a rectangle not inside
-// it. Main thread.
+// and nothing written, for a texture create_texture_rgba8 did not make, or a rectangle of no size
+// or not inside it. Main thread.
 void texture_write_rgba8(Texture* texture, int x, int y, int width, int height,
                          const unsigned char* rgba);
 
@@ -262,10 +264,10 @@ void texture_set_compression_enabled(bool enabled);
 // --texture-compress-colour turns it on.
 void texture_set_colour_compression_enabled(bool enabled);
 
-// Bytes this texture occupies on the GPU including its mip chain, derived from
-// the internal format the driver actually chose rather than from the channel
-// count the loader passed. Unsized formats mean those two can disagree, which is
-// exactly why the probe asks.
+// Bytes this texture occupies on the GPU including its mip chain, where it has
+// one, derived from the internal format the driver actually chose rather than
+// from the channel count the loader passed. Unsized formats mean those two can
+// disagree, which is exactly why the probe asks.
 size_t texture_gpu_bytes(const Texture* texture);
 
 // The `normalTexExists` / `clearcoatNormalExists` gate: 0 none, 1 stored with a
