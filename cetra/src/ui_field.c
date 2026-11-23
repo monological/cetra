@@ -48,6 +48,10 @@ struct UIField {
     unsigned flags;
     char* buf; // UTF-8, always NUL-terminated
     int len, cap;
+    // A secret field's text as it is shown: `buf` byte for byte, each character a mark as long as
+    // it is (_mirror), so what measures, places and draws the text reads it unchanged. NULL for
+    // any other field, which shows `buf`.
+    char* shown;
     char* placeholder; // the dim hint while `buf` is empty; owned, NULL for none
     STB_TexteditState state;
     // The two members ImGui's copy of stb_textedit writes by name; see the block above.
@@ -90,11 +94,44 @@ static void _break_rows(UIField* f) {
         ui_lines_break(&f->rows, &f->text, f->wrap, 0);
 }
 
+/*
+ * A secret field's marks: a character of one byte shown as "*", of two as "·" (U+00B7), of three
+ * as "∗" (U+2217) and of four as a private-use character, each as long in UTF-8 as the character
+ * it stands for, so a byte of the text is a byte of what is shown. The atlas holds the first two;
+ * the others are drawn as its box. A mark of the same length keeps every offset the field and
+ * stb_textedit hold the text's own, where one star for every character would need each mapped.
+ */
+static const char* const MARKS[] = {"*", "\xC2\xB7", "\xE2\x88\x97", "\xF4\x8F\xBF\xBD"};
+
+// The text shown: a secret field's marks, kept as long as the text, else the text itself.
+static const char* _shown(const UIField* f) {
+    return f->shown ? f->shown : f->buf;
+}
+
+static void _mirror(UIField* f) {
+    if (!f->shown)
+        return;
+    const char* p = f->buf;
+    char* out = f->shown;
+    while (*p) {
+        const char* at = p;
+        text_utf8_next(&p);
+        const size_t n = (size_t)(p - at);
+        if (n >= 1 && n <= 4)
+            memcpy(out, MARKS[n - 1], n);
+        else
+            memset(out, '*', n);
+        out += n;
+    }
+    *out = '\0';
+}
+
 // After an edit the measuring text follows the buffer and its runs, and the rows are broken again
 // for it at once from row `row` on, the rows before it kept: stb_textedit asks for them before the
 // next layout.
 static void _sync_from(UIField* f, size_t row) {
-    f->text.text = f->buf;
+    _mirror(f);
+    f->text.text = _shown(f);
     f->text.length = (size_t)f->len;
     f->text.runs = f->el->runs;
     f->text.run_count = f->el->run_count;
@@ -139,12 +176,17 @@ static int _prev_index(const UIField* f, int i) {
     return (int)(p - f->buf);
 }
 
-// The platform's word moves (ui_typing.h), in stb_textedit's int offsets.
+// The platform's word moves (ui_typing.h), in stb_textedit's int offsets. A secret field is one
+// word, its ends the moves', so a move tells nothing of where its text's words are.
 static int _word_left(const UIField* f, int i) {
+    if (f->shown)
+        return 0;
     return (int)ui_typing_word_left(f->buf, (size_t)f->len, i > 0 ? (size_t)i : 0);
 }
 
 static int _word_right(const UIField* f, int i) {
+    if (f->shown)
+        return f->len;
     return (int)ui_typing_word_right(f->buf, (size_t)f->len, i > 0 ? (size_t)i : 0);
 }
 
@@ -202,12 +244,43 @@ static void _layout_row(StbTexteditRow* r, UIField* f, int start) {
     r->num_chars = end - start + (newline ? 1 : 0);
 }
 
+// Zeroes bytes a secret field let go of, through a volatile pointer, so the stores are made though
+// nothing reads them after.
+static void _wipe(void* p, size_t n) {
+    volatile unsigned char* v = p;
+    while (n--)
+        *v++ = 0;
+}
+
+// A secret buffer moved to a new one of `cap` bytes, the old zeroed before it is freed, so no copy
+// of the text stays behind in the heap.
+static bool _move_secret(char** buf, int had, size_t cap) {
+    char* moved = calloc(cap, 1);
+    if (!moved)
+        return false;
+    if (*buf) {
+        memcpy(moved, *buf, (size_t)had);
+        _wipe(*buf, (size_t)had);
+        free(*buf);
+    }
+    *buf = moved;
+    return true;
+}
+
 static bool _reserve(UIField* f, int need) {
     if (need + 1 <= f->cap)
         return true;
     size_t cap = (size_t)f->cap;
-    if (!grow_array((void**)&f->buf, &cap, (size_t)need + 1, 1, 32))
+    if (f->flags & UI_FIELD_SECRET) {
+        // The text's and the marks' buffers grow together, each as long as the other.
+        cap = cap < 32 ? 32 : cap;
+        while (cap < (size_t)need + 1)
+            cap *= 2;
+        if (!_move_secret(&f->buf, f->cap, cap) || !_move_secret(&f->shown, f->cap, cap))
+            return false;
+    } else if (!grow_array((void**)&f->buf, &cap, (size_t)need + 1, 1, 32)) {
         return false;
+    }
     f->cap = (int)cap;
     return true;
 }
@@ -215,6 +288,8 @@ static bool _reserve(UIField* f, int need) {
 static void _delete_chars(UIField* f, int at, int n) {
     memmove(f->buf + at, f->buf + at + n, (size_t)(f->len - at - n + 1));
     f->len -= n;
+    if (f->shown)
+        _wipe(f->buf + f->len + 1, (size_t)n); // the text that moved down, left behind
     f->edits++;
     _sync(f);
 }
@@ -280,13 +355,21 @@ static int _insert_chars(UIField* f, int at, const char* text, int n) {
 
 struct UIField* ui_field_make(UIElement* el, unsigned flags) {
     UIField* f = calloc(1, sizeof(UIField));
+    // A secret field is one line, as a password's is: its marks and its buffers come with it.
+    if (flags & UI_FIELD_SECRET)
+        flags &= ~(unsigned)(UI_FIELD_MULTILINE | UI_FIELD_SUBMIT_ON_ENTER);
+    if (f)
+        f->flags = flags;
     if (!f || !_reserve(f, 0)) {
+        if (f) {
+            free(f->buf);
+            free(f->shown);
+        }
         free(f);
         log_error("ui_text_field: out of memory");
         return NULL;
     }
     f->el = el;
-    f->flags = flags;
     f->buf[0] = '\0';
     stb_textedit_initialize_state(&f->state, !(flags & UI_FIELD_MULTILINE));
     f->Stb = &f->state;
@@ -299,6 +382,12 @@ struct UIField* ui_field_make(UIElement* el, unsigned flags) {
 void ui_field_free(struct UIField* f) {
     if (!f)
         return;
+    if (f->shown) {
+        // The text, and what stb_textedit kept of it to undo, zeroed before they are freed.
+        _wipe(f->buf, (size_t)f->cap);
+        _wipe(&f->state, sizeof f->state);
+        free(f->shown);
+    }
     free(f->buf);
     free(f->placeholder);
     free(f->rows.starts);
@@ -339,7 +428,7 @@ static void _width(const UISystem* ui, UIElement* el, const UIStyle* s, float wi
     UIField* f = el->field;
     if (!f)
         return;
-    f->text = ui_text_make(ui_draw_list(ui), f->buf, (size_t)f->len, s, el->runs, el->run_count);
+    f->text = ui_text_make(ui_draw_list(ui), _shown(f), (size_t)f->len, s, el->runs, el->run_count);
     glm_vec4_copy((float*)s->fg, f->color);
     f->text.color = f->color;
     f->line_h = ui_text_line_height(&f->text, s->line_spacing);
@@ -452,9 +541,12 @@ void ui_field_set_text(UIElement* el, const char* text) {
     el->runs = NULL;
     el->run_count = 0;
     // Moved rather than copied: the text may be the field's own, or part of it, which is never
-    // longer than the buffer and so never grew it.
+    // longer than the buffer and so never grew it. A secret field's text before it is zeroed.
+    const int had = f->len;
     memmove(f->buf, text ? text : "", n + 1);
     f->len = (int)n;
+    if (f->shown && had > (int)n)
+        _wipe(f->buf + n + 1, (size_t)(had - (int)n));
     stb_textedit_initialize_state(&f->state, !(f->flags & UI_FIELD_MULTILINE));
     f->state.cursor = f->state.select_start = f->state.select_end = f->len;
     f->scroll_x = f->scroll_y = 0.0f;
@@ -491,9 +583,10 @@ static void _select(UIField* f, int a, int b) {
     f->state.has_preferred_x = 0;
 }
 
-// Copies the selection to the engine's clipboard; nothing when there is none.
+// Copies the selection to the engine's clipboard; nothing when there is none, or from a secret
+// field, whose text leaves it only by the app.
 static void _copy(const UISystem* ui, const UIField* f) {
-    if (!_has_selection(f))
+    if (!_has_selection(f) || f->shown)
         return;
     int lo, hi;
     _selection(f, &lo, &hi);
@@ -676,8 +769,9 @@ static bool _key(const UISystem* ui, UIElement* el, UIField* f, UIRect content,
         case GLFW_KEY_X:
             if (!shortcut)
                 return false;
+            // A secret field's cut cuts nothing, as its copy copies nothing.
             _copy(ui, f);
-            if (!ro)
+            if (!ro && !f->shown)
                 stb_textedit_cut(f, &f->state);
             break;
         case GLFW_KEY_V:
@@ -747,10 +841,11 @@ static bool _take_key(const UISystem* ui, UIElement* el, UIRect content, const I
 
 // ------------------------------------------------------------------- the pointer
 
-// The word round the caret (ui_typing.h).
+// The word round the caret (ui_typing.h); a secret field's whole text, its one word.
 static void _select_word(UIField* f) {
-    size_t a = 0, b = 0;
-    ui_typing_word_round(f->buf, (size_t)f->len, (size_t)f->state.cursor, &a, &b);
+    size_t a = 0, b = (size_t)f->len;
+    if (!f->shown)
+        ui_typing_word_round(f->buf, (size_t)f->len, (size_t)f->state.cursor, &a, &b);
     _select(f, (int)a, (int)b);
 }
 

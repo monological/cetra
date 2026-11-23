@@ -703,6 +703,7 @@ enum {
     UI_FIELD_MULTILINE = 1,       // wraps, growing to `max_rows` rows, if any, then scrolls inside
     UI_FIELD_READ_ONLY = 2,       // selected and copied, never edited; may carry styled runs
     UI_FIELD_SUBMIT_ON_ENTER = 4, // multi-line: Enter submits and Shift+Enter starts a line
+    UI_FIELD_SECRET = 8,          // one line shown a star a character, never copied or cut out
 };
 
 UIElement* ui_text_field(UIElement* parent, unsigned flags, UIActionFn on_submit, void* user);

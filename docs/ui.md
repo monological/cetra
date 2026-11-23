@@ -476,7 +476,8 @@ fields, which go soft at the 12 to 14 pixels code is read at, worst on a 1x scre
 `ui_field.c` (spec 14.2) is ImGui's copy of stb_textedit, compiled as C from this one file behind a
 block of five compatibility names (`ImS8`, `ImGuiDir_Left`/`_Right`, the `LastMoveDirectionLR` and
 `Stb` members, `IM_ASSERT`), run on a growing UTF-8 buffer. A field is single-line, multi-line
-(growing to `max_rows`, 0 for no most, then scrolling inside itself), or read-only with runs. Page
+(growing to `max_rows`, 0 for no most, then scrolling inside itself), read-only with runs, or
+secret. Page
 Up and Down page by the rows the field shows.
 
 Its header is private. `ui.c` lays a field out, routes input to it and draws it through
@@ -500,6 +501,15 @@ element's. The placeholder is drawn dim while the field is empty, and never size
   `delete_length`, and joining typing a word at a time reads that.
 - **The keys are the platform's**: Cmd on macOS and Ctrl elsewhere for the shortcuts, Option or Ctrl
   for a word, Cmd+arrow to a line's or the text's end.
+- **A secret field (`UI_FIELD_SECRET`, spec 14.45) shows a mark a character** and keeps everything
+  else a field's. It holds a second buffer, the text byte for byte with each character a mark as
+  long in UTF-8 as it is (`*`, `·`, then U+2217 and a private-use character the atlas lacks, drawn
+  as its box), and measures, breaks, places, selects and draws over that, so every offset stb and
+  the field keep is the text's own and no path forks; a press lands on the mark it is over.
+  `ui_field_text` gives the text. Copy and cut take nothing; a word move and a double press see the
+  whole text as one word, so neither tells where its words are. It is one line, whatever else it
+  was asked for. Both buffers are zeroed before they are freed or grown past, and the text's tail
+  wherever it shrinks, so a key does not stay in the heap after its field.
 - **The blink is the wall clock's**, not the UI's `dt`, which idle mode keeps waits out of. The
   overlay sets `UISystem.now` and asks `engine_request_frame_after` for the caret's next change, so
   under idle mode the window wakes only for the blink. Headless the caret does not blink, so a
