@@ -445,6 +445,7 @@ struct UIRows {
     bool restart;     // every child freed before the rows are built
     int reveal;       // the row ui_scroll_to_row asked for, until it is built; -1 for none
     bool hidden_last; // the last layout laid the pane out hidden, so its rect is no view
+    int most;         // ui_scroll_set_rows_most's count; 0 = every row
 };
 
 // What a built row changed since it was built holds in `child_row`: a row past any count, so the
@@ -530,6 +531,14 @@ void ui_scroll_set_row_count(UIElement* pane, int count) {
         _rows_fresh(r, r->count, count);
     r->count = count;
     r->dirty = true;
+}
+
+void ui_scroll_set_rows_most(UIElement* pane, int most) {
+    if (!pane || !pane->rows || most < 0) {
+        log_error("ui_scroll_set_rows_most: not a pane with rows, or a count under none");
+        return;
+    }
+    pane->rows->most = most;
 }
 
 void ui_scroll_rows_changed(UIElement* pane, int first, int count) {
@@ -1175,11 +1184,16 @@ static void _measure(const UISystem* ui, UIElement* el, int axis) {
     const float line = _lines_up(el, axis) ? _line_of(el) : -1.0f;
 
     if (el->rows && axis == 1) {
-        // A pane of rows is as tall as all of them, built or not.
+        // A pane of rows is as tall as all of them, built or not, or as its first `most` and their
+        // gaps. Summed on the tops its view is found on, those are the rows in view at its top
+        // whatever the estimate, so the next settle builds them and the layout after measures them.
         _rows_measure(ui, el);
+        const struct UIRows* r = el->rows;
         float pad[4];
         _padding_of(ui, el, pad);
-        v = el->rows->top[el->rows->count] + pad[0] + pad[2];
+        const float rows =
+            r->most > 0 && r->most < r->count ? r->top[r->most] - r->gap : r->top[r->count];
+        v = rows + pad[0] + pad[2];
     } else if (el->child_count > 0) {
         float pad[4];
         _padding_of(ui, el, pad);

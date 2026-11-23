@@ -602,6 +602,11 @@ def run_ui_gate(workdir):
                      where it was.
       ui-rows-focus  the focused row stays built and focused when the pane is
                      scrolled far from it, beside the rows in view.
+      ui-scroll-rows-most a FIT pane of 30 one-line rows given a most of 12 (spec 14.47)
+                     is twelve rows and their eleven gaps tall at its first layout,
+                     though the estimate is off; -1 is refused; a two-line row among
+                     the twelve makes it a line taller; started over with 5 rows it
+                     is five; given 0 it is all 30; row 20 revealed lies inside it.
       ui-table-columns a table's columns (spec 14.30), as exact rects at 900 and 701
                      points: a FIT column as wide as its widest cell, which is row
                      90,000 of 100,000, far past the view; a FIT column narrower
@@ -1809,6 +1814,29 @@ def run_ui_gate(workdir):
             detail = (f"focused row built {p[('first', 'built')][0]:.0f}; scrolled to "
                       f"{p[('far', 'scroll')][0]:.0f}, kept {p[('far', 'kept')][0]:.0f} with "
                       f"{held:.0f} rows held (want at most {held_most + 1})")
+        return ok, detail
+
+    # The rows here are labels, as tall as the probe measures them, 8 points apart.
+    @arm("ui-scroll-rows-most")
+    def _():
+        p = _ui_probe("scroll-rows-most")
+        if not p:
+            return False, "the probe produced nothing"
+        row, line = p[("row", "height")][0], p[("line", "height")][0]
+        twelve, refused = p[("twelve", "height")][0], p[("refused", "height")][0]
+        two, five = p[("two", "height")][0], p[("five", "height")][0]
+        every = p[("all", "height")][0]
+        top, bottom, pane_top, pane_bottom = p.get(("reveal", "span"), [0.0, -1.0, 1.0, 0.0])
+        def rows(n):
+            return n * row + (n - 1) * row_gap
+        ok = (row > 0 and close(twelve, rows(12)) and close(refused, twelve)
+              and close(two, twelve + line) and close(five, rows(5)) and close(every, rows(30))
+              and top < bottom and top >= pane_top - 1e-3 and bottom <= pane_bottom + 1e-3)
+        detail = (f"given 12, {twelve:.1f} tall (want {rows(12):.1f}, 12 rows of {row:.1f} and "
+                  f"11 gaps), refused -1 leaves {refused:.1f}; a two-line row {two:.1f} (want "
+                  f"{twelve + line:.1f}, a line more); 5 rows {five:.1f} (want {rows(5):.1f}); "
+                  f"given 0, {every:.1f} (want {rows(30):.1f}); row 20 revealed at {top:.1f} to "
+                  f"{bottom:.1f} in the pane's {pane_top:.1f} to {pane_bottom:.1f}")
         return ok, detail
 
     # ---- the table (spec 14.30)

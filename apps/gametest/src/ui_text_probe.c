@@ -1492,6 +1492,65 @@ static int probe_rows_focus(UISystem* ui) {
     return 0;
 }
 
+static int g_two_lines = -1; // the row built with a second line; -1 for none
+
+static void build_line_row(UIElement* row, int index, void* user) {
+    (void)user;
+    char text[48];
+    snprintf(text, sizeof(text), index == g_two_lines ? "Row %d\nits summary" : "Row %d", index);
+    ui_label(row, text);
+}
+
+static void say_rows_height(const char* label, const UIElement* pane) {
+    printf("ui scroll-rows-most %s height %.6f\n", label, (double)pane->rect.h);
+}
+
+static int probe_scroll_rows_most(UISystem* ui, const Font* font) {
+    UIScreen* s = ui_screen(ui, "rows-most");
+    ui_screen_set_modal(s, false);
+    UIElement* pane = ui_scroll(ui_screen_root(s));
+    ui_set_size(pane, UI_FIXED, 300.0f, UI_FIT, 0.0f);
+    pane->spacing = ROW_GAP;
+    for (int i = 0; i < 4; i++)
+        pane->padding[i] = -1.0f;
+    // An estimate well off the rows' measure, which the first layout's height does not keep.
+    ui_scroll_set_rows(pane, 30, 50.0f, build_line_row, NULL);
+    ui_scroll_set_rows_most(pane, 12);
+    ui_push(ui, s);
+    ui_layout(s, 1280.0f, 720.0f);
+    const UIElement* first = ui_scroll_find_row(pane, 0);
+    printf("ui scroll-rows-most row height %.6f\n", first ? (double)first->rect.h : -1.0);
+    printf("ui scroll-rows-most line height %.6f\n",
+           (double)ui_line_height(font, PROBE_SIZE, 1.0f));
+    say_rows_height("twelve", pane);
+    ui_scroll_set_rows_most(pane, -1);
+    ui_layout(s, 1280.0f, 720.0f);
+    say_rows_height("refused", pane);
+    // A row among the first twelve built again with a second line.
+    g_two_lines = 7;
+    ui_scroll_rows_changed(pane, 7, 1);
+    ui_layout(s, 1280.0f, 720.0f);
+    say_rows_height("two", pane);
+    ui_scroll_to_row(ui, pane, 20);
+    for (int i = 0; i < 3; i++)
+        pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    const UIElement* revealed = ui_scroll_find_row(pane, 20);
+    if (revealed)
+        printf("ui scroll-rows-most reveal span %.6f %.6f %.6f %.6f\n", (double)revealed->rect.y,
+               (double)(revealed->rect.y + revealed->rect.h), (double)pane->rect.y,
+               (double)(pane->rect.y + pane->rect.h));
+    // Started over with five rows, the count kept.
+    g_two_lines = -1;
+    ui_scroll_set_rows(pane, 5, 50.0f, build_line_row, NULL);
+    ui_layout(s, 1280.0f, 720.0f);
+    say_rows_height("five", pane);
+    ui_scroll_set_rows(pane, 30, 50.0f, build_line_row, NULL);
+    ui_scroll_set_rows_most(pane, 0);
+    ui_layout(s, 1280.0f, 720.0f);
+    say_rows_height("all", pane);
+    return 0;
+}
+
 // ---- the matcher
 
 static void say_match(const char* label, const char* query, const char* name) {
@@ -2750,6 +2809,8 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_rows_anchor(ui);
     if (!strcmp(which, "rows-focus"))
         return probe_rows_focus(ui);
+    if (!strcmp(which, "scroll-rows-most"))
+        return probe_scroll_rows_most(ui, font);
     if (!strcmp(which, "table-columns"))
         return probe_table_columns(ui, font);
     if (!strcmp(which, "table-measure"))

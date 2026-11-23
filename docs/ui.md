@@ -123,6 +123,12 @@ field is refused by name: a field's text is `ui_field_set_text` and its hint
 - **A built row is reached with `ui_scroll_find_row`**, NULL while it is not built and valid until
   the next layout, so an app changes one in place (appending to a streamed message) rather than
   rebuilding with `ui_scroll_rows_changed`.
+- **A pane of rows sized FIT is as tall as every row, or as its first `ui_scroll_set_rows_most`**
+  and the gaps between them, and scrolls the rest (spec 14.47): a list of hundreds showing twelve,
+  a row that wraps counting its every line. Its view is found on the tops its height was summed on,
+  so those rows are the ones in view at its top, built by the settle after the first layout
+  whatever the estimate, and the height is theirs before `ui_layout` returns. `max_size` still caps
+  it; a FIXED, SHARE or GROW pane ignores the count.
 - **A bar is drawn only inside its element**, its insets included, a pane's, an editor's and a
   table's alike: an element sized to nothing, or narrower than the bar and its insets, has none,
   drawn or pressed (spec 14.17).

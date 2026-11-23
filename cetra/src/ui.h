@@ -674,6 +674,10 @@ typedef void (*UIRowFn)(UIElement* row, int index, void* user);
 void ui_scroll_set_rows(UIElement* pane, int count, float estimate, UIRowFn build, void* user);
 // Grows or shrinks the rows at their end, keeping every height measured: a message appended.
 void ui_scroll_set_row_count(UIElement* pane, int count);
+// The most rows a pane of rows sized FIT is as tall as: its first `most`, as built and measured or
+// at the estimate until then, and the gaps between them; past them it scrolls. 0, as made, is
+// every row. Starting the rows over keeps it.
+void ui_scroll_set_rows_most(UIElement* pane, int most);
 // Rows `first` to `first + count` change: those built are built again at the next layout, and
 // measured again.
 void ui_scroll_rows_changed(UIElement* pane, int first, int count);
