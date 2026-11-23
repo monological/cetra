@@ -67,8 +67,8 @@ typedef struct InputState {
     double scroll_dy;
     // The trackpad's pinch since the previous frame ended, on the wheel's schedule: the part of
     // itself what is pinched grows by, + as the fingers part, so a scale is multiplied by
-    // 1 + pinch. A pinch while the debug GUI has the pointer is dropped, as a scroll is. 0 on a
-    // system cetra hears no pinch from.
+    // 1 + pinch. Above -1 always: a frame's several changes compound. A pinch while the debug GUI
+    // has the pointer is dropped, as a scroll is. 0 on a system cetra hears no pinch from.
     double pinch;
     // The keys pressed since the previous frame ended, by GLFW key code, on the wheel's schedule:
     // a tap that went down and up between two polls of the keys is still a press. Keys a GUI

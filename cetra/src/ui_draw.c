@@ -817,26 +817,34 @@ static bool _lines_hold(UILines* lines, const UIText* t, float width, size_t mos
     return lines->count > 0 && lines->width == width && lines->most == most;
 }
 
-// The mark a text cut short ends in, as a text in the cut one's face, size and colour: an
+// The mark a text cut short ends in, as a text in the cut one's face, size and colour -- an
 // ellipsis, or three full stops in a face whose atlas holds none, where an ellipsis would be the
-// missing-glyph box.
-static UIText _cut_mark(const UIText* t) {
+// missing-glyph box -- and in `*reach` what it adds to the line it ends: the tracking any two
+// glyphs have between them, then its own width. The break leaves a line that room and the draw
+// puts the mark in it, both from this one sum. The text has a face (_text_ok).
+static UIText _cut_mark(const UIText* t, float* reach) {
     UIText mark = *t;
     mark.runs = NULL;
     mark.run_count = 0;
-    mark.text = "\xE2\x80\xA6";
-    mark.length = 3;
-    UIWalk w = _walk(&mark, 0);
-    UIGlyph g;
-    if (!_walk_next(&w, mark.length, &g) || !g.g)
-        mark.text = "...";
+    mark.text = font_get_glyph(t->font, 0x2026) ? "\xE2\x80\xA6" : "...";
+    mark.length = strlen(mark.text);
+    *reach = t->tracking + ui_text_span_width(&mark, 0, mark.length);
     return mark;
 }
 
-// How far along a line the mark of a cut one stands, the line `width` wide before it: after the
-// tracking any two glyphs have between them, where there is a glyph before it.
-static float _cut_mark_at(const UIText* t, float width) {
-    return width > 0.0f ? width + t->tracking : 0.0f;
+float ui_text_cut_width(const UIText* t) {
+    if (!t || !_text_ok(t))
+        return 0.0f;
+    float reach;
+    _cut_mark(t, &reach);
+    return reach - t->tracking;
+}
+
+// Whether the text holds more than white space from byte `from` on.
+static bool _runs_on(const UIText* t, size_t from) {
+    while (from < t->length && (t->text[from] == ' ' || t->text[from] == '\n'))
+        from++;
+    return from < t->length;
 }
 
 // Where the line starting at byte `from` stops fitting `max_width`: at its '\n', at the text's
@@ -870,14 +878,20 @@ static bool _break_from(UILines* lines, const UIText* t, float width, size_t mos
         const size_t end = ui_text_break(t, from, width);
         if (end >= t->length)
             break;
-        if (most > 0 && lines->count == most && _text_ok(t)) {
-            // The last line kept, and the text runs on. It is broken again to leave the mark its
-            // room, and at whichever glyph, not at a space: the line is the text's last word, or
-            // a long one's first part, and a word kept whole could leave it empty.
-            const UIText mark = _cut_mark(t);
-            const float room = width - ui_text_span_width(&mark, 0, mark.length) - t->tracking;
-            lines->cut = true;
-            lines->cut_end = _fit_end(t, from, room);
+        if (most > 0 && lines->count == most) {
+            // The last line kept. With only white space left of the text it ends as it broke,
+            // ui_lines_end leaving that off. With more, the text is cut: the line is fitted again
+            // to leave the mark its room, and at whichever glyph, not at a space, since it is the
+            // text's last word or a long one's first part and a word kept whole could leave it
+            // empty. A text with no face to measure is cut where the line broke.
+            if (_runs_on(t, end)) {
+                float reach = 0.0f;
+                const bool faced = _text_ok(t);
+                if (faced)
+                    _cut_mark(t, &reach);
+                lines->cut = true;
+                lines->cut_end = faced ? _fit_end(t, from, width - fmaxf(reach, 0.0f)) : end;
+            }
             break;
         }
         from = t->text[end] == '\n' ? end + 1 : end;
@@ -902,10 +916,12 @@ bool ui_lines_break_from(UILines* lines, const UIText* t, float width, size_t li
 size_t ui_lines_end(const UILines* lines, const UIText* t, size_t i) {
     const size_t start = lines->starts[i];
     const bool last = i + 1 == lines->count;
-    size_t end = last ? (lines->cut ? lines->cut_end : t->length) : lines->starts[i + 1];
+    size_t end = !last ? lines->starts[i + 1] : lines->cut ? lines->cut_end : t->length;
     if (end > start && t->text[end - 1] == '\n')
         end--;
-    while (end > start && t->text[end - 1] == ' ')
+    // The last of lines held to a most may stand before a tail of white space of both kinds,
+    // which the lines stopped short of.
+    while (end > start && (t->text[end - 1] == ' ' || (last && t->text[end - 1] == '\n')))
         end--;
     return end;
 }
@@ -1049,16 +1065,14 @@ void ui_draw_text_lines(UIDrawList* dl, UIRect r, const UIText* t, const UILines
         const size_t from = lines->starts[i];
         const size_t to = ui_lines_end(lines, t, i);
         const float width = ui_text_span_width(t, from, to);
-        if (lines->cut && i + 1 == lines->count) {
-            const UIText mark = _cut_mark(t);
-            const float mark_at = _cut_mark_at(t, width);
-            const float x =
-                _align_pen(r, align, mark_at + ui_text_span_width(&mark, 0, mark.length));
-            ui_text_draw_span(dl, t, from, to, x, baseline);
-            ui_text_draw_span(dl, &mark, 0, mark.length, x + mark_at, baseline);
-        } else {
-            ui_text_draw_span(dl, t, from, to, _align_pen(r, align, width), baseline);
-        }
+        // A cut last line is its text and its mark, placed as one.
+        const bool marked = lines->cut && i + 1 == lines->count;
+        float reach = 0.0f;
+        const UIText mark = marked ? _cut_mark(t, &reach) : (UIText){0};
+        const float x = _align_pen(r, align, width + reach);
+        ui_text_draw_span(dl, t, from, to, x, baseline);
+        if (marked)
+            ui_text_draw_span(dl, &mark, 0, mark.length, x + width + t->tracking, baseline);
         baseline += line_h;
     }
 }

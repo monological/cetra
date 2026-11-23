@@ -96,6 +96,16 @@ static size_t glyph_quads(UISystem* ui, UIRect* rects, vec4* colors, size_t cap)
     return n;
 }
 
+// How far right of a label's left its glyphs reach: the furthest of their right edges.
+static float drawn_right(const UIRect* rects, size_t n, const UIElement* label) {
+    float right = 0.0f;
+    for (size_t i = 0; i < n; i++) {
+        const float r = rects[i].x + rects[i].w - label->rect.x;
+        right = r > right ? r : right;
+    }
+    return right;
+}
+
 static int probe_wrap_label(UISystem* ui, Font* font) {
     UIElement* label = NULL;
     wrap_fixture(ui, &label, 300.0f, PARAGRAPH);
@@ -112,12 +122,7 @@ static int probe_wrap_label(UISystem* ui, Font* font) {
     UIRect rects[512];
     vec4 colors[512];
     const size_t n = glyph_quads(ui, rects, colors, 512);
-    float right = 0.0f;
-    for (size_t i = 0; i < n; i++) {
-        const float r = rects[i].x + rects[i].w - label->rect.x;
-        right = r > right ? r : right;
-    }
-    printf("ui wrap-label drawn right %.6f\n", (double)right);
+    printf("ui wrap-label drawn right %.6f\n", (double)drawn_right(rects, n, label));
     ui_pop(ui);
 
     // Given no width, a wrapping label measures as its longest word.
@@ -166,11 +171,13 @@ static const char* ADDRESS = "https://example.com/adaptive-socs-and-fpgas/develo
 /*
  * A wrapping label held to `rows` rows of `text` across the fixture's 300-point panel (spec 14.44),
  * laid out and built, said under `step`:
- * - its lines and whether it is cut, and its height;
- * - the right edge of everything it draws, from its left;
- * - its last line: its glyphs drawn against its text's with the mark's, and its text's width with
- *   the mark's by ui_text_width, beside that width with the glyph cut away put back, which is
- *   past the label's where the cut is as late as fits.
+ * - `lines`: how many, and whether it is cut; `height`: the label's;
+ * - `drawn`: the right edge of everything it draws, from its left;
+ * - `last`: its last line's glyphs as drawn, against its text's inked bytes with the mark's one;
+ * - `fits`: that line's text with its mark, and the same with the glyph cut away put back, which
+ *   is past the label's width where the cut is as late as fits;
+ * - `mark`: the left edge of the last line's rightmost glyph, from the label's left, and the
+ *   line's text's width, which the mark stands after.
  */
 static void say_rows(UISystem* ui, const Font* font, const char* step, const char* text, int rows) {
     UIElement* label = NULL;
@@ -187,54 +194,71 @@ static void say_rows(UISystem* ui, const Font* font, const char* step, const cha
     UIRect rects[512];
     vec4 colors[512];
     const size_t n = glyph_quads(ui, rects, colors, 512);
+    printf("ui label-rows %s drawn %.6f\n", step, (double)drawn_right(rects, n, label));
     // A label's own padding is 4 above: its last line's glyphs are those whose middles lie under
     // the lines before it.
     const float lh = ui_line_height(font, PROBE_SIZE, 1.0f);
     const float last_top = label->rect.y + 4.0f + (float)(count ? count - 1 : 0) * lh;
-    float right = 0.0f;
     int last_glyphs = 0;
+    float rightmost = 0.0f, rightmost_left = 0.0f;
     for (size_t i = 0; i < n; i++) {
-        const float r = rects[i].x + rects[i].w - label->rect.x;
-        right = r > right ? r : right;
-        last_glyphs += rects[i].y + rects[i].h * 0.5f >= last_top;
-    }
-    printf("ui label-rows %s drawn %.6f\n", step, (double)right);
-
-    if (count > 0) {
-        const UIStyle style = {.font = (Font*)font, .font_size = PROBE_SIZE};
-        const UIText t = ui_text_make(NULL, text, strlen(text), &style, NULL, 0);
-        const size_t from = lines->starts[count - 1], to = ui_lines_end(lines, &t, count - 1);
-        // The glyph cut away is the one the cut stands at, past any spaces left off the line.
-        const size_t more = cut ? lines->cut_end + 1 : to;
-        char line[512];
-        int inked = 0;
-        float with_mark = 0.0f, one_more = 0.0f;
-        if (more - from + 1 < sizeof(line)) {
-            const float mark = cut ? ui_text_width(font, PROBE_SIZE, 0.0f, "\xE2\x80\xA6") : 0.0f;
-            memcpy(line, text + from, more - from);
-            line[more - from] = '\0';
-            one_more = ui_text_width(font, PROBE_SIZE, 0.0f, line) + mark;
-            line[to - from] = '\0';
-            with_mark = ui_text_width(font, PROBE_SIZE, 0.0f, line) + mark;
-            for (const char* p = line; *p; p++)
-                inked += *p != ' ';
+        if (rects[i].y + rects[i].h * 0.5f < last_top)
+            continue;
+        last_glyphs++;
+        if (rects[i].x + rects[i].w > rightmost) {
+            rightmost = rects[i].x + rects[i].w;
+            rightmost_left = rects[i].x - label->rect.x;
         }
-        printf("ui label-rows %s last %.6f %.6f\n", step, (double)last_glyphs,
-               (double)(inked + (cut ? 1 : 0)));
-        printf("ui label-rows %s fits %.6f %.6f\n", step, (double)with_mark, (double)one_more);
     }
+
+    const UIStyle style = {.font = (Font*)font, .font_size = PROBE_SIZE};
+    const UIText t = ui_text_make(NULL, text, strlen(text), &style, NULL, 0);
+    const size_t from = count ? lines->starts[count - 1] : 0;
+    const size_t to = count ? ui_lines_end(lines, &t, count - 1) : 0;
+    // The glyph cut away is the one the cut stands at, past any spaces left off the line.
+    size_t more = to;
+    if (cut) {
+        const char* next = text + lines->cut_end;
+        text_utf8_next(&next);
+        more = (size_t)(next - text);
+    }
+    int inked = 0;
+    for (size_t i = from; i < to; i++)
+        inked += text[i] != ' ';
+    const float mark = cut ? ui_text_cut_width(&t) : 0.0f;
+    const float text_width = ui_text_span_width(&t, from, to);
+    printf("ui label-rows %s last %.6f %.6f\n", step, (double)last_glyphs,
+           (double)(inked + (cut ? 1 : 0)));
+    printf("ui label-rows %s fits %.6f %.6f\n", step, (double)(text_width + mark),
+           (double)(ui_text_span_width(&t, from, more) + mark));
+    printf("ui label-rows %s mark %.6f %.6f\n", step, (double)rightmost_left, (double)text_width);
     ui_pop(ui);
 }
 
 static int probe_label_rows(UISystem* ui, const Font* font) {
+    const int uncut = wrap_lines(font, PARAGRAPH, 280.0f);
     printf("ui label-rows line height %.6f\n", (double)ui_line_height(font, PROBE_SIZE, 1.0f));
     printf("ui label-rows inner width %.6f\n", 280.0);
-    printf("ui label-rows uncut lines %.6f\n", (double)wrap_lines(font, PARAGRAPH, 280.0f));
+    printf("ui label-rows uncut lines %.6f\n", (double)uncut);
     say_rows(ui, font, "three", PARAGRAPH, 3);
     say_rows(ui, font, "roomy", PARAGRAPH, 99);
+    say_rows(ui, font, "exact", PARAGRAPH, uncut);
     say_rows(ui, font, "one", PARAGRAPH, 1);
     say_rows(ui, font, "short", "the quick brown fox jumps over the lazy dog and keeps on", 3);
     say_rows(ui, font, "word", ADDRESS, 2);
+    // A line, then white space of both kinds and nothing more: nothing is hidden, so no mark.
+    say_rows(ui, font, "tail", "the quick brown fox \n\n", 1);
+
+    // Given no width, a label held to a most measures as its mark, what it can shorten to.
+    UIScreen* fit_screen = ui_screen(ui, "fit");
+    UIElement* fit = ui_label(ui_screen_root(fit_screen), ADDRESS);
+    fit->wrap = true;
+    fit->max_rows = 2;
+    ui_layout(fit_screen, 1280.0f, 720.0f);
+    const UIStyle style = {.font = (Font*)font, .font_size = PROBE_SIZE};
+    const UIText address = ui_text_make(NULL, ADDRESS, strlen(ADDRESS), &style, NULL, 0);
+    printf("ui label-rows fit width %.6f %.6f\n", (double)fit->rect.w,
+           (double)ui_text_cut_width(&address));
 
     // Kept as its lines are: laid out again nothing breaks, and another most breaks once.
     UIElement* label = NULL;
@@ -319,14 +343,9 @@ static int probe_runs_wrap(Game* game, UISystem* ui, Font* font) {
     ui_build(ui, 1280.0f, 720.0f, 0.0f);
     const size_t run_lines = wrapped->lines ? wrapped->lines->count : 0;
     const size_t n = glyph_quads(ui, rects, colors, 64);
-    float right = 0.0f;
-    for (size_t i = 0; i < n; i++) {
-        const float r = rects[i].x + rects[i].w - wrapped->rect.x;
-        right = r > right ? r : right;
-    }
     printf("ui runs-wrap lines plain %.6f\n", (double)plain_lines);
     printf("ui runs-wrap lines face %.6f\n", (double)run_lines);
-    printf("ui runs-wrap drawn right %.6f\n", (double)right);
+    printf("ui runs-wrap drawn right %.6f\n", (double)drawn_right(rects, n, wrapped));
     printf("ui runs-wrap label width %.6f\n", (double)wrapped->rect.w);
     ui_pop(ui);
     return 0;

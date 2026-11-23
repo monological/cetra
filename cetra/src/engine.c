@@ -390,6 +390,10 @@ void free_engine(Engine* engine) {
 
         gl_delete_texture(&engine->brdf_lut);
 
+        // Before the GUI goes: what the watch hears asks the GUI whether it has the pointer.
+        free_pinch_watch(engine->pinch_watch);
+        engine->pinch_watch = NULL;
+
         // The backends assert on a missing context, so the ImGui teardown is
         // gated on the context and not on the window: creation can fail after
         // the window and before the GUI.
@@ -399,8 +403,6 @@ void free_engine(Engine* engine) {
             igDestroyContext(NULL);
         }
 
-        free_pinch_watch(engine->pinch_watch);
-        engine->pinch_watch = NULL;
         glfwDestroyWindow(engine->window);
     }
 
@@ -1592,10 +1594,13 @@ static void _engine_pointer_scroll(Engine* engine, double xoffset, double yoffse
     }
 }
 
+// One change of a pinch into the frame's. A change is a scale's, so two in a frame compound:
+// summed, a slow frame's many small ones would zoom further than the hand did, and enough of
+// them closing would pass -1, a scale of nothing. One that leaves no scale is no pinch.
 static void _engine_pointer_pinch(Engine* engine, double by) {
-    if (engine_gui_wants_mouse())
+    if (engine_gui_wants_mouse() || !(by > -1.0))
         return;
-    engine->input.pinch += by;
+    engine->input.pinch = (1.0 + engine->input.pinch) * (1.0 + by) - 1.0;
 }
 
 // What the window's pinch watch heard, unless a script is the hand.
@@ -1632,7 +1637,8 @@ static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double y
  * modifier reaches InputState and a real hand cannot add it mid-drag either.
  * Typing is EVENTS instead, a key being a press and its release in one frame.
  */
-#define INPUT_SCRIPT_TYPED 32 // typing events one line may carry
+#define INPUT_SCRIPT_TYPED   32 // typing events one line may carry
+#define INPUT_SCRIPT_PINCHES 4  // and pinches: a frame's several events, as a slow frame has
 
 typedef struct InputScriptRange {
     FrameScriptRange range; // first, by frame_script.h's contract
@@ -1642,7 +1648,8 @@ typedef struct InputScriptRange {
     bool down;
     bool shift;
     double wheel;
-    double pinch;
+    double pinches[INPUT_SCRIPT_PINCHES]; // in the line's order, each a `pinch=`
+    int pinch_count;
     InputKeyEvent typed[INPUT_SCRIPT_TYPED]; // in the line's order
     int typed_count;
     bool close; // asks to close the window as its first frame ends
@@ -1670,6 +1677,17 @@ static bool _pointer_pair(const char* value, double* a, double* b) {
     const char* second = end + 1;
     *b = strtod(second, &end);
     return end != second && *end == '\0';
+}
+
+// A token's one number into `out`. False, logged, when its value is no number.
+static bool _script_number(const char* tok, const char* value, double* out, const char* path,
+                           int line) {
+    char* end = NULL;
+    *out = strtod(value, &end);
+    if (end != value && *end == '\0')
+        return true;
+    log_error("%s:%d: '%s' has no number", path, line, tok);
+    return false;
 }
 
 static bool _script_typed(InputScriptRange* r, InputKeyEvent ev, const char* path, int line) {
@@ -1812,15 +1830,22 @@ static bool _input_token(void* range, const char* tok, const char* path, int lin
             }
             return true;
         }
-        const bool wheel = n == 5 && strncmp(tok, "wheel", 5) == 0;
-        if (wheel || (n == 5 && strncmp(tok, "pinch", 5) == 0)) {
-            char* end = NULL;
-            *(wheel ? &r->wheel : &r->pinch) = strtod(eq + 1, &end);
-            if (end == eq + 1 || *end != '\0') {
-                log_error("%s:%d: %s '%s' has no number", path, line, wheel ? "wheel" : "pinch",
-                          tok);
+        if (n == 5 && strncmp(tok, "wheel", 5) == 0)
+            return _script_number(tok, eq + 1, &r->wheel, path, line);
+        if (n == 5 && strncmp(tok, "pinch", 5) == 0) {
+            double by;
+            if (!_script_number(tok, eq + 1, &by, path, line))
+                return false;
+            if (!(by > -1.0)) {
+                log_error("%s:%d: '%s' leaves no scale: a pinch is above -1", path, line, tok);
                 return false;
             }
+            if (r->pinch_count >= INPUT_SCRIPT_PINCHES) {
+                log_error("%s:%d: more than %d pinches on one line", path, line,
+                          INPUT_SCRIPT_PINCHES);
+                return false;
+            }
+            r->pinches[r->pinch_count++] = by;
             return true;
         }
         if (n == 4 && strncmp(tok, "type", 4) == 0)
@@ -1859,8 +1884,8 @@ static void _engine_input_script_frame(Engine* engine) {
 
     if (r->wheel != 0.0)
         _engine_pointer_scroll(engine, 0.0, r->wheel);
-    if (r->pinch != 0.0)
-        _engine_pointer_pinch(engine, r->pinch);
+    for (int i = 0; i < r->pinch_count; i++)
+        _engine_pointer_pinch(engine, r->pinches[i]);
 
     for (int i = 0; i < r->typed_count; i++) {
         const InputKeyEvent* ev = &r->typed[i];

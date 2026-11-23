@@ -3415,9 +3415,18 @@ static void on_scroll(Engine* engine, double xoffset, double yoffset) {
         canvas_view_zoom_at(&g_views[view_at(g_last_x)], g_last_x, g_last_y, pow(1.15, yoffset));
 }
 
+// A pinch a view took, said by its number: the pinch, the view's zoom before and after, and the
+// unit under the pointer before and after, which a zoom about the pointer keeps.
+static void say_pinch(const CanvasView* v, double by, double was, CanvasPoint under) {
+    static int said;
+    const CanvasPoint now = canvas_view_unit_at(v, g_last_x, g_last_y);
+    printf("canvas pinch %d by %.6f zoom %.15g %.15g unit %lld %lld %lld %lld\n", said++, by, was,
+           v->points_per_unit, (long long)under.x, (long long)under.y, (long long)now.x,
+           (long long)now.y);
+}
+
 // The trackpad's pinch this frame (spec 14.44): the view under the pointer zoomed about it, as the
-// wheel zooms it. Under the probe each is said by its number: the pinch, the zoom before and after,
-// and the unit under the pointer before and after, which a zoom about the pointer keeps.
+// wheel zooms it.
 static void pinch_view(const Engine* engine) {
     const double by = engine->input.pinch;
     if (by == 0.0 || over_ui())
@@ -3426,13 +3435,8 @@ static void pinch_view(const Engine* engine) {
     const double was = v->points_per_unit;
     const CanvasPoint under = canvas_view_unit_at(v, g_last_x, g_last_y);
     canvas_view_zoom_at(v, g_last_x, g_last_y, 1.0 + by);
-    if (!g_probe)
-        return;
-    static int said;
-    const CanvasPoint now = canvas_view_unit_at(v, g_last_x, g_last_y);
-    printf("canvas pinch %d by %.6f zoom %.15g %.15g unit %lld %lld %lld %lld\n", said++, by, was,
-           v->points_per_unit, (long long)under.x, (long long)under.y, (long long)now.x,
-           (long long)now.y);
+    if (g_probe)
+        say_pinch(v, by, was, under);
 }
 
 /*

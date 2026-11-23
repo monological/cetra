@@ -319,11 +319,13 @@ def run_canvas_gate(workdir):
                      layer: each half equals its view drawn alone, 0 px. The views share one
                      target and one tile table, both refilled per view.
       canvas-pinch   the trackpad's pinch through the engine's input (spec 14.44), scripted as
-                     `pinch=`: three of them, the fingers parting by a quarter, closing by a
-                     fifth and parting by a half with the pointer elsewhere, each multiply the
-                     zoom of the view under the pointer by 1 + the pinch, from where the last
-                     left it, and leave the unit under the pointer where it was; the frame
-                     between them with no pinch says none.
+                     `pinch=`: the fingers parting by a quarter, closing by a fifth and parting
+                     by a half with the pointer elsewhere, each multiply the zoom of the view
+                     under the pointer by 1 + the pinch, from where the last left it, and leave
+                     the unit under the pointer where it was; the frame between them with no
+                     pinch says none. Three closings by a half in one frame are one pinch of
+                     -0.875, an eighth left: a frame's changes compound, where their sum would
+                     leave no scale.
       canvas-panes   apps/canvas --editor twice, the editors as panes (spec 14.6), driven by a
                      script: one pane opens on the first file; F8 splits it, the new pane taking
                      the focus and "X" typed into the first file there; F10 shows the second file
@@ -1103,29 +1105,33 @@ def run_canvas_gate(workdir):
         script = os.path.join(workdir, "pinch.script")
         with open(script, "w", encoding="utf-8") as f:
             f.write("2 at=260,410\n4 at=260,410 pinch=0.25\n6 at=260,410 pinch=-0.2\n"
-                    "8 at=260,410\n10 at=520,150 pinch=0.5\n")
-        shot, probe = _canvas_run(workdir, "pinch", "--input-script", script, frames=14)
-        rows = [probe.get(("pinch", str(k))) for k in range(4)]
-        if not shot or any(row is None or len(row) != 10 for row in rows[:3]):
-            ok, detail = False, "the app failed, or said fewer than three pinches whole"
+                    "8 at=260,410\n10 at=520,150 pinch=0.5\n"
+                    "12 at=520,150 pinch=-0.5 pinch=-0.5 pinch=-0.5\n")
+        shot, probe = _canvas_run(workdir, "pinch", "--input-script", script, frames=16)
+        said = _canvas_sheet(probe, "pinch")
+        rows = [said.get(str(k)) for k in range(4)]
+        if not shot or len(said) != 4 or any(row is None or len(row) != 10 for row in rows):
+            ok, detail = False, f"the app failed, or did not say four pinches whole: {len(said)}"
         else:
-            by = [float(row[1]) for row in rows[:3]]
-            was = [float(row[3]) for row in rows[:3]]
-            now = [float(row[4]) for row in rows[:3]]
-            under = [tuple(int(v) for v in row[6:8]) for row in rows[:3]]
-            after = [tuple(int(v) for v in row[8:10]) for row in rows[:3]]
+            by = [float(row[1]) for row in rows]
+            was = [float(row[3]) for row in rows]
+            now = [float(row[4]) for row in rows]
+            under = [tuple(int(v) for v in row[6:8]) for row in rows]
+            after = [tuple(int(v) for v in row[8:10]) for row in rows]
             scaled = all(math.isclose(n, w * (1.0 + b), rel_tol=1e-6)
                          for n, w, b in zip(now, was, by))
-            chained = all(math.isclose(was[k + 1], now[k], rel_tol=1e-9) for k in range(2))
+            chained = all(math.isclose(was[k + 1], now[k], rel_tol=1e-9) for k in range(3))
             held = all(max(abs(a - u) for a, u in zip(aa, uu)) <= 1
                        for aa, uu in zip(after, under))
-            ok = (by == [0.25, -0.2, 0.5] and scaled and chained and held
-                  and under[2] != under[0] and rows[3] is None)
-            detail = (f"pinches {by} (want 0.25, -0.2, 0.5) took the zoom from {was[0]:.6g} "
-                      f"through {', '.join(f'{n:.6g}' for n in now)}, each 1 + its pinch times the "
+            # Three halvings in one frame are an eighth: summed they would be -1.5, no scale.
+            ok = (by == [0.25, -0.2, 0.5, -0.875] and scaled and chained and held
+                  and under[2] != under[0])
+            detail = (f"pinches {by} (want 0.25, -0.2, 0.5, and -0.875 for three of -0.5 in one "
+                      f"frame) took the zoom from {was[0]:.6g} through "
+                      f"{', '.join(f'{n:.6g}' for n in now)}, each 1 + its pinch times the "
                       f"last: {scaled and chained}; the unit under the pointer before and after "
                       f"each {list(zip(under, after))} (want the same, and another under the "
-                      f"pointer moved); a fourth said: {rows[3] is not None} (want False)")
+                      f"pointer moved)")
         return ok, detail
 
     # ---- the editor as panes (spec 14.6)

@@ -849,6 +849,12 @@ static bool _wraps(const UIElement* el) {
     return el->kind == UI_LABEL && el->wrap;
 }
 
+// The most lines an element's text is broken into, 0 for no most: a wrapping label's `max_rows`
+// (spec 14.44). A text field reads the same member as how far it grows, and breaks rows of its own.
+static size_t _most_rows(const UIElement* el) {
+    return _wraps(el) && el->max_rows > 0 ? (size_t)el->max_rows : 0;
+}
+
 // An element's lines, made on first use; NULL out of memory.
 static UILines* _text_lines(UIElement* el) {
     if (!el->lines) {
@@ -878,6 +884,11 @@ static float _intrinsic(const UISystem* ui, UIElement* el, int axis) {
         const UIText t = _element_text(ui, el, &s);
         if (ui_lines_measure(lines, &t, _wraps(el), &v))
             el->measures++;
+        // A label held to a most can shorten to its mark, so it asks for no more across. Its
+        // longest word, which an address is the whole of, would hold every parent that fits or
+        // grows round it to that width, and the label would never be given less to shorten to.
+        if (_most_rows(el) > 0)
+            v = fminf(v, ui_text_cut_width(&t));
     } else if (lines) {
         // One line height PER LINE, as the layout broke them. Charging one made an authored
         // two-line label measure half its height and draw outside its own rect and its parent's --
@@ -1402,11 +1413,8 @@ static void _break_lines(const UISystem* ui, UIElement* el) {
     if (!_text_lines(el))
         return;
     const UIText t = _element_text(ui, el, &s);
-    // A wrapping label alone is held to its most rows: a field's most is how far it grows, and
-    // nothing else reads one.
-    const bool wraps = _wraps(el);
-    const size_t most = wraps && el->max_rows > 0 ? (size_t)el->max_rows : 0;
-    if (ui_lines_break(el->lines, &t, wraps ? el->rect.w - pad[1] - pad[3] : INFINITY, most))
+    const float width = _wraps(el) ? el->rect.w - pad[1] - pad[3] : INFINITY;
+    if (ui_lines_break(el->lines, &t, width, _most_rows(el)))
         el->wraps++;
     else if (el->lines->count == 0)
         _drop_lines(el);

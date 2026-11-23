@@ -44,6 +44,9 @@ float ui_text_longest_word(const UIText* t);
 // The widest of the text's '\n'-separated lines: what a text that does not wrap is measured by,
 // each line placed by its own width rather than by the longest one's.
 float ui_text_widest_line(const UIText* t);
+// The width of the mark a text cut short ends in: the least a text held to a most of lines can
+// shorten to.
+float ui_text_cut_width(const UIText* t);
 // Whether `runs` fit the first `length` bytes of `text`: in order, apart, inside it, and starting
 // and ending on a character. Refused by name otherwise, `who` naming the call.
 bool ui_text_runs_check(const char* who, const char* text, size_t length, const UITextRun* runs,

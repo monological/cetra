@@ -128,7 +128,7 @@ add_custom_command(
 # only when the number changes.
 set(BUILD_DIGEST_HEADER ${SHADER_GEN_DIR}/build_digest.h)
 file(GLOB _digested CONFIGURE_DEPENDS
-    src/*.c src/*.h src/*.cpp src/game/*.c src/game/*.h src/game/*.cpp
+    src/*.c src/*.h src/*.cpp src/*.m src/game/*.c src/game/*.h src/game/*.cpp
     src/procedural/*.c src/procedural/*.h src/procedural/*.cpp)
 add_custom_command(
     OUTPUT ${BUILD_DIGEST_HEADER}

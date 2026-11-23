@@ -28,22 +28,27 @@ PinchWatch* create_pinch_watch(GLFWwindow* window, PinchFn heard, void* user) {
         log_error("create_pinch_watch: out of memory");
         return NULL;
     }
-    // `magnification` is the change in scale since the gesture's last event, the unit the engine
-    // sums. The window is compared and never sent a message: the watch is freed before it is.
-    watch->monitor = [[NSEvent
-        addLocalMonitorForEventsMatchingMask:NSEventMaskMagnify
-                                     handler:^NSEvent*(NSEvent* event) {
-                                       if ([event window] == watched)
-                                           heard(user, (double)[event magnification]);
-                                       return event;
-                                     }] retain];
+    // Called outside GLFW's own pools, so what AppKit hands back autoreleased has one to leave by.
+    @autoreleasepool {
+        // `magnification` is the change in scale since the gesture's last event. The block keeps
+        // the window it names until the monitor is removed, which is before the window goes.
+        watch->monitor = [[NSEvent
+            addLocalMonitorForEventsMatchingMask:NSEventMaskMagnify
+                                         handler:^NSEvent*(NSEvent* event) {
+                                           if ([event window] == watched)
+                                               heard(user, (double)[event magnification]);
+                                           return event;
+                                         }] retain];
+    }
     return watch;
 }
 
 void free_pinch_watch(PinchWatch* watch) {
     if (!watch)
         return;
-    [NSEvent removeMonitor:watch->monitor];
-    [watch->monitor release];
+    @autoreleasepool {
+        [NSEvent removeMonitor:watch->monitor];
+        [watch->monitor release];
+    }
     free(watch);
 }

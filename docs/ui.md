@@ -48,13 +48,15 @@ was given.
   runs on past them the last line ends in a mark, `…` in the label's face or three full stops in
   a face with none: the line is cut at whichever glyph leaves the mark its room in the width, its
   trailing spaces left off, and the mark's width is part of the line's, so a centred line is
-  centred with it. The label measures the lines it shows. One row is a text shortened to its
-  width. Nothing but a wrapping label reads it off an element: a multi-line field's `max_rows`
-  is how far it grows.
-- **A wrapping label measures as its longest word**, which an address is the whole of. Across a
-  column it is given the column's width and breaks inside the word; along a row it keeps what it
-  measures, and so does every parent that fits or grows round it, up to the window. A parent
-  sized as a share measures nothing, and stops that there.
+  centred with it. A text with only white space past its last line is whole, and has no mark.
+  The label measures the lines it shows. One row is a text shortened to its width. Nothing but
+  a wrapping label reads it off an element: a multi-line field's `max_rows` is how far it grows.
+- **A wrapping label measures as its longest word across**, which an address is the whole of;
+  held to a most, as its mark, what it can shorten to. The measure is a floor: across a column
+  a label is given the column's width whatever it measures, and breaks inside a word longer
+  than that, but along a row it keeps what it measures, and so does every parent that fits or
+  grows round it, up to the window. An axis that measures no content stops that: a FIXED one, or
+  a share.
 - **A FIXED axis measures no content**, since its size is its own.
 - **`max_size` is the most an element measures along each axis**, 0 for none, for FIT and GROW
   alike. A pane held at its most scrolls. A GROW child held at its most leaves its room to the

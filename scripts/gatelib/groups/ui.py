@@ -552,10 +552,13 @@ def run_ui_gate(workdir):
       ui-label-rows  a wrapping label of `max_rows` (spec 14.44): a paragraph of four
                      lines held to three and to one, and an address, one word, held to
                      two, each show that many lines and measure that many line heights,
-                     the last ending in the mark, drawn inside the label's width with
-                     no room left for one glyph more; the paragraph held to 99, and a
-                     text of two lines held to three, are whole and unmarked. Laid out
-                     again it breaks nothing, and at another most it breaks once.
+                     the last ending in the mark, its rightmost glyph, after its text,
+                     drawn inside the label's width with no room left for one glyph
+                     more; the paragraph held to 99 and to its own four, a text of two
+                     lines held to three, and a line with only white space after it held
+                     to one, are whole and unmarked. Laid out again it breaks nothing,
+                     and at another most it breaks once. Given no width it measures as
+                     its mark, what it can shorten to.
       ui-runs-draw   a styled run colours exactly its bytes' glyphs, the rest
                      keep the label's colour, and a run in another face draws that
                      face's glyph.
@@ -1531,30 +1534,40 @@ def run_ui_gate(workdir):
         else:
             lh, inner = p[("line", "height")][0], p[("inner", "width")][0]
             uncut = p[("uncut", "lines")][0]
-            # Each step's most lines and whether its text runs on past them.
-            steps = {"three": (3, 1), "roomy": (uncut, 0), "one": (1, 1), "short": (2, 0),
-                     "word": (2, 1)}
+            # Each step's lines shown and whether its text runs on past them.
+            steps = {"three": (3, 1), "roomy": (uncut, 0), "exact": (uncut, 0), "one": (1, 1),
+                     "short": (2, 0), "word": (2, 1), "tail": (1, 0)}
             wrong = []
+            fit, mark = p[("fit", "width")]
             for step, (rows, cut) in steps.items():
                 lines, glyphs = p[(step, "lines")], p[(step, "last")]
                 fits, more = p[(step, "fits")]
+                mark_left, text_width = p[(step, "mark")]
+                # The mark is the last line's rightmost glyph, and stands after the line's text:
+                # its quad from the text's end, less the margin a glyph's quad has round its ink,
+                # which is under a quarter of the mark.
+                marked = text_width - 0.25 * mark <= mark_left <= fits if cut else True
                 held = (lines == [rows, cut] and close(p[(step, "height")][0], rows * lh + 8.0)
                         and p[(step, "drawn")][0] <= inner + 0.5 and glyphs[0] == glyphs[1]
-                        and fits <= inner and (more > inner if cut else more == fits))
+                        and fits <= inner and (more > inner if cut else more == fits) and marked)
                 if not held:
                     wrong.append(f"{step}: lines and cut {lines} (want {[rows, cut]}), "
                                  f"{p[(step, 'height')][0]:.1f} high, drawn to "
                                  f"{p[(step, 'drawn')][0]:.2f}, {glyphs[0]:.0f} glyphs on its last "
                                  f"line (want {glyphs[1]:.0f}), {fits:.2f} wide with its mark and "
-                                 f"{more:.2f} with a glyph more")
+                                 f"{more:.2f} with a glyph more, its last glyph from "
+                                 f"{mark_left:.2f} after text {text_width:.2f} wide")
             wraps, kept = p[("kept", "wraps")], p[("kept", "lines")][0]
-            ok = not wrong and uncut > 3 and wraps == [1, 1, 2] and kept == 2
+            ok = (not wrong and uncut > 3 and wraps == [1, 1, 2] and kept == 2
+                  and close(fit, mark))
             detail = ("; ".join(wrong) if wrong else
                       f"a paragraph of {uncut:.0f} lines held to 3 and to 1, and an address to 2, "
-                      f"each end in the mark inside {inner:.0f} points with no room for a glyph "
-                      f"more; held to 99, and one of two lines to 3, are whole") + (
+                      f"each end in the mark, after their text, inside {inner:.0f} points with no "
+                      f"room for a glyph more; held to 99 and to {uncut:.0f}, one of two lines to "
+                      f"3, and a line with only white space after it to 1, are whole") + (
                       f"; broken {wraps} times first, laid out again and at another most (want "
-                      f"1, 1, 2), {kept:.0f} lines then (want 2)")
+                      f"1, 1, 2), {kept:.0f} lines then (want 2); given no width it is "
+                      f"{fit:.3f} wide, its mark {mark:.3f}")
         return ok, detail
 
     # ---- styled runs

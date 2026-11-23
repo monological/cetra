@@ -1,11 +1,8 @@
 #ifndef _PINCH_H_
 #define _PINCH_H_
 
-/*
- * The trackpad's pinch on a window (spec 14.44). GLFW hands an app none on any system, so cetra
- * hears it from the system itself where it can: macOS, in pinch_macos.m. Everywhere else there is
- * no watch to make, and the engine's pinch stays 0.
- */
+// The trackpad's pinch on a window (spec 14.44), heard from the system itself: GLFW hands an app
+// none on any.
 
 struct GLFWwindow;
 typedef struct PinchWatch PinchWatch;

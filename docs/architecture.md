@@ -904,11 +904,13 @@ the inverse of the engine's own, used by `ui_input_read` and by an app's own pan
 `engine->input.scroll_dx/dy`, one frame's delta.
 
 **The trackpad's pinch** is `engine->input.pinch`, one frame's too: the part of itself what is
-pinched grows by, so an app multiplies its scale by `1 + pinch`. GLFW hands an app no pinch on any
-system, so cetra hears it from the system itself where it can (`pinch.h`): on macOS a monitor on
-AppKit's magnify events for the engine's window (`pinch_macos.m`, the library's one file in
-Objective-C), each event's change in scale added to the frame's sum. The event comes in a poll, so
-it wakes an idle loop as a scroll does. On Windows and Linux the pinch reads 0.
+pinched grows by, so an app multiplies its scale by `1 + pinch`, which is always above 0. GLFW
+hands an app no pinch on any system, so cetra hears it from the system itself where it can
+(`pinch.h`): on macOS a monitor on AppKit's magnify events for the engine's window
+(`pinch_macos.m`, the library's one file in Objective-C). Each event is a change in scale, and a
+frame's several compound, `(1 + a)(1 + b) - 1`: summed, a slow frame's many would zoom further
+than the hand did. The event comes in a poll, so it wakes an idle loop as a scroll does. On
+Windows and Linux the pinch reads 0.
 
 **The clipboard** is `engine_clipboard_get`/`_set`: GLFW's in a window, a string the engine owns
 headless, so a test never touches the user's.

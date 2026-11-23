@@ -852,8 +852,9 @@ bool engine_fb_to_points(const Engine* engine, double fb_x, double fb_y, double*
  * `from-to` range, `#` comments, the last matching line winning.
  *
  * The pointer's tokens are `at=x,y` (framebuffer pixels, +Y up), `by=dx,dy` (per
- * frame, where `at` is absent), `down`, `shift`, `wheel=<f>` and `pinch=<f>`, a
- * frame's of InputState's pinch. A range states
+ * frame, where `at` is absent), `down`, `shift`, `wheel=<f>` and `pinch=<f>`, one
+ * change of InputState's pinch, above -1, a line's several each a change of the
+ * one frame. A range states
  * the pointer's STATE, so a press is `down` appearing and a release is it going;
  * `shift` is read at the press, which is the only moment GLFW's modifier reaches
  * the input state. A script REPLACES the mouse and the trackpad's pinch.
