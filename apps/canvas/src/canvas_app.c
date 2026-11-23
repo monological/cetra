@@ -2349,6 +2349,7 @@ static bool g_gui_click;        // --gui-click: a click handed to the debug GUI 
 static UISystem* g_ui_enter;    // --ui-enter: the UI, given an input pass of nothing each frame
 static bool g_probe;            // --canvas-probe: the run says what it did
 static const char* g_ui_text;   // --ui-text: a label in the --ui panel
+static int g_ui_rows;           // --ui-rows: that label wrapped, held to this many rows
 static UISystem* g_ui_live;     // the UI given the real pointer and keyboard each frame
 
 // --ui-keys (spec 14.10): the --ui panel takes keys through a hook, as a pane an app draws would,
@@ -4779,8 +4780,8 @@ static void usage(const char* argv0) {
         "MS]\n"
         "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
         "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--input-script PATH]\n"
-        "          [--ui-enter] [--ui-text TEXT] [--ui-keys] [--gui-click] [--history] "
-        "[--palette]\n"
+        "          [--ui-enter] [--ui-text TEXT] [--ui-rows N] [--ui-keys] [--gui-click] "
+        "[--history] [--palette]\n"
         "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim] [--read-only]\n"
         "          [--editor-fold FIRST,LAST] [--editor-filler LINE,ROWS] [--refuse-close]\n"
         "          [--ui-borders] [--ui-seams] [--ui-lines] [--ui-table] [--ui-table-pane]\n"
@@ -4928,6 +4929,8 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "--ui-text") == 0 && more) {
             with_ui = true;
             g_ui_text = argv[++i];
+        } else if (strcmp(argv[i], "--ui-rows") == 0 && more) {
+            g_ui_rows = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--ui-keys") == 0) {
             with_ui = true;
             g_ui_keys = true;
@@ -5158,8 +5161,15 @@ int main(int argc, char** argv) {
         UIElement* panel = ui_panel(ui_screen_root(screen));
         ui_set_size(panel, UI_FIXED, 160.0f, UI_FIXED, 90.0f);
         ui_set_style(panel, &(UIStyle){.bg = {0.2f, 0.6f, 0.9f, 1.0f}});
-        if (g_ui_text)
-            ui_label(panel, g_ui_text);
+        if (g_ui_text) {
+            UIElement* text = ui_label(panel, g_ui_text);
+            // Under --ui-rows it wraps across the panel and is held to so many rows (spec 14.44).
+            if (text && g_ui_rows > 0) {
+                text->wrap = true;
+                text->max_rows = g_ui_rows;
+                ui_set_size(text, UI_GROW, 0.0f, UI_FIT, 0.0f);
+            }
+        }
         // Under --ui-keys the panel is focused by a press and takes the keys, and a field under it
         // is something to move the pointer across while it holds the focus.
         if (g_ui_keys) {

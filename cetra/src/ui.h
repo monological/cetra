@@ -521,7 +521,9 @@ struct UIElement {
     // A scrolling pane at its end stays at its end as its content grows, as a terminal does; one
     // scrolled up stays where it was.
     bool follow_end;
-    int max_rows; // the most rows a multi-line field grows to before it scrolls; 0 = no most
+    // The most rows a multi-line field grows to before it scrolls, or a wrapping label shows: where
+    // the label's text runs on past them, its last line ends in "…". 0 = no most.
+    int max_rows;
 
     // What a control writes through. Borrowed, and exactly one is non-NULL for
     // the kind that uses it: the control is a VIEW of the app's own variable,

@@ -83,7 +83,8 @@ first frame after which nothing asks for another.
 ## UI text and panes
 
 - `--ui` puts a panel of the game UI over the canvas; `--ui-text` sets its label, which is how the
-  glyph arms draw characters past ASCII and one the atlas lacks. `--ui-keys` makes the panel
+  glyph arms draw characters past ASCII and one the atlas lacks, and `--ui-rows N` wraps that
+  label and holds it to N rows, the last ending in `…`. `--ui-keys` makes the panel
   focusable with a key hook, as a pane pcb draws itself would have, and shows the last two things
   it was handed.
 - `--palette` is a modal command palette over the app's own commands: Cmd+K (Ctrl+K off macOS)

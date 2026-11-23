@@ -549,6 +549,13 @@ def run_ui_gate(workdir):
                      once. Its text is measured across once, and again only for new
                      text or a new size: a new width keeps the measure, which is the
                      label's longest word in its face.
+      ui-label-rows  a wrapping label of `max_rows` (spec 14.44): a paragraph of four
+                     lines held to three and to one, and an address, one word, held to
+                     two, each show that many lines and measure that many line heights,
+                     the last ending in the mark, drawn inside the label's width with
+                     no room left for one glyph more; the paragraph held to 99, and a
+                     text of two lines held to three, are whole and unmarked. Laid out
+                     again it breaks nothing, and at another most it breaks once.
       ui-runs-draw   a styled run colours exactly its bytes' glyphs, the rest
                      keep the label's colour, and a run in another face draws that
                      face's glyph.
@@ -1514,6 +1521,40 @@ def run_ui_gate(workdir):
                       f"{seq[2]:.0f} at a new width, {seq[3]:.0f} after new text, {seq[4]:.0f} in "
                       f"a new size (want 1, 1, 2, 3, 4); measured "
                       + ", ".join(f"{m:.0f}" for m in measured) + " (want 1, 1, 1, 2, 3)")
+        return ok, detail
+
+    @arm("ui-label-rows")
+    def _():
+        p = _ui_probe("label-rows")
+        if not p:
+            ok, detail = False, "the probe produced nothing"
+        else:
+            lh, inner = p[("line", "height")][0], p[("inner", "width")][0]
+            uncut = p[("uncut", "lines")][0]
+            # Each step's most lines and whether its text runs on past them.
+            steps = {"three": (3, 1), "roomy": (uncut, 0), "one": (1, 1), "short": (2, 0),
+                     "word": (2, 1)}
+            wrong = []
+            for step, (rows, cut) in steps.items():
+                lines, glyphs = p[(step, "lines")], p[(step, "last")]
+                fits, more = p[(step, "fits")]
+                held = (lines == [rows, cut] and close(p[(step, "height")][0], rows * lh + 8.0)
+                        and p[(step, "drawn")][0] <= inner + 0.5 and glyphs[0] == glyphs[1]
+                        and fits <= inner and (more > inner if cut else more == fits))
+                if not held:
+                    wrong.append(f"{step}: lines and cut {lines} (want {[rows, cut]}), "
+                                 f"{p[(step, 'height')][0]:.1f} high, drawn to "
+                                 f"{p[(step, 'drawn')][0]:.2f}, {glyphs[0]:.0f} glyphs on its last "
+                                 f"line (want {glyphs[1]:.0f}), {fits:.2f} wide with its mark and "
+                                 f"{more:.2f} with a glyph more")
+            wraps, kept = p[("kept", "wraps")], p[("kept", "lines")][0]
+            ok = not wrong and uncut > 3 and wraps == [1, 1, 2] and kept == 2
+            detail = ("; ".join(wrong) if wrong else
+                      f"a paragraph of {uncut:.0f} lines held to 3 and to 1, and an address to 2, "
+                      f"each end in the mark inside {inner:.0f} points with no room for a glyph "
+                      f"more; held to 99, and one of two lines to 3, are whole") + (
+                      f"; broken {wraps} times first, laid out again and at another most (want "
+                      f"1, 1, 2), {kept:.0f} lines then (want 2)")
         return ok, detail
 
     # ---- styled runs

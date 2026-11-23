@@ -1676,7 +1676,8 @@ and:
   Under `--canvas-probe` it prints the column's box, the pane's box, the column's colour and the
   input line's top (`canvas history column`), which `ui-history-clip` reads.
 - `--ui-text TEXT` sets the text of the `--ui` panel's label (implies `--ui`). The glyph arms draw
-  é, Ω and a codepoint the atlas lacks through it.
+  é, Ω and a codepoint the atlas lacks through it. `--ui-rows N` (spec 14.44) wraps that label
+  across the panel and holds it to N rows, a longer text ending in `…`: a picture to look at.
 - `--ui-keys` (spec 14.10) makes the `--ui` panel focusable and gives it a key hook (implies
   `--ui`), as a pane an app draws would have: a click focuses it, and its label says the last two
   things it was handed, a key by its code and modifiers and a character as itself. It takes every

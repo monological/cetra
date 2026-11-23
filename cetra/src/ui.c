@@ -1402,7 +1402,11 @@ static void _break_lines(const UISystem* ui, UIElement* el) {
     if (!_text_lines(el))
         return;
     const UIText t = _element_text(ui, el, &s);
-    if (ui_lines_break(el->lines, &t, _wraps(el) ? el->rect.w - pad[1] - pad[3] : INFINITY))
+    // A wrapping label alone is held to its most rows: a field's most is how far it grows, and
+    // nothing else reads one.
+    const bool wraps = _wraps(el);
+    const size_t most = wraps && el->max_rows > 0 ? (size_t)el->max_rows : 0;
+    if (ui_lines_break(el->lines, &t, wraps ? el->rect.w - pad[1] - pad[3] : INFINITY, most))
         el->wraps++;
     else if (el->lines->count == 0)
         _drop_lines(el);

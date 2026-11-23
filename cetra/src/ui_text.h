@@ -70,6 +70,11 @@ typedef struct UILines {
     size_t* starts; // the byte each line starts at
     size_t count, capacity;
     float width; // what they were broken at; INFINITY for '\n's alone
+    // The most lines they were broken into, 0 for no most. `cut` when the text runs on past the
+    // last: that line then ends at `cut_end`, short of the width by the mark drawn after it.
+    size_t most;
+    bool cut;
+    size_t cut_end;
     // The face, size and tracking the lines and the measures are for. A text in another drops both.
     const Font* font;
     float size, tracking;
@@ -81,20 +86,23 @@ typedef struct UILines {
 // when it walked the text for it.
 bool ui_lines_measure(UILines* lines, const UIText* t, bool wrap, float* width);
 /*
- * Breaks `t` into `lines` at `width` -- INFINITY breaks only at its '\n's -- unless they hold the
- * lines of the same width, face, size and tracking already. True when it broke them; false when it
- * kept them, or ran out of memory, which leaves `count` 0.
+ * Breaks `t` into `lines` at `width` -- INFINITY breaks only at its '\n's -- and into `most` of
+ * them at most, 0 for as many as it takes, unless they hold the lines of the same width, most,
+ * face, size and tracking already. A text that runs on past `most` is cut (spec 14.44): its last
+ * line ends with room left in the width for the mark ui_draw_text_lines draws after it. True when
+ * it broke them; false when it kept them, or ran out of memory, which leaves `count` 0.
  */
-bool ui_lines_break(UILines* lines, const UIText* t, float width);
+bool ui_lines_break(UILines* lines, const UIText* t, float width, size_t most);
 // Breaks `t` again from line `line` on, keeping the lines before it: for a text changed at or after
 // where that line starts, as an append is, or anywhere from line 0. The measures go with the old
 // text. Every line is broken when they are not this width's and style's. True once broken; false
 // out of memory, which leaves `count` 0.
 bool ui_lines_break_from(UILines* lines, const UIText* t, float width, size_t line);
-// The end of line `i`, its '\n' and any spaces it wrapped at left off.
+// The end of line `i`, its '\n' and any spaces it wrapped at left off; of a cut last line, where
+// it is cut.
 size_t ui_lines_end(const UILines* lines, const UIText* t, size_t i);
 // Draws each of `lines` a line height below the last, from `r`'s top, placed by `align` on its own
-// width.
+// width; a cut last line with its mark after it, the mark's width part of the line's.
 void ui_draw_text_lines(UIDrawList* dl, UIRect r, const UIText* t, const UILines* lines,
                         float line_spacing, UIAlign align);
 

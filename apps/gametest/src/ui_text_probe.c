@@ -159,6 +159,102 @@ static int probe_wrap_cache(UISystem* ui) {
     return 0;
 }
 
+// The probe's text of one word: an address, which breaks inside itself or not at all.
+static const char* ADDRESS = "https://example.com/adaptive-socs-and-fpgas/developer/package-pinout-"
+                             "files/usapackages/xcku040ffva1156pkg.txt?revision=one-two-three-four";
+
+/*
+ * A wrapping label held to `rows` rows of `text` across the fixture's 300-point panel (spec 14.44),
+ * laid out and built, said under `step`:
+ * - its lines and whether it is cut, and its height;
+ * - the right edge of everything it draws, from its left;
+ * - its last line: its glyphs drawn against its text's with the mark's, and its text's width with
+ *   the mark's by ui_text_width, beside that width with the glyph cut away put back, which is
+ *   past the label's where the cut is as late as fits.
+ */
+static void say_rows(UISystem* ui, const Font* font, const char* step, const char* text, int rows) {
+    UIElement* label = NULL;
+    wrap_fixture(ui, &label, 300.0f, text);
+    label->max_rows = rows;
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+    const UILines* lines = label->lines;
+    const size_t count = lines ? lines->count : 0;
+    const bool cut = lines && lines->cut;
+    printf("ui label-rows %s lines %.6f %.6f\n", step, (double)count, cut ? 1.0 : 0.0);
+    printf("ui label-rows %s height %.6f\n", step, (double)label->rect.h);
+
+    ui_build(ui, 1280.0f, 720.0f, 0.0f);
+    UIRect rects[512];
+    vec4 colors[512];
+    const size_t n = glyph_quads(ui, rects, colors, 512);
+    // A label's own padding is 4 above: its last line's glyphs are those whose middles lie under
+    // the lines before it.
+    const float lh = ui_line_height(font, PROBE_SIZE, 1.0f);
+    const float last_top = label->rect.y + 4.0f + (float)(count ? count - 1 : 0) * lh;
+    float right = 0.0f;
+    int last_glyphs = 0;
+    for (size_t i = 0; i < n; i++) {
+        const float r = rects[i].x + rects[i].w - label->rect.x;
+        right = r > right ? r : right;
+        last_glyphs += rects[i].y + rects[i].h * 0.5f >= last_top;
+    }
+    printf("ui label-rows %s drawn %.6f\n", step, (double)right);
+
+    if (count > 0) {
+        const UIStyle style = {.font = (Font*)font, .font_size = PROBE_SIZE};
+        const UIText t = ui_text_make(NULL, text, strlen(text), &style, NULL, 0);
+        const size_t from = lines->starts[count - 1], to = ui_lines_end(lines, &t, count - 1);
+        // The glyph cut away is the one the cut stands at, past any spaces left off the line.
+        const size_t more = cut ? lines->cut_end + 1 : to;
+        char line[512];
+        int inked = 0;
+        float with_mark = 0.0f, one_more = 0.0f;
+        if (more - from + 1 < sizeof(line)) {
+            const float mark = cut ? ui_text_width(font, PROBE_SIZE, 0.0f, "\xE2\x80\xA6") : 0.0f;
+            memcpy(line, text + from, more - from);
+            line[more - from] = '\0';
+            one_more = ui_text_width(font, PROBE_SIZE, 0.0f, line) + mark;
+            line[to - from] = '\0';
+            with_mark = ui_text_width(font, PROBE_SIZE, 0.0f, line) + mark;
+            for (const char* p = line; *p; p++)
+                inked += *p != ' ';
+        }
+        printf("ui label-rows %s last %.6f %.6f\n", step, (double)last_glyphs,
+               (double)(inked + (cut ? 1 : 0)));
+        printf("ui label-rows %s fits %.6f %.6f\n", step, (double)with_mark, (double)one_more);
+    }
+    ui_pop(ui);
+}
+
+static int probe_label_rows(UISystem* ui, const Font* font) {
+    printf("ui label-rows line height %.6f\n", (double)ui_line_height(font, PROBE_SIZE, 1.0f));
+    printf("ui label-rows inner width %.6f\n", 280.0);
+    printf("ui label-rows uncut lines %.6f\n", (double)wrap_lines(font, PARAGRAPH, 280.0f));
+    say_rows(ui, font, "three", PARAGRAPH, 3);
+    say_rows(ui, font, "roomy", PARAGRAPH, 99);
+    say_rows(ui, font, "one", PARAGRAPH, 1);
+    say_rows(ui, font, "short", "the quick brown fox jumps over the lazy dog and keeps on", 3);
+    say_rows(ui, font, "word", ADDRESS, 2);
+
+    // Kept as its lines are: laid out again nothing breaks, and another most breaks once.
+    UIElement* label = NULL;
+    wrap_fixture(ui, &label, 300.0f, PARAGRAPH);
+    label->max_rows = 3;
+    UIScreen* s = ui_top(ui);
+    ui_layout(s, 1280.0f, 720.0f);
+    const unsigned first = label->wraps;
+    ui_layout(s, 1280.0f, 720.0f);
+    ui_layout(s, 1280.0f, 720.0f);
+    const unsigned again = label->wraps;
+    label->max_rows = 2;
+    ui_layout(s, 1280.0f, 720.0f);
+    printf("ui label-rows kept wraps %.6f %.6f %.6f\n", (double)first, (double)again,
+           (double)label->wraps);
+    printf("ui label-rows kept lines %.6f\n", (double)(label->lines ? label->lines->count : 0));
+    ui_pop(ui);
+    return 0;
+}
+
 // A second face, wider than the first, for the runs that change it.
 static Font* wide_font(Game* game) {
     Font* wide = load_font(game->engine->text_renderer->font_pool,
@@ -2422,6 +2518,8 @@ static int probe_match(void) {
 int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
     if (!strcmp(which, "wrap-label"))
         return probe_wrap_label(ui, font);
+    if (!strcmp(which, "label-rows"))
+        return probe_label_rows(ui, font);
     if (!strcmp(which, "wrap-cache"))
         return probe_wrap_cache(ui);
     if (!strcmp(which, "runs-draw"))

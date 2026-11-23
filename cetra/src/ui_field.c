@@ -87,7 +87,7 @@ static void _break_rows(UIField* f) {
     if (f->state.single_line)
         _one_row(f);
     else
-        ui_lines_break(&f->rows, &f->text, f->wrap);
+        ui_lines_break(&f->rows, &f->text, f->wrap, 0);
 }
 
 // After an edit the measuring text follows the buffer and its runs, and the rows are broken again
