@@ -501,12 +501,11 @@ element's. The placeholder is drawn dim while the field is empty, and never size
   `delete_length`, and joining typing a word at a time reads that.
 - **The keys are the platform's**: Cmd on macOS and Ctrl elsewhere for the shortcuts, Option or Ctrl
   for a word, Cmd+arrow to a line's or the text's end.
-- **A secret field (`UI_FIELD_SECRET`, spec 14.45) shows a mark a character** and keeps everything
-  else a field's. It holds a second buffer, the text byte for byte with each character a mark as
-  long in UTF-8 as it is (`*`, `·`, then U+2217 and a private-use character the atlas lacks, drawn
-  as its box), and measures, breaks, places, selects and draws over that, so every offset stb and
-  the field keep is the text's own and no path forks; a press lands on the mark it is over.
-  `ui_field_text` gives the text. Copy and cut take nothing; a word move and a double press see the
+- **A secret field (`UI_FIELD_SECRET`, spec 14.45) shows a star a character**, whatever its length
+  in UTF-8, and keeps everything else a field's. It holds a second buffer of the stars, which
+  measures, places, selects and draws the text; stb and the field keep their offsets in the
+  text's bytes, each handed to the stars as the characters before it (`_shown_at`), so a press
+  lands on the star it is over. `ui_field_text` gives the text. Copy and cut take nothing; a word move and a double press see the
   whole text as one word, so neither tells where its words are. It is one line, whatever else it
   was asked for. Both buffers are zeroed before they are freed or grown past, and the text's tail
   wherever it shrinks, so a key does not stay in the heap after its field.

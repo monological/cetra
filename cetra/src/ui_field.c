@@ -48,9 +48,9 @@ struct UIField {
     unsigned flags;
     char* buf; // UTF-8, always NUL-terminated
     int len, cap;
-    // A secret field's text as it is shown: `buf` byte for byte, each character a mark as long as
-    // it is (_mirror), so what measures, places and draws the text reads it unchanged. NULL for
-    // any other field, which shows `buf`.
+    // A secret field's text as it is shown: a star for each character of `buf` (_mirror), which is
+    // what measures, places and draws it, each offset into the text mapped to its star
+    // (_shown_at). NULL for any other field, which shows `buf`.
     char* shown;
     char* placeholder; // the dim hint while `buf` is empty; owned, NULL for none
     STB_TexteditState state;
@@ -95,35 +95,41 @@ static void _break_rows(UIField* f) {
 }
 
 /*
- * A secret field's marks: a character of one byte shown as "*", of two as "·" (U+00B7), of three
- * as "∗" (U+2217) and of four as a private-use character, each as long in UTF-8 as the character
- * it stands for, so a byte of the text is a byte of what is shown. The atlas holds the first two;
- * the others are drawn as its box. A mark of the same length keeps every offset the field and
- * stb_textedit hold the text's own, where one star for every character would need each mapped.
+ * A secret field shows a star for each character, whatever its length in UTF-8, so the stars say
+ * how many characters there are and nothing of which. stb_textedit and the field keep their
+ * offsets in the text's bytes; what measures and draws the stars is handed each one as the number
+ * of characters before it (_shown_at). Both count characters as text_utf8_next steps over them, a
+ * malformed byte one.
  */
-static const char* const MARKS[] = {"*", "\xC2\xB7", "\xE2\x88\x97", "\xF4\x8F\xBF\xBD"};
 
-// The text shown: a secret field's marks, kept as long as the text, else the text itself.
+// The text shown: a secret field's stars, else the text itself; and how many bytes of it.
 static const char* _shown(const UIField* f) {
     return f->shown ? f->shown : f->buf;
 }
 
+static size_t _shown_len(const UIField* f) {
+    return f->shown ? strlen(f->shown) : (size_t)f->len;
+}
+
+// Where byte `at` of the text falls in what is shown: the byte itself, or a secret field's star.
+static size_t _shown_at(const UIField* f, size_t at) {
+    if (!f->shown)
+        return at;
+    size_t count = 0;
+    for (const char* p = f->buf; *p && (size_t)(p - f->buf) < at; count++)
+        text_utf8_next(&p);
+    return count;
+}
+
+// A secret field's stars written again for its text, ended by a zero.
 static void _mirror(UIField* f) {
     if (!f->shown)
         return;
-    const char* p = f->buf;
-    char* out = f->shown;
-    while (*p) {
-        const char* at = p;
+    size_t count = 0;
+    for (const char* p = f->buf; *p; count++)
         text_utf8_next(&p);
-        const size_t n = (size_t)(p - at);
-        if (n >= 1 && n <= 4)
-            memcpy(out, MARKS[n - 1], n);
-        else
-            memset(out, '*', n);
-        out += n;
-    }
-    *out = '\0';
+    memset(f->shown, '*', count);
+    f->shown[count] = '\0';
 }
 
 // After an edit the measuring text follows the buffer and its runs, and the rows are broken again
@@ -132,7 +138,7 @@ static void _mirror(UIField* f) {
 static void _sync_from(UIField* f, size_t row) {
     _mirror(f);
     f->text.text = _shown(f);
-    f->text.length = (size_t)f->len;
+    f->text.length = _shown_len(f);
     f->text.runs = f->el->runs;
     f->text.run_count = f->el->run_count;
     if (f->state.single_line)
@@ -225,7 +231,8 @@ static float _glyph_width(UIField* f, int line_start, int i) {
         return 0.0f;
     if (f->buf[at] == '\n')
         return -1.0f; // IMSTB_TEXTEDIT_GETWIDTH_NEWLINE
-    return ui_text_pen(&f->text, (size_t)at, (size_t)_next_index(f, at));
+    return ui_text_pen(&f->text, _shown_at(f, (size_t)at),
+                       _shown_at(f, (size_t)_next_index(f, at)));
 }
 
 // The row starting at `start`, from the rows already broken: stb asks for each row in turn from the
@@ -237,7 +244,7 @@ static void _layout_row(StbTexteditRow* r, UIField* f, int start) {
     const bool newline = next > start && f->buf[next - 1] == '\n';
     const int end = newline ? next - 1 : next;
     r->x0 = 0.0f;
-    r->x1 = ui_text_span_width(&f->text, (size_t)start, (size_t)end);
+    r->x1 = ui_text_span_width(&f->text, _shown_at(f, (size_t)start), _shown_at(f, (size_t)end));
     r->baseline_y_delta = f->line_h;
     r->ymin = 0.0f;
     r->ymax = f->line_h;
@@ -428,7 +435,7 @@ static void _width(const UISystem* ui, UIElement* el, const UIStyle* s, float wi
     UIField* f = el->field;
     if (!f)
         return;
-    f->text = ui_text_make(ui_draw_list(ui), _shown(f), (size_t)f->len, s, el->runs, el->run_count);
+    f->text = ui_text_make(ui_draw_list(ui), _shown(f), _shown_len(f), s, el->runs, el->run_count);
     glm_vec4_copy((float*)s->fg, f->color);
     f->text.color = f->color;
     f->line_h = ui_text_line_height(&f->text, s->line_spacing);
@@ -889,7 +896,7 @@ static void _drag(const UISystem* ui, UIElement* el, UIRect content, float x, fl
 // The caret's place in content coordinates: its row's top and its pen.
 static void _caret_at(const UIField* f, float* x, float* y) {
     const size_t row = _row_of(f, f->state.cursor);
-    *x = ui_text_pen(&f->text, f->rows.starts[row], (size_t)f->state.cursor);
+    *x = ui_text_pen(&f->text, f->rows.starts[row], _shown_at(f, (size_t)f->state.cursor));
     *y = f->line_h * (float)row;
 }
 
@@ -911,7 +918,7 @@ static void _keep_caret_in_view(UIField* f, UIRect content) {
 // multi-line one wraps at its width.
 static void _clamp_scroll(UIField* f, UIRect content) {
     const float wide =
-        f->state.single_line ? ui_text_span_width(&f->text, 0, (size_t)f->len) : 0.0f;
+        f->state.single_line ? ui_text_span_width(&f->text, 0, f->text.length) : 0.0f;
     const float max_x = glm_max(wide + UI_TYPING_CARET_WIDTH - content.w, 0.0f);
     const float max_y = glm_max(f->line_h * (float)f->rows.count - content.h, 0.0f);
     f->scroll_x = glm_clamp(f->scroll_x, 0.0f, max_x);
@@ -949,24 +956,25 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
     size_t first, last;
     _rows_shown(f, content, &first, &last);
 
-    // The selection, behind the text, row by row.
+    // The selection, behind the text, row by row, in what is shown.
     if (_has_selection(f)) {
         vec4 tint = {0};
         ui_selection_colour(ui_theme(ui), tint);
-        int lo, hi;
-        _selection(f, &lo, &hi);
+        int from, to;
+        _selection(f, &from, &to);
+        const size_t lo = _shown_at(f, (size_t)from), hi = _shown_at(f, (size_t)to);
         for (size_t i = first; i < last; i++) {
             const size_t start = f->rows.starts[i];
-            const size_t next = i + 1 < f->rows.count ? f->rows.starts[i + 1] : (size_t)f->len;
-            if ((size_t)lo >= next || (size_t)hi <= start)
+            const size_t next = i + 1 < f->rows.count ? f->rows.starts[i + 1] : f->text.length;
+            if (lo >= next || hi <= start)
                 continue;
-            const size_t a = (size_t)lo > start ? (size_t)lo : start;
+            const size_t a = lo > start ? lo : start;
             const size_t end = ui_lines_end(&f->rows, &f->text, i);
-            const size_t b = (size_t)hi < end ? (size_t)hi : end;
+            const size_t b = hi < end ? hi : end;
             const float x0 = ui_text_pen(&f->text, start, a);
             // A selection running on past the row's end shows a little past it, as a newline does.
             float x1 = ui_text_pen(&f->text, start, b);
-            if ((size_t)hi > end)
+            if (hi > end)
                 x1 += f->line_h * 0.3f;
             if (x1 > x0)
                 ui_draw_quad(dl, (UIRect){ox + x0, oy + f->line_h * (float)i, x1 - x0, f->line_h},

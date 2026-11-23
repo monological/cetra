@@ -931,11 +931,9 @@ static int probe_field_caret_x(UISystem* ui, Font* font) {
     return 0;
 }
 
-// The secret field's text, one character of each length in UTF-8, and the marks it shows for them.
+// The secret field's text, one character of each length in UTF-8, and the stars it shows for them.
 static const char* SECRET_TYPED = "ab1\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80"; // ab1, é, €, 😀
-static const char* SECRET_SHOWN = "***\xc2\xb7\xe2\x88\x97\xf4\x8f\xbf\xbd";
-static const size_t SECRET_AT[] = {0, 1, 2, 3,
-                                   5, 8, 12}; // where each character starts, then the end
+static const char* SECRET_SHOWN = "******";
 #define SECRET_CHARS 6
 
 // Whether a glyph quad has the box of `codepoint` at the probe's size, to a pixel's snapping.
@@ -964,20 +962,19 @@ static int probe_field_secret(const Game* game, UISystem* ui, Font* font) {
     type_pass(ui);
     say_text("field-secret", "typed", field, SECRET_TYPED);
 
-    // What is drawn: a mark a character, the stars and the dot glyphs, the rest the missing box.
+    // What is drawn: a star a character, of whatever length, and no missing glyph's box.
     ui_build(ui, 1280.0f, 720.0f, 0.0f);
     UIRect rects[64];
     vec4 colors[64];
     const size_t quads = glyph_quads(ui, rects, colors, 64);
     const float left = field->rect.x + 10.0f, right = field->rect.x + field->rect.w - 10.0f;
     const float top = field->rect.y, bottom = field->rect.y + field->rect.h;
-    int glyphs = 0, stars = 0, dots = 0; // the field's own; the button under it draws its label
+    int glyphs = 0, stars = 0; // the field's own; the button under it draws its label
     for (size_t i = 0; i < quads; i++) {
         if (rects[i].y < top || rects[i].y + rects[i].h > bottom)
             continue;
         glyphs++;
         stars += quad_is(&rects[i], font, '*') ? 1 : 0;
-        dots += quad_is(&rects[i], font, 0xB7) ? 1 : 0;
     }
     const float line_h = ui_line_height(font, PROBE_SIZE, 1.0f);
     const UIDrawList* dl = ui_draw_list(ui);
@@ -990,11 +987,11 @@ static int probe_field_secret(const Game* game, UISystem* ui, Font* font) {
             r.y + r.h <= bottom && r.h < line_h)
             boxes++;
     }
-    printf("ui field-secret drawn marks %d %d %d %d\n", glyphs, stars, dots, boxes);
+    printf("ui field-secret drawn marks %d %d %d\n", glyphs, stars, boxes);
 
-    // The caret at each character where the marks' widths put it, and the stars' steps alike.
+    // The caret after each character where that many stars put it, a step of one star each.
     one_key(ui, GLFW_KEY_HOME, 0);
-    float worst = 0.0f, steps[3] = {0};
+    float worst = 0.0f, low = INFINITY, high = 0.0f, last = 0.0f;
     for (size_t i = 0; i <= SECRET_CHARS; i++) {
         ui_build(ui, 1280.0f, 720.0f, 0.0f);
         UIRect caret;
@@ -1002,17 +999,17 @@ static int probe_field_secret(const Game* game, UISystem* ui, Font* font) {
             printf("ui field-secret missing caret %zu\n", i);
             return 0;
         }
-        const float off = fabsf(caret.x - field_x(field, font, SECRET_SHOWN, SECRET_AT[i]));
+        const float off = fabsf(caret.x - field_x(field, font, SECRET_SHOWN, i));
         worst = off > worst ? off : worst;
-        if (i < 3)
-            steps[i] = field_x(field, font, SECRET_SHOWN, SECRET_AT[i + 1]) -
-                       field_x(field, font, SECRET_SHOWN, SECRET_AT[i]);
+        if (i > 0) {
+            low = fminf(low, caret.x - last);
+            high = fmaxf(high, caret.x - last);
+        }
+        last = caret.x;
         one_key(ui, GLFW_KEY_RIGHT, 0);
     }
-    const float spread =
-        fmaxf(fmaxf(steps[0], steps[1]), steps[2]) - fminf(fminf(steps[0], steps[1]), steps[2]);
     printf("ui field-secret caret off %.6f\n", (double)worst);
-    printf("ui field-secret star step %.6f %.6f\n", (double)steps[0], (double)spread);
+    printf("ui field-secret star step %.6f %.6f\n", (double)low, (double)(high - low));
 
     // Copy and cut take nothing out: the clipboard as it was, the text kept.
     engine_clipboard_set(engine, "kept");
