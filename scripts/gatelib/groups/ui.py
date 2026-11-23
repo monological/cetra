@@ -728,8 +728,9 @@ def run_ui_gate(workdir):
                      draws six stars of one step and no box, the caret after each
                      character where that many stars put it; copy and cut take
                      nothing out, a word move and a double press see one word, a
-                     press on the second star sets the caret after the first, and
-                     a secret field asked for many lines is one.
+                     press on the second star sets the caret after the first, what
+                     Backspace took is kept to undo until the text is set and none
+                     of it after, and a secret field asked for many lines is one.
       ui-field-scroll-x a line longer than its field keeps the caret inside it at
                      the end, and Home scrolls back to the start.
       ui-field-multiline a multi-line field wraps into more rows than its most,
@@ -2350,16 +2351,18 @@ def run_ui_gate(workdir):
             step, spread = p.get(("star", "step"), [0, 99])
             words = p.get(("word", "caret"))
             double, click = p.get(("double", "caret")), p.get(("click", "caret"))
+            undo = p.get(("undo", "bytes"))
             flags = [("typed", "text"), ("copied", "clip"), ("cut", "text"), ("cut", "clip"),
                      ("oneline", "text")]
             wrong = _probe_wrong(p, {k: 1 for k in flags})
             ok = (not wrong and marks == [6, 6, 0] and off <= 0.01 and step > 0
                   and spread <= 0.01 and words == [0, 12] and double == [12, 0, 12, 12]
-                  and click == [1, 1, 1, 12])
+                  and click == [1, 1, 1, 12] and undo == [7, 0])
             detail = (f"marks {marks} (want 6 glyphs, 6 stars, no box); caret {off:.3f} from "
                       f"where the stars put it; star step {step:.3f}, spread {spread:.4f}; word "
                       f"moves {words} (want 0 12); double press {double} (want all of 12); "
-                      f"press on the second star {click} (want caret 1)"
+                      f"press on the second star {click} (want caret 1); undo bytes {undo} "
+                      f"(want the 7 Backspace took kept, then 0 once the text is set)"
                       + (f"; wrong: {wrong}" if wrong else ""))
         return ok, detail
 

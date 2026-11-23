@@ -508,7 +508,9 @@ element's. The placeholder is drawn dim while the field is empty, and never size
   lands on the star it is over. `ui_field_text` gives the text. Copy and cut take nothing; a word move and a double press see the
   whole text as one word, so neither tells where its words are. It is one line, whatever else it
   was asked for. Both buffers are zeroed before they are freed or grown past, and the text's tail
-  wherever it shrinks, so a key does not stay in the heap after its field.
+  wherever it shrinks, so a key does not stay in the heap after its field. Setting its text zeroes
+  stb's state too, whose undo store holds what Backspace and typing over a selection took out
+  (spec 14.46), so a field kept for the next key keeps nothing of the last.
 - **The blink is the wall clock's**, not the UI's `dt`, which idle mode keeps waits out of. The
   overlay sets `UISystem.now` and asks `engine_request_frame_after` for the caret's next change, so
   under idle mode the window wakes only for the blink. Headless the caret does not blink, so a

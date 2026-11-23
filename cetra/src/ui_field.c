@@ -424,6 +424,14 @@ void ui_field_inspect(const UIElement* el, int* cursor, int* select_start, int* 
         *rows = f->rows.count;
 }
 
+size_t ui_field_undo_bytes(const UIElement* el) {
+    const UIField* f = el ? el->field : NULL;
+    size_t kept = 0;
+    for (size_t i = 0; f && i < sizeof f->state.undostate.undo_char; i++)
+        kept += f->state.undostate.undo_char[i] != 0;
+    return kept;
+}
+
 void ui_field_runs_changed(UIElement* el) {
     if (el && el->field)
         _sync(el->field);
@@ -548,12 +556,16 @@ void ui_field_set_text(UIElement* el, const char* text) {
     el->runs = NULL;
     el->run_count = 0;
     // Moved rather than copied: the text may be the field's own, or part of it, which is never
-    // longer than the buffer and so never grew it. A secret field's text before it is zeroed.
+    // longer than the buffer and so never grew it. A secret field's text before it is zeroed, and
+    // its stb state: starting it again resets the undo store's counters, not its characters, which
+    // hold what Backspace and typing over a selection took out.
     const int had = f->len;
     memmove(f->buf, text ? text : "", n + 1);
     f->len = (int)n;
     if (f->shown && had > (int)n)
         _wipe(f->buf + n + 1, (size_t)(had - (int)n));
+    if (f->shown)
+        _wipe(&f->state, sizeof f->state);
     stb_textedit_initialize_state(&f->state, !(f->flags & UI_FIELD_MULTILINE));
     f->state.cursor = f->state.select_start = f->state.select_end = f->len;
     f->scroll_x = f->scroll_y = 0.0f;

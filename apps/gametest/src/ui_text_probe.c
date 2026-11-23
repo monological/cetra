@@ -1039,6 +1039,15 @@ static int probe_field_secret(const Game* game, UISystem* ui, Font* font) {
     press_at(ui, second + (third - second) * 0.25f, y, 1.0);
     say_field("field-secret", "click", field);
 
+    // What Backspace takes out -- the four-byte character and the three-byte one -- is kept to
+    // undo while the text stands, and none of it once the text is set.
+    one_key(ui, GLFW_KEY_END, 0);
+    one_key(ui, GLFW_KEY_BACKSPACE, 0);
+    one_key(ui, GLFW_KEY_BACKSPACE, 0);
+    const size_t kept = ui_field_undo_bytes(field);
+    ui_field_set_text(field, "");
+    printf("ui field-secret undo bytes %zu %zu\n", kept, ui_field_undo_bytes(field));
+
     // Asked for many lines as well, it is one: Enter starts no line in it.
     UIScreen* s = ui_top(ui);
     UIElement* lines =

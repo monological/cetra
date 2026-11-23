@@ -18,6 +18,9 @@ unsigned ui_field_flags(const UIElement* el);
 // scroll and how many rows it is broken into. Any output may be NULL.
 void ui_field_inspect(const UIElement* el, int* cursor, int* select_start, int* select_end,
                       float* scroll_x, float* scroll_y, size_t* rows);
+// What a test reads of what a field keeps to undo: how many bytes of stb_textedit's store of
+// characters are not zero, used or not; 0 for anything not a field.
+size_t ui_field_undo_bytes(const UIElement* el);
 
 // The element's runs were set: the field's rows are broken again in their faces now, for an edit
 // or an append before the next layout.
