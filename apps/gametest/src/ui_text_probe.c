@@ -931,6 +931,133 @@ static int probe_field_caret_x(UISystem* ui, Font* font) {
     return 0;
 }
 
+// The secret field's text, one character of each length in UTF-8, and the marks it shows for them.
+static const char* SECRET_TYPED = "ab1\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80"; // ab1, é, €, 😀
+static const char* SECRET_SHOWN = "***\xc2\xb7\xe2\x88\x97\xf4\x8f\xbf\xbd";
+static const size_t SECRET_AT[] = {0, 1, 2, 3,
+                                   5, 8, 12}; // where each character starts, then the end
+#define SECRET_CHARS 6
+
+// Whether a glyph quad has the box of `codepoint` at the probe's size, to a pixel's snapping.
+static bool quad_is(const UIRect* r, const Font* font, uint32_t codepoint) {
+    const GlyphInfo* g = font_get_glyph(font, codepoint);
+    const float scale = PROBE_SIZE / font->base_size;
+    return g && fabsf(r->w - (float)(g->x1 - g->x0) * scale) <= 1.0f &&
+           fabsf(r->h - (float)(g->y1 - g->y0) * scale) <= 1.0f;
+}
+
+// A press and its release at (x, y), a second after the last, so it begins a run of presses.
+static void press_at(UISystem* ui, float x, float y, double gap) {
+    g_clock += gap;
+    pass(ui, &(UIInput){.pointer_x = x,
+                        .pointer_y = y,
+                        .pointer_pressed = true,
+                        .pointer_down = true,
+                        .time = g_clock});
+    pass(ui, &(UIInput){.pointer_x = x, .pointer_y = y, .pointer_released = true, .time = g_clock});
+}
+
+static int probe_field_secret(const Game* game, UISystem* ui, Font* font) {
+    Engine* engine = game->engine;
+    UIElement* field = field_fixture(ui, UI_FIELD_SECRET, NULL);
+    ev_text(SECRET_TYPED);
+    type_pass(ui);
+    say_text("field-secret", "typed", field, SECRET_TYPED);
+
+    // What is drawn: a mark a character, the stars and the dot glyphs, the rest the missing box.
+    ui_build(ui, 1280.0f, 720.0f, 0.0f);
+    UIRect rects[64];
+    vec4 colors[64];
+    const size_t quads = glyph_quads(ui, rects, colors, 64);
+    const float left = field->rect.x + 10.0f, right = field->rect.x + field->rect.w - 10.0f;
+    const float top = field->rect.y, bottom = field->rect.y + field->rect.h;
+    int glyphs = 0, stars = 0, dots = 0; // the field's own; the button under it draws its label
+    for (size_t i = 0; i < quads; i++) {
+        if (rects[i].y < top || rects[i].y + rects[i].h > bottom)
+            continue;
+        glyphs++;
+        stars += quad_is(&rects[i], font, '*') ? 1 : 0;
+        dots += quad_is(&rects[i], font, 0xB7) ? 1 : 0;
+    }
+    const float line_h = ui_line_height(font, PROBE_SIZE, 1.0f);
+    const UIDrawList* dl = ui_draw_list(ui);
+    int boxes = 0;
+    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
+        UIRect r;
+        int kind = 0;
+        ui_draw_list_quad(dl, i, &r, NULL, &kind);
+        if (kind == 0 && r.w != 1.5f && r.x >= left && r.x + r.w <= right && r.y >= top &&
+            r.y + r.h <= bottom && r.h < line_h)
+            boxes++;
+    }
+    printf("ui field-secret drawn marks %d %d %d %d\n", glyphs, stars, dots, boxes);
+
+    // The caret at each character where the marks' widths put it, and the stars' steps alike.
+    one_key(ui, GLFW_KEY_HOME, 0);
+    float worst = 0.0f, steps[3] = {0};
+    for (size_t i = 0; i <= SECRET_CHARS; i++) {
+        ui_build(ui, 1280.0f, 720.0f, 0.0f);
+        UIRect caret;
+        if (!caret_quad(ui, &caret)) {
+            printf("ui field-secret missing caret %zu\n", i);
+            return 0;
+        }
+        const float off = fabsf(caret.x - field_x(field, font, SECRET_SHOWN, SECRET_AT[i]));
+        worst = off > worst ? off : worst;
+        if (i < 3)
+            steps[i] = field_x(field, font, SECRET_SHOWN, SECRET_AT[i + 1]) -
+                       field_x(field, font, SECRET_SHOWN, SECRET_AT[i]);
+        one_key(ui, GLFW_KEY_RIGHT, 0);
+    }
+    const float spread =
+        fmaxf(fmaxf(steps[0], steps[1]), steps[2]) - fminf(fminf(steps[0], steps[1]), steps[2]);
+    printf("ui field-secret caret off %.6f\n", (double)worst);
+    printf("ui field-secret star step %.6f %.6f\n", (double)steps[0], (double)spread);
+
+    // Copy and cut take nothing out: the clipboard as it was, the text kept.
+    engine_clipboard_set(engine, "kept");
+    one_key(ui, GLFW_KEY_A, INPUT_MOD_SHORTCUT);
+    one_key(ui, GLFW_KEY_C, INPUT_MOD_SHORTCUT);
+    printf("ui field-secret copied clip %d\n",
+           strcmp(engine_clipboard_get(engine), "kept") == 0 ? 1 : 0);
+    one_key(ui, GLFW_KEY_X, INPUT_MOD_SHORTCUT);
+    say_text("field-secret", "cut", field, SECRET_TYPED);
+    printf("ui field-secret cut clip %d\n",
+           strcmp(engine_clipboard_get(engine), "kept") == 0 ? 1 : 0);
+
+    // One word: a word move goes from end to end, a double press selects the whole.
+    one_key(ui, GLFW_KEY_END, 0);
+    one_key(ui, GLFW_KEY_LEFT, INPUT_MOD_WORD);
+    const int word_left = cursor_of(field);
+    one_key(ui, GLFW_KEY_RIGHT, INPUT_MOD_WORD);
+    printf("ui field-secret word caret %d %d\n", word_left, cursor_of(field));
+    const float y = field->rect.y + field->rect.h * 0.5f;
+    const float second = field_x(field, font, SECRET_SHOWN, 1);
+    const float third = field_x(field, font, SECRET_SHOWN, 2);
+    press_at(ui, second + (third - second) * 0.5f, y, 1.0);
+    press_at(ui, second + (third - second) * 0.5f, y, 0.1);
+    say_field("field-secret", "double", field);
+
+    // A press on the second star's left part puts the caret after the first character.
+    press_at(ui, second + (third - second) * 0.25f, y, 1.0);
+    say_field("field-secret", "click", field);
+
+    // Asked for many lines as well, it is one: Enter starts no line in it.
+    UIScreen* s = ui_top(ui);
+    UIElement* lines =
+        ui_text_field(ui_screen_root(s),
+                      UI_FIELD_SECRET | UI_FIELD_MULTILINE | UI_FIELD_SUBMIT_ON_ENTER, NULL, NULL);
+    ui_set_focus(s, lines);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    ev_text("a");
+    ev_key(GLFW_KEY_ENTER, GLFW_MOD_SHIFT);
+    ev_key(GLFW_KEY_ENTER, 0);
+    ev_text("b");
+    type_pass(ui);
+    say_text("field-secret", "oneline", lines, "ab");
+    return 0;
+}
+
 static int probe_field_scroll_x(UISystem* ui) {
     UIElement* field = field_fixture(ui, 0, NULL);
     ev_text("the quick brown fox jumps over the lazy dog and keeps going");
@@ -2573,6 +2700,8 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_field_undo(ui);
     if (!strcmp(which, "field-caret-x"))
         return probe_field_caret_x(ui, font);
+    if (!strcmp(which, "field-secret"))
+        return probe_field_secret(game, ui, font);
     if (!strcmp(which, "field-scroll-x"))
         return probe_field_scroll_x(ui);
     if (!strcmp(which, "field-multiline"))

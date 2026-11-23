@@ -724,6 +724,12 @@ def run_ui_gate(workdir):
                      three wrapping to 1; a run ended beginning again.
       ui-field-caret-x at every index of a line with kerning pairs, the caret is
                      where the glyph there is drawn, to the pixel snap.
+      ui-field-secret a secret field typed ab1, é, € and a four-byte character
+                     draws a mark a character, three stars of one step, a dot and
+                     two boxes, the caret where the marks put it; copy and cut take
+                     nothing out, a word move and a double press see one word, a
+                     press on the second star sets the caret after the first, and
+                     a secret field asked for many lines is one.
       ui-field-scroll-x a line longer than its field keeps the caret inside it at
                      the end, and Home scrolls back to the start.
       ui-field-multiline a multi-line field wraps into more rows than its most,
@@ -2331,6 +2337,30 @@ def run_ui_gate(workdir):
             ok = worst <= 0.5
             detail = (f"the caret at most {worst:.3f} points from where the glyph at its index is "
                       f"drawn (want within the pixel snap, 0.5)")
+        return ok, detail
+
+    @arm("ui-field-secret")
+    def _():
+        p = _ui_probe("field-secret")
+        if not p:
+            ok, detail = False, "the probe produced nothing"
+        else:
+            marks = p.get(("drawn", "marks"))
+            off = p.get(("caret", "off"), [99])[0]
+            step, spread = p.get(("star", "step"), [0, 99])
+            words = p.get(("word", "caret"))
+            double, click = p.get(("double", "caret")), p.get(("click", "caret"))
+            flags = [("typed", "text"), ("copied", "clip"), ("cut", "text"), ("cut", "clip"),
+                     ("oneline", "text")]
+            wrong = _probe_wrong(p, {k: 1 for k in flags})
+            ok = (not wrong and marks == [4, 3, 1, 2] and off <= 0.01 and step > 0
+                  and spread <= 0.01 and words == [0, 12] and double == [12, 0, 12, 12]
+                  and click == [1, 1, 1, 12])
+            detail = (f"marks {marks} (want 4 glyphs, 3 stars, 1 dot, 2 boxes); caret {off:.3f} "
+                      f"from the marks' widths; star step {step:.3f}, spread {spread:.4f}; word "
+                      f"moves {words} (want 0 12); double press {double} (want all of 12); "
+                      f"press on the second star {click} (want caret 1)"
+                      + (f"; wrong: {wrong}" if wrong else ""))
         return ok, detail
 
     @arm("ui-field-scroll-x")
