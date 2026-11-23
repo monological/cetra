@@ -626,9 +626,10 @@ the `fit-clip` group reads. `apps/shapes` takes both and `apps/canvas` takes `--
 
 The input script is `--pad-script`'s grammar through the same parser: one line per frame or
 `from-to` range, `#` comments, the last matching line winning.
-- **Pointer state:** `at=x,y` (framebuffer pixels, +Y up), `by=dx,dy`, `down`, `shift` and
-  `wheel=<f>`. A range states the pointer's state, so a press is `down` appearing and a release is
-  it going.
+- **Pointer state:** `at=x,y` (framebuffer pixels, +Y up), `by=dx,dy`, `down`, `shift`,
+  `wheel=<f>` and `pinch=<f>`, a frame's of the trackpad's pinch (`InputState.pinch`: `0.25` is
+  the fingers parting by a quarter). A range states the pointer's state, so a press is `down`
+  appearing and a release is it going.
 - **Typing is events:** `type=TEXT` (UTF-8, `\s` a space and `\\` a backslash) and `key=NAME` with
   modifiers joined before it by `+` (`shift`, `ctrl`, `alt`, `super`, and `mod`, the platform's
   shortcut key: `key=mod+k`), delivered on every frame of their range in the line's order. A NAME is

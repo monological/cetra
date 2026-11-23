@@ -252,9 +252,10 @@ holding a copy of the panes' splits was the alternative, and copies the window's
 ## Focus, input and key routing
 
 **`ui_input_read` fills a `UIInput` from the engine**: the pointer, its press and release and their
-modifiers, the wheel, the clock, and the keys (`UIInput.key_events`, the engine's ordered list of
-keys, repeats and characters; `docs/architecture.md`, Input). It leaves `nav_*`, `accept` and
-`back` to the app's own bindings. No app gathers pointer state of its own.
+modifiers, the wheel, the trackpad's pinch, the clock, and the keys (`UIInput.key_events`, the
+engine's ordered list of keys, repeats and characters; `docs/architecture.md`, Input). It leaves
+`nav_*`, `accept` and `back` to the app's own bindings. No app gathers pointer state of its own.
+The pinch is the app's alone: no element of the UI's takes it.
 
 **A run of presses** is counted by `ui_presses_add`, on a `UIPresses` its caller holds: a press
 close enough to the last in time and place (`UI_PRESS_SECONDS` and `UI_PRESS_POINTS`, in `ui.c`)

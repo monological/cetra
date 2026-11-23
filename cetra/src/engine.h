@@ -502,6 +502,9 @@ typedef struct Engine {
     InputState input;
     // The scripted input, or NULL for the real devices (engine_set_input_script).
     struct InputScript* input_script;
+    // ENGINE-OWNED: what hears the trackpad's pinch on the window; NULL on a system cetra hears
+    // none from, and with no screen.
+    struct PinchWatch* pinch_watch;
     // The clipboard of a headless run, owned; a window's is the system's (engine_clipboard_get).
     char* clipboard;
 
@@ -849,10 +852,11 @@ bool engine_fb_to_points(const Engine* engine, double fb_x, double fb_y, double*
  * `from-to` range, `#` comments, the last matching line winning.
  *
  * The pointer's tokens are `at=x,y` (framebuffer pixels, +Y up), `by=dx,dy` (per
- * frame, where `at` is absent), `down`, `shift` and `wheel=<f>`. A range states
+ * frame, where `at` is absent), `down`, `shift`, `wheel=<f>` and `pinch=<f>`, a
+ * frame's of InputState's pinch. A range states
  * the pointer's STATE, so a press is `down` appearing and a release is it going;
  * `shift` is read at the press, which is the only moment GLFW's modifier reaches
- * the input state. A script REPLACES the mouse.
+ * the input state. A script REPLACES the mouse and the trackpad's pinch.
  *
  * The typing tokens are `type=TEXT`, UTF-8 with `\s` for a space and `\\` for a
  * backslash, one character event each; and `key=NAME`, one press, its modifiers

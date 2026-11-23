@@ -50,6 +50,7 @@
 #include "springbone.h"
 #include "wind.h"
 #include "profiler.h"
+#include "pinch.h"
 #include "postfx_programs.h"
 #include "scene_tags_internal.h"
 #include "scene_view_state.h"
@@ -79,6 +80,7 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
 static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
 static void _engine_char_callback(GLFWwindow* window, unsigned int codepoint);
 static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
+static void _engine_pinch_heard(void* user, double by);
 static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, int fb_height);
 static void _engine_iconify_callback(GLFWwindow* window, int iconified);
 static void _engine_close_callback(GLFWwindow* window);
@@ -397,6 +399,8 @@ void free_engine(Engine* engine) {
             igDestroyContext(NULL);
         }
 
+        free_pinch_watch(engine->pinch_watch);
+        engine->pinch_watch = NULL;
         glfwDestroyWindow(engine->window);
     }
 
@@ -580,6 +584,7 @@ static bool _engine_frame_renderable(const Engine* engine) {
 static void _engine_clear_latches(Engine* engine) {
     engine->input.scroll_dx = 0.0;
     engine->input.scroll_dy = 0.0;
+    engine->input.pinch = 0.0;
     memset(engine->input.key_pressed, 0, sizeof(engine->input.key_pressed));
     engine->input.key_event_count = 0;
     engine->input.pointer_pressed = false;
@@ -1060,6 +1065,9 @@ static int _setup_engine_gui(Engine* engine) {
     glfwSetWindowFocusCallback(engine->window, ImGui_ImplGlfw_WindowFocusCallback);
     glfwSetCursorEnterCallback(engine->window, ImGui_ImplGlfw_CursorEnterCallback);
     glfwSetScrollCallback(engine->window, _engine_scroll_callback);
+    // A hand pinches a window on a screen: a run with none has its script's pinch alone.
+    if (!engine->headless)
+        engine->pinch_watch = create_pinch_watch(engine->window, _engine_pinch_heard, engine);
 
     return 0;
 }
@@ -1584,6 +1592,19 @@ static void _engine_pointer_scroll(Engine* engine, double xoffset, double yoffse
     }
 }
 
+static void _engine_pointer_pinch(Engine* engine, double by) {
+    if (engine_gui_wants_mouse())
+        return;
+    engine->input.pinch += by;
+}
+
+// What the window's pinch watch heard, unless a script is the hand.
+static void _engine_pinch_heard(void* user, double by) {
+    Engine* engine = user;
+    if (!engine->input_script)
+        _engine_pointer_pinch(engine, by);
+}
+
 // Scroll feeds ImGui first; if the GUI isn't using the pointer, it forwards to
 // the app (e.g. camera zoom).
 static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
@@ -1621,6 +1642,7 @@ typedef struct InputScriptRange {
     bool down;
     bool shift;
     double wheel;
+    double pinch;
     InputKeyEvent typed[INPUT_SCRIPT_TYPED]; // in the line's order
     int typed_count;
     bool close; // asks to close the window as its first frame ends
@@ -1790,11 +1812,13 @@ static bool _input_token(void* range, const char* tok, const char* path, int lin
             }
             return true;
         }
-        if (n == 5 && strncmp(tok, "wheel", 5) == 0) {
+        const bool wheel = n == 5 && strncmp(tok, "wheel", 5) == 0;
+        if (wheel || (n == 5 && strncmp(tok, "pinch", 5) == 0)) {
             char* end = NULL;
-            r->wheel = strtod(eq + 1, &end);
+            *(wheel ? &r->wheel : &r->pinch) = strtod(eq + 1, &end);
             if (end == eq + 1 || *end != '\0') {
-                log_error("%s:%d: wheel '%s' has no number", path, line, tok);
+                log_error("%s:%d: %s '%s' has no number", path, line, wheel ? "wheel" : "pinch",
+                          tok);
                 return false;
             }
             return true;
@@ -1809,7 +1833,7 @@ static bool _input_token(void* range, const char* tok, const char* path, int lin
 }
 
 // One frame of the script, in the order a hand produces: the cursor moves,
-// then the button changes under it, then the wheel turns, then the typing.
+// then the button changes under it, then the wheel turns or the fingers pinch, then the typing.
 static void _engine_input_script_frame(Engine* engine) {
     InputScript* s = engine->input_script;
     if (!s)
@@ -1835,6 +1859,8 @@ static void _engine_input_script_frame(Engine* engine) {
 
     if (r->wheel != 0.0)
         _engine_pointer_scroll(engine, 0.0, r->wheel);
+    if (r->pinch != 0.0)
+        _engine_pointer_pinch(engine, r->pinch);
 
     for (int i = 0; i < r->typed_count; i++) {
         const InputKeyEvent* ev = &r->typed[i];

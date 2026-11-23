@@ -11,7 +11,8 @@ linked doc explains the subsystem. `cetra/src/ext/` is vendored and not listed.
 | `scene_view.c/h` | A view: its camera, rig and settings, its targets (the G-buffer and the resolves) built to its size, and the picking rays from a point in it. See `docs/architecture.md`. |
 | `scene_view_state.h` | Private: what the engine keeps per view (targets, matrices, last frame's camera, the chain, the meter, the cloud march) and the pass brackets on its targets. |
 | `engine_internal.h` | Private: the pass brackets and frame plumbing the renderer, shadows, captures and post chain call between them, and the lit-surface variant cache. |
-| `input.c/h` | The engine's input state: keys, the ordered typed-key list, the pointer and its latched press and release, and the platform's shortcut modifiers. |
+| `input.c/h` | The engine's input state: keys, the ordered typed-key list, the pointer and its latched press and release, the wheel and the trackpad's pinch, and the platform's shortcut modifiers. |
+| `pinch.c/h`, `pinch_macos.m` | A watch on a window's trackpad pinch, heard from the system itself since GLFW hands on none: macOS's, a monitor on AppKit's magnify events; none to make anywhere else. See `docs/architecture.md`, Input. |
 | `scene.c/h` | The scene graph and its transform walk, and what a scene owns: lights, materials and their skin profiles, particles, shadows, IBL, sky, probes, GI, water, rain. See `docs/architecture.md`. |
 | `scene_tags.c/h`, `scene_tags_internal.h` | A table of tags for 3D views, borrowed by any: per object a colour, an outline, a dim, hidden and lit; privately, the counts that say what restarts a view and the table's bind. See `docs/architecture.md`, Tags. |
 | `tag_table.c/h` | The buffer texture a tag table lives in, three texels a tag, written by range; the canvas's tags and a scene's both go through it. |

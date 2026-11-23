@@ -3335,6 +3335,7 @@ static void start_late_work(Engine* engine) {
 
 static void history_stream(Engine* engine);
 static void pictures_write_late(const Engine* engine);
+static void pinch_view(const Engine* engine);
 
 static void on_update(Engine* engine, float dt) {
     (void)dt;
@@ -3360,6 +3361,7 @@ static void on_update(Engine* engine, float dt) {
     }
     if (g_probe)
         say_typed(engine);
+    pinch_view(engine);
     live_ui_update(engine);
     if (g_editor_sheet.file_count)
         editor_host_frame(engine);
@@ -3410,6 +3412,26 @@ static void on_scroll(Engine* engine, double xoffset, double yoffset) {
     (void)xoffset;
     if (!over_ui())
         canvas_view_zoom_at(&g_views[view_at(g_last_x)], g_last_x, g_last_y, pow(1.15, yoffset));
+}
+
+// The trackpad's pinch this frame (spec 14.44): the view under the pointer zoomed about it, as the
+// wheel zooms it. Under the probe each is said by its number: the pinch, the zoom before and after,
+// and the unit under the pointer before and after, which a zoom about the pointer keeps.
+static void pinch_view(const Engine* engine) {
+    const double by = engine->input.pinch;
+    if (by == 0.0 || over_ui())
+        return;
+    CanvasView* v = &g_views[view_at(g_last_x)];
+    const double was = v->points_per_unit;
+    const CanvasPoint under = canvas_view_unit_at(v, g_last_x, g_last_y);
+    canvas_view_zoom_at(v, g_last_x, g_last_y, 1.0 + by);
+    if (!g_probe)
+        return;
+    static int said;
+    const CanvasPoint now = canvas_view_unit_at(v, g_last_x, g_last_y);
+    printf("canvas pinch %d by %.6f zoom %.15g %.15g unit %lld %lld %lld %lld\n", said++, by, was,
+           v->points_per_unit, (long long)under.x, (long long)under.y, (long long)now.x,
+           (long long)now.y);
 }
 
 /*

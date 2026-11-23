@@ -26,4 +26,6 @@ repos:
       # joined the run and cppcheck began parsing them as C++.
       - id: cppcheck
         args: [--std=c11, --suppress=missingIncludeSystem, --suppress=missingInclude, --suppress=unusedFunction, --suppress=unmatchedSuppression, --suppress=staticFunction, --suppress=unusedStructMember, --suppress=toomanyconfigs, --suppress=normalCheckLevelMaxBranches, --suppress=checkLevelNormal, --suppress=checkersReport, --suppress=unreachableCode, --suppress=variableScope, --suppress=knownConditionTrueFalse, --suppress=constParameterCallback, --suppress=passedByValueCallback, --suppress=cstyleCast, "--suppress=*:*ext/*"]
-        exclude: '^(cetra/src/ext/|cetra/src/ltc_lut\.h$)'
+        # A .m is Objective-C, which cppcheck reads as C and stops at the first message send
+        # with a syntax error.
+        exclude: '^(cetra/src/ext/|cetra/src/ltc_lut\.h$)|\.m$'

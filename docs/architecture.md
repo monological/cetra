@@ -903,10 +903,18 @@ gathers its own. `engine_fb_to_points` is the one conversion from those pixels t
 the inverse of the engine's own, used by `ui_input_read` and by an app's own panning. The wheel is
 `engine->input.scroll_dx/dy`, one frame's delta.
 
+**The trackpad's pinch** is `engine->input.pinch`, one frame's too: the part of itself what is
+pinched grows by, so an app multiplies its scale by `1 + pinch`. GLFW hands an app no pinch on any
+system, so cetra hears it from the system itself where it can (`pinch.h`): on macOS a monitor on
+AppKit's magnify events for the engine's window (`pinch_macos.m`, the library's one file in
+Objective-C), each event's change in scale added to the frame's sum. The event comes in a poll, so
+it wakes an idle loop as a scroll does. On Windows and Linux the pinch reads 0.
+
 **The clipboard** is `engine_clipboard_get`/`_set`: GLFW's in a window, a string the engine owns
 headless, so a test never touches the user's.
 
-**The input script** (`engine_set_input_script`) moves and presses the pointer and types:
+**The input script** (`engine_set_input_script`) moves and presses the pointer, turns the wheel,
+pinches (`pinch=<f>`, through the call the system's own pinch takes) and types:
 `type=TEXT` (UTF-8, `\s` a space) and `key=NAME` with `+` modifiers. `mod` is the platform's
 shortcut modifier, Cmd on macOS and Ctrl elsewhere (`INPUT_MOD_SHORTCUT` in `input.h`, beside
 `INPUT_MOD_WORD`, bits of `InputKeyEvent.mods` held to GLFW's by a static assert), so a script is

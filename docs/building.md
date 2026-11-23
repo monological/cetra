@@ -27,6 +27,9 @@ Every dependency is vendored under `cetra/src/ext/` and built from source as a s
   so GNU extensions are available.
 - **`GL_SILENCE_DEPRECATION` is defined on macOS only**, through a `$<PLATFORM_ID:Darwin>`
   generator expression in the root `CMakeLists.txt`.
+- **One file is Objective-C**, `pinch_macos.m`, on macOS only, given to the C compiler as GLFW's
+  own `.m` files are, with no `OBJC` language enabled. `cetra/CMakeLists.txt` says why it is
+  listed and nothing more.
 
 **`_POSIX_C_SOURCE=200809L` and `_DEFAULT_SOURCE` are defined on the `cetra` target on Linux only**,
 through a `$<PLATFORM_ID:Linux>` generator expression in `cetra/CMakeLists.txt`. The scoping is the

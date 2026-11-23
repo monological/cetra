@@ -25,6 +25,7 @@ void init_input_state(InputState* state) {
     state->drag_plane_distance = 0.0f;
     state->scroll_dx = 0.0;
     state->scroll_dy = 0.0;
+    state->pinch = 0.0;
     memset(state->key_pressed, 0, sizeof(state->key_pressed));
     state->key_event_count = 0;
 }

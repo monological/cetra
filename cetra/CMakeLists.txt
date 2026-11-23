@@ -224,6 +224,16 @@ file(GLOB CETRA_SOURCES
 add_library(cetra STATIC ${CETRA_SOURCES} ${SHADER_HEADER} ${SHADER_INCLUDES_HEADER}
     ${BUILD_DIGEST_HEADER})
 
+# The one file in Objective-C: what hears AppKit's pinch, which GLFW hands on to nobody (spec
+# 14.44). Listed and nothing more, as GLFW lists its own .m files: with OBJC not enabled CMake
+# gives a .m to the C compiler, and clang reads the language off the extension. Two things that
+# look right and are not: enable_language(OBJC) here makes every .m in the build OBJC, GLFW's
+# too, in directories that have no rules for it, and the generate step fails; and LANGUAGE C on
+# the file makes CMake pass -x c, which compiles Cocoa's headers as C.
+if(APPLE)
+    target_sources(cetra PRIVATE src/pinch_macos.m)
+endif()
+
 # The internal tree as a target, for an in-tree app to link: what makes
 # #include "cetra/internal/foo.h" resolve. Nothing links it but add_cetra_app,
 # so a consumer cannot name an internal header.

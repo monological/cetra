@@ -16,7 +16,8 @@ gate arm measures.
 ```
 
 It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`. In a window a drag pans and the wheel
-zooms the view under the cursor; = and - zoom, 0 resets the view and P prints its centre. G opens the
+or the trackpad's pinch zooms the view under the cursor, about the cursor; = and - zoom, 0 resets
+the view and P prints its centre. G opens the
 debug GUI and F the FPS readout, which under `--idle` counts the frames drawn. The app's own keys
 stand down while the UI wants the keyboard (`ui_wants_keyboard`): a field or the editor has the
 focus, or the palette is up.

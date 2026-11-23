@@ -806,16 +806,18 @@ typedef struct UIInput {
     // What a desktop keyboard and wheel add (spec 14.2); zero from an app that has neither, which
     // is every game.
     float wheel_y;                   // the wheel this frame, in its own units; + is away
+    float pinch;                     // the trackpad's pinch this frame, as InputState's; the UI's
+                                     // own elements take none of it
     const InputKeyEvent* key_events; // typed this frame, in order; borrowed for the call
     int key_event_count;             //
     double time;                     // seconds, any monotonic clock: double clicks measure on it
 } UIInput;
 
 // Fills `in` with what the engine read this frame: the pointer, in window points, with its left
-// button's edges and the modifiers held at its press; the wheel and the typing the poll delivered;
-// and the time, the wall clock in a window and the frame count headless, so a headless double
-// click is the same on every run. The navigation, accept and back are left as they were: they are
-// the app's, from its own bindings, before or after this.
+// button's edges and the modifiers held at its press; the wheel, the pinch and the typing the poll
+// delivered; and the time, the wall clock in a window and the frame count headless, so a headless
+// double click is the same on every run. The navigation, accept and back are left as they were:
+// they are the app's, from its own bindings, before or after this.
 void ui_input_read(UIInput* in, const struct Engine* engine);
 
 // A run of presses: the last one's time, on UIInput.time, and place, and how many so far. Zeroed,

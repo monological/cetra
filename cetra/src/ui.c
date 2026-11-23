@@ -2808,6 +2808,7 @@ void ui_input_read(UIInput* in, const Engine* engine) {
     in->pointer_released = is->pointer_released;
     in->pointer_mods = is->press_mods;
     in->wheel_y = (float)engine->input.scroll_dy;
+    in->pinch = (float)engine->input.pinch;
     in->key_events = engine->input.key_events;
     in->key_event_count = engine->input.key_event_count;
     in->time = _ui_clock(engine);
