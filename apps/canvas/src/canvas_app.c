@@ -2350,6 +2350,7 @@ static UISystem* g_ui_enter;    // --ui-enter: the UI, given an input pass of no
 static bool g_probe;            // --canvas-probe: the run says what it did
 static const char* g_ui_text;   // --ui-text: a label in the --ui panel
 static int g_ui_rows;           // --ui-rows: that label wrapped, held to this many rows
+static const char* g_ui_secret; // --ui-secret: a secret field under the --ui panel, holding this
 static UISystem* g_ui_live;     // the UI given the real pointer and keyboard each frame
 
 // --ui-keys (spec 14.10): the --ui panel takes keys through a hook, as a pane an app draws would,
@@ -4784,8 +4785,8 @@ static void usage(const char* argv0) {
         "MS]\n"
         "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
         "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--input-script PATH]\n"
-        "          [--ui-enter] [--ui-text TEXT] [--ui-rows N] [--ui-keys] [--gui-click] "
-        "[--history] [--palette]\n"
+        "          [--ui-enter] [--ui-text TEXT] [--ui-rows N] [--ui-secret TEXT] [--ui-keys]\n"
+        "          [--gui-click] [--history] [--palette]\n"
         "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim] [--read-only]\n"
         "          [--editor-fold FIRST,LAST] [--editor-filler LINE,ROWS] [--refuse-close]\n"
         "          [--ui-borders] [--ui-seams] [--ui-lines] [--ui-table] [--ui-table-pane]\n"
@@ -4935,6 +4936,9 @@ int main(int argc, char** argv) {
             g_ui_text = argv[++i];
         } else if (strcmp(argv[i], "--ui-rows") == 0 && more) {
             g_ui_rows = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--ui-secret") == 0 && more) {
+            with_ui = true;
+            g_ui_secret = argv[++i];
         } else if (strcmp(argv[i], "--ui-keys") == 0) {
             with_ui = true;
             g_ui_keys = true;
@@ -5181,6 +5185,15 @@ int main(int argc, char** argv) {
             g_keys_label = ui_label(panel, "click, then type");
             ui_set_on_key(panel, panel_keys, NULL);
             ui_text_field(ui_screen_root(screen), 0, NULL, NULL);
+            ui_screen_set_modal(screen, false);
+            g_ui_live = ui;
+        }
+        // Under --ui-secret a secret field under the panel holds the text, focused, to type into
+        // (spec 14.45).
+        if (g_ui_secret) {
+            UIElement* field = ui_text_field(ui_screen_root(screen), UI_FIELD_SECRET, NULL, NULL);
+            ui_field_set_text(field, g_ui_secret);
+            ui_set_focus(screen, field);
             ui_screen_set_modal(screen, false);
             g_ui_live = ui;
         }

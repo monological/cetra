@@ -17,7 +17,8 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-22: 14.44, a pinch and a label cut short, built for the same pane once the
+_Last updated: 2026-11-23: 14.45, a field showing stars, built for pcb 10.3's key dialog.
+2026-11-22: 14.44, a pinch and a label cut short, built for the same pane once the
 user had run it. Before it, the same day: 14.43, a texture of an app's own pixels, built for pcb
 10.2's datasheet pane, and item 1's images decided with it (its Left for later); 2026-11-20: 14.42,
 a quiet engine, built for pcb 9.2's `make` (its spec);
@@ -73,7 +74,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 9 | What the panes and the fonts need of the UI | **Built** | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
 | 10 | Pictures read back: a rectangle of the window, a canvas or 3D view drawn off the screen, and a window that cannot draw still running its update | **Built**; a read in the background with no frame drawn, and formats past RGBA8, left for later | 9, the agents (pcb 9.1's `look`) | 14.41 |
 
-Specs 14.7, 14.9 to 14.21, 14.23 to 14.28, 14.30 to 14.37 and 14.42 to 14.44 are the smaller changes
+Specs 14.7, 14.9 to 14.21, 14.23 to 14.28, 14.30 to 14.37 and 14.42 to 14.45 are the smaller changes
 pcb asked for, listed under "Not among the nine". Spec 14.8 was not asked for by pcb: a headless run
 waits for the textures its start-up asked for before frame 1 (`docs/architecture.md`, Render
 Pipeline), which `pcb render` gets for free. Nor was 14.29, which splits the gate suite into files (`docs/verification.md`,
@@ -752,6 +753,12 @@ old size.
   as Ctrl and the wheel already, and on Linux, by Wayland's pointer gestures and X11's XInput
   2.4, neither looked at from the Mac this was built on; the pointer's shape over a link or a
   text; a label that takes a press, pcb pressing its address through its own pointer.
+- **A field showing stars** -- spec 14.45, built, for pcb 10.3's key dialog, where the user gives
+  the key an AI provider is asked with. `UI_FIELD_SECRET` draws a mark a character over a mirror of
+  the text, takes nothing out by copy or cut, sees one word, is one line, and zeroes its buffers
+  when it lets them go (`docs/ui.md`, The text field). Left by it: a field showing its last
+  character for a moment, as phones do; a button that shows the text; macOS's secure input
+  (`EnableSecureEventInput`), the app's to turn on.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the

@@ -1679,6 +1679,9 @@ and:
 - `--ui-text TEXT` sets the text of the `--ui` panel's label (implies `--ui`). The glyph arms draw
   é, Ω and a codepoint the atlas lacks through it. `--ui-rows N` (spec 14.44) wraps that label
   across the panel and holds it to N rows, a longer text ending in `…`: a picture to look at.
+- `--ui-secret TEXT` (spec 14.45) puts a secret field (`UI_FIELD_SECRET`) under the `--ui` panel
+  holding TEXT, focused, to look at and type into (implies `--ui`): a star for a character of one
+  byte, a dot for one of two, the missing-glyph box for longer ones.
 - `--ui-keys` (spec 14.10) makes the `--ui` panel focusable and gives it a key hook (implies
   `--ui`), as a pane an app draws would have: a click focuses it, and its label says the last two
   things it was handed, a key by its code and modifiers and a character as itself. It takes every
