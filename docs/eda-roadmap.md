@@ -777,7 +777,11 @@ old size.
   panes' bars were solid white and its go list's faint: an editor's and a table's thumb was its
   text colour. Every bar's thumb is the scroll style's `fg` now, `theme.scroll` colouring them all
   (`docs/ui.md`, Scrolling panes and virtual rows); pcb 10.6.1 names it in its theme file. A new
-  theme colour for the bar was turned down, `scroll`'s `fg` already being one.
+  theme colour for the bar was turned down, `scroll`'s `fg` already being one. Then, asked for by
+  the user, bars that fade as macOS's: `UITheme.scroll_fades` shows a bar as its element appears,
+  scrolls, takes the keys or has the pointer over it, and fades it half a second after, at
+  Chromium's imitation of macOS's timings, fixed in cetra; a faded bar takes no press. pcb 10.6.1
+  turns it on. The timings in the theme were turned down as too low a level.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the
