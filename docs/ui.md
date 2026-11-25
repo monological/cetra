@@ -132,6 +132,9 @@ field is refused by name: a field's text is `ui_field_set_text` and its hint
 - **A bar is drawn only inside its element**, its insets included, a pane's, an editor's and a
   table's alike: an element sized to nothing, or narrower than the bar and its insets, has none,
   drawn or pressed (spec 14.17).
+- **Every bar's thumb is the scroll style's `fg`** (spec 14.48): a pane's its own, an editor's and
+  a table's the theme's `scroll` entry, by default white at 35%, never the text colour of what it
+  scrolls. A theme colours every bar with `theme.scroll`.
 - **A pane places content shorter than its view by `align_main`**, as any element places what is
   left over, before its scroll is settled: `UI_ALIGN_CENTER` stands it in the middle.
 - **The wheel and a press on a bar reach the deepest thing under the pointer with somewhere to

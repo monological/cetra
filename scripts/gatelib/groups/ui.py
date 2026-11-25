@@ -967,6 +967,12 @@ def run_ui_gate(workdir):
                      them, with the first sized 0 by 0 and again 4 by 150; a press
                      inside the narrow one below where a thumb would stand
                      scrolls nothing.
+      ui-bar-colour  every bar's thumb is the scroll style's fg (spec 14.48): of
+                     a pane, an editor and a table side by side, each holding
+                     more than it shows, all three thumbs white at 35% in cetra's
+                     own theme, red under a theme whose scroll fg is red and whose
+                     editor's and table's fg are green, and the pane's blue under
+                     a style of its own whose fg is blue.
       ui-editor-top-row the view's top as rows from the text's start (spec 14.19):
                      0 at the start; line 100 half a row in is the rows above it,
                      3 fillers and a closed fold's one row among them, and 0.5;
@@ -2816,6 +2822,25 @@ def run_ui_gate(workdir):
         ok, detail = doc_flags("editor-bar-room", 4, "a bar only inside its element: an editor "
                                "sized to nothing draws none, one 4 points wide none and a press on "
                                "it pages nothing; one with room draws its thumb inside its insets")
+        return ok, detail
+
+    @arm("ui-bar-colour")
+    def _():
+        p = _ui_probe("bar-colour")
+        if not p:
+            return False, "the probe produced nothing"
+        bars = ("pane", "editor", "table")
+        faint, red, blue = (1.0, 1.0, 1.0, 0.35), (1.0, 0.0, 0.0, 1.0), (0.0, 0.0, 1.0, 1.0)
+        want = {**{f"own_{b}": faint for b in bars}, **{f"loud_{b}": red for b in bars},
+                "styled_pane": blue}
+        wrong = [f"{label} {p.get((label, 'thumb'))} (want {w})" for label, w in want.items()
+                 if len(p.get((label, "thumb"), ())) != 4
+                 or not all(close(a, b) for a, b in zip(p[(label, "thumb")], w))]
+        ok = not wrong
+        detail = ("every thumb the scroll style's fg: a pane's, an editor's and a table's white at "
+                  "35% in cetra's theme, red under a scroll fg of red with the editor's and the "
+                  "table's text green, and a pane's own style's blue"
+                  if ok else f"wrong: {'; '.join(wrong)}")
         return ok, detail
 
     @arm("ui-editor-top-row")

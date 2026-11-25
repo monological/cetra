@@ -404,9 +404,9 @@ typedef struct UITheme {
     UIStyle toggle[UI_STATE_COUNT];
     UIStyle slider[UI_STATE_COUNT];
     UIStyle selector[UI_STATE_COUNT];
-    // A scrolling pane: `bg` behind its content, `fg` its bar's thumb, and FOCUS -- which a pane
-    // takes while the focus is anywhere inside it -- its border, the subtle one round the pane
-    // the keys are in.
+    // A scrolling pane: `bg` behind its content, `fg` its bar's thumb and every editor's and
+    // table's, and FOCUS -- which a pane takes while the focus is anywhere inside it -- its border,
+    // the subtle one round the pane the keys are in.
     UIStyle scroll[UI_STATE_COUNT];
     float scroll_step; // points a wheel unit scrolls; 0 = the theme's font size
     // A text field: `fg` its text and caret, its placeholder `fg` dimmed; FOCUS its border while

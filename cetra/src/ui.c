@@ -1893,6 +1893,23 @@ static bool _bar(const UISystem* ui, const UIElement* el, UIScrollPlace* place, 
     return _scroll_place(ui, el, place) && ui_bar_place(_bar_strip(el, place), place, track, thumb);
 }
 
+/*
+ * An element's bar, where it has one, its thumb in the scroll style's `fg`: a pane's own, drawn in
+ * `s`; an editor's or a table's the theme's scroll entry, not its text colour, so every bar a theme
+ * draws is one colour whatever it scrolls.
+ */
+static void _emit_bar(UISystem* ui, const UIElement* el, const UIStyle* s) {
+    UIScrollPlace place;
+    UIRect track, thumb;
+    if (!_bar(ui, el, &place, &track, &thumb))
+        return;
+    const UIState state = _state_of(el);
+    UIStyle bar = el->kind == UI_SCROLL ? *s : ui->theme.scroll[state];
+    const UIStyle def = _default_style(UI_SCROLL, state);
+    _inherit(&bar, &def);
+    ui_draw_rounded(ui->dl, thumb, UI_BAR_W * 0.5f, bar.fg, NULL, 0.0f);
+}
+
 static void _emit_pane(UISystem* ui, const UIElement* el, const UIStyle* s);
 
 static void _emit(UISystem* ui, UIElement* el) {
@@ -1942,10 +1959,7 @@ static void _emit(UISystem* ui, UIElement* el) {
                 const double wake = ops->draw(ui, el, &s, _content_in(el, &s),
                                               top && top->focused == el, ui->now, blink);
                 ui->caret_wake = wake < ui->caret_wake ? wake : ui->caret_wake;
-                UIScrollPlace place;
-                UIRect track, thumb;
-                if (_bar(ui, el, &place, &track, &thumb))
-                    ui_draw_rounded(dl, thumb, UI_BAR_W * 0.5f, (float*)s.fg, NULL, 0.0f);
+                _emit_bar(ui, el, &s);
                 break;
             }
             case UI_TOGGLE: {
@@ -2058,10 +2072,7 @@ static void _emit_pane(UISystem* ui, const UIElement* el, const UIStyle* s) {
             _emit(ui, c);
     }
     ui_pop_clip(dl);
-    UIScrollPlace place;
-    UIRect track, thumb;
-    if (_bar(ui, el, &place, &track, &thumb))
-        ui_draw_rounded(dl, thumb, UI_BAR_W * 0.5f, (float*)s->fg, NULL, 0.0f);
+    _emit_bar(ui, el, s);
 }
 
 // One eased value a step toward its target, and onto it once within `snap` of it: an exponential

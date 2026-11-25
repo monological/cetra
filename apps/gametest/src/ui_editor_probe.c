@@ -24,6 +24,7 @@
 #include "cetra/text_doc.h"
 #include "cetra/ui_editor.h"
 #include "cetra/ui_editor_vim.h"
+#include "cetra/ui_table.h"
 #include "cetra/util.h"
 
 // ---- A stand-in for an editor: carets the text moves, as an editor's would be.
@@ -2693,6 +2694,94 @@ static int probe_editor_bar_room(UISystem* ui) {
     if (top)
         fprintf(stderr, "editor-bar-room: a press scrolled the narrow editor to %zu\n", top);
     say_flag("editor-bar-room", "press", "still", top == 0);
+    free_text_doc(doc);
+    return 0;
+}
+
+// ---- Every bar one colour (spec 14.48)
+
+static void bar_cell(int row, int column, UITableCell* out, void* user) {
+    (void)row;
+    (void)column;
+    (void)user;
+    out->text = "row";
+}
+
+// The colour of the thumb drawn in `el`: the flat quad a bar wide inside its rect and its right 20
+// points, as `which` `label` thumb r g b a; nothing said when there is none.
+static void say_thumb(const UISystem* ui, const char* which, const char* label,
+                      const UIElement* el) {
+    const UIDrawList* dl = ui_draw_list(ui);
+    const UIRect e = el->rect;
+    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
+        UIRect r;
+        vec4 c;
+        int kind = 0;
+        ui_draw_list_quad(dl, i, &r, c, &kind);
+        if (kind == 0 && fabsf(r.w - UI_BAR_W) < 0.01f && r.x >= e.x + e.w - 20.0f &&
+            r.x + r.w <= e.x + e.w && r.y >= e.y && r.y + r.h <= e.y + e.h) {
+            printf("ui %s %s thumb %.6f %.6f %.6f %.6f\n", which, label, (double)c[0], (double)c[1],
+                   (double)c[2], (double)c[3]);
+            return;
+        }
+    }
+}
+
+// A pane, an editor and a table side by side, each holding more than it shows: their thumbs in
+// cetra's own theme; under a theme whose scroll `fg` is red and whose editor's and table's are
+// green; and the pane under a style of its own whose `fg` is blue.
+static int probe_bar_colour(UISystem* ui) {
+    static char text[200 * 16];
+    size_t len = 0;
+    for (int i = 0; i < 200; i++)
+        len += (size_t)snprintf(text + len, sizeof(text) - len, "line %03d\n", i);
+    TextDoc* doc = create_text_doc(text, len - 1);
+    editor_theme(ui);
+    const UITheme own = *ui_theme(ui);
+    UIScreen* s = ui_screen(ui, "bar-colour");
+    ui_screen_set_modal(s, false);
+    UIElement* root = ui_screen_root(s);
+    root->dir = UI_ROW;
+    UIElement* pane = ui_scroll(root);
+    ui_set_size(pane, UI_FIXED, 200.0f, UI_FIXED, 150.0f);
+    for (int i = 0; i < 20; i++)
+        ui_set_size(ui_panel(pane), UI_GROW, 0.0f, UI_FIXED, 30.0f);
+    UIElement* ed = fixed_editor(root, doc, 200.0f, 150.0f);
+    UIElement* table = ui_table(root);
+    ui_set_size(table, UI_FIXED, 200.0f, UI_FIXED, 150.0f);
+    static const UITableColumn column = {.title = "Row", .size = UI_GROW};
+    ui_table_set_columns(table, &column, 1);
+    ui_table_set_rows(table, 100, &(UITableSource){.cell = bar_cell});
+    ui_push(ui, s);
+
+    UITheme loud = own;
+    for (int st = 0; st < UI_STATE_COUNT; st++)
+        for (int k = 0; k < 4; k++) {
+            loud.scroll[st].fg[k] = k == 0 || k == 3 ? 1.0f : 0.0f;
+            loud.editor[st].fg[k] = loud.table[st].fg[k] = k == 1 || k == 3 ? 1.0f : 0.0f;
+        }
+    const struct {
+        const char* name;
+        const UITheme* theme;
+    } themes[] = {{"own", &own}, {"loud", &loud}};
+    const struct {
+        const char* name;
+        const UIElement* el;
+    } bars[] = {{"pane", pane}, {"editor", ed}, {"table", table}};
+    for (size_t t = 0; t < sizeof themes / sizeof themes[0]; t++) {
+        ui_set_theme(ui, themes[t].theme);
+        editor_pass(ui);
+        editor_pass(ui);
+        for (size_t b = 0; b < sizeof bars / sizeof bars[0]; b++) {
+            char label[32];
+            snprintf(label, sizeof label, "%s_%s", themes[t].name, bars[b].name);
+            say_thumb(ui, "bar-colour", label, bars[b].el);
+        }
+    }
+    ui_set_style(pane, &(UIStyle){.fg = {0.0f, 0.0f, 1.0f, 1.0f}});
+    editor_pass(ui);
+    say_thumb(ui, "bar-colour", "styled_pane", pane);
+    ui_set_theme(ui, &own);
     free_text_doc(doc);
     return 0;
 }
@@ -5441,6 +5530,8 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_editor_gutter(ui);
     if (!strcmp(which, "editor-bar-room"))
         return probe_editor_bar_room(ui);
+    if (!strcmp(which, "bar-colour"))
+        return probe_bar_colour(ui);
     if (!strcmp(which, "editor-top-row"))
         return probe_editor_top_row(ui);
     if (!strcmp(which, "editor-gutter-digits"))
