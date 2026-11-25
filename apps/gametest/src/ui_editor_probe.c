@@ -2653,15 +2653,20 @@ static bool bars_in(const UISystem* ui, UIRect rect, size_t* in, size_t* out) {
     return n <= 256;
 }
 
-// A bar is drawn only inside its element, its insets included: an editor sized to nothing draws
-// none, nor does one 4 points wide, where a press on its edge pages nothing; one with room draws
-// its thumb inside itself.
-static int probe_editor_bar_room(UISystem* ui) {
+// 200 short numbered lines, more than an editor 150 tall shows, the last without a line break.
+static TextDoc* numbered_text(void) {
     static char text[200 * 16];
     size_t len = 0;
     for (int i = 0; i < 200; i++)
         len += (size_t)snprintf(text + len, sizeof(text) - len, "line %03d\n", i);
-    TextDoc* doc = create_text_doc(text, len - 1);
+    return create_text_doc(text, len - 1);
+}
+
+// A bar is drawn only inside its element, its insets included: an editor sized to nothing draws
+// none, nor does one 4 points wide, where a press on its edge pages nothing; one with room draws
+// its thumb inside itself.
+static int probe_editor_bar_room(UISystem* ui) {
+    TextDoc* doc = numbered_text();
     // In a row as pcb's panes are, the one sized to nothing first.
     UIElement* hidden = editor_fixture(ui, doc, 0.0f, 0.0f);
     ui_screen_root(ui_top(ui))->dir = UI_ROW;
@@ -2711,15 +2716,15 @@ static void bar_cell(int row, int column, UITableCell* out, void* user) {
 // points, as `which` `label` thumb r g b a; nothing said when there is none.
 static void say_thumb(const UISystem* ui, const char* which, const char* label,
                       const UIElement* el) {
-    const UIDrawList* dl = ui_draw_list(ui);
+    Fill fills[256];
+    const size_t n = fills_in(ui, NULL, fills, 256);
     const UIRect e = el->rect;
-    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
-        UIRect r;
-        vec4 c;
-        int kind = 0;
-        ui_draw_list_quad(dl, i, &r, c, &kind);
-        if (kind == 0 && fabsf(r.w - UI_BAR_W) < 0.01f && r.x >= e.x + e.w - 20.0f &&
-            r.x + r.w <= e.x + e.w && r.y >= e.y && r.y + r.h <= e.y + e.h) {
+    for (size_t i = 0; i < n && i < 256; i++) {
+        const UIRect r = fills[i].r;
+        if (fabsf(r.w - UI_BAR_W) < 0.01f && r.x >= e.x + e.w - 20.0f && r.x + r.w <= e.x + e.w &&
+            r.y >= e.y && r.y + r.h <= e.y + e.h) {
+            vec4 c;
+            ui_draw_list_quad(ui_draw_list(ui), fills[i].at, NULL, c, NULL);
             printf("ui %s %s thumb %.6f %.6f %.6f %.6f\n", which, label, (double)c[0], (double)c[1],
                    (double)c[2], (double)c[3]);
             return;
@@ -2731,11 +2736,7 @@ static void say_thumb(const UISystem* ui, const char* which, const char* label,
 // cetra's own theme; under a theme whose scroll `fg` is red and whose editor's and table's are
 // green; and the pane under a style of its own whose `fg` is blue.
 static int probe_bar_colour(UISystem* ui) {
-    static char text[200 * 16];
-    size_t len = 0;
-    for (int i = 0; i < 200; i++)
-        len += (size_t)snprintf(text + len, sizeof(text) - len, "line %03d\n", i);
-    TextDoc* doc = create_text_doc(text, len - 1);
+    TextDoc* doc = numbered_text();
     editor_theme(ui);
     const UITheme own = *ui_theme(ui);
     UIScreen* s = ui_screen(ui, "bar-colour");

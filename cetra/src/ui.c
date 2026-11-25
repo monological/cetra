@@ -87,8 +87,8 @@ struct UISystem {
     // wake for; INFINITY when nothing will.
     double now;
     double wake;
-    // The builds begun, which a bar's `built` is counted in; and the element whose bar a press at
-    // the pointer would take, as the build began.
+    // The builds begun, which a bar's `built` is counted in; and, during a build, the element whose
+    // bar's grip the pointer was over as it began, NULL outside one.
     uint64_t builds;
     UIElement* bar_under;
 
@@ -1915,51 +1915,56 @@ static bool _bar(const UISystem* ui, const UIElement* el, UIScrollPlace* place, 
 #define UI_BAR_HOLD 0.5
 #define UI_BAR_FADE 0.25
 
+// How much of `el`'s bar the clock shows, 0..1: all of it unless the theme fades bars.
+static float _bar_shown(const UISystem* ui, const UIElement* el) {
+    if (!ui->theme.scroll_fades)
+        return 1.0f;
+    const double since = ui->now - el->bar.woke;
+    if (since >= UI_BAR_HOLD + UI_BAR_FADE)
+        return 0.0f;
+    return 1.0f - glm_smooth((float)(fmax(since - UI_BAR_HOLD, 0.0) / UI_BAR_FADE));
+}
+
+// Whether `el`'s bar takes a press: the last build drew some of it. The clock is still that
+// build's, being set only as a build begins.
+static bool _bar_drawn(const UISystem* ui, const UIElement* el) {
+    return !ui->theme.scroll_fades || (el->bar.built == ui->builds && _bar_shown(ui, el) > 0.0f);
+}
+
 /*
- * Wakes the bar a build draws where it appeared -- the build before drew none of it -- moved, came
- * to hold the keys, or has the pointer over its grip or holding it; and keeps what the next build
- * compares. How much of it shows at the clock, 0..1: all of it unless the theme fades bars, and
- * then a wake asked for when its fade begins and at once through it.
+ * Notes the bar a build draws, woken where it appeared -- the build before drew none of it --
+ * moved, came to hold the keys, or is the bar under the pointer or held by it; and keeps what the
+ * next build compares.
  */
-static float _bar_wake(UISystem* ui, UIElement* el, const UIScrollPlace* place) {
-    const bool focused = _shows_focus(_state_of(el));
+static void _bar_note(UISystem* ui, UIElement* el, const UIScrollPlace* place, UIState state) {
+    const bool focused = _shows_focus(state);
     const bool appeared = !el->bar.built || el->bar.built + 1 != ui->builds;
-    const bool under = el == ui->bar_under &&
-                       ui_rect_hit(_bar_grip(el, place), ui->last_pointer_x, ui->last_pointer_y);
     if (appeared || place->at != el->bar.at || place->total != el->bar.total ||
-        (focused && !el->bar.focused) || under || ui->bar_drag == el)
+        (focused && !el->bar.focused) || el == ui->bar_under || el == ui->bar_drag)
         el->bar.woke = ui->now;
     el->bar.at = place->at;
     el->bar.total = place->total;
     el->bar.focused = focused;
     el->bar.built = ui->builds;
-    const double t = (ui->now - el->bar.woke - UI_BAR_HOLD) / UI_BAR_FADE;
-    float shown = 1.0f;
-    if (ui->theme.scroll_fades && t >= 1.0) {
-        shown = 0.0f;
-    } else if (ui->theme.scroll_fades) {
-        const float u = t > 0.0 ? (float)t : 0.0f;
-        shown = 1.0f - u * u * (3.0f - 2.0f * u);
-        ui->wake = fmin(ui->wake, t < 0.0 ? -t * UI_BAR_FADE : 0.0);
-    }
-    el->bar.shown = shown;
-    return shown;
 }
 
 /*
  * An element's bar, where it has one, its thumb in the scroll style's `fg`: a pane's own, drawn in
  * `s`; an editor's or a table's the theme's scroll entry, not its text colour, so every bar a theme
- * draws is one colour whatever it scrolls. A fading bar's alpha is taken down by how much shows.
+ * draws is one colour whatever it scrolls. A fading bar's alpha is taken down by how much shows,
+ * and it asks to be drawn again when its fade begins and at once through it.
  */
-static void _emit_bar(UISystem* ui, UIElement* el, const UIStyle* s) {
+static void _emit_bar(UISystem* ui, UIElement* el, const UIStyle* s, UIState state) {
     UIScrollPlace place;
     UIRect track, thumb;
     if (!_bar(ui, el, &place, &track, &thumb))
         return;
-    const float shown = _bar_wake(ui, el, &place);
+    _bar_note(ui, el, &place, state);
+    const float shown = _bar_shown(ui, el);
     if (shown <= 0.0f)
         return;
-    const UIState state = _state_of(el);
+    if (ui->theme.scroll_fades)
+        ui->wake = fmin(ui->wake, fmax(el->bar.woke + UI_BAR_HOLD - ui->now, 0.0));
     UIStyle bar = el->kind == UI_SCROLL ? *s : ui->theme.scroll[state];
     const UIStyle def = _default_style(UI_SCROLL, state);
     _inherit(&bar, &def);
@@ -1967,7 +1972,7 @@ static void _emit_bar(UISystem* ui, UIElement* el, const UIStyle* s) {
     ui_draw_rounded(ui->dl, thumb, UI_BAR_W * 0.5f, bar.fg, NULL, 0.0f);
 }
 
-static void _emit_pane(UISystem* ui, UIElement* el, const UIStyle* s);
+static void _emit_pane(UISystem* ui, UIElement* el, const UIStyle* s, UIState state);
 
 static void _emit(UISystem* ui, UIElement* el) {
     if (el->hidden)
@@ -2015,8 +2020,8 @@ static void _emit(UISystem* ui, UIElement* el) {
                 const bool blink = ui->engine && !ui->engine->headless;
                 const double wake = ops->draw(ui, el, &s, _content_in(el, &s),
                                               top && top->focused == el, ui->now, blink);
-                ui->wake = wake < ui->wake ? wake : ui->wake;
-                _emit_bar(ui, el, &s);
+                ui->wake = fmin(ui->wake, wake);
+                _emit_bar(ui, el, &s, state);
                 break;
             }
             case UI_TOGGLE: {
@@ -2101,7 +2106,7 @@ static void _emit(UISystem* ui, UIElement* el) {
         ui_set_draw_program(dl, NULL, el->rect, 0.0f);
 
     if (el->kind == UI_SCROLL) {
-        _emit_pane(ui, el, &s);
+        _emit_pane(ui, el, &s, state);
         return;
     }
     for (size_t i = 0; i < el->child_count; i++)
@@ -2119,7 +2124,7 @@ static UIRect _pane_clip(const UIElement* el, const UIStyle* s) {
  * border or outside the pane, the children wholly out of view not emitted at all, and the bar over
  * them. The pane's fill and border were drawn before, under the content.
  */
-static void _emit_pane(UISystem* ui, UIElement* el, const UIStyle* s) {
+static void _emit_pane(UISystem* ui, UIElement* el, const UIStyle* s, UIState state) {
     UIDrawList* dl = ui->dl;
     const UIRect view = _pane_clip(el, s);
     ui_push_clip(dl, view);
@@ -2129,7 +2134,7 @@ static void _emit_pane(UISystem* ui, UIElement* el, const UIStyle* s) {
             _emit(ui, c);
     }
     ui_pop_clip(dl);
-    _emit_bar(ui, el, s);
+    _emit_bar(ui, el, s, state);
 }
 
 // One eased value a step toward its target, and onto it once within `snap` of it: an exponential
@@ -2248,6 +2253,16 @@ static UIElement* _scrolling_at(const UISystem* ui, UIElement* root, float x, fl
         if (_scroll_place(ui, el, place))
             return el;
     return NULL;
+}
+
+// The element whose bar's grip is at the point, faded or not -- the bar a press there would take
+// -- its place, track and thumb in the rest; NULL for none.
+static UIElement* _bar_at(const UISystem* ui, UIElement* root, float x, float y,
+                          UIScrollPlace* place, UIRect* track, UIRect* thumb) {
+    UIElement* el = _scrolling_at(ui, root, x, y, place);
+    return el && _bar(ui, el, place, track, thumb) && ui_rect_hit(_bar_grip(el, place), x, y)
+               ? el
+               : NULL;
 }
 
 // Whether anything under `el` but `el` itself is drawn at the point: a pane's content only where
@@ -2665,11 +2680,10 @@ static void _update(UISystem* ui, const UIInput* in, float width, float height) 
     bool on_bar = false;
     if (in->pointer_pressed) {
         UIScrollPlace place;
-        UIElement* el = _scrolling_at(ui, top->root, in->pointer_x, in->pointer_y, &place);
         UIRect track, thumb;
-        if (el && (!ui->theme.scroll_fades || el->bar.shown > 0.0f) &&
-            _bar(ui, el, &place, &track, &thumb) &&
-            ui_rect_hit(_bar_grip(el, &place), in->pointer_x, in->pointer_y)) {
+        UIElement* el =
+            _bar_at(ui, top->root, in->pointer_x, in->pointer_y, &place, &track, &thumb);
+        if (el && _bar_drawn(ui, el)) {
             on_bar = true;
             if (in->pointer_y >= thumb.y && in->pointer_y < thumb.y + thumb.h) {
                 ui->bar_drag = el;
@@ -2836,9 +2850,10 @@ bool ui_build(UISystem* ui, float width, float height, float dt) {
     ui->wake = INFINITY;
     ui->builds++;
     const UIScreen* top = ui_top(ui);
-    UIScrollPlace under;
-    ui->bar_under = top && top->root ? _scrolling_at(ui, top->root, ui->last_pointer_x,
-                                                     ui->last_pointer_y, &under)
+    UIScrollPlace place;
+    UIRect track, thumb;
+    ui->bar_under = top && top->root ? _bar_at(ui, top->root, ui->last_pointer_x,
+                                               ui->last_pointer_y, &place, &track, &thumb)
                                      : NULL;
     // Bottom to top: a pause screen over a HUD draws both, and the one on top
     // is simply the one emitted last -- from the highest opaque screen, which
@@ -2878,6 +2893,7 @@ bool ui_build(UISystem* ui, float width, float height, float dt) {
     // otherwise inherit a transition it has nothing to do with.
     ui_draw_list_set_offset(ui->dl, 0.0f, 0.0f);
     ui_draw_list_set_alpha(ui->dl, 1.0f);
+    ui->bar_under = NULL;
     _pass_end(ui);
     return moving;
 }

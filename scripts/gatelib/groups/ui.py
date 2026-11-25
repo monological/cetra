@@ -1273,6 +1273,12 @@ def run_ui_gate(workdir):
     def close(a, b, tol=0.01):
         return abs(a - b) <= tol
 
+    def mismatches(p, key, want):
+        # Each label whose `key` numbers are not its wanted ones, within close's tolerance, said.
+        return [f"{label} {p.get((label, key))} (want {w})" for label, w in want.items()
+                if len(p.get((label, key), ())) != len(w)
+                or not all(close(a, b) for a, b in zip(p[(label, key)], w))]
+
     # ---- layout
     @arm("ui-layout")
     def _():
@@ -1766,9 +1772,7 @@ def run_ui_gate(workdir):
                 "hovered": woke, "let": woke, "pressed": woke, "freed": woke, "quiet": gone,
                 "wheeled": woke, "unfocused": gone, "focused": woke, "dropped": gone,
                 "hidden": gone, "unhidden": woke, "always": (0.35, -1.0)}
-        wrong = [f"{label} {p.get((label, 'shown'))} (want {w})" for label, w in want.items()
-                 if len(p.get((label, "shown"), ())) != 2
-                 or not all(close(a, b) for a, b in zip(p[(label, "shown")], w))]
+        wrong = mismatches(p, "shown", want)
         faded, shown = p.get(("faded", "by"), [None])[0], p.get(("shown", "by"), [None])[0]
         if faded is None or not close(faded, 0.0):
             wrong.append(f"a press on the faded bar paged {faded} (want 0)")
@@ -2869,9 +2873,7 @@ def run_ui_gate(workdir):
         faint, red, blue = (1.0, 1.0, 1.0, 0.35), (1.0, 0.0, 0.0, 1.0), (0.0, 0.0, 1.0, 1.0)
         want = {**{f"own_{b}": faint for b in bars}, **{f"loud_{b}": red for b in bars},
                 "styled_pane": blue}
-        wrong = [f"{label} {p.get((label, 'thumb'))} (want {w})" for label, w in want.items()
-                 if len(p.get((label, "thumb"), ())) != 4
-                 or not all(close(a, b) for a, b in zip(p[(label, "thumb")], w))]
+        wrong = mismatches(p, "thumb", want)
         ok = not wrong
         detail = ("every thumb the scroll style's fg: a pane's, an editor's and a table's white at "
                   "35% in cetra's theme, red under a scroll fg of red with the editor's and the "

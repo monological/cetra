@@ -2636,7 +2636,7 @@ typedef struct EditorSheet {
     bool layout;    // --vim-layout: = and gq and new lines' indents answered
     int fold_first, fold_last; // --editor-fold: the first pane's lines folded, as numbered; 0 none
     int filler_line, filler_rows; // --editor-filler: blank rows above a line, as numbered; 0 none
-    bool fade_bars;               // --fade-bars: the theme's bars fade, as pcb's do
+    bool fade_bars;               // --fade-bars: the theme's bars fade
     // With --vim: the vim mode under the app's own, and a line under the editor saying its state,
     // with the line / ? and : are typed in after it -- its kind shown before it -- and what the
     // last such line came to, said until the next key; and the editor that asked for the line.

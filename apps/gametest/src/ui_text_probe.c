@@ -15,9 +15,10 @@
 
 #include "cetra/engine.h"
 #include "cetra/fuzzy.h"
-#include "cetra/internal/ui_field.h" // a field's caret and rows, which the field arms read
-#include "cetra/internal/ui_hooks.h" // the clock a bar fades on, and the wake it asks for
-#include "cetra/internal/ui_text.h"  // a label's lines, which the wrap arms count
+#include "cetra/internal/ui_field.h"    // a field's caret and rows, which the field arms read
+#include "cetra/internal/ui_hooks.h"    // the clock a bar fades on, and the wake it asks for
+#include "cetra/internal/ui_internal.h" // the bar's width, which the bar arms find its thumb by
+#include "cetra/internal/ui_text.h"     // a label's lines, which the wrap arms count
 #include "cetra/text.h"
 #include "cetra/ui_table.h"
 
@@ -561,19 +562,30 @@ static int probe_scroll_follow(UISystem* ui) {
     return 0;
 }
 
+// The pane's thumb as the last build drew it, read from the draw list: the quad a bar wide at its
+// right edge, in `r` and its colour in `c`; false for none drawn.
+static bool pane_thumb(const UISystem* ui, const UIElement* pane, UIRect* r, vec4 c) {
+    const UIDrawList* dl = ui_draw_list(ui);
+    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
+        UIRect q;
+        vec4 k;
+        ui_draw_list_quad(dl, i, &q, k, NULL);
+        if (q.w == UI_BAR_W && q.x > pane->rect.x + pane->rect.w - 10.0f) {
+            *r = q;
+            glm_vec4_copy(k, c);
+            return true;
+        }
+    }
+    return false;
+}
+
 static int probe_scroll_bar(UISystem* ui) {
     UIElement* rows[PANE_ROWS];
     UIElement* pane = pane_fixture(ui, rows, PANE_ROWS, false, false);
-    // The thumb, read from what the pane emits: the 6-point quad at its right edge.
     UIRect thumb = {0};
-    const UIDrawList* dl = ui_draw_list(ui);
+    vec4 colour = {0};
     ui_build(ui, 1280.0f, 720.0f, 1.0f);
-    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
-        UIRect r;
-        ui_draw_list_quad(dl, i, &r, NULL, NULL);
-        if (r.w == 6.0f && r.x > pane->rect.x + pane->rect.w - 10.0f)
-            thumb = r;
-    }
+    pane_thumb(ui, pane, &thumb, colour);
     ui_probe_rect("scroll-bar", "pane", pane->rect);
     ui_probe_rect("scroll-bar", "thumb", thumb);
     printf("ui scroll-bar content height %.6f\n", (double)pane->scroll_content);
@@ -596,28 +608,17 @@ static int probe_scroll_bar(UISystem* ui) {
 
 // ---- a bar that fades (spec 14.48)
 
-// The alpha of the pane's thumb as the last build drew it, 0 for none drawn.
-static float thumb_alpha(UISystem* ui, const UIElement* pane) {
-    const UIDrawList* dl = ui_draw_list(ui);
-    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
-        UIRect r;
-        vec4 c;
-        ui_draw_list_quad(dl, i, &r, c, NULL);
-        if (r.w == 6.0f && r.x > pane->rect.x + pane->rect.w - 10.0f)
-            return c[3];
-    }
-    return 0.0f;
-}
-
-// One pass at the clock's `now` with `in`, and the thumb its build drew and the wake it asked for,
-// -1 for none, as bar-fade `label` shown.
+// One pass at the clock's `now` with `in`, and the alpha of the thumb its build drew, 0 for none,
+// and the wake it asked for, -1 for none, as bar-fade `label` shown.
 static void fade_pass(UISystem* ui, const UIElement* pane, const char* label, double now,
                       UIInput in) {
     ui_system_set_now(ui, now);
     pass(ui, &in);
+    UIRect r;
+    vec4 c = {0};
+    const float alpha = pane_thumb(ui, pane, &r, c) ? c[3] : 0.0f;
     const double wake = ui_system_wake(ui);
-    printf("ui bar-fade %s shown %.6f %.6f\n", label, (double)thumb_alpha(ui, pane),
-           isfinite(wake) ? wake : -1.0);
+    printf("ui bar-fade %s shown %.6f %.6f\n", label, (double)alpha, isfinite(wake) ? wake : -1.0);
 }
 
 static bool fade_key(UIElement* el, const InputKeyEvent* key, void* user) {
