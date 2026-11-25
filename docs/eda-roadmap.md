@@ -17,7 +17,8 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-24: 14.48, every scroll bar in one colour, from the user's look at pcb 10.6.
+_Last updated: 2026-11-24: 14.48, scroll bars in one colour that fade, from the user's look at pcb
+10.6.
 2026-11-23: 14.47, a pane of rows fits up to a count, built for pcb 10.3.1's go list.
 Before it, the same day: 14.46, a secret field forgets its undo, from pcb 10.3's last review, and
 14.45, a field showing stars, built for pcb 10.3's key dialog.
@@ -772,7 +773,7 @@ old size.
   and was short for a palette row whose summary wraps. `ui_scroll_set_rows_most` holds a FIT pane
   of rows to its first rows as measured (`docs/ui.md`, Scrolling panes and virtual rows). pcb
   keeping its count, and the list becoming a table, were turned down.
-- **Every scroll bar in one colour** -- spec 14.48, from the user's look at pcb 10.6, whose code
+- **Scroll bars in one colour that fade** -- spec 14.48, from the user's look at pcb 10.6, whose code
   panes' bars were solid white and its go list's faint: an editor's and a table's thumb was its
   text colour. Every bar's thumb is the scroll style's `fg` now, `theme.scroll` colouring them all
   (`docs/ui.md`, Scrolling panes and virtual rows); pcb 10.6.1 names it in its theme file. A new
