@@ -13,4 +13,9 @@
 void ui_system_held(const UISystem* ui, const UIElement** pressed, const UIElement** bar,
                     const UIElement** seen);
 
+// The clock the next pass reads -- a caret's blink, a bar's fade -- set as a window's frame sets
+// it; and the seconds after it the last build asked to be drawn again, INFINITY for never.
+void ui_system_set_now(UISystem* ui, double now);
+double ui_system_wake(const UISystem* ui);
+
 #endif // _UI_HOOKS_H_

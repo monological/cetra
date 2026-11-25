@@ -135,6 +135,13 @@ field is refused by name: a field's text is `ui_field_set_text` and its hint
 - **Every bar's thumb is the scroll style's `fg`** (spec 14.48): a pane's its own, an editor's and
   a table's the theme's `scroll` entry, by default white at 35%, never the text colour of what it
   scrolls. A theme colours every bar with `theme.scroll`.
+- **A theme's `scroll_fades` fades its bars as macOS's fade** (spec 14.48). A bar wakes, at a build
+  that draws it, where the build before drew none of it (shown first, unhidden, sized from nothing,
+  outgrown), where its place or its length moved, where its element came to hold the keys, and
+  where the pointer is over the bar a press there would take, or holds it. It shows 0.5 s after it
+  last woke and fades over 0.25 s, eased, on the UI's clock -- Chromium's imitation of macOS's
+  overlay scrollers, fixed in `ui.c` -- asking idle mode for the frames. One the last build drew
+  none of takes no press, which goes to what is under it; the pointer over its grip brings it back.
 - **A pane places content shorter than its view by `align_main`**, as any element places what is
   left over, before its scroll is settled: `UI_ALIGN_CENTER` stands it in the middle.
 - **The wheel and a press on a bar reach the deepest thing under the pointer with somewhere to

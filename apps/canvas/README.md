@@ -138,6 +138,8 @@ The app reads the UI's input through `ui_input_read` alone and keeps no pointer 
 - `--editor-fold FIRST,LAST` folds the first pane's lines FIRST to LAST, as numbered, closed: the
   test bed for the editor's folds. `--editor-filler LINE,ROWS` puts ROWS blank filler rows above
   line LINE of the first pane.
+- `--fade-bars` fades the editor's scroll bars as macOS's do (`UITheme.scroll_fades`, spec 14.48):
+  shown as each pane appears or scrolls, gone 0.75 s after.
 - `--editor` may be given up to eight times, and the editors are panes, the test bed for
   `ui_remove`, `ui_move` and `ui_editor_set_doc`: F8 splits the focused pane, F9 closes it from its
   own key, and F10 shows the next file in it where that pane last was. `--split-share F` gives the

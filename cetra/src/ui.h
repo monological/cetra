@@ -409,6 +409,10 @@ typedef struct UITheme {
     // the subtle one round the pane the keys are in.
     UIStyle scroll[UI_STATE_COUNT];
     float scroll_step; // points a wheel unit scrolls; 0 = the theme's font size
+    // Bars that fade, as macOS's do: a bar shows as its element appears, scrolls, takes the keys or
+    // has the pointer over it, and fades half a second after; a faded bar takes no press. false =
+    // every bar always shown.
+    bool scroll_fades;
     // A text field: `fg` its text and caret, its placeholder `fg` dimmed; FOCUS its border while
     // it takes the keys.
     UIStyle text_field[UI_STATE_COUNT];
@@ -484,6 +488,15 @@ struct UIElement {
     unsigned row_builds;
     struct UIScreen* screen; // a screen's root: the screen it is; NULL for every other element
     UIElement* removed_next; // taken out during a pass: the next taken out, until the pass ends
+    // Its bar as the last build to draw one left it: the UI's clock when it last woke -- appeared,
+    // moved, took the keys, had the pointer over it -- how much of it showed, 0..1, where it stood
+    // and over how much, whether its element held the keys, and that build's count.
+    struct {
+        double woke;
+        float shown, at, total;
+        bool focused;
+        uint64_t built;
+    } bar;
 
     // BY FUNCTION
     char* text;                    // ui_set_text (owned)

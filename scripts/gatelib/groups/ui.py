@@ -588,6 +588,15 @@ def run_ui_gate(workdir):
                      down the track as the content is scrolled; dragging it 50
                      points scrolls by that share of the track's room, and a press
                      on the track below it pages down by nine tenths of the view.
+      ui-bar-fade    a theme's scroll_fades fades a bar as macOS's (spec 14.48), on
+                     the clock the probe sets: a pane over more than it shows draws
+                     its thumb at 35% as it appears, with a wake 0.5 s off; at 0.4
+                     the same, 0.1 s off; at 0.625 half that, a wake at once; at
+                     0.8 none, and no wake. A press on its track with the pointer
+                     coming there pages nothing, and the build after draws it; a
+                     press then pages 0.9 of the view. Gone, the wheel, the pane
+                     taking the keys and its being hidden and shown each bring it
+                     back; with the fade off it shows after 20 s, asking no wake.
       ui-rows-built  100,000 virtual rows in a 200-point pane: the content is every
                      row at its estimate and the gaps, only the rows in view and one
                      either side are built, at the top and at row 50,000, which is
@@ -1743,6 +1752,33 @@ def run_ui_gate(workdir):
             detail = (f"thumb {th:.2f} tall (want {want_h:.2f}) at {ty:.1f} (want {py + 2:.0f}); "
                       f"dragged 50 points it scrolls {dragged:.2f} (want {want_drag:.2f}); a press "
                       f"below it pages {paged:.1f} (want {0.9 * view:.0f})")
+        return ok, detail
+
+    @arm("ui-bar-fade")
+    def _():
+        p = _ui_probe("bar-fade")
+        if not p:
+            return False, "the probe produced nothing"
+        # (the thumb's alpha, the wake asked for, -1 for none) after each pass, at 0.5 s held and
+        # 0.25 s faded: 35% and half a second's wake as it wakes, none and no wake once gone.
+        woke, gone = (0.35, 0.5), (0.0, -1.0)
+        want = {"first": woke, "held": (0.35, 0.1), "half": (0.175, 0.0), "gone": gone,
+                "hovered": woke, "let": woke, "pressed": woke, "freed": woke, "quiet": gone,
+                "wheeled": woke, "unfocused": gone, "focused": woke, "dropped": gone,
+                "hidden": gone, "unhidden": woke, "always": (0.35, -1.0)}
+        wrong = [f"{label} {p.get((label, 'shown'))} (want {w})" for label, w in want.items()
+                 if len(p.get((label, "shown"), ())) != 2
+                 or not all(close(a, b) for a, b in zip(p[(label, "shown")], w))]
+        faded, shown = p.get(("faded", "by"), [None])[0], p.get(("shown", "by"), [None])[0]
+        if faded is None or not close(faded, 0.0):
+            wrong.append(f"a press on the faded bar paged {faded} (want 0)")
+        if shown is None or not close(shown, 0.9 * view):
+            wrong.append(f"a press on the bar shown again paged {shown} (want {0.9 * view:.0f})")
+        ok = not wrong
+        detail = ("shown as it appears, held 0.5 s, half faded at 0.625, gone with no wake at 0.8; "
+                  "a press on the faded track pages nothing while the pointer brings it back, and "
+                  "then pages; the wheel, the keys and being shown again each bring it back; never "
+                  "faded with the fade off" if ok else f"wrong: {'; '.join(wrong)}")
         return ok, detail
 
     # ---- virtual rows: 30-point rows 8 points apart in a 200-point pane

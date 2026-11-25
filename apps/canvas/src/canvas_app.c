@@ -2636,6 +2636,7 @@ typedef struct EditorSheet {
     bool layout;    // --vim-layout: = and gq and new lines' indents answered
     int fold_first, fold_last; // --editor-fold: the first pane's lines folded, as numbered; 0 none
     int filler_line, filler_rows; // --editor-filler: blank rows above a line, as numbered; 0 none
+    bool fade_bars;               // --fade-bars: the theme's bars fade, as pcb's do
     // With --vim: the vim mode under the app's own, and a line under the editor saying its state,
     // with the line / ? and : are typed in after it -- its kind shown before it -- and what the
     // last such line came to, said until the next key; and the editor that asked for the line.
@@ -3177,6 +3178,7 @@ static bool build_editor(UISystem* ui, const char* const* paths, int count, bool
     glm_vec4_copy((vec4){0.95f, 0.76f, 0.45f, 1.0f}, st[STYLE_HEAD].text);
     glm_vec4_copy((vec4){0.95f, 0.30f, 0.30f, 1.0f}, st[STYLE_ERROR].underline);
     glm_vec4_copy((vec4){0.30f, 0.65f, 0.35f, 0.30f}, st[STYLE_LANDED].background);
+    theme.scroll_fades = s->fade_bars;
     ui_set_theme(ui, &theme);
     UIScreen* screen = ui_screen(ui, "editor");
     ui_screen_set_modal(screen, false);
@@ -4917,6 +4919,8 @@ int main(int argc, char** argv) {
                 fprintf(stderr, "canvas: --editor-filler takes LINE,ROWS\n");
                 return 2;
             }
+        } else if (strcmp(argv[i], "--fade-bars") == 0) {
+            g_editor_sheet.fade_bars = true;
         } else if (strcmp(argv[i], "--split-share") == 0 && more) {
             g_split_share = (float)atof(argv[++i]);
         } else if (strcmp(argv[i], "--vim") == 0) {

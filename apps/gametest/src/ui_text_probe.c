@@ -16,6 +16,7 @@
 #include "cetra/engine.h"
 #include "cetra/fuzzy.h"
 #include "cetra/internal/ui_field.h" // a field's caret and rows, which the field arms read
+#include "cetra/internal/ui_hooks.h" // the clock a bar fades on, and the wake it asks for
 #include "cetra/internal/ui_text.h"  // a label's lines, which the wrap arms count
 #include "cetra/text.h"
 #include "cetra/ui_table.h"
@@ -590,6 +591,92 @@ static int probe_scroll_bar(UISystem* ui) {
              .pointer_x = tx, .pointer_y = below, .pointer_pressed = true, .pointer_down = true});
     pass(ui, &(UIInput){.pointer_x = tx, .pointer_y = below, .pointer_released = true});
     printf("ui scroll-bar paged by %.6f\n", (double)(pane->scroll_target - before));
+    return 0;
+}
+
+// ---- a bar that fades (spec 14.48)
+
+// The alpha of the pane's thumb as the last build drew it, 0 for none drawn.
+static float thumb_alpha(UISystem* ui, const UIElement* pane) {
+    const UIDrawList* dl = ui_draw_list(ui);
+    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
+        UIRect r;
+        vec4 c;
+        ui_draw_list_quad(dl, i, &r, c, NULL);
+        if (r.w == 6.0f && r.x > pane->rect.x + pane->rect.w - 10.0f)
+            return c[3];
+    }
+    return 0.0f;
+}
+
+// One pass at the clock's `now` with `in`, and the thumb its build drew and the wake it asked for,
+// -1 for none, as bar-fade `label` shown.
+static void fade_pass(UISystem* ui, const UIElement* pane, const char* label, double now,
+                      UIInput in) {
+    ui_system_set_now(ui, now);
+    pass(ui, &in);
+    const double wake = ui_system_wake(ui);
+    printf("ui bar-fade %s shown %.6f %.6f\n", label, (double)thumb_alpha(ui, pane),
+           isfinite(wake) ? wake : -1.0);
+}
+
+static bool fade_key(UIElement* el, const InputKeyEvent* key, void* user) {
+    (void)el;
+    (void)key;
+    (void)user;
+    return false;
+}
+
+/*
+ * The pane fading its bar: shown as it appears, held, half faded, gone; a press on the faded
+ * track the content's while the pointer coming there brings the bar back, and a press then the
+ * bar's; quiet, then woken by the wheel, by the pane taking the keys and by its being hidden and
+ * shown; and with the fade off, shown after any time.
+ */
+static int probe_bar_fade(UISystem* ui) {
+    UIElement* rows[PANE_ROWS];
+    UIElement* pane = pane_fixture(ui, rows, PANE_ROWS, false, false);
+    UIScreen* screen = ui_top(ui);
+    UITheme theme = *ui_theme(ui);
+    theme.scroll_fades = true;
+    ui_set_theme(ui, &theme);
+    const UIInput away = {.pointer_x = 5.0f, .pointer_y = 5.0f};
+    const float gx = pane->rect.x + pane->rect.w - 5.0f, gy = pane->rect.y + pane->rect.h - 4.0f;
+    fade_pass(ui, pane, "first", 0.0, away);
+    fade_pass(ui, pane, "held", 0.4, away);
+    fade_pass(ui, pane, "half", 0.625, away);
+    fade_pass(ui, pane, "gone", 0.8, away);
+    const float faded_from = pane->scroll_target;
+    fade_pass(
+        ui, pane, "hovered", 0.8,
+        (UIInput){.pointer_x = gx, .pointer_y = gy, .pointer_pressed = true, .pointer_down = true});
+    printf("ui bar-fade faded by %.6f\n", (double)(pane->scroll_target - faded_from));
+    fade_pass(ui, pane, "let", 0.85,
+              (UIInput){.pointer_x = gx, .pointer_y = gy, .pointer_released = true});
+    const float shown_from = pane->scroll_target;
+    fade_pass(
+        ui, pane, "pressed", 0.9,
+        (UIInput){.pointer_x = gx, .pointer_y = gy, .pointer_pressed = true, .pointer_down = true});
+    printf("ui bar-fade shown by %.6f\n", (double)(pane->scroll_target - shown_from));
+    fade_pass(ui, pane, "freed", 0.95,
+              (UIInput){.pointer_x = gx, .pointer_y = gy, .pointer_released = true});
+    fade_pass(ui, pane, "quiet", 3.0, away);
+    const float cx = pane->rect.x + pane->rect.w * 0.5f, cy = pane->rect.y + pane->rect.h * 0.5f;
+    fade_pass(ui, pane, "wheeled", 3.0,
+              (UIInput){.pointer_x = cx, .pointer_y = cy, .wheel_y = -1.0f});
+    fade_pass(ui, pane, "unfocused", 5.0, away);
+    ui_set_on_key(pane, fade_key, NULL);
+    ui_set_focus(screen, pane);
+    fade_pass(ui, pane, "focused", 5.0, away);
+    ui_set_focus(screen, NULL);
+    fade_pass(ui, pane, "dropped", 7.0, away);
+    ui_set_hidden(pane, true);
+    fade_pass(ui, pane, "hidden", 7.0, away);
+    ui_set_hidden(pane, false);
+    fade_pass(ui, pane, "unhidden", 7.5, away);
+    theme.scroll_fades = false;
+    ui_set_theme(ui, &theme);
+    fade_pass(ui, pane, "always", 20.0, away);
     return 0;
 }
 
@@ -2751,6 +2838,8 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_scroll_follow(ui);
     if (!strcmp(which, "scroll-bar"))
         return probe_scroll_bar(ui);
+    if (!strcmp(which, "bar-fade"))
+        return probe_bar_fade(ui);
     if (!strcmp(which, "field-type"))
         return probe_field_type(ui);
     if (!strcmp(which, "field-edit"))
