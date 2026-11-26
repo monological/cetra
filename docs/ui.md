@@ -63,6 +63,12 @@ was given.
   siblings still growing, shared again round by round, and what is left after that is placed by
   `align_main` rather than left as a gap. Across the axis a stretched child is clamped before the
   cross alignment places it.
+- **`min_size` is the least an element measures along each axis** (spec 14.49), 0 for none, for
+  FIT, GROW and SHARE alike, held where the most is: a parent fitting its children is at least that
+  long round one, so a popup fitting its content is no narrower than its least however short the
+  content, and its growing children are stretched across what it comes to. A GROW child grows from
+  its least as from what it measures, sharing the room as a child that long would. It wins over a
+  shorter most; given less room than it, the element draws past; a FIXED axis ignores it.
 - **`UI_SHARE` is a size as a share of the parent** (spec 14.9), `size[axis]` from 0 to 1: of the
   inner length less the gaps between the children along the parent's main axis, of the inner
   length across it, rounded down to a whole point so the edge it puts down draws sharp. It is

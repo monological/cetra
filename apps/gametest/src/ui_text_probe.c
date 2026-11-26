@@ -1720,6 +1720,87 @@ static int probe_max_size(UISystem* ui) {
     return 0;
 }
 
+// ---- the least an element measures (spec 14.49)
+
+// A panel with no padding and no gaps, sized as given, of which `parent` is the parent.
+static UIElement* padless(UIElement* parent, UISize x, float w, UISize y, float h) {
+    UIElement* p = ui_panel(parent);
+    ui_set_size(p, x, w, y, h);
+    for (int i = 0; i < 4; i++)
+        p->padding[i] = -1.0f;
+    p->spacing = -1.0f;
+    return p;
+}
+
+// A FIT panel with a least of `least` across, holding a FIXED child `w` by 20.
+static UIElement* least_fitting(UIElement* parent, float least, float w) {
+    UIElement* p = padless(parent, UI_FIT, 0.0f, UI_FIT, 0.0f);
+    p->min_size[0] = least;
+    fixed_panel(p, w, 20.0f);
+    return p;
+}
+
+// The go list's shape: a FIT column with a least of 300 across, a growing child over a FIXED one
+// `w` wide, which the growing one is stretched across.
+static UIElement* least_column(UIElement* parent, float w, UIElement** grows) {
+    UIElement* col = padless(parent, UI_FIT, 0.0f, UI_FIT, 0.0f);
+    col->dir = UI_COLUMN;
+    col->min_size[0] = 300.0f;
+    *grows = padless(col, UI_GROW, 0.0f, UI_FIXED, 20.0f);
+    fixed_panel(col, w, 20.0f);
+    return col;
+}
+
+static int probe_min_size(UISystem* ui) {
+    UIScreen* s = ui_screen(ui, "min");
+    ui_screen_set_modal(s, false);
+    UIElement* root = ui_screen_root(s);
+    root->dir = UI_COLUMN;
+    // Content shorter than the least: the least; longer: the content.
+    const UIElement* shorter = least_fitting(root, 200.0f, 50.0f);
+    const UIElement* longer = least_fitting(root, 200.0f, 300.0f);
+    // The go list's shape, its strip narrower than the least and then wider: the least, then the
+    // strip, and the growing child across the whole of it each time.
+    UIElement *narrow_grows, *wide_grows;
+    const UIElement* narrow = least_column(root, 100.0f, &narrow_grows);
+    const UIElement* wide = least_column(root, 500.0f, &wide_grows);
+    // Three empty growing children of a 600-point row, the first with a least of 400: it grows from
+    // 400 by its share of the 200 left, as a child that measured 400 would.
+    UIElement* row = bare_row(root);
+    UIElement* const grow[3] = {padless(row, UI_GROW, 0.0f, UI_FIXED, 20.0f),
+                                padless(row, UI_GROW, 0.0f, UI_FIXED, 20.0f),
+                                padless(row, UI_GROW, 0.0f, UI_FIXED, 20.0f)};
+    grow[0]->min_size[0] = 400.0f;
+    // A least of 200 over a most of 100: the least.
+    UIElement* both = least_fitting(root, 200.0f, 50.0f);
+    both->max_size[0] = 100.0f;
+    // A FIXED element ignores its least.
+    UIElement* fixed = fixed_panel(root, 50.0f, 20.0f);
+    fixed->min_size[0] = 100.0f;
+    // Down as across: a FIT panel with a least of 80 down, holding a child 20 tall.
+    UIElement* tall = least_fitting(root, 0.0f, 50.0f);
+    tall->min_size[1] = 80.0f;
+    // A share of a quarter of a 400-point row, with a least of 150.
+    UIElement* split = padless(root, UI_FIXED, 400.0f, UI_FIXED, 30.0f);
+    split->dir = UI_ROW;
+    UIElement* share = padless(split, UI_SHARE, 0.25f, UI_FIXED, 20.0f);
+    share->min_size[0] = 150.0f;
+    ui_push(ui, s);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    printf("ui min-size shorter width %.6f\n", (double)shorter->rect.w);
+    printf("ui min-size longer width %.6f\n", (double)longer->rect.w);
+    printf("ui min-size narrow widths %.6f %.6f\n", (double)narrow->rect.w,
+           (double)narrow_grows->rect.w);
+    printf("ui min-size wide widths %.6f %.6f\n", (double)wide->rect.w, (double)wide_grows->rect.w);
+    printf("ui min-size grow widths %.6f %.6f %.6f\n", (double)grow[0]->rect.w,
+           (double)grow[1]->rect.w, (double)grow[2]->rect.w);
+    printf("ui min-size both width %.6f\n", (double)both->rect.w);
+    printf("ui min-size fixed width %.6f\n", (double)fixed->rect.w);
+    printf("ui min-size tall height %.6f\n", (double)tall->rect.h);
+    printf("ui min-size share width %.6f\n", (double)share->rect.w);
+    return 0;
+}
+
 // ---- a panel measured by its app (spec 14.33)
 
 // What a measured panel's measure answers, and how many times each axis asked it. Down, with
@@ -2875,6 +2956,8 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_utf8();
     if (!strcmp(which, "max-size"))
         return probe_max_size(ui);
+    if (!strcmp(which, "min-size"))
+        return probe_min_size(ui);
     if (!strcmp(which, "share"))
         return probe_share(ui);
     if (!strcmp(which, "measure"))

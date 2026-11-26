@@ -17,8 +17,8 @@ engine feature that pcb happens to be the first user of.
 (Workflow) requires: the item's status, the decisions its spec made, anything it did differently
 from what is written here and why, and any new item it found.
 
-_Last updated: 2026-11-24: 14.48, scroll bars in one colour that fade, from the user's look at pcb
-10.6.
+_Last updated: 2026-11-25: 14.49, an element no shorter than a length, for pcb 10.8's go list.
+2026-11-24: 14.48, scroll bars in one colour that fade, from the user's look at pcb 10.6.
 2026-11-23: 14.47, a pane of rows fits up to a count, built for pcb 10.3.1's go list.
 Before it, the same day: 14.46, a secret field forgets its undo, from pcb 10.3's last review, and
 14.45, a field showing stars, built for pcb 10.3's key dialog.
@@ -782,6 +782,13 @@ old size.
   scrolls, takes the keys or has the pointer over it, and fades it half a second after, at
   Chromium's imitation of macOS's timings, fixed in cetra; a faded bar takes no press. pcb 10.6.1
   turns it on. The timings in the theme were turned down as too low a level.
+- **An element no shorter than a length** -- spec 14.49, built, for pcb 10.8's go list, a popup 640
+  points wide whose strip of keys says more in the parts picker than 640 holds: pcb made that list
+  720 wide by hand. `min_size`, beside `max_size`, is the least a FIT, GROW or SHARE element
+  measures, so the popup can fit its content and be no narrower than 640, its search and rows
+  stretched across whatever it comes to (`docs/ui.md`, Layout, one axis at a time). pcb 10.8.1
+  takes it. A growing child grows from its least by its share, as from what it measures, cetra's
+  growing rule kept; CSS's, where a least is a floor on the final length alone, was not taken up.
 - **Navigation through the keys**, which lifts 14.10's refusal on the controls: the arrows, Enter
   and the pad reaching the focused element as keys, each claimed or declined, with only what is
   declined moving the focus or pressing -- as ImGui's key owners, Qt's and GTK's propagation and the

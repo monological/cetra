@@ -516,6 +516,9 @@ struct UIElement {
     // The most a FIT, GROW or SHARE element measures along each axis; 0 = no most. A scrolling pane
     // past it scrolls; anything else draws past it.
     float max_size[2];
+    // The least a FIT, GROW or SHARE element measures along each axis; 0 = no least. It wins over a
+    // shorter most; given less room than it, the element draws past.
+    float min_size[2];
     // An element's two inheritable lengths: 0 takes the style's or the theme's, and a negative one
     // is none. The padding is top, right, bottom, left, and taken whole: all four 0 is the style's,
     // and otherwise each side is its own, a 0 side none as a negative one is.

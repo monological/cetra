@@ -669,6 +669,13 @@ def run_ui_gate(workdir):
                      scrolls; a growing child held to 100 takes it and its siblings
                      share the rest; two held and centred leave the rest to the
                      alignment; a fixed element ignores its most.
+      ui-min-size    the least an element measures (spec 14.49): a fitting panel is
+                     its least round shorter content and the content round longer;
+                     the go list's shape, a fitting column with a least, is the
+                     least round a narrow strip and the strip round a wide one, its
+                     growing child across it each time; a growing child with a least
+                     grows from it by its share; the least wins over a shorter most;
+                     a fixed element ignores it; down as across; a share held to it.
       ui-share       UI_SHARE (spec 14.9), as exact rects: a share of 0.7 is that
                      share of the row's inner length less its gap, rounded down to
                      a whole point, and its GROW sibling the rest exactly, at
@@ -2103,6 +2110,34 @@ def run_ui_gate(workdir):
                       f"growing child held to 100 takes {held:.0f} and its siblings {rest} (want "
                       f"250 each); two held to 100 and centred {both} at {offset:.0f} (want 200); "
                       f"a fixed one with a most of 10 keeps {fixed:.0f} (want 50)")
+        return ok, detail
+
+    # ---- the least an element measures (spec 14.49)
+    @arm("ui-min-size")
+    def _():
+        p = _ui_probe("min-size")
+        if not p:
+            ok, detail = False, "the probe produced nothing"
+        else:
+            shorter, longer = p[("shorter", "width")][0], p[("longer", "width")][0]
+            narrow, wide = p[("narrow", "widths")], p[("wide", "widths")]
+            grow = p[("grow", "widths")]
+            both, fixed = p[("both", "width")][0], p[("fixed", "width")][0]
+            tall, share = p[("tall", "height")][0], p[("share", "width")][0]
+            want_grow = [400.0 + 200.0 / 3.0, 200.0 / 3.0, 200.0 / 3.0]
+            ok = (close(shorter, 200.0) and close(longer, 300.0)
+                  and all(close(w, 300.0) for w in narrow) and all(close(w, 500.0) for w in wide)
+                  and all(close(g, w) for g, w in zip(grow, want_grow)) and close(both, 200.0)
+                  and close(fixed, 50.0) and close(tall, 80.0) and close(share, 150.0))
+            detail = (f"a fitting panel with a least of 200 is {shorter:.0f} round 50 of content "
+                      f"(want 200) and {longer:.0f} round 300 (want 300); the go list's shape, a "
+                      f"least of 300, is {narrow} round a strip of 100 and {wide} round one of 500, "
+                      f"the panel and its growing child (want 300 and 500); three growing children "
+                      f"of 600, the first with a least of 400, take {grow} (want "
+                      f"{[round(w, 2) for w in want_grow]}); a least of 200 over a most of 100 is "
+                      f"{both:.0f} (want 200); a fixed 50 with a least of 100 keeps {fixed:.0f}; "
+                      f"a least of 80 down is {tall:.0f} tall; a quarter of 400 with a least of "
+                      f"150 is {share:.0f}")
         return ok, detail
 
     # ---- a size as a share of the parent; every length here is exact in float, so == holds

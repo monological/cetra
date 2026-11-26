@@ -988,15 +988,17 @@ static float* _len(UIRect* r, int axis) {
     return axis == 0 ? &r->w : &r->h;
 }
 
-// `len` held to the element's most along `axis`, when it names one.
-static float _at_most(const UIElement* el, int axis, float len) {
-    return el->max_size[axis] > 0.0f ? glm_min(len, el->max_size[axis]) : len;
+// `len` held to the element's most and its least along `axis`, where it names them; the least
+// winning over a shorter most.
+static float _held(const UIElement* el, int axis, float len) {
+    const float most = el->max_size[axis] > 0.0f ? glm_min(len, el->max_size[axis]) : len;
+    return glm_max(most, el->min_size[axis]);
 }
 
 // A SHARE element's length out of `room`: rounded down to a whole point, so the edge it puts down
-// draws sharp -- only text is snapped to pixels -- and held to its most.
+// draws sharp -- only text is snapped to pixels -- and held to its most and its least.
 static float _share_len(const UIElement* el, int axis, float room) {
-    return _at_most(el, axis, glm_max(floorf(el->size[axis] * room), 0.0f));
+    return _held(el, axis, glm_max(floorf(el->size[axis] * room), 0.0f));
 }
 
 // Whether a child takes its place in its parent's flow: a backdrop stands outside it, and a hidden
@@ -1090,11 +1092,11 @@ static void _rows_measure(const UISystem* ui, UIElement* pane) {
 
 /*
  * Across its parent's flow: a GROW child stretches to the room and a SHARE child takes its share of
- * it, each up to its most; any other keeps the length it has.
+ * it, each held to its most and its least; any other keeps the length it has.
  */
 static float _cross_len(const UIElement* c, int axis, float room) {
     if (c->size_mode[axis] == UI_GROW)
-        return _at_most(c, axis, room);
+        return _held(c, axis, room);
     if (c->size_mode[axis] == UI_SHARE)
         return _share_len(c, axis, room);
     return axis == 0 ? c->rect.w : c->rect.h;
@@ -1239,10 +1241,12 @@ static void _measure(const UISystem* ui, UIElement* el, int axis) {
         v = pad[0] + pad[2];
     }
 
-    // A share measures nothing, so a parent fitting its children is the size of the others.
+    // A share measures nothing, so a parent fitting its children is the size of the others. What
+    // else measures is held to its least here, so a parent fitting it is at least that long round
+    // it, and a growing one grows from it.
     *_len(&el->rect, axis) = mode == UI_FIXED   ? el->size[axis]
                              : mode == UI_SHARE ? 0.0f
-                                                : _at_most(el, axis, v);
+                                                : _held(el, axis, v);
     if (axis == 1)
         el->baseline = _baseline_of(ui, el, line);
 }
