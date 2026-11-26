@@ -988,11 +988,15 @@ static float* _len(UIRect* r, int axis) {
     return axis == 0 ? &r->w : &r->h;
 }
 
-// `len` held to the element's most and its least along `axis`, where it names them; the least
-// winning over a shorter most.
+// The most an element measures along `axis`, its least where that is longer, so the least wins over
+// a shorter most; INFINITY where it names no most.
+static float _most(const UIElement* el, int axis) {
+    return el->max_size[axis] > 0.0f ? glm_max(el->max_size[axis], el->min_size[axis]) : INFINITY;
+}
+
+// `len` held to the element's most and its least along `axis`.
 static float _held(const UIElement* el, int axis, float len) {
-    const float most = el->max_size[axis] > 0.0f ? glm_min(len, el->max_size[axis]) : len;
-    return glm_max(most, el->min_size[axis]);
+    return glm_max(glm_min(len, _most(el, axis)), el->min_size[axis]);
 }
 
 // A SHARE element's length out of `room`: rounded down to a whole point, so the edge it puts down
@@ -1011,8 +1015,7 @@ static bool _in_flow(const UIElement* c) {
 // most.
 static bool _still_growing(const UIElement* c, int axis) {
     const float len = axis == 0 ? c->rect.w : c->rect.h;
-    return _in_flow(c) && c->size_mode[axis] == UI_GROW &&
-           !(c->max_size[axis] > 0.0f && len >= c->max_size[axis]);
+    return _in_flow(c) && c->size_mode[axis] == UI_GROW && len < _most(c, axis);
 }
 
 // Sums a pane's row tops again when a height, the count or its spacing has changed.
@@ -1233,19 +1236,19 @@ static void _measure(const UISystem* ui, UIElement* el, int axis) {
         const float kids = (along ? sum : most) + (axis == 0 ? pad[1] + pad[3] : pad[0] + pad[2]);
         v = kids > v ? kids : v;
     }
-    // A growing pane asks nothing of its parent down the axis it scrolls: whatever height it is
-    // given, its content is seen through it. Fitting, it is as tall as its content.
+    // A growing pane asks nothing of its parent down the axis it scrolls but its least: whatever
+    // height it is given, its content is seen through it. Fitting, it is as tall as its content.
     if (el->kind == UI_SCROLL && axis == 1 && el->size_mode[1] == UI_GROW) {
         float pad[4];
         _padding_of(ui, el, pad);
         v = pad[0] + pad[2];
     }
 
-    // A share measures nothing, so a parent fitting its children is the size of the others. What
-    // else measures is held to its least here, so a parent fitting it is at least that long round
-    // it, and a growing one grows from it.
+    // A share's length is its parent's to settle, so it measures only its least: a parent fitting
+    // its children is the size of the others, or of that least where it is longer. Anything else is
+    // held to its most and its least here, which a growing one then grows from.
     *_len(&el->rect, axis) = mode == UI_FIXED   ? el->size[axis]
-                             : mode == UI_SHARE ? 0.0f
+                             : mode == UI_SHARE ? _held(el, axis, 0.0f)
                                                 : _held(el, axis, v);
     if (axis == 1)
         el->baseline = _baseline_of(ui, el, line);
@@ -1371,9 +1374,10 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
             if (!_still_growing(c, axis))
                 continue;
             float* cl = _len(&c->rect, axis);
-            if (c->max_size[axis] > 0.0f && *cl + share >= c->max_size[axis]) {
-                room -= c->max_size[axis] - *cl;
-                *cl = c->max_size[axis];
+            const float most = _most(c, axis);
+            if (*cl + share >= most) {
+                room -= most - *cl;
+                *cl = most;
                 growing--;
                 held = true;
             }

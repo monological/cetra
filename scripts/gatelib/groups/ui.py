@@ -675,7 +675,9 @@ def run_ui_gate(workdir):
                      least round a narrow strip and the strip round a wide one, its
                      growing child across it each time; a growing child with a least
                      grows from it by its share; the least wins over a shorter most;
-                     a fixed element ignores it; down as across; a share held to it.
+                     a fixed element ignores it; down as across; a share held to it,
+                     along and across, and a fitting parent fitting round a share's
+                     least; a child stretched across held to it.
       ui-share       UI_SHARE (spec 14.9), as exact rects: a share of 0.7 is that
                      share of the row's inner length less its gap, rounded down to
                      a whole point, and its GROW sibling the rest exactly, at
@@ -2124,11 +2126,15 @@ def run_ui_gate(workdir):
             grow = p[("grow", "widths")]
             both, fixed = p[("both", "width")][0], p[("fixed", "width")][0]
             tall, share = p[("tall", "height")][0], p[("share", "width")][0]
+            across = p[("across", "width")][0]
+            share_col, share_row = p[("column", "widths")], p[("row", "widths")]
             want_grow = [400.0 + 200.0 / 3.0, 200.0 / 3.0, 200.0 / 3.0]
             ok = (close(shorter, 200.0) and close(longer, 300.0)
                   and all(close(w, 300.0) for w in narrow) and all(close(w, 500.0) for w in wide)
                   and all(close(g, w) for g, w in zip(grow, want_grow)) and close(both, 200.0)
-                  and close(fixed, 50.0) and close(tall, 80.0) and close(share, 150.0))
+                  and close(fixed, 50.0) and close(tall, 80.0) and close(share, 150.0)
+                  and close(across, 150.0) and all(close(w, 300.0) for w in share_col)
+                  and close(share_row[0], 250.0) and close(share_row[1], 150.0))
             detail = (f"a fitting panel with a least of 200 is {shorter:.0f} round 50 of content "
                       f"(want 200) and {longer:.0f} round 300 (want 300); the go list's shape, a "
                       f"least of 300, is {narrow} round a strip of 100 and {wide} round one of 500, "
@@ -2137,7 +2143,11 @@ def run_ui_gate(workdir):
                       f"{[round(w, 2) for w in want_grow]}); a least of 200 over a most of 100 is "
                       f"{both:.0f} (want 200); a fixed 50 with a least of 100 keeps {fixed:.0f}; "
                       f"a least of 80 down is {tall:.0f} tall; a quarter of 400 with a least of "
-                      f"150 is {share:.0f}")
+                      f"150 is {share:.0f}; a growing child across 100 with a least of 150 is "
+                      f"{across:.0f}; a share across a fitting column beside 100, its least 300, "
+                      f"gives {share_col} (want the column and the share 300); a share along a "
+                      f"fitting row beside 100, its least 150, gives {share_row} (want 250 and "
+                      f"150)")
         return ok, detail
 
     # ---- a size as a share of the parent; every length here is exact in float, so == holds

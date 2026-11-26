@@ -74,8 +74,9 @@ was given.
   length across it, rounded down to a whole point so the edge it puts down draws sharp. It is
   settled before GROW, so a split is a SHARE side and a GROW side and the second takes exactly the
   rest whatever it measures; a weight on GROW was rejected because it misses by the gap a nested
-  split measures. A SHARE axis measures 0, so a FIT parent is the size of its other children and the
-  share is of what that comes to.
+  split measures. A SHARE axis measures its least, 0 for none, so a FIT parent is the size of its
+  other children, or of the share's least where that is longer, and the share is of what that comes
+  to.
 - **A panel can be measured by its app** (`ui_set_measure`, spec 14.33; its contract in `ui.h`),
   for what a hook paints whose size the layout cannot see, such as a column of values beside a
   plot. It is asked in `_intrinsic`, where a label's text and a table's rows are measured, so

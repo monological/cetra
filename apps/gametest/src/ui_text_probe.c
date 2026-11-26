@@ -1663,13 +1663,20 @@ static UIElement* fixed_panel(UIElement* parent, float w, float h) {
     return p;
 }
 
+// A panel with no padding and no gaps, sized as given, of which `parent` is the parent.
+static UIElement* padless(UIElement* parent, UISize x, float w, UISize y, float h) {
+    UIElement* p = ui_panel(parent);
+    ui_set_size(p, x, w, y, h);
+    for (int i = 0; i < 4; i++)
+        p->padding[i] = -1.0f;
+    p->spacing = -1.0f;
+    return p;
+}
+
 // A row 600 points across with no padding and no gaps, whose room is all its children's.
 static UIElement* bare_row(UIElement* parent) {
-    UIElement* row = fixed_panel(parent, 600.0f, 30.0f);
+    UIElement* row = padless(parent, UI_FIXED, 600.0f, UI_FIXED, 30.0f);
     row->dir = UI_ROW;
-    for (int i = 0; i < 4; i++)
-        row->padding[i] = -1.0f;
-    row->spacing = -1.0f;
     return row;
 }
 
@@ -1721,16 +1728,6 @@ static int probe_max_size(UISystem* ui) {
 }
 
 // ---- the least an element measures (spec 14.49)
-
-// A panel with no padding and no gaps, sized as given, of which `parent` is the parent.
-static UIElement* padless(UIElement* parent, UISize x, float w, UISize y, float h) {
-    UIElement* p = ui_panel(parent);
-    ui_set_size(p, x, w, y, h);
-    for (int i = 0; i < 4; i++)
-        p->padding[i] = -1.0f;
-    p->spacing = -1.0f;
-    return p;
-}
 
 // A FIT panel with a least of `least` across, holding a FIXED child `w` by 20.
 static UIElement* least_fitting(UIElement* parent, float least, float w) {
@@ -1785,6 +1782,24 @@ static int probe_min_size(UISystem* ui) {
     split->dir = UI_ROW;
     UIElement* share = padless(split, UI_SHARE, 0.25f, UI_FIXED, 20.0f);
     share->min_size[0] = 150.0f;
+    // A growing child stretched across a 100-point column, with a least of 150: the least.
+    UIElement* narrow_col = padless(root, UI_FIXED, 100.0f, UI_FIXED, 20.0f);
+    narrow_col->dir = UI_COLUMN;
+    UIElement* across = padless(narrow_col, UI_GROW, 0.0f, UI_FIXED, 20.0f);
+    across->min_size[0] = 150.0f;
+    // A share across a FIT column, beside a FIXED 100, with a least of 300: the column fits round
+    // the least, and the share is it.
+    UIElement* share_col = padless(root, UI_FIT, 0.0f, UI_FIT, 0.0f);
+    share_col->dir = UI_COLUMN;
+    fixed_panel(share_col, 100.0f, 20.0f);
+    UIElement* share_across = padless(share_col, UI_SHARE, 0.5f, UI_FIXED, 20.0f);
+    share_across->min_size[0] = 300.0f;
+    // A share along a FIT row, beside a FIXED 100, with a least of 150: the row fits round both.
+    UIElement* share_row = padless(root, UI_FIT, 0.0f, UI_FIT, 0.0f);
+    share_row->dir = UI_ROW;
+    fixed_panel(share_row, 100.0f, 20.0f);
+    UIElement* share_along = padless(share_row, UI_SHARE, 0.5f, UI_FIXED, 20.0f);
+    share_along->min_size[0] = 150.0f;
     ui_push(ui, s);
     pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
     printf("ui min-size shorter width %.6f\n", (double)shorter->rect.w);
@@ -1798,6 +1813,11 @@ static int probe_min_size(UISystem* ui) {
     printf("ui min-size fixed width %.6f\n", (double)fixed->rect.w);
     printf("ui min-size tall height %.6f\n", (double)tall->rect.h);
     printf("ui min-size share width %.6f\n", (double)share->rect.w);
+    printf("ui min-size across width %.6f\n", (double)across->rect.w);
+    printf("ui min-size column widths %.6f %.6f\n", (double)share_col->rect.w,
+           (double)share_across->rect.w);
+    printf("ui min-size row widths %.6f %.6f\n", (double)share_row->rect.w,
+           (double)share_along->rect.w);
     return 0;
 }
 
